@@ -41,7 +41,7 @@ vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
   analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
   claimBatchForAnalysis: h.claimBatchForAnalysis,
 }));
-vi.mock('@server/dataLakes/serializeLakeClaim', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({
   serializeLakeClaim: async <T extends { lake: { id: string } }>(claim: () => Promise<T>) => {
     h.tx.push('enter');
     try {

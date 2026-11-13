@@ -8,6 +8,7 @@ import {
   AdminAiConfigSchema,
   confidenceBand,
   type AdminAiConfig,
+  type AdminAiAttempt,
   type AdminAiFeature,
   type AdminAiReason,
   type AdminAiSuggestionItem,
@@ -18,6 +19,7 @@ import {
 } from '@bike4mind/common';
 import {
   adminAiSuggestionRepository,
+  AdminAiAttemptModel,
   adminSettingsRepository,
   apiKeyRepository,
   cacheRepository,
@@ -61,6 +63,7 @@ export type AdminAiRunInput = {
   evidenceLinks?: string[];
   /** Bump to re-ask for the same evidence after a prompt or question change. */
   policyVersion: string;
+  actionClass?: string;
   /** Decision-engine features only. Sent verbatim, not pseudonymised: keep identifiers in `evidence`. */
   question?: DecisionQuestion;
   /** Text-engine features only. Sent verbatim, not pseudonymised: keep identifiers in `evidence`. */
@@ -204,6 +207,48 @@ export async function runAdminAi(
   deps: RunAdminAiDeps = {}
 ): Promise<AdminAiRunResult> {
   const logger = deps.logger ?? new Logger({ metadata: { service: 'adminAi', feature } });
+  const attempt: AdminAiAttempt = {
+    feature,
+    policyVersion: input.policyVersion,
+    outcome: 'running',
+    calls: 0,
+    knownCostUsd: 0,
+    costUnknown: true,
+    startedAt: new Date(),
+  };
+  let attemptId: string;
+  try {
+    attemptId = (await AdminAiAttemptModel.create(attempt)).id;
+  } catch {
+    return { ok: false, skip: 'error' };
+  }
+  attempt.costUnknown = false;
+  const result = await executeAdminAi(feature, input, deps, attempt);
+  try {
+    await AdminAiAttemptModel.updateOne(
+      { _id: attemptId },
+      {
+        $set: {
+          ...attempt,
+          outcome: result.ok ? (result.cached ? 'cached' : 'suggestion') : 'skip',
+          ...(result.ok ? { suggestionId: result.suggestion.id } : { skipReason: result.skip }),
+          finishedAt: new Date(),
+        },
+      }
+    );
+  } catch {
+    logger.error('admin AI attempt settlement failed', { feature });
+  }
+  return result;
+}
+
+async function executeAdminAi(
+  feature: AdminAiFeature,
+  input: AdminAiRunInput,
+  deps: RunAdminAiDeps,
+  attempt: AdminAiAttempt
+): Promise<AdminAiRunResult> {
+  const logger = deps.logger ?? new Logger({ metadata: { service: 'adminAi', feature } });
   const now = deps.now ?? Date.now;
   let inflight: { key: string; owner: string } | null = null;
   try {
@@ -239,7 +284,16 @@ export async function runAdminAi(
         maxCallsPerDay: featureConfig.maxCallsPerDay,
       } satisfies AdminAiSpendLimits,
       onCost: (usd: number) => {
-        costUsd += Number.isFinite(usd) ? usd : 0;
+        if (Number.isFinite(usd) && usd >= 0) {
+          costUsd += usd;
+          attempt.knownCostUsd += usd;
+        } else attempt.costUnknown = true;
+      },
+      onCall: (delta: number) => {
+        attempt.calls += delta;
+      },
+      onUnknownCost: () => {
+        attempt.costUnknown = true;
       },
     };
 
@@ -328,6 +382,8 @@ export async function runAdminAi(
     const suggestion = await adminAiSuggestionRepository.createPending({
       ...key,
       entityType: input.entityType,
+      actionClass: input.actionClass,
+      costUnknown: attempt.costUnknown,
       model: answer.model,
       escalated,
       verdict: answer.verdict,

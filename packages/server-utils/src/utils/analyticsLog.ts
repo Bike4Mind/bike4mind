@@ -9,6 +9,8 @@ import { recordOrganizationAuditEventSafe } from './organizationAudit';
 interface LogEventOptions {
   session?: mongoose.ClientSession;
   ability?: Ability;
+  /** Trusted request principal, separate from the account whose analytics counters are updated. */
+  organizationAuditActorUserId?: string;
 }
 
 /**
@@ -26,7 +28,7 @@ export async function logEvent(event: AnalyticsEventPayloads, options?: LogEvent
   ) {
     await recordOrganizationAuditEventSafe({
       organizationId: event.metadata.organizationId,
-      actorUserId: event.userId!,
+      actorUserId: options?.organizationAuditActorUserId ?? event.userId!,
       action: event.type === OrganizationEvents.ADD_ORG_MEMBER ? 'member.added' : 'member.removed',
       targetId: 'userId' in event.metadata ? event.metadata.userId : undefined,
     });

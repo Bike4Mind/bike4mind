@@ -149,6 +149,7 @@ export enum AdminTab {
   StripeDisputes = 75,
   Approvals = 76,
   Tutorials = 77,
+  AiOperations = 78,
 }
 
 /**
@@ -255,7 +256,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Coins,
     label: 'Money',
     items: [
-      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue', testid: 'admin-revenue-btn' },
+      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
@@ -308,6 +309,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Sparkles,
     label: 'AI',
     items: [
+      { Icon: Gauge, tab: AdminTab.AiOperations, label: 'AI operations', testid: 'admin-ai-operations-btn' },
       { Icon: Brain, tab: AdminTab.LLMDashboard, label: 'Models' },
       { Icon: Bot, tab: AdminTab.AgentOps, label: 'Agents' },
       { Icon: FileText, tab: AdminTab.SystemPrompts, label: 'System prompts' },

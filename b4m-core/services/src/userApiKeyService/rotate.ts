@@ -22,7 +22,6 @@ const rotateUserApiKeySchema = z.object({
 export type RotateUserApiKeyParameters = z.infer<typeof rotateUserApiKeySchema>;
 
 interface RotateUserApiKeyAdapters {
-  serviceAccountManagement?: boolean;
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
@@ -37,6 +36,8 @@ interface RotateUserApiKeyAdapters {
    * nothing from a rotation. See the no-escalation rule below.
    */
   callerScopes?: ApiKeyScopeValue[];
+  /** See resolveOwnedApiKey: only the org key rotate route passes it. */
+  includeOrgOwned?: boolean;
 }
 
 export interface RotateUserApiKeyResult {
@@ -70,8 +71,7 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: strin
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
  *
- * Personal-key rotation RE-OWNS the key to whoever rotated it. Service keys keep their principal.
- * Previously only the secret and
+ * Rotation RE-OWNS the key to whoever rotated it. Previously only the secret and
  * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
  * teammate's org-billed key walked away with a plaintext credential that
  * authenticated as that teammate. Re-owning keeps the org-admin capability (the
@@ -85,7 +85,7 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: strin
  * as a superset of the target key's scopes.
  *
  * Callers should surface `previousOwnerUserId` so the original minter can be told
- * their key changed hands.
+ * their key changed hands. An org-owned key (`orgOwned`) is the exception: it is never re-owned.
  */
 export const rotateUserApiKey = async (
   userId: string,
@@ -95,7 +95,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  const apiKey = await resolveOwnedApiKey(userId, params.keyId, adapters);
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db, includeOrgOwned: adapters.includeOrgOwned });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }
@@ -111,7 +111,9 @@ export const rotateUserApiKey = async (
   );
 
   const previousOwnerUserId = apiKey.userId?.toString();
-  const reOwned = !apiKey.serviceAccount && !!previousOwnerUserId && previousOwnerUserId !== userId;
+  // An org-owned key stays with the org's service account: re-owning it to the rotating admin
+  // would tie it to a member again, which is exactly what an org-owned key exists to avoid.
+  const reOwned = !apiKey.orgOwned && !!previousOwnerUserId && previousOwnerUserId !== userId;
 
   // An embed key's userId is not just an owner label: the embed runtime resolves the
   // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access

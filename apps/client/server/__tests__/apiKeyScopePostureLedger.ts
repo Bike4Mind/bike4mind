@@ -262,9 +262,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   // Mixed audience: user-readable keys need authentication only; the full catalog also requires ADMIN scope.
   'settings/fetch.ts',
   'settings/serverConfig.ts',
-  'skills/[id]/index.ts',
-  'skills/[id]/share.ts',
-  'skills/index.ts',
   'slack/oauth/callback.ts',
   'slack/oauth/user-link/initiate.ts',
   'slack/oauth/workspaces.ts',

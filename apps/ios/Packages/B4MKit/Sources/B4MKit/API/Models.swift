@@ -61,6 +61,10 @@ public struct QuestTurn: Identifiable, Hashable, Sendable {
   public let createdAt: Date
   public let creditsUsed: Double?
   public let pendingAction: PendingAction?
+  /// Length of the raw reply slots `reply` was filtered from (see `ReplyVisibility`), when a live frame
+  /// carried them; `nil` for REST and local turns. The mid-stream grow-only guard compares this, not the
+  /// visible length, because hiding a choices block or reasoning legitimately shortens the visible text.
+  public let rawReplyLength: Int?
 
   public init(
     id: String,
@@ -71,7 +75,8 @@ public struct QuestTurn: Identifiable, Hashable, Sendable {
     errorCode: ErrorCode? = nil,
     createdAt: Date,
     creditsUsed: Double? = nil,
-    pendingAction: PendingAction? = nil
+    pendingAction: PendingAction? = nil,
+    rawReplyLength: Int? = nil
   ) {
     self.id = id
     self.prompt = prompt
@@ -82,6 +87,7 @@ public struct QuestTurn: Identifiable, Hashable, Sendable {
     self.createdAt = createdAt
     self.creditsUsed = creditsUsed
     self.pendingAction = pendingAction
+    self.rawReplyLength = rawReplyLength
   }
 }
 

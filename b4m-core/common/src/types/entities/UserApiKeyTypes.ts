@@ -39,6 +39,11 @@ export enum ApiKeyScope {
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
+  /**
+   * Create and delete throwaway test-persona accounts (POST/DELETE /api/v1/personas). Offered only to
+   * admins and developer-tagged users, and re-checked against the key owner on every call.
+   */
+  PERSONAS_MINT = 'personas:mint',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
@@ -147,9 +152,9 @@ export enum ApiKeyScope {
   /**
    * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
    * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
-   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
-   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
-   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * a listing, and import one into your library. Not confined: `b4m skills push --publish` upserts the
+   * skill through `/api/skills`, which now requires skills:write, and a confined key would be refused
+   * there. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
    * is outward-facing (UserApiKeysTab.tsx).
    */
   SKILLS_WRITE = 'skills:write',
@@ -327,10 +332,57 @@ export interface IUserApiKeyMetadata {
   baseline?: IUserApiKeyBaseline;
 }
 
+/**
+ * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
+ * A projection, never the stored document: no secret material and no minter location metadata.
+ */
+export interface IOrgApiKeyView {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScopeValue[];
+  status: ApiKeyStatus;
+  createdAt?: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+  /** Lifetime settled spend (`usage.totalSpendCredits`); the key keeps no per-period counter. */
+  creditsUsed: number;
+  /** The member who created the key; `name` is null when that account no longer exists. */
+  createdBy: { id: string; name: string | null } | null;
+}
+
+/**
+ * A member's own key billed to the org, as the org's owner and managers see it
+ * (pages/api/organizations/[id]/api-keys/members). Same projection rules as IOrgApiKeyView.
+ */
+export interface IOrgMemberApiKeyView {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScopeValue[];
+  status: ApiKeyStatus;
+  createdAt?: Date;
+  expiresAt?: Date;
+  lastUsedAt?: Date;
+  revokedAt?: Date;
+  creditsUsed: number;
+  /** The member holding the key; `name` is null when that account no longer exists. */
+  createdBy: { id: string; name: string | null };
+}
+
+/** POST /api/organizations/[id]/api-keys and its rotate: the view plus the secret, shown once. */
+export interface IOrgApiKeySecretResponse {
+  apiKey: IOrgApiKeyView;
+  key: string;
+}
+
 export interface IUserApiKeyRateLimit {
   requestsPerMinute: number;
   requestsPerDay: number;
 }
+
+export const API_KEY_RATE_LIMIT_MAX_PER_MINUTE = 10_000;
+export const API_KEY_RATE_LIMIT_MAX_PER_DAY = 1_000_000;
 
 /**
  * Ceilings a key gets when minted without explicit ones. Lives here rather than
@@ -446,6 +498,13 @@ export interface IUserApiKey {
    * request, this only narrows which lakes that authority may be exercised for.
    */
   preauthorizedLakeIds?: string[];
+  /**
+   * Present only on an org-owned key: one held by the organization's service account rather than a
+   * member, so it outlives whoever created it. Records that creator for audit. Deliberately not
+   * `metadata.createdByUserId`, which marks a platform-admin-provisioned key and bypasses the paid
+   * access gate. Rotation never re-owns an org-owned key to the rotating admin.
+   */
+  orgOwned?: { createdByUserId: string };
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**
@@ -525,6 +584,15 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
+  /**
+   * Disables the user's not-yet-DISABLED keys that are billed to `organizationId`, stamping
+   * revokedAt/revokedBy/revokedReason. Personal keys are untouched. Resolves the revoked ids.
+   */
+  revokeLiveOrgBilledByUserId: (
+    userId: string,
+    organizationId: string,
+    stamp: { revokedBy: string; revokedReason: string }
+  ) => Promise<string[]>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   /**
    * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.

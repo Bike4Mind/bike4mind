@@ -203,6 +203,9 @@ describe('DataLakeProposalsPanel', () => {
     renderPanel({ proposals: [] });
 
     expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Nothing is waiting for review/);
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(
+      /unless a research configuration adds results from its trusted sites automatically/
+    );
   });
 
   it('flags a source a reviewer previously declined rather than hiding it', () => {

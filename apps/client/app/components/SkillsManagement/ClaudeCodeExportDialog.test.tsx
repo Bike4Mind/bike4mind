@@ -126,6 +126,8 @@ describe('ClaudeCodeExportDialog', () => {
     const warning = screen.getByTestId('skill-claude-code-key-warning');
     expect(warning).toHaveTextContent("never to a project's .claude/settings.json");
     expect(warning).toHaveTextContent('headersHelper');
+    expect(warning).toHaveTextContent('JSON object');
+    expect(warning).toHaveTextContent('{"Authorization": "Bearer <key>"}');
     // A member who can't edit and sees no bundles gets no bundles section.
     expect(screen.queryByTestId('skill-claude-code-bundles')).not.toBeInTheDocument();
   });

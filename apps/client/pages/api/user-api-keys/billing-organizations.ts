@@ -1,5 +1,6 @@
 import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 
 /**
  * GET /api/user-api-keys/billing-organizations
@@ -11,6 +12,7 @@ import { baseApi } from '@server/middlewares/baseApi';
  */
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user?.id;
+  assertNotOrgServiceAccount(req.user);
 
   const administeredOrgIds = await organizationRepository.findIdsAdministeredBy(userId);
   const organizations = await Promise.all(administeredOrgIds.map(id => organizationRepository.findById(id)));

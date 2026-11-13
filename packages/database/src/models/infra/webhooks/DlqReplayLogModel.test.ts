@@ -5,6 +5,46 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../__test__/crea
 import DlqReplayLogModel, { dlqReplayLogRepository } from './DlqReplayLogModel';
 
 describe('DlqReplayLogRepository.findRecent', () => {
+  it('pages beyond 200 records with tied timestamps, filters and literal reason search', async () => {
+    const createdAt = new Date();
+    await DlqReplayLogModel.create(
+      Array.from({ length: 225 }, (_, index) => ({
+        queueLabel: 'paged',
+        messageId: `entity-${index}`,
+        messageBody: 'SECRET',
+        sourceQueue: 'Paged',
+        status: 'discarded',
+        operation: 'discard',
+        reason: 'Obsolete [job]',
+        replayedBy: 'admin-1',
+        createdAt,
+      }))
+    );
+    const ids: string[] = [];
+    let before: { createdAt: Date; id: string } | undefined;
+    for (;;) {
+      const rows = await dlqReplayLogRepository.findRecent({
+        queueLabel: 'paged',
+        status: 'discarded',
+        search: '[job]',
+        startDate: createdAt,
+        endDate: createdAt,
+        limit: 50,
+        before,
+        includeBody: false,
+      });
+      if (!rows.length) break;
+      expect(rows.every(row => row.reason === 'Obsolete [job]' && !('messageBody' in row))).toBe(true);
+      ids.push(...rows.map(row => String(row.id)));
+      const last = rows.at(-1)!;
+      before = { createdAt: last.createdAt, id: String(last.id) };
+    }
+    expect(ids).toHaveLength(225);
+    expect(new Set(ids).size).toBe(225);
+    expect(ids).toEqual([...ids].sort().reverse());
+    expect(await dlqReplayLogRepository.findRecent({ search: ids[0], includeBody: false })).toHaveLength(1);
+    expect(await dlqReplayLogRepository.findRecent({ search: 'entity-224', includeBody: false })).toHaveLength(1);
+  });
   let mongoServer: MongoMemoryServer;
 
   beforeAll(async () => {

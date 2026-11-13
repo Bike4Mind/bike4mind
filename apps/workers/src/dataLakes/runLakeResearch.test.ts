@@ -17,6 +17,11 @@ const h = vi.hoisted(() => ({
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
   recordOperationalUsage: vi.fn(),
+  autoApprove: vi.fn(),
+  loadActiveLakeGrants: vi.fn(),
+  resolveEffectiveOwnerIds: vi.fn(),
+  findIdsWithAdminRights: vi.fn(),
+  findConfig: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -25,11 +30,12 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {},
+  dataLakeResearchConfigRepository: { findByIdInLake: h.findConfig },
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
-  organizationRepository: { findById: h.findOrgById },
+  organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -37,19 +43,31 @@ vi.mock('@bike4mind/database', () => ({
     recordProgress: h.recordProgress,
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
-  dataLakeService: { proposeDataLakeContent: h.proposeDataLakeContent },
-  dataLakeResearchService: {
-    executeResearchRun: h.executeResearchRun,
-    recordResearchRunOutcome: h.recordResearchRunOutcome,
-    RelevanceJudgeService: class {
-      judge = h.judge;
+vi.mock('@bike4mind/services', async importOriginal => {
+  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  return {
+    apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
+    dataLakeService: {
+      proposeDataLakeContent: h.proposeDataLakeContent,
+      autoApproveDataLakeProposal: h.autoApprove,
+      loadActiveLakeGrants: h.loadActiveLakeGrants,
+      resolveEffectiveOwnerIds: h.resolveEffectiveOwnerIds,
     },
-    RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
-  },
-  recordOperationalUsage: h.recordOperationalUsage,
-}));
+    dataLakeResearchService: {
+      executeResearchRun: h.executeResearchRun,
+      recordResearchRunOutcome: h.recordResearchRunOutcome,
+      RelevanceJudgeService: class {
+        judge = h.judge;
+      },
+      RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
+      // Real: the live source rules are what these tests exercise.
+      normalizeResearchLevers: real.normalizeResearchLevers,
+      matchSource: real.matchSource,
+      trustedEntryForUrl: real.trustedEntryForUrl,
+    },
+    recordOperationalUsage: h.recordOperationalUsage,
+  };
+});
 // The real searchWithHedge runs, so the failover test exercises the same hedge chat uses.
 vi.mock('@bike4mind/services/llm', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/llm')>()),
@@ -60,7 +78,13 @@ vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableMo
 // every caller there, and mocking the wrong module leaves the REAL fetcher in place - which fails
 // closed to null and reads as a broken extraction contract rather than a broken mock.
 vi.mock('@bike4mind/fab-pipeline', () => ({ fetchAndParseURL: h.fetchAndParseURL }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsByNames: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({ serializeLakeClaim: vi.fn() }));
 
 import { runLakeResearch } from './runLakeResearch';
 
@@ -94,6 +118,14 @@ const claimedRun = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const liveConfig = (overrides: Record<string, unknown> = {}) => ({
+  name: 'Weekly filings',
+  query: 'coastal erosion',
+  autoAdmitTrusted: true,
+  trustedDomains: ['example.com'],
+  ...overrides,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.claimForExecution.mockResolvedValue(claimedRun());
@@ -112,6 +144,11 @@ beforeEach(() => {
   });
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
   h.recordOperationalUsage.mockResolvedValue(undefined);
+  h.loadActiveLakeGrants.mockResolvedValue([]);
+  h.resolveEffectiveOwnerIds.mockReturnValue(['owner-1']);
+  h.findIdsWithAdminRights.mockResolvedValue(['org-7']);
+  h.findConfig.mockResolvedValue(liveConfig());
+  h.autoApprove.mockResolvedValue({ outcome: 'admitted' });
 });
 
 describe('runLakeResearch', () => {
@@ -864,5 +901,203 @@ describe('runLakeResearch', () => {
     // Logged, not dropped: otherwise "the run card never moved" is indistinguishable from "the
     // progress write never fired".
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/progress write failed/), expect.anything());
+  });
+
+  describe('auto-admit port', () => {
+    type AutoPorts = {
+      autoAdmit?: (
+        p: { id: string; sourceUrl: string },
+        r: { isTrusted: (u: string) => string | null }
+      ) => Promise<string>;
+    };
+    // The run's own snapshot rule, which trusts every host here.
+    const rule = { isTrusted: (u: string) => new URL(u).hostname.replace(/^www\./, '') };
+    const runWithPort = async (
+      levers_: Record<string, unknown> = { autoAdmitTrusted: true },
+      sourceUrl = 'https://example.com/a'
+    ) => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers(levers_) }));
+      let result: string | undefined;
+      let hadPort = false;
+      h.executeResearchRun.mockImplementation(async (_l: unknown, _r: string, ports: AutoPorts) => {
+        hadPort = !!ports.autoAdmit;
+        result = await ports.autoAdmit?.({ id: 'prop-1', sourceUrl }, rule);
+        return {
+          totals: { ...emptyResearchRunTotals(), proposed: 1, autoAdmitted: result === 'admitted' ? 1 : 0 },
+          spentMicroUsd: 0,
+          stopReason: 'exhausted',
+        };
+      });
+      await runLakeResearch('run-1', logger);
+      return { result, hadPort };
+    };
+
+    it('provides no port unless the run snapshot opted in', async () => {
+      const { hadPort } = await runWithPort({});
+      expect(hadPort).toBe(false);
+    });
+
+    it('binds the port to the effective owner after a transfer, with the config id and name', async () => {
+      h.resolveEffectiveOwnerIds.mockReturnValue(['new-owner']);
+      h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('admitted');
+      const [proposalId, boundRule] = h.autoApprove.mock.calls[0];
+      expect(proposalId).toBe('prop-1');
+      expect(boundRule).toMatchObject({
+        configId: 'config-1',
+        configName: 'Weekly filings',
+        owner: { userId: 'new-owner', isAdmin: false, administeredOrgIds: ['org-7'] },
+      });
+      expect(boundRule.isTrusted('https://example.com/a')).toBe('example.com');
+    });
+
+    it('leaves the proposal pending when the owner cannot be resolved', async () => {
+      h.findUserById.mockResolvedValueOnce({ id: 'owner-1', organizationId: null }).mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+    });
+
+    it('keeps the run succeeded and reports left_pending when the service throws', async () => {
+      h.autoApprove.mockRejectedValue(new Error('mongo down'));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/auto-admit failed/), expect.anything());
+    });
+
+    it('leaves the proposal pending when the manager turned auto-admit off mid-run', async () => {
+      h.findConfig.mockResolvedValue(liveConfig({ autoAdmitTrusted: false }));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'auto_admit_off' })
+      );
+    });
+
+    it('leaves the proposal pending when the config was deleted mid-run', async () => {
+      h.findConfig.mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'config_missing' })
+      );
+    });
+
+    describe('live source rules', () => {
+      const admitCalls = () => h.autoApprove.mock.calls;
+      const finalUrlRule = () => admitCalls()[0][1] as { isTrusted: (u: string) => string | null };
+
+      it('admits when the live config is unchanged', async () => {
+        const { result } = await runWithPort();
+
+        expect(result).toBe('admitted');
+        expect(finalUrlRule().isTrusted('https://example.com/a')).toBe('example.com');
+      });
+
+      it('does not admit when the source site was removed, even if the final url is on a trusted site', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['other.org'] }));
+
+        const { result } = await runWithPort(undefined, 'https://example.com/a');
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringMatching(/stopped by the live config/),
+          expect.objectContaining({ reason: 'source_not_trusted_live' })
+        );
+      });
+
+      it('does not admit when the source site was blocked live', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ blockedDomains: ['example.com'] }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('does not admit when a longer live review entry now covers the source', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ reviewDomains: ['news.example.com'] }));
+
+        const { result } = await runWithPort(undefined, 'https://news.example.com/a');
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('rejects a final url whose site was blocked live', async () => {
+        h.findConfig.mockResolvedValue(
+          liveConfig({ trustedDomains: ['example.com', 'other.org'], blockedDomains: ['other.org'] })
+        );
+
+        await runWithPort();
+
+        expect(finalUrlRule().isTrusted('https://other.org/x')).toBeNull();
+        expect(finalUrlRule().isTrusted('https://example.com/x')).toBe('example.com');
+      });
+
+      it('rejects a final url on a site added to the live list but not trusted by the run', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['example.com', 'other.org'] }));
+        h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ autoAdmitTrusted: true }) }));
+        let added: string | null | undefined;
+        h.executeResearchRun.mockImplementation(async (_l: unknown, _r: string, ports: AutoPorts) => {
+          await ports.autoAdmit?.(
+            { id: 'prop-1', sourceUrl: 'https://example.com/a' },
+            {
+              isTrusted: u => (u.includes('example.com') ? 'example.com' : null),
+            }
+          );
+          added = (admitCalls()[0][1] as { isTrusted: (u: string) => string | null }).isTrusted('https://other.org/x');
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+        });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(added).toBeNull();
+      });
+
+      it('treats a legacy config without trustedDomains as an empty list', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: undefined }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('matches the live list after normalizing its entries', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['https://www.Example.com/blog'] }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('admitted');
+        expect(finalUrlRule().isTrusted('https://example.com/a')).toBe('example.com');
+      });
+    });
+
+    it('passes autoAdmitted through to the settle', async () => {
+      await runWithPort();
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ totals: expect.objectContaining({ autoAdmitted: 1 }) })
+      );
+    });
   });
 });
