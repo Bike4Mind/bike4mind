@@ -9,9 +9,10 @@ import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
-import { sessionRepository } from '@bike4mind/database';
+import { rapidReplyResultRepository, sessionRepository } from '@bike4mind/database';
+import { generateRapidReply, saveRapidReplyResult } from '@server/rapidReply/generateRapidReply';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { ApiKeyScope, ttfvtState } from '@bike4mind/common';
-import { Types } from 'mongoose';
 import { SQSService } from '@bike4mind/utils';
 
 interface TestConfiguration {
@@ -32,8 +33,6 @@ const handler = adminApi({
     })
   )
   .post(async (req, res) => {
-    console.log('🧪 Rapid Reply test configuration API called');
-
     const {
       mainModelId,
       testInput = 'Test message for rapid reply configuration',
@@ -62,16 +61,17 @@ const handler = adminApi({
       throw error;
     };
 
-    // Get system settings
-    const settings = await adminSettingsRepository
-      .getSettingsValue('RapidReplySettings')
-      .catch(recordFailedRunAndRethrow);
+    const [settings, enableRapidReply] = await Promise.all([
+      adminSettingsRepository.getSettingsValue('RapidReplySettings'),
+      adminSettingsRepository.getSettingsValue('EnableRapidReply'),
+    ]).catch(recordFailedRunAndRethrow);
     if (!settings) {
       return recordFailedRunAndRethrow(new Error('Rapid Reply settings not found. Please configure settings first.'));
     }
 
-    // Check if Rapid Reply is enabled
-    if (!settings.enabled) {
+    // Same toggle chat reads in pages/api/ai/rapid-reply.ts; RapidReplySettings.enabled is never written.
+    const globalEnabled = enableRapidReply === true;
+    if (!globalEnabled) {
       await recordTestRun(false);
       return res.json({
         success: false,
@@ -127,29 +127,27 @@ const handler = adminApi({
     const prompts = await rapidReplyPromptRepository.findByModelPair(mapping.id).catch(recordFailedRunAndRethrow);
     const activePrompts = prompts.filter(p => p.isActive);
 
-    // Actually test the rapid reply process with proper measurement
+    // Run the rapid model the way chat does (generate, then save the result for the quest), then
+    // the main turn, which picks that result up. Every rapid figure reported below comes from the
+    // saved rapid reply result; the main model's timing is reported separately.
     const testStartTime = Date.now();
     let rapidReplyStartTime = 0;
     let rapidReplyEndTime = 0;
-    let rapidReplyTtfvt = 0; // Time to first visible token
-    // 0 means "not measured" as well as "measured as 0", and the recommendation below gates on
-    // `> 0` - so a turn that streamed only a thinking block scored 0 and silently skipped the
-    // check that exists to catch exactly that turn. The state says which case a 0 is.
-    let rapidReplyTtfvtState: ReturnType<typeof ttfvtState> = 'unknown';
 
-    let rapidReplyResponse = null;
+    let rapidReplyResponse: string | null = null;
+    let rapidReplyLatency = 0;
+    let rapidReplyTtfvt = 0;
+    let mainModelTtfvt: number | undefined;
+    // 0 means "not measured" as well as "measured as 0"; the state says which case a 0 is.
+    let mainModelTtfvtState: ReturnType<typeof ttfvtState> = 'unknown';
+    let mainModelError: string | null = null;
     const actualTokensUsed = 0;
     const actualCost = 0;
-    let errorMessage = null;
+    let errorMessage: string | null = null;
     let testSession = null;
-    let testBody = null;
     let chatCompletion = null;
-    let rapidReplyResults = null;
 
     try {
-      console.log('🧪 Creating temporary test session for rapid reply testing');
-
-      // Create a temporary test session directly (simpler approach)
       testSession = await sessionRepository.create({
         userId: req.user.id,
         name: `Rapid Reply Test - ${new Date().toISOString()}`,
@@ -167,9 +165,6 @@ const handler = adminApi({
         ],
       });
 
-      console.log(`🧪 Test session created: ${testSession.id}`);
-
-      // Create a ChatCompletionProcess instance for testing with rapid reply enabled
       chatCompletion = new ChatCompletionProcess({
         ...getDefaultChatCompletionOptions(),
         queue: new SQSService(), // Create per-request to ensure fresh credentials
@@ -180,247 +175,131 @@ const handler = adminApi({
         tokenizer: getSharedTokenizer(req.logger),
       });
 
-      // Use a predefined complex message or enhance the input to be complex
-      const complexTestMessage =
-        testInput.length > 100
-          ? testInput
-          : testInput.length > 50
-            ? `${testInput} Please provide a detailed analysis with multiple perspectives, including pros and cons, and consider various implementation approaches.`
-            : `${testInput} Analyze this topic comprehensively, comparing different approaches and methodologies. Include detailed explanations with examples and consider potential challenges and solutions.`;
-
-      testBody = {
-        userId: req.user.id,
-        sessionId: testSession.id,
-        historyCount: 5, // Some history to make it complex
-        fabFileIds: [], // No files but we'll add complexity elsewhere
-        message: complexTestMessage,
-        messageFileIds: [], // No message files but complex message
-        questId: new Types.ObjectId().toString(), // Generate a valid MongoDB ObjectId for testing
-        params: {
-          model: mainModelId, // Use the main model to trigger rapid reply
-          max_tokens: 1000, // Allow more tokens for main response
-          stream: true, // Enable streaming to measure TTFVT
-          temperature: 0.7,
-          // Additional parameters to ensure simple classification
-          n: 1, // Single response
-          top_p: 1.0, // Standard top_p
-          presence_penalty: 0, // No presence penalty
-          frequency_penalty: 0, // No frequency penalty
-        },
-        promptMeta: {
-          session: {
-            id: testSession.id,
-            userId: req.user.id,
-          },
-        }, // Required by LLMApiRequestBodySchema
-        enableQuestMaster: false, // Keep disabled for testing
-        enableMementos: true, // Enable to make it complex
-        enableArtifacts: true, // Enable to make it complex
-        enableAgents: false, // Keep disabled for testing
-        tools: ['deep_research' as const], // Add research tool to force complex classification
-        queryComplexity: 'complex' as const, // Force complex classification
-        // The route also accepts an admin-scoped key, so the turn's auth comes from the request.
-        ...requestTurnAuth(req),
-        // Optional schema fields - declared for QuestStartBodySchema type conformance
-        dashboardParams: undefined,
-        questMaster: undefined,
-        researchMode: undefined,
-        imageConfig: undefined,
-      };
-
-      console.log('🧪 Starting rapid reply test with main model:', mainModelId);
-      console.log('🧪 Test questId:', testBody.questId);
-      console.log('🧪 Test sessionId:', testBody.sessionId);
-      console.log('🧪 Original test input:', testInput);
-      console.log('🧪 Complex test message:', complexTestMessage);
-      console.log('🧪 Query complexity forced to:', testBody.queryComplexity);
-      console.log('🧪 Tools enabled:', testBody.tools);
-      console.log('🧪 Mementos enabled:', testBody.enableMementos);
-      console.log('🧪 Artifacts enabled:', testBody.enableArtifacts);
-      rapidReplyStartTime = Date.now();
-
-      // Create the quest first (process method expects it to exist)
+      const promptMeta = { session: { id: testSession.id, userId: req.user.id } };
+      // process() expects the quest to exist already.
       const quest = await chatCompletion.db.quests.create({
-        sessionId: testBody.sessionId,
-        prompt: complexTestMessage,
+        sessionId: testSession.id,
+        prompt: testInput,
         type: 'message',
         timestamp: new Date(),
         replies: [],
-        promptMeta: testBody.promptMeta,
+        promptMeta,
       });
 
-      console.log('🧪 Quest created:', quest.id);
-
-      // Update the testBody to use the actual quest ID
-      testBody.questId = quest.id;
-
-      // Use the process method for direct processing (no queue)
-      try {
-        console.log('🧪 Starting quest processing...');
-        // No externalTools merge here on purpose: this admin test endpoint
-        // hardcodes its tool list above and never requests premium overlay
-        // tools. Add the premiumLlmTools merge if that ever changes.
-        await chatCompletion.process({
-          body: testBody,
-          logger: req.logger,
-        });
-        console.log('🧪 Quest processing completed');
-      } catch (processError) {
-        console.error('🧪 Error during quest processing:', processError);
-        throw processError;
-      }
-
+      rapidReplyStartTime = Date.now();
+      const generation = await generateRapidReply({
+        mapping,
+        message: testInput,
+        userId: req.user.id,
+        logger: req.logger,
+        meter: createRequestCompletionMeter(req, 'rapid reply test', { systemModel: true }),
+      });
       rapidReplyEndTime = Date.now();
 
-      // Add a small delay to ensure quest processing is complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check database directly for the quest (process method created it)
-      console.log('🧪 Checking database for quests in session:', testBody.sessionId);
-
-      // Try multiple ways to find the quest
-      const questBySession = await chatCompletion.db.quests.findOne({ sessionId: testBody.sessionId });
-      const allQuestsInSession = await chatCompletion.db.quests.find({ sessionId: testBody.sessionId });
-
-      // Get the most recent quest (should be the one created by process method)
-      const mostRecentQuest =
-        allQuestsInSession.length > 0
-          ? allQuestsInSession.sort(
-              (a, b) => new Date(b.createdAt || b.updatedAt).getTime() - new Date(a.createdAt || a.updatedAt).getTime()
-            )[0]
-          : null;
-
-      console.log('🧪 Database check results:');
-      console.log('🧪 - Quest by session found:', !!questBySession);
-      console.log('🧪 - Most recent quest found:', !!mostRecentQuest);
-      console.log('🧪 - Total quests in session:', allQuestsInSession.length);
-
-      if (allQuestsInSession.length > 0) {
-        console.log('🧪 - All quests in session:');
-        allQuestsInSession.forEach((q, index) => {
-          console.log(
-            `🧪   Quest ${index + 1}: ID=${q.id}, Status=${q.status}, Type=${q.type}, HasReply=${!!q.reply}, ReplyLength=${q.reply?.length || 0}`
-          );
-        });
-      }
-
-      // Use the most recent quest (created by process method)
-      const completedQuest = mostRecentQuest || questBySession;
-
-      // Check for rapid reply results (this is what we actually want to test)
-      if (completedQuest) {
-        console.log('🧪 Checking for rapid reply results...');
-        console.log('🧪 - Quest ID:', completedQuest.id);
-        console.log('🧪 - Rapid reply DB available:', !!chatCompletion.db.rapidReply);
-        console.log('🧪 - Rapid reply results available:', !!chatCompletion.db.rapidReply?.results);
-
-        try {
-          rapidReplyResults = await chatCompletion.db.rapidReply?.results?.findByQuestId(completedQuest.id);
-          console.log('🧪 - Rapid reply results found:', !!rapidReplyResults);
-          if (rapidReplyResults) {
-            console.log('🧪 - Rapid reply result details:', JSON.stringify(rapidReplyResults, null, 2));
-          } else {
-            console.log('🧪 - No rapid reply results found for quest ID:', completedQuest.id);
-
-            // findAll method not available on rapid reply results repository
-            console.log(
-              '🧪 - Rapid reply results repository methods:',
-              Object.keys(chatCompletion.db.rapidReply?.results || {})
-            );
-          }
-        } catch (error) {
-          console.log('🧪 - Error checking rapid reply results:', error);
-        }
-      }
-
-      console.log('🧪 Quest details after processing:');
-      console.log('🧪 - Status:', completedQuest?.status);
-      console.log('🧪 - Type:', completedQuest?.type);
-      console.log('🧪 - Has reply:', !!completedQuest?.reply);
-      console.log('🧪 - Reply length:', completedQuest?.reply?.length || 0);
-      console.log('🧪 - Replies array length:', completedQuest?.replies?.length || 0);
-      console.log('🧪 - First reply:', completedQuest?.replies?.[0]?.substring(0, 100) || 'none');
-      console.log('🧪 - All replies:', completedQuest?.replies);
-      console.log('🧪 - Prompt meta:', JSON.stringify(completedQuest?.promptMeta, null, 2));
-
-      // Check if there's any content in the quest at all
-      console.log('🧪 - Quest keys:', Object.keys(completedQuest || {}));
-      console.log('🧪 - Quest full object:', JSON.stringify(completedQuest, null, 2));
-
-      // Check if we have rapid reply results (this is what we actually want)
-      if (rapidReplyResults?.rapidResponse?.content) {
-        rapidReplyResponse = rapidReplyResults.rapidResponse.content;
-        // Use the latency from rapid reply results, not the total test time
-        const rapidReplyLatency = rapidReplyResults.rapidResponse.latency || 0;
-        rapidReplyTtfvt = rapidReplyLatency; // TTFVT is the same as latency for rapid reply
-        // rapidReplyTtfvtState is deliberately left at its initializer: reaching this branch means
-        // the rapid model produced content, so there is nothing frozen to report. Deriving it from
-        // questPromptMeta here would grade the MAIN model's stamps and report them as the rapid
-        // model's - that model's own timing is rapidResponse.ttfvt.
-
-        console.log(`🧪 Rapid reply test completed successfully`);
-        console.log(`🧪 TTFVT: ${rapidReplyTtfvt}ms`);
-        console.log(`🧪 Latency: ${rapidReplyLatency}ms`);
-        console.log(`🧪 Response length: ${rapidReplyResponse.length} characters`);
-        console.log(`🧪 Rapid reply content: "${rapidReplyResponse}"`);
-      } else if (completedQuest?.reply || completedQuest?.replies?.[0]) {
-        // Fallback to quest reply if no rapid reply results
-        rapidReplyResponse = completedQuest.reply || completedQuest.replies?.[0] || '';
-
-        // Try to get rapid reply metrics from quest promptMeta
-        const questPromptMeta = completedQuest.promptMeta as any;
-        rapidReplyTtfvt = questPromptMeta?.rapidTtfvt || questPromptMeta?.performance?.firstTokenTime || 0;
-        rapidReplyTtfvtState = ttfvtState(
-          questPromptMeta?.performance?.firstTokenTime,
-          questPromptMeta?.performance?.firstChunkTime
-        );
-
-        // Calculate latency from the rapid reply timing if available
-        const rapidReplyLatency = questPromptMeta?.rapidLatency || (rapidReplyTtfvt > 0 ? rapidReplyTtfvt : 0);
-
-        console.log(`🧪 Quest reply test completed successfully`);
-        console.log(`🧪 TTFVT: ${rapidReplyTtfvt}ms`);
-        console.log(`🧪 Rapid Reply Latency: ${rapidReplyLatency}ms`);
-        console.log(`🧪 Response length: ${rapidReplyResponse.length} characters`);
-        console.log(`🧪 Quest promptMeta:`, JSON.stringify(questPromptMeta, null, 2));
+      if (generation.status === 'skipped') {
+        errorMessage =
+          generation.reason === 'model_unavailable'
+            ? `Rapid model ${mapping.rapidModelId} is not available and no fallback model could run`
+            : `Rapid model ${mapping.rapidModelId} returned an empty response`;
       } else {
-        errorMessage = `No response generated from rapid reply test. Quest status: ${completedQuest?.status || 'unknown'}, type: ${completedQuest?.type || 'unknown'}`;
-        console.log('🧪 Rapid reply test failed:', errorMessage);
+        // Non-streaming call, so the first visible token arrives with the whole reply.
+        await saveRapidReplyResult({
+          questId: quest.id,
+          sessionId: testSession.id,
+          userId: req.user.id,
+          mainModelId,
+          mapping,
+          generation,
+          ttfvt: generation.latency,
+        });
+
+        const testBody = {
+          userId: req.user.id,
+          sessionId: testSession.id,
+          historyCount: 5,
+          fabFileIds: [],
+          message: testInput,
+          messageFileIds: [],
+          questId: quest.id,
+          params: {
+            model: mainModelId,
+            max_tokens: 1000,
+            stream: true, // Streaming, so the main model's TTFVT is measured
+            temperature: 0.7,
+            n: 1,
+            top_p: 1.0,
+            presence_penalty: 0,
+            frequency_penalty: 0,
+          },
+          promptMeta,
+          enableQuestMaster: false,
+          enableMementos: true,
+          enableArtifacts: true,
+          enableAgents: false,
+          tools: ['deep_research' as const],
+          queryComplexity: 'complex' as const,
+          // The route also accepts an admin-scoped key, so the turn's auth comes from the request.
+          ...requestTurnAuth(req),
+          // Optional schema fields - declared for QuestStartBodySchema type conformance
+          dashboardParams: undefined,
+          questMaster: undefined,
+          researchMode: undefined,
+          imageConfig: undefined,
+        };
+
+        // A main-model failure is reported on its own; it does not change what the rapid model did.
+        try {
+          // No externalTools merge here on purpose: this admin test endpoint
+          // hardcodes its tool list above and never requests premium overlay
+          // tools. Add the premiumLlmTools merge if that ever changes.
+          await chatCompletion.process({ body: testBody, logger: req.logger });
+          const completedQuest = await chatCompletion.db.quests.findById(quest.id);
+          const performance = (
+            completedQuest?.promptMeta as { performance?: { firstTokenTime?: number; firstChunkTime?: number } }
+          )?.performance;
+          mainModelTtfvt = performance?.firstTokenTime;
+          mainModelTtfvtState = ttfvtState(performance?.firstTokenTime, performance?.firstChunkTime);
+        } catch (processError) {
+          req.logger.warn('[RapidReplyTest] Main model run failed:', processError);
+          mainModelError = processError instanceof Error ? processError.message : String(processError);
+        }
+
+        // Read back what was saved, as chat's hand-off does, rather than the in-memory generation.
+        const rapidReplyResult = await rapidReplyResultRepository.findByQuestId(quest.id);
+        if (rapidReplyResult?.rapidResponse?.content) {
+          rapidReplyResponse = rapidReplyResult.rapidResponse.content;
+          rapidReplyLatency = rapidReplyResult.rapidResponse.latency || 0;
+          rapidReplyTtfvt = rapidReplyResult.rapidResponse.ttfvt || rapidReplyLatency;
+        } else {
+          errorMessage = 'No rapid reply result was saved for the test quest';
+        }
       }
     } catch (error) {
-      console.error('🧪 Rapid reply test failed:', error);
-      if (error instanceof Error) {
-        errorMessage = error.message;
-        console.error('🧪 Error stack:', error.stack);
-      } else {
-        errorMessage = 'Unknown error occurred';
-      }
+      req.logger.error('[RapidReplyTest] Test run failed:', error);
+      errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     } finally {
-      // Always clean up the test session and quest
       if (testSession) {
+        const sessionId = testSession.id;
         try {
-          console.log(`🧪 Cleaning up test session: ${testSession.id}`);
-          await sessionRepository.delete(testSession.id);
-          console.log('🧪 Test session cleaned up successfully');
-        } catch (cleanupError) {
-          console.warn('🧪 Failed to cleanup test session:', cleanupError);
-        }
-      }
-
-      // Also clean up any test quests that were created
-      if (testBody?.sessionId) {
-        try {
-          console.log(`🧪 Cleaning up test quests in session: ${testBody.sessionId}`);
-          const questsToDelete = await chatCompletion?.db?.quests?.find({ sessionId: testBody.sessionId });
-          if (questsToDelete && questsToDelete.length > 0) {
-            for (const quest of questsToDelete) {
-              await chatCompletion?.db?.quests?.delete?.(quest.id);
-              console.log(`🧪 Deleted quest: ${quest.id}`);
-            }
+          const results = await rapidReplyResultRepository.findBySessionId(sessionId);
+          for (const result of results) {
+            await rapidReplyResultRepository.delete(result.id);
           }
-          console.log('🧪 Test quests cleaned up successfully');
         } catch (cleanupError) {
-          console.warn('🧪 Failed to cleanup test quests:', cleanupError);
+          req.logger.warn('[RapidReplyTest] Failed to clean up test rapid reply results:', cleanupError);
+        }
+        try {
+          const questsToDelete = (await chatCompletion?.db?.quests?.find({ sessionId })) ?? [];
+          for (const quest of questsToDelete) {
+            await chatCompletion?.db?.quests?.delete?.(quest.id);
+          }
+        } catch (cleanupError) {
+          req.logger.warn('[RapidReplyTest] Failed to clean up test quests:', cleanupError);
+        }
+        try {
+          await sessionRepository.delete(sessionId);
+        } catch (cleanupError) {
+          req.logger.warn('[RapidReplyTest] Failed to clean up test session:', cleanupError);
         }
       }
     }
@@ -432,15 +311,14 @@ const handler = adminApi({
 
     const testEndTime = Date.now();
 
-    // Use the actual rapid reply latency from the results, not the test timing
-    const actualRapidReplyLatency = rapidReplyResults?.rapidResponse?.latency || rapidReplyTtfvt || 0;
-    const actualRapidReplyTtfvt = rapidReplyResults?.rapidResponse?.latency || rapidReplyTtfvt || 0; // TTFVT is the same as latency for rapid reply
+    const actualRapidReplyLatency = rapidReplyLatency;
+    const actualRapidReplyTtfvt = rapidReplyTtfvt;
+    const maxConfiguredLatency = Math.min(mapping.maxLatency, settings.maxAcceptableLatency || 2000);
     const actualResponseLength = rapidReplyResponse?.length || 0;
 
     // Check latency against configured limits
-    const latencyCheck =
-      actualRapidReplyLatency <= mapping.maxLatency &&
-      actualRapidReplyLatency <= (settings.maxAcceptableLatency || 2000);
+    // No rapid reply means nothing was measured, which must not read as "within limits".
+    const latencyCheck = !!rapidReplyResponse && actualRapidReplyLatency <= maxConfiguredLatency;
 
     // Prepare test results
     const testResults = {
@@ -458,14 +336,19 @@ const handler = adminApi({
         ttfvt: actualRapidReplyTtfvt,
         latency: actualRapidReplyLatency,
         responseLength: actualResponseLength,
-        maxConfiguredLatency: Math.min(mapping.maxLatency, settings.maxAcceptableLatency || 2000),
+        maxConfiguredLatency,
+        // The main model's own timing, kept apart so it is never read as the rapid model's.
+        mainModelTtfvt,
+        mainModelError,
         estimatedCost: actualCost,
         tokensUsed: actualTokensUsed,
         latencyCheck: {
           passed: latencyCheck,
-          message: latencyCheck
-            ? `Rapid reply latency ${actualRapidReplyLatency}ms is within limits`
-            : `Rapid reply latency ${actualRapidReplyLatency}ms exceeds limit of ${Math.min(mapping.maxLatency, settings.maxAcceptableLatency || 2000)}ms`,
+          message: !rapidReplyResponse
+            ? 'No rapid reply was generated, so latency was not measured'
+            : latencyCheck
+              ? `Rapid reply latency ${actualRapidReplyLatency}ms is within limits`
+              : `Rapid reply latency ${actualRapidReplyLatency}ms exceeds limit of ${maxConfiguredLatency}ms`,
         },
       },
       rapidReplyTest: {
@@ -489,7 +372,7 @@ const handler = adminApi({
             : [],
       },
       settings: {
-        globalEnabled: settings.enabled,
+        globalEnabled,
         allowedUserTags: settings.allowedUserTags,
         transitionMode: settings.transitionMode,
         showIndicator: settings.showIndicator,
@@ -509,13 +392,19 @@ const handler = adminApi({
         );
       }
 
-      if (rapidReplyTtfvtState === 'never-rendered') {
-        recommendations.push(
-          'The model streamed but nothing ever became visible to the user. This is a frozen turn, not a slow one - check the system prompt for a response the model hides entirely.'
-        );
-      } else if (rapidReplyTtfvt > 1000) {
+      if (rapidReplyTtfvt > 1000) {
         recommendations.push(
           `TTFVT (${rapidReplyTtfvt}ms) is high. Consider using a faster rapid model or optimizing the system prompt`
+        );
+      }
+
+      if (mainModelError) {
+        recommendations.push(
+          `The main model run failed: ${mainModelError}. The rapid reply result above is unaffected.`
+        );
+      } else if (mainModelTtfvtState === 'never-rendered') {
+        recommendations.push(
+          'The main model streamed but nothing ever became visible to the user. This is a frozen turn, not a slow one - check its system prompt for a response the model hides entirely.'
         );
       }
 
@@ -599,8 +488,8 @@ const handler = adminApi({
 
     await recordTestRun(testSuccess);
 
-    console.log(
-      `${testSuccess ? '✅' : '❌'} Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`
+    req.logger.info(
+      `[RapidReplyTest] Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`
     );
 
     return res.json({

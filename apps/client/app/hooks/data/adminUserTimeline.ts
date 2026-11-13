@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  UserDetectionLinks,
   UserLinkedAccount,
   UserSignIn,
   UserSignInsPage,
@@ -101,6 +102,32 @@ export const useUserLinkedAccounts = (userId: string) =>
     queryKey: ['admin', 'users', userId, 'linked-accounts'],
     queryFn: async (): Promise<UserLinkedAccount[]> =>
       (await api.get<UserLinkedAccount[]>(`/api/admin/users/${encodeURIComponent(userId)}/linked-accounts`)).data,
+    staleTime: 1000 * 60,
+  });
+
+type WireDetectionLinks = {
+  detections: Array<Omit<UserDetectionLinks['detections'][number], 'detectedAt'> & { detectedAt: string }>;
+  accounts: Array<Omit<UserDetectionLinks['accounts'][number], 'signedUpAt'> & { signedUpAt: string | null }>;
+  truncated: boolean;
+};
+
+/** Accounts that cohort shadow detections name together with this user. */
+export const useUserDetectionLinks = (userId: string) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'detection-links'],
+    queryFn: async (): Promise<UserDetectionLinks> => {
+      const response = await api.get<WireDetectionLinks>(
+        `/api/admin/users/${encodeURIComponent(userId)}/detection-links`
+      );
+      return {
+        ...response.data,
+        detections: response.data.detections.map(item => ({ ...item, detectedAt: new Date(item.detectedAt) })),
+        accounts: response.data.accounts.map(account => ({
+          ...account,
+          signedUpAt: account.signedUpAt ? new Date(account.signedUpAt) : null,
+        })),
+      };
+    },
     staleTime: 1000 * 60,
   });
 

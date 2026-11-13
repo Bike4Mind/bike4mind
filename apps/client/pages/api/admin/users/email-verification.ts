@@ -1,10 +1,14 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ApiKeyScope, emailVerificationResponseSchema, emailVerificationUserResponseSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  MODERATION_PAGE_READ,
+  emailVerificationResponseSchema,
+  emailVerificationUserResponseSchema,
+} from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
 const EmailVerificationQuerySchema = z.object({
@@ -18,13 +22,12 @@ const EmailVerificationQuerySchema = z.object({
 const USER_PROJECTION = Object.keys(emailVerificationUserResponseSchema.shape).join(' ');
 
 // Admin-only endpoint to list users by email verification status
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(
   asyncHandler(async (req, res) => {
-    // Check admin authorization
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { page, limit, status, search } = EmailVerificationQuerySchema.parse(req.query);
     const skip = (page - 1) * limit;
 

@@ -44,7 +44,6 @@ describe('registerUser', () => {
   let mockAdapters: any;
   let mockInvite: any;
   let mockSettings: any;
-  let mockReferralCredits: any;
   let mockAddCredits: any;
 
   beforeEach(() => {
@@ -59,7 +58,6 @@ describe('registerUser', () => {
       usageHistory: [],
     };
     mockSettings = { settingValue: 'tag1,tag2' };
-    mockReferralCredits = { settingValue: '10' };
 
     mockAddCredits = vi.fn().mockResolvedValue({ id: 'newUserId', currentCredits: 10 });
     vi.spyOn(creditService, 'addCredits').mockImplementation(mockAddCredits);
@@ -74,7 +72,6 @@ describe('registerUser', () => {
         adminSettings: {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
             if (name === 'defaultTags') return Promise.resolve(mockSettings);
-            if (name === 'ReferralCreditsAmount') return Promise.resolve(mockReferralCredits);
             return Promise.resolve(null);
           }),
         },
@@ -369,7 +366,6 @@ describe('registerUser', () => {
     it('allows a disposable email when blockDisposableEmails is switched OFF', async () => {
       mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
         if (name === 'defaultTags') return Promise.resolve(mockSettings);
-        if (name === 'ReferralCreditsAmount') return Promise.resolve(mockReferralCredits);
         if (name === 'blockDisposableEmails') return Promise.resolve({ settingValue: 'false' });
         return Promise.resolve(null);
       });
@@ -636,16 +632,6 @@ describe('registerUser', () => {
     expect(createdUser.tags).toEqual(['tag1', 'tag2', PENDING_FREE_CREDITS_TAG]);
   });
 
-  it('sets freeCredits to 0 if referralCredits setting is missing', async () => {
-    mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
-      if (name === 'defaultTags') return Promise.resolve(mockSettings);
-      if (name === 'ReferralCreditsAmount') return Promise.resolve(null);
-      return Promise.resolve(null);
-    });
-    await registerUser(baseParams, mockAdapters);
-    expect(mockAddCredits).not.toHaveBeenCalled();
-  });
-
   it('marks invite as used and updates status', async () => {
     await registerUser(baseParams, mockAdapters);
     expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
@@ -699,7 +685,6 @@ describe('registerUser', () => {
     const setAllowOpenRegistration = (value: 'true' | 'false') => {
       mockAdapters.db.adminSettings.findBySettingName = vi.fn().mockImplementation((name: string) => {
         if (name === 'defaultTags') return Promise.resolve(mockSettings);
-        if (name === 'ReferralCreditsAmount') return Promise.resolve(mockReferralCredits);
         if (name === 'allowOpenRegistration') return Promise.resolve({ settingValue: value });
         return Promise.resolve(null);
       });
@@ -783,7 +768,7 @@ describe('registerUser', () => {
           const values: Record<string, string> = {
             signupGrantInitialCredits: '4',
             signupGrantDripCap: '9000',
-            ReferralCreditsAmount: '10',
+            ReferralCreditsAmount: '5000',
           };
           return name in values ? { settingValue: values[name] } : readSetting(name);
         });
@@ -796,13 +781,53 @@ describe('registerUser', () => {
         ...extra,
       });
 
-      it('splits a refer-a-friend flat grant into a tranche plus a locked remainder', async () => {
+      it('enrolls the default grant for a referral, ignoring a stored ReferralCreditsAmount', async () => {
         enableStaging();
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 6, creditsReleased: 0 });
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 9000, creditsReleased: 0 });
         expect(created().pendingCreditGrant).toBeNull();
         expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
+      });
+
+      it("enrolls the default grant for a referral, ignoring the invite's own startingCredits", async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 750 }));
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 9000, creditsReleased: 0 });
+        expect(created().pendingCreditGrant).toBeNull();
+      });
+
+      it("enrolls the default grant for a referral with a matching subscriber row, keeping the subscriber's storage", async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.subscribers = {
+          findByEmail: vi
+            .fn()
+            .mockResolvedValue({ inviteCode: baseParams.inviteCode, startingCredits: 20000, startingStorage: 5000 }),
+        };
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 9000, creditsReleased: 0 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().storageLimitOverride).toBe(5000);
+      });
+
+      it('gives a referral invitee the same grant as an open signup', async () => {
+        enableStaging();
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
+          name === 'allowOpenRegistration' ? { settingValue: 'true' } : readSetting(name)
+        );
+        const open = await registerUser(noInviteParams, mockAdapters);
+        mockAdapters.db.users.findByUsernameOrEmail.mockResolvedValue(null);
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 750 }));
+        const referred = await registerUser(baseParams, mockAdapters);
+        const amounts = (grant: { signupCredits: number; unlockCredits: number }) => ({
+          signupCredits: grant.signupCredits,
+          unlockCredits: grant.unlockCredits,
+        });
+        expect(amounts(referred.signupGrant!)).toEqual(amounts(open.signupGrant!));
+        expect(open.signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 9000 });
       });
 
       it('keeps the flat grant for an admin code that sizes its credits', async () => {
@@ -843,7 +868,6 @@ describe('registerUser', () => {
         enableStaging();
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
-          if (name === 'ReferralCreditsAmount') return { settingValue: '0' };
           if (name === 'allowOpenRegistration') return { settingValue: false };
           return readSetting(name);
         });
@@ -860,7 +884,6 @@ describe('registerUser', () => {
         enableStaging();
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
-          if (name === 'ReferralCreditsAmount') return { settingValue: '0' };
           if (name === 'allowOpenRegistration') return { settingValue: true };
           return readSetting(name);
         });
@@ -926,43 +949,20 @@ describe('registerUser', () => {
         expect(created().signupInvite).toBeUndefined();
       });
 
-      it('stages a referral invite with the retired staged flag off, keeping its whole amount', async () => {
-        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
-        await registerUser(baseParams, mockAdapters);
-        const grant = created().signupGrant;
-        expect(grant.signupCredits + grant.unlockCredits).toBe(10);
-        expect(created().pendingCreditGrant).toBeNull();
-      });
-
-      it('pays a referral invite above the initial credits whole under a drip cap of 0', async () => {
+      it('enrolls the default grant for a referral under a drip cap of 0', async () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
           const values: Record<string, string> = {
             signupGrantInitialCredits: '4',
             signupGrantDailyCredits: '0',
             signupGrantDripCap: '0',
-            ReferralCreditsAmount: '10',
+            ReferralCreditsAmount: '5000',
           };
           return name in values ? { settingValue: values[name] } : readSetting(name);
         });
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toMatchObject({ signupCredits: 10, unlockCredits: 0, creditsReleased: 0 });
-      });
-
-      it('keeps the referral split under a stored drip cap above 0', async () => {
-        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
-        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
-          const values: Record<string, string> = {
-            signupGrantInitialCredits: '4',
-            signupGrantDripCap: '9000',
-            ReferralCreditsAmount: '10',
-          };
-          return name in values ? { settingValue: values[name] } : readSetting(name);
-        });
-        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
-        await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 6, creditsReleased: 0 });
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 0, creditsReleased: 0 });
       });
     });
 

@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 import type {
   ISkillBundle,
   ISkillHonestSummary,
@@ -8,6 +9,7 @@ import type {
   ISkillSnapshot,
   SkillListingReportReason,
   SkillListingVisibility,
+  SkillReviewStatus,
   SkillRiskTier,
 } from '@bike4mind/common';
 
@@ -25,6 +27,9 @@ export type MarketVersionView = {
   snapshot: ISkillSnapshot;
   honestSummary?: ISkillHonestSummary;
   riskTier?: SkillRiskTier;
+  /** The listing's author approved it themselves; no second reviewer. */
+  selfApproved?: boolean;
+  reviewStatus?: SkillReviewStatus;
   createdAt: string;
 };
 
@@ -100,15 +105,14 @@ export const useRecommendedListings = (enabled = true) =>
     staleTime: 5 * 60 * 1000,
   });
 
-/** Detail by id, or by unlisted share token when `token` is given without an id. */
+/** Detail by id, or by unlisted share token when only `token` is given. */
 export const useListingDetail = (args: { id?: string; token?: string }) =>
   useQuery({
-    queryKey: ['skill-market', 'listing', args.id ?? null, args.token ?? null],
+    queryKey: ['skill-market', 'listing', args.id ?? null, args.id ? null : (args.token ?? null)],
     queryFn: async () => {
-      const url = args.id
-        ? `/api/skills/market/${args.id}${args.token ? `?token=${encodeURIComponent(args.token)}` : ''}`
-        : `/api/skills/market/by-token/${encodeURIComponent(args.token ?? '')}`;
-      return (await api.get<ListingDetail>(url)).data;
+      if (args.id) return (await api.get<ListingDetail>(`/api/skills/market/${args.id}`)).data;
+      const headers = { [SKILL_SHARE_TOKEN_HEADER]: args.token ?? '' };
+      return (await api.get<ListingDetail>('/api/skills/market/by-token', { headers })).data;
     },
     enabled: Boolean(args.id || args.token),
     retry: false,
@@ -132,6 +136,8 @@ export type ReviewQueueVersionItem = {
 export type ReviewQueueReportItem = {
   listing: MarketListing;
   count: number;
+  /** Reports that count toward auto-hide. */
+  countingCount: number;
   reports: Array<{ reason: SkillListingReportReason; details?: string; createdAt: string }>;
 };
 export type LegacyGlobalSkill = {

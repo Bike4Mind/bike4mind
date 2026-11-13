@@ -32,6 +32,29 @@ describe('oauthRedirectUriSchema', () => {
 });
 
 describe('createOAuthClientSchema', () => {
+  const federatedIdp = { issuer: 'https://idp.example.test', audience: 'app', providerName: 'B4M' };
+  const base = { name: 'App', redirectUris: ['https://app.example.test/cb'], federatedIdp };
+
+  it('accepts an optional federated quota profile without changing defaults', () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    expect(createOAuthClientSchema.parse({ ...base, rateLimit }).rateLimit).toEqual(rateLimit);
+    expect(createOAuthClientSchema.parse(base).rateLimit).toBeUndefined();
+    expect(updateOAuthClientSchema.parse({ rateLimit }).rateLimit).toEqual(rateLimit);
+    expect(updateOAuthClientSchema.parse({ rateLimit: null }).rateLimit).toBeNull();
+    expect(createOAuthClientSchema.safeParse({ ...base, federatedIdp: undefined, rateLimit }).success).toBe(false);
+  });
+
+  it.each([
+    { requestsPerMinute: 0, requestsPerDay: 20_000 },
+    { requestsPerMinute: 1.5, requestsPerDay: 20_000 },
+    { requestsPerMinute: 10_001, requestsPerDay: 20_000 },
+    { requestsPerMinute: 300, requestsPerDay: 1_000_001 },
+    { requestsPerMinute: 300 },
+  ])('rejects an invalid profile %j', rateLimit => {
+    expect(createOAuthClientSchema.safeParse({ ...base, rateLimit }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ rateLimit }).success).toBe(false);
+  });
+
   it('trims the name and defaults clientType to relying-party', () => {
     const parsed = createOAuthClientSchema.parse({ name: '  App ', redirectUris: ['https://a.example.test/cb'] });
     expect(parsed).toMatchObject({ name: 'App', clientType: 'relying-party' });
@@ -121,6 +144,16 @@ describe('updateOAuthClientSchema', () => {
   it('accepts a federatedIdp object and null', () => {
     expect(updateOAuthClientSchema.safeParse({ federatedIdp: trust }).success).toBe(true);
     expect(updateOAuthClientSchema.parse({ federatedIdp: null }).federatedIdp).toBeNull();
+  });
+
+  it('accepts an Overwatch product id and null, and rejects one that is not a lower-case slug', () => {
+    expect(updateOAuthClientSchema.parse({ overwatchProductId: ' reading-app ' }).overwatchProductId).toBe(
+      'reading-app'
+    );
+    expect(updateOAuthClientSchema.parse({ overwatchProductId: null }).overwatchProductId).toBeNull();
+    for (const bad of ['', 'Reading-App', '-reading', 'reading app', 'a'.repeat(65)]) {
+      expect(updateOAuthClientSchema.safeParse({ overwatchProductId: bad }).success).toBe(false);
+    }
   });
 
   it('rejects a non-https issuer in federatedIdp', () => {

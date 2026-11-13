@@ -3,9 +3,9 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
+// admin-toolkit-allow 2026-11-12 -- Existing price and embedding confirmations retain their save behavior during the field-row cleanup.
 import {
   Button,
-  Card,
   Divider,
   FormControl,
   FormHelperText,
@@ -26,10 +26,12 @@ import {
   Stack,
   Box,
 } from '@mui/joy';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { SettingFieldRow } from './shared/SettingFieldRow';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
+import { StatusChip } from './shared/StatusChip';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
-import { rangeMessage } from './settingFieldHelpers';
+import { describeMoneyValue, moneyChangeWarning, rangeMessage } from './settingFieldHelpers';
 import { useSettingsDraft } from './SettingsDraftProvider';
 
 interface SubSetting {
@@ -109,10 +111,10 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
 
 const AdminSettingInputField = ({
   setting,
-  index,
   defaultValue,
   subSettings,
   lockedNote,
+  valueHelper,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
   // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
@@ -121,6 +123,7 @@ const AdminSettingInputField = ({
   subSettings?: SubSetting[];
   /** Locks a boolean setting: the switch and Save are disabled and this replaces the description. */
   lockedNote?: string;
+  valueHelper?: ReactNode;
 }) => {
   const saveRef = useRef<HTMLDivElement>(null);
   useAdminSaveShortcut(saveRef);
@@ -145,15 +148,22 @@ const AdminSettingInputField = ({
         (setting.type === 'number' && next !== '' && next !== null
           ? rangeMessage(Number(next), setting.min, setting.max)
           : undefined),
-      warning:
+      // Staged edits never reach saveValue - the SaveBar commits them - so the price
+      // confirmation has to come from the warning the provider batches.
+      warning: next =>
         setting.key === 'defaultEmbeddingModel'
-          ? 'Changing the embedding model affects new files. Existing files may need reprocessing to restore search accuracy.'
-          : undefined,
+          ? [
+              'Changing the embedding model affects new files. Existing files may need reprocessing to restore search accuracy.',
+            ]
+          : setting.changesCustomerPrice
+            ? [moneyChangeWarning(setting.key, setting.name, defaultValue, next)]
+            : [],
     }
   );
   const { value, setValue } = draft;
   const [secretFocused, setSecretFocused] = useState(false);
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
+  const [showMoneyWarning, setShowMoneyWarning] = useState(false);
   // Whether the admin actually typed into a sensitive field, as opposed to the field
   // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
   // key" from an accidental empty write - see the guard in saveValue.
@@ -169,6 +179,7 @@ const AdminSettingInputField = ({
   const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
+  const changesCustomerPrice = setting.changesCustomerPrice === true;
 
   // Only number settings declare bounds, and only some of those, so they are read through
   // the type discriminant rather than off the union.
@@ -231,6 +242,12 @@ const AdminSettingInputField = ({
       return;
     }
 
+    // Unstaged only; a staged edit is confirmed through the SaveBar's batched warning above.
+    if (changesCustomerPrice && isDirty) {
+      setShowMoneyWarning(true);
+      return;
+    }
+
     // Save directly for other settings
     saveValue(value);
   };
@@ -241,20 +258,36 @@ const AdminSettingInputField = ({
     setShowEmbeddingWarning(false);
   };
 
+  const confirmMoneyChange = () => {
+    if (value === null) return;
+    saveValue(value);
+    setShowMoneyWarning(false);
+  };
+
   return (
     <>
-      <Card
+      <SettingFieldRow
         ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
+        data-testid={`admin-setting-${setting.key}-row`}
         tabIndex={0}
         aria-label={`${setting.name} settings editor`}
-        variant="outlined"
-        sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
       >
         <Grid container spacing={2}>
           <Grid xs={12} md={6}>
             <FormControl error={Boolean(fieldError)} sx={{ width: '100%' }}>
-              <FormLabel>{setting.name}</FormLabel>
+              <FormLabel>
+                {setting.name}
+                {changesCustomerPrice && (
+                  <Box component="span" sx={{ ml: 1 }}>
+                    <StatusChip
+                      tone="warn"
+                      label="Changes customer price"
+                      data-testid={`admin-setting-${setting.key}-money-badge`}
+                    />
+                  </Box>
+                )}
+              </FormLabel>
 
               {setting.type === 'boolean' ? (
                 <Switch
@@ -337,6 +370,9 @@ const AdminSettingInputField = ({
                     before that save, not one hidden behind a previous failure's message. */}
                 {rangeError ?? floorWarning ?? saveError ?? lockedNote ?? setting.description}
               </FormHelperText>
+              {valueHelper && (
+                <FormHelperText sx={{ display: 'block', color: 'admin.inkMuted' }}>{valueHelper}</FormHelperText>
+              )}
             </FormControl>
           </Grid>
 
@@ -396,7 +432,51 @@ const AdminSettingInputField = ({
             <ScopedSettingOverrides setting={setting} />
           </>
         )}
-      </Card>
+      </SettingFieldRow>
+
+      <Modal open={showMoneyWarning} onClose={() => setShowMoneyWarning(false)}>
+        <ModalDialog variant="outlined" role="alertdialog" data-testid="admin-setting-money-dialog">
+          <DialogTitle>
+            <WarningIcon color="warning" sx={{ mr: 1 }} />
+            Confirm a change to what customers pay
+          </DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <Typography level="body-md" data-testid="admin-setting-money-dialog-change">
+                <strong>{setting.name}</strong> changes from{' '}
+                <strong>{describeMoneyValue(setting.key, defaultValue)}</strong> to{' '}
+                <strong>{describeMoneyValue(setting.key, value)}</strong>.
+              </Typography>
+              <Alert color="warning" variant="soft">
+                <Typography level="body-sm">
+                  This changes what customers are charged, or what they receive for money already paid. The change takes
+                  effect immediately and is recorded in the admin audit log.
+                </Typography>
+              </Alert>
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="warning"
+              onClick={confirmMoneyChange}
+              loading={updateSettings.isPending}
+              data-testid="admin-setting-money-confirm-btn"
+            >
+              Save price change
+            </Button>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => setShowMoneyWarning(false)}
+              disabled={updateSettings.isPending}
+              data-testid="admin-setting-money-cancel-btn"
+            >
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
 
       {/* Confirmation Modal for Embedding Model Changes */}
       <Modal open={showEmbeddingWarning} onClose={() => setShowEmbeddingWarning(false)}>

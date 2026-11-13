@@ -87,6 +87,9 @@ describe('POST /api/overwatch/v1/hops', () => {
     expect(baseApiOptions[0]).toMatchObject({
       requiredScopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
       allowedMethods: ['POST'],
+      // Machine ingest: the key is in use, its owner is not acting.
+      recordsActivity: false,
+      recordsKeyUse: true,
     });
     const limit = rateLimitOptions[0] as { limit: number; bucket: string; subject: (r: unknown) => unknown };
     expect(limit.bucket).toBe('overwatch-hops-mint');

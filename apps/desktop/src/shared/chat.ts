@@ -100,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -215,6 +218,18 @@ export interface ChatToolCall {
    */
   approvalRules?: string[];
   /**
+   * Set with `approvalId` when the call can be allowed for its project: the prefix rules "Allow in this
+   * project" saves, which apply to every session in that project and its worktrees.
+   */
+  approvalProjectRules?: string[];
+  /** Set with `approvalProjectRules`: the project folder they are saved for. */
+  approvalProject?: string;
+  /**
+   * Set with `approvalId` on a shell call where only some sub-commands need a decision: those, as
+   * written, each with why. The rest are already allowed, and the card's answers cover only these.
+   */
+  approvalParts?: { text: string; reason?: string }[];
+  /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
    * the tool runs, which is what makes the settled row report what the user actually picked.
@@ -297,6 +312,8 @@ export type ChatApprovalDecidedBy =
       option?: string;
       /** With answer 'always': the derived rules were also saved for every session. */
       everywhere?: true;
+      /** With answer 'always': the derived prefix rules were also saved for every session in the project. */
+      project?: true;
     }
   /** A saved permission rule; `source` names where it lives (desktop or Claude Code settings). */
   | { kind: 'rule'; rule: string; source?: string }
@@ -407,6 +424,8 @@ export interface ChatApprovalAnswer {
    * every later session. Main saves the rules it derived itself; this only says yes to them.
    */
   everywhere?: boolean;
+  /** With decision 'always': also save the card's `approvalProjectRules` for its project. */
+  project?: boolean;
 }
 
 /**
@@ -721,6 +740,12 @@ export interface ChatMessage {
   model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /**
+   * A plain reply's one request: its server request id and settled charge, which a reply with
+   * `rounds` keeps per round instead (see ChatReplyRound.requestId). Absent on older replies.
+   */
+  requestId?: string;
+  settled?: ChatSettledCharge;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -1422,6 +1447,8 @@ export interface ChatSession extends ChatSessionMeta {
 export interface ChatSessionExportResult {
   saved: boolean;
   path?: string;
+  /** Items left out of a local data export. */
+  warnings?: string[];
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
@@ -2034,6 +2061,24 @@ export interface ChatReplyRound {
    * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
    */
   sent?: ChatSentRound;
+  /**
+   * The server's id for this round's request: the `X-Request-ID` it was sent with, as the stream's
+   * `meta` event echoed it. The key that counts the round's charge exactly once. Absent on older
+   * rounds and on servers that send no `meta`.
+   */
+  requestId?: string;
+  /** What the server's ledger recorded for this round's request; see ChatSettledCharge. */
+  settled?: ChatSettledCharge;
+}
+
+/**
+ * The charge the server committed for one request, from the stream's `settled` event. Unlike
+ * `usage.creditsUsed`, computed before settlement, this is what the ledger holds. Stored only:
+ * totals still come from `usage`.
+ */
+export interface ChatSettledCharge {
+  creditsCharged: number;
+  usdCost?: number;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

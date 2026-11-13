@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { mockEmit, mockKeyFor } = vi.hoisted(() => ({ mockEmit: vi.fn(), mockKeyFor: vi.fn() }));
 vi.mock('./emitActiveEvent', () => ({
@@ -392,7 +393,7 @@ describe('emitPurchaseEvents', () => {
   });
 
   it('never throws when the emitter rejects or the key lookup throws', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     mockEmit.mockRejectedValue(new Error('down'));
     await expect(emitPurchaseEvents(invoice())).resolves.toEqual(['widgets']);
     expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] billing event emit failed', {
@@ -516,5 +517,78 @@ describe('stableEventId', () => {
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(stableEventId('signup', 'widgets', 'u1')).toBe(a);
     expect(stableEventId('signup', 'widgets', 'u2')).not.toBe(a);
+  });
+});
+
+describe('the OAuth client touch', () => {
+  const oauthTouch = { source: 'widgets', medium: 'oauth', content: 'client-1' };
+
+  it('credits the signup to the client product, labelled oauth', async () => {
+    await expect(
+      emitSignupForSourceProducts({ userId: 'u1', method: 'otc', touches: { oauthTouch } })
+    ).resolves.toEqual(['widgets']);
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: 'widgets',
+        event: 'signup',
+        eventId: stableEventId('signup', 'widgets', pseudonymize('u1', 'test-salt')),
+        utm: oauthTouch,
+        metadata: { touch: 'oauth', attribution: 'self-reported', method: 'otc' },
+      })
+    );
+  });
+
+  it('credits the account payments to the client product, beside the host copy', async () => {
+    mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+    await emitPurchaseEvents({
+      user: { id: 'u1', acquisition: { oauthTouch } },
+      paymentId: 'in_1',
+      kind: 'subscription',
+      amountMinor: 3000,
+      currency: 'usd',
+      billingReason: 'subscription_create',
+    });
+    expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.utm, c.metadata.touch])).toEqual([
+      ['bike4mind', undefined, undefined],
+      ['widgets', oauthTouch, 'oauth'],
+    ]);
+  });
+
+  it('leaves a product a campaign touch also names on that touch, and credits it once', async () => {
+    await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'otc',
+      touches: { firstTouch: { source: 'widgets', campaign: 'launch' }, oauthTouch },
+    });
+    expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.utm, c.metadata.touch])).toEqual([
+      ['widgets', { source: 'widgets', campaign: 'launch' }, 'first'],
+    ]);
+  });
+
+  it('credits both products when the campaign and the client name different ones', async () => {
+    await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'otc',
+      touches: { lastTouch: { source: 'gadgets' }, oauthTouch },
+    });
+    expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.metadata.touch])).toEqual([
+      ['gadgets', 'last'],
+      ['widgets', 'oauth'],
+    ]);
+  });
+
+  it('credits nothing for a client product with no ingest key, or for the host itself', async () => {
+    for (const source of ['unkeyed', 'bike4mind']) {
+      mockKeyFor.mockImplementation(() => 'key');
+      if (source === 'unkeyed') mockKeyFor.mockImplementation((p: string) => (p === 'widgets' ? 'key' : undefined));
+      await expect(
+        emitSignupForSourceProducts({
+          userId: 'u1',
+          method: 'otc',
+          touches: { oauthTouch: { source, medium: 'oauth' } },
+        })
+      ).resolves.toEqual([]);
+    }
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });

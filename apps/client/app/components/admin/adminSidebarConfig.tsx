@@ -23,6 +23,7 @@ import {
   FileText,
   Fingerprint,
   Gauge,
+  GraduationCap,
   Gavel,
   GitBranch,
   GitPullRequest,
@@ -78,20 +79,18 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  Accounts = 4,
+  // 4, 11 and 17 were tabs with no panel; never reuse them.
   RegistrationInvites = 5,
   Migrate = 6,
   Modals = 7,
   Files = 8,
   Documentation = 9,
   WorldTime = 10,
-  Analysts = 11,
   Waitlist = 12,
   Subscriptions = 13,
   Organizations = 14,
   CreditAnalytics = 15,
   SecretsRotation = 16,
-  BulkImport = 17,
   ModelLogs = 18,
   ModelMetrics = 19,
   EventMetrics = 20,
@@ -149,6 +148,8 @@ export enum AdminTab {
   ModerationIncidents = 74,
   StripeDisputes = 75,
   Approvals = 76,
+  Tutorials = 77,
+  AiOperations = 78,
 }
 
 /**
@@ -255,7 +256,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Coins,
     label: 'Money',
     items: [
-      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue', testid: 'admin-revenue-btn' },
+      { Icon: ChartSpline, tab: AdminTab.Revenue, label: 'Revenue & payments', testid: 'admin-revenue-btn' },
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
@@ -308,6 +309,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Sparkles,
     label: 'AI',
     items: [
+      { Icon: Gauge, tab: AdminTab.AiOperations, label: 'AI operations', testid: 'admin-ai-operations-btn' },
       { Icon: Brain, tab: AdminTab.LLMDashboard, label: 'Models' },
       { Icon: Bot, tab: AdminTab.AgentOps, label: 'Agents' },
       { Icon: FileText, tab: AdminTab.SystemPrompts, label: 'System prompts' },
@@ -372,6 +374,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Settings, tab: AdminTab.AdminSettings, label: 'General', testid: 'admin-settings-btn' },
       { Icon: AppWindow, tab: AdminTab.Modals, label: 'Modals', testid: 'admin-modals-tab-btn' },
       { Icon: Newspaper, tab: AdminTab.WhatsNewModals, label: "What's new" },
+      { Icon: GraduationCap, tab: AdminTab.Tutorials, label: 'Tutorials', testid: 'admin-tutorials-btn' },
       { Icon: NotebookText, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: BookOpen, tab: AdminTab.Documentation, label: 'Docs' },
       { Icon: SquareTerminal, tab: AdminTab.ApiReference, label: 'API reference' },

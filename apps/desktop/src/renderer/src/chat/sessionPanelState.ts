@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CONTENT_MAX_WIDTH } from './layout';
+import { COLUMN_PADDING, CONTENT_MAX_WIDTH } from './layout';
 
 /**
  * The session panel's sections, in the order they are drawn. Adding one is a new id here and a
@@ -15,13 +15,32 @@ export const SESSION_PANEL_INSET = 12;
 export const SESSION_PANEL_SPACE = SESSION_PANEL_WIDTH + 2 * SESSION_PANEL_INSET;
 
 /**
- * Whether the docked card fits beside the reading column without covering any of its text.
+ * How the panel sits in the thread region, by the region's width (not the window's, so the sidebar,
+ * the browser pane and split views all count):
+ * - `beside`: the free margin right of the centered reading column holds the card, so it floats
+ *   there and nothing moves when it opens.
+ * - `push`: no such margin, but the region fits the panel's rail and a full reading column, so the
+ *   column shifts left to make room.
+ * - `overlay`: too narrow for both; the card opens over the thread with a scrim, from the header button.
  *
- * Reserve a rail beside a full reading column. Below this the card folds into its header button
- * and opens as a popover instead.
+ * Without a centered column (the orchestrator's stage and dock fill the region) there is no margin
+ * to float in, so a wide region pushes. A width not yet measured counts as wide.
  */
-export function panelFitsBesideThread(columnWidth: number): boolean {
-  return columnWidth >= CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE;
+export type SessionPanelLayout = 'beside' | 'push' | 'overlay';
+
+/** The narrowest region whose centered column leaves the card its margin, padding included. */
+export const SESSION_PANEL_BESIDE_MIN_WIDTH = CONTENT_MAX_WIDTH + 2 * (SESSION_PANEL_SPACE - COLUMN_PADDING);
+/** The narrowest region that fits the panel's rail beside a full reading column. */
+export const SESSION_PANEL_PUSH_MIN_WIDTH = CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE;
+
+export function sessionPanelLayout(
+  regionWidth: number | null,
+  { centeredColumn }: { centeredColumn: boolean }
+): SessionPanelLayout {
+  const width = regionWidth ?? Number.POSITIVE_INFINITY;
+  if (centeredColumn && width >= SESSION_PANEL_BESIDE_MIN_WIDTH) return 'beside';
+  if (width >= SESSION_PANEL_PUSH_MIN_WIDTH) return 'push';
+  return 'overlay';
 }
 
 /**

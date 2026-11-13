@@ -38,6 +38,7 @@ import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
+const MAX_SETTLED_REREADS = 3;
 
 export interface SessionsController {
   sessions: ChatSessionSummary[];
@@ -514,6 +515,8 @@ export interface ConversationController {
   /** A first turn waiting on its worktree, before `turn` exists. Null otherwise. */
   preparing: WorkspaceProgress | null;
   sendError: string | null;
+  /** The chat whose read failed, so the shell stops treating it as opening; null otherwise. */
+  openFailedFor: string | null;
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
   dismissNotice: () => void;
@@ -606,6 +609,7 @@ export function useConversation(
   const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [openFailedFor, setOpenFailedFor] = useState<string | null>(null);
   const [notices, setNotices] = useState<ContextNotice[]>([]);
   const notice = useMemo(() => noticeText(notices), [notices]);
   const setNotice = useCallback((text: string | null) => setNotices(text ? [{ message: text }] : []), []);
@@ -651,6 +655,7 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
+    setOpenFailedFor(null);
     setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
     if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
@@ -671,30 +676,53 @@ export function useConversation(
     }
 
     let current = true;
+    let settledRereads = 0;
     const load = (): void => {
       const read: SessionRead = { sessionId, stale: false };
       openRead.current = read;
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
-      void window.b4m.chat.getSession(sessionId).then(loaded => {
+      const failed = (error: unknown): void => {
         if (!current) return;
         if (preparationBeforeRead !== workspaceVersion.current) return load();
         if (historyBeforeRead !== historyVersion.current) return load();
         if (read.stale) return load();
-        // A reply already running arrives as main's live copy, and the events from now on
-        // extend it. One that settled while this read was in flight is stale: read again
-        // rather than put back a turn the 'done' already closed.
-        const live = loaded?.replyInFlight;
-        if (live && settledReplies.current.has(live.messageId)) return load();
-        openRead.current = null;
-        setSession(loaded);
-        setMessages(loaded?.messages ?? []);
-        // A started session opened while its worktree is still being cut: no event is coming
-        // to say so, the 'workspace' one went out before this window was looking.
-        setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
-        setStreaming(!!live);
-        setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
-      });
+        if (openRead.current === read) openRead.current = null;
+        const reason = error instanceof Error ? error.message : String(error);
+        const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error(?:: |$))?/, '');
+        setSendError(`Could not open this conversation. ${detail}`);
+        setSession(null);
+        setMessages([]);
+        setStreaming(false);
+        setTurn(null);
+        setOpenFailedFor(sessionId);
+      };
+      void window.b4m.chat
+        .getSession(sessionId)
+        .then(loaded => {
+          if (!current) return;
+          if (preparationBeforeRead !== workspaceVersion.current) return load();
+          if (historyBeforeRead !== historyVersion.current) return load();
+          if (read.stale) return load();
+          // A reply already running arrives as main's live copy, and the events from now on
+          // extend it. One that settled while this read was in flight is stale: read again
+          // rather than put back a turn the 'done' already closed.
+          const live = loaded?.replyInFlight;
+          // Bounded so an id wrongly left settled shows the live copy instead of blanking the thread in a read loop.
+          if (live && settledReplies.current.has(live.messageId) && settledRereads < MAX_SETTLED_REREADS) {
+            settledRereads++;
+            return load();
+          }
+          openRead.current = null;
+          setSession(loaded);
+          setMessages(loaded?.messages ?? []);
+          // A started session opened while its worktree is still being cut: no event is coming
+          // to say so, the 'workspace' one went out before this window was looking.
+          setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
+          setStreaming(!!live);
+          setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+        })
+        .catch(failed);
     };
     load();
     // Read rather than derived: main owns the queue, and a window opening onto a session that
@@ -866,6 +894,8 @@ export function useConversation(
       // Anything that is not a live event may depend on, or replace, what is still queued.
       flushLive();
 
+      // A resumed reply keeps its id, so its run is live again and must not read as settled.
+      if (event.type === 'start') settledReplies.current.delete(event.messageId);
       if (event.type === 'done' || event.type === 'error') {
         settledReplies.current.add(event.messageId);
         // Counted before the session filter below, and deliberately: a reply running in a
@@ -1117,12 +1147,17 @@ export function useConversation(
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
 
+  // Main just wrote this chat, so a read of it still in flight may predate the write and is done again.
+  const outdateOpenRead = useCallback((id: string) => {
+    const read = openRead.current;
+    if (read && read.sessionId === id) read.stale = true;
+  }, []);
+
   // A summary main just wrote, folded into both the open conversation and the sidebar row. The
   // open conversation only when it is that session: a share can return after the user moved on.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
-      const read = openRead.current;
-      if (read && read.sessionId === updated.id) read.stale = true;
+      outdateOpenRead(updated.id);
       setSession(current =>
         current?.id === updated.id
           ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories }
@@ -1130,7 +1165,7 @@ export function useConversation(
       );
       onSummaryChanged(updated);
     },
-    [onSummaryChanged]
+    [onSummaryChanged, outdateOpenRead]
   );
 
   // One main-side share for the chip's picker (no `path`), /add-dir and Add folder; `confirm` echoes a typed addition.
@@ -1212,17 +1247,19 @@ export function useConversation(
           name === 'compact'
             ? await window.b4m.chat.compactContext(sessionId, args)
             : await window.b4m.chat.clearContext(sessionId);
+        if (activeSessionId.current !== sessionId) return;
         if (!result.ok) {
           setSendError(result.error);
           return;
         }
+        outdateOpenRead(sessionId);
         setSession(result.session);
         setMessages(result.session.messages);
       } finally {
-        setCommandProgress(null);
+        if (activeSessionId.current === sessionId) setCommandProgress(null);
       }
     },
-    [sessionId, shareDirectory]
+    [sessionId, shareDirectory, outdateOpenRead]
   );
 
   const cancelQueued = useCallback(
@@ -1256,6 +1293,7 @@ export function useConversation(
       try {
         const updated = await save(sessionId);
         if (!updated) return;
+        outdateOpenRead(sessionId);
         if (clearsNotice && activeSessionId.current === sessionId) setNotice(null);
         setSession(current => (current?.id === sessionId ? { ...current, ...apply(updated) } : current));
         onSummaryChanged(updated);
@@ -1265,7 +1303,7 @@ export function useConversation(
         }
       }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
   const rename = useCallback(
@@ -1300,11 +1338,13 @@ export function useConversation(
       }
       return;
     }
-    if (!settled || activeSessionId.current !== sessionId) return;
+    if (!settled) return;
+    outdateOpenRead(sessionId);
+    if (activeSessionId.current !== sessionId) return;
     if (settled.notice) setNotice(settled.notice);
     setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
     onSummaryChanged(settled.session);
-  }, [sessionId, onSummaryChanged]);
+  }, [sessionId, onSummaryChanged, outdateOpenRead]);
 
   const setHistory = useCallback(
     async (enabled: boolean) => {
@@ -1312,7 +1352,9 @@ export function useConversation(
       const version = historyVersion.current;
       try {
         const updated = await window.b4m.chat.setSessionHistory(sessionId, enabled);
-        if (!updated || version !== historyVersion.current) return;
+        if (!updated) return;
+        outdateOpenRead(sessionId);
+        if (version !== historyVersion.current) return;
         setSession(current =>
           current?.id === sessionId ? { ...current, historyEnabled: updated.historyEnabled } : current
         );
@@ -1323,7 +1365,7 @@ export function useConversation(
         }
       }
     },
-    [sessionId, session?.id, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged, outdateOpenRead]
   );
 
   const setReasoningEffort = useCallback(
@@ -1356,6 +1398,7 @@ export function useConversation(
       try {
         const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
         if (!updated) throw new Error('The conversation could not be found.');
+        outdateOpenRead(sessionId);
         if (!latest()) return true;
         setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
         onSummaryChanged(updated);
@@ -1373,7 +1416,7 @@ export function useConversation(
         return false;
       }
     },
-    [sessionId, session?.id, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged, outdateOpenRead]
   );
 
   const setApprovalMode = useCallback(
@@ -1396,6 +1439,7 @@ export function useConversation(
         return null;
       });
       if (!updated) return;
+      outdateOpenRead(sessionId);
       // The reply can land after a switch to another conversation, which must keep its own flag.
       setSession(current => {
         if (current?.id !== sessionId) return current;
@@ -1408,7 +1452,7 @@ export function useConversation(
       });
       onSummaryChanged(updated);
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
@@ -1568,6 +1612,7 @@ export function useConversation(
     phase,
     preparing,
     sendError,
+    openFailedFor,
     notice,
     dismissNotice,
     send,

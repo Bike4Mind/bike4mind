@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   modelDiscoveryStateRepository: { countPendingSuggestions: m.countPendingSuggestions },
   sreErrorTrackingRepository: { countFailed: m.countFailed },
   countNewFeedback: m.countNewFeedback,
+  oldestNewFeedbackAt: vi.fn(),
 }));
 vi.mock('@bike4mind/database/infra', () => ({ secretRotationRepository: { countOverdue: m.countOverdue } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: m.loggerError } }));
@@ -45,7 +46,12 @@ vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
   getSecretRotationConfig: () => ({ JWT_SECRET: {}, OTHER_SECRET: {} }),
 }));
 
-import { computeAdminActionCounts, resetDeadLetterCountCacheForTests } from './actionCounts';
+import {
+  ADMIN_ACTION_COUNTERS,
+  computeAdminActionCounts,
+  computeAdminActionOldest,
+  resetDeadLetterCountCacheForTests,
+} from './actionCounts';
 
 const NOW = new Date('2026-11-09T12:00:00.000Z');
 const fullAdmin = { id: 'admin', isAdmin: true };
@@ -75,20 +81,41 @@ beforeEach(() => {
 });
 
 describe('computeAdminActionCounts access gating', () => {
+  it('keeps supported oldest dates, isolates failures and explains unsupported queues', async () => {
+    const original = ADMIN_ACTION_COUNTERS.feedback.oldestAt;
+    ADMIN_ACTION_COUNTERS.feedback.oldestAt = async () => NOW;
+    try {
+      const oldest = await computeAdminActionOldest(fullAdmin);
+      expect(oldest.feedback.at).toBe(NOW.toISOString());
+      expect(oldest.moderationReview.reason).toMatch(/failed/);
+      expect(oldest.deadLetters.reason).toMatch(/SQS/);
+      const denied = await computeAdminActionOldest({ id: 'member' });
+      expect(denied).toEqual({});
+    } finally {
+      ADMIN_ACTION_COUNTERS.feedback.oldestAt = original;
+    }
+  });
   it('gives a full admin every key', async () => {
     const counts = await computeAdminActionCounts(fullAdmin, 'admin', NOW);
 
     expect(Object.keys(counts).sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS].sort());
   });
 
-  it('gives a support:read delegate only the queues support:read acts on', async () => {
+  it('gives a support:read delegate the queues they may read', async () => {
     const counts = await computeAdminActionCounts(
       { id: 'd', isAdmin: false, adminPermissions: ['support:read'] },
       'd',
       NOW
     );
 
-    expect(Object.keys(counts).sort()).toEqual(['approvals', 'unreviewedAudit']);
+    expect(Object.keys(counts).sort()).toEqual([
+      'approvals',
+      'deadLetters',
+      'publishedPages',
+      'signupDomainHolds',
+      'signupRiskReview',
+      'unreviewedAudit',
+    ]);
   });
 
   it('gives a settings:manage and users:moderate delegate exactly those queues', async () => {
@@ -99,7 +126,16 @@ describe('computeAdminActionCounts access gating', () => {
     );
 
     expect(Object.keys(counts).sort()).toEqual(
-      ['deadLetters', 'modelLifecycle', 'sreAgent', 'stripeDisputes', 'waitingSubscribers'].sort()
+      [
+        'heldSignupGrants',
+        'modelLifecycle',
+        'publishedPages',
+        'signupDomainHolds',
+        'signupRiskReview',
+        'sreAgent',
+        'stripeDisputes',
+        'waitingSubscribers',
+      ].sort()
     );
   });
 
@@ -183,7 +219,7 @@ describe('approvals count', () => {
 });
 
 describe('dead letters count', () => {
-  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['settings:manage'] };
+  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
 
   it('sums visible messages, skipping a queue that failed or reported -1', async () => {
     m.getQueueAttributes
@@ -194,6 +230,18 @@ describe('dead letters count', () => {
     const counts = await computeAdminActionCounts(settingsManager, 's', NOW);
 
     expect(counts.deadLetters).toBe(3);
+  });
+
+  it('counts for a support:read viewer, who can open the tab', async () => {
+    m.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 2, approximateNotVisibleCount: 0 });
+
+    const counts = await computeAdminActionCounts(
+      { id: 'r', isAdmin: false, adminPermissions: ['support:read'] },
+      'r',
+      NOW
+    );
+
+    expect(counts.deadLetters).toBeGreaterThan(0);
   });
 
   it('is null when no queue answers', async () => {

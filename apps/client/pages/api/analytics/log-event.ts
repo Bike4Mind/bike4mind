@@ -1,21 +1,23 @@
-import { CreditPurchaseEvents, FirstRunEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, FirstRunEvents, MfaEnrollmentEvents, OrganizationEvents } from '@bike4mind/common';
 import { AnalyticsEventPayloads } from '@bike4mind/server-utils/types/analytics/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
-// Server-authoritative payment and first-answer records must not be writable by clients.
+// Server-authoritative payment, first-answer, MFA and organization records cannot be written by clients.
 const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
   CreditPurchaseEvents.CHECKOUT_STARTED,
   CreditPurchaseEvents.CREDITS_GRANTED,
   CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
   FirstRunEvents.FIRST_ANSWER_CREDITS,
   FirstRunEvents.POLICIES_SHOWN,
+  ...Object.values(MfaEnrollmentEvents),
+  ...Object.values(OrganizationEvents),
 ]);
 
 // Every tracked UI action posts here unbatched, so it would dominate the shared default write budget.
-const handler = baseApi({ defaultWriteRateLimit: false }).post(
+const handler = baseApi({ defaultWriteRateLimit: false, recordsActivity: false }).post(
   async (req: Request<{}, unknown, Omit<AnalyticsEventPayloads, 'userId'>>, res) => {
     if (SERVER_ONLY_EVENTS.has(req.body?.type)) {
       throw new ForbiddenError('This event can only be recorded by the server');

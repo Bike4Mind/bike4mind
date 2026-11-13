@@ -10,7 +10,7 @@ import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4m
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
@@ -32,7 +32,7 @@ const handleSamlCallback = async (req: any, res: any) => {
     // Never log the request body or RelayState: the body carries the base64
     // SAMLResponse, i.e. a complete signed assertion that is replayable inside its
     // validity window by anyone who can read the logs.
-    console.log('SAML callback received:', { method: req.method });
+    req.logger.debug('SAML callback received', { method: req.method });
 
     // Try to extract IDP ID from RelayState or other mechanisms
     if (RelayState) {
@@ -44,20 +44,20 @@ const handleSamlCallback = async (req: any, res: any) => {
     if (!idpId) {
       // Fallback: try to get the IDP from query params (for testing)
       idpId = req.query?.idp as string;
-      console.log('Fallback - trying IDP from query params:', idpId);
+      req.logger.debug('Falling back to IDP from query params', { idpId });
     }
 
     if (!idpId) {
       // Another fallback: if we only have one SAML IDP, use it
-      console.log('No IDP ID found, attempting to find active SAML IDPs...');
+      req.logger.debug('No IDP ID found, looking for a single active SAML IDP');
       const allIdps = await identityProviderRepository.findAll();
       const samlIdps = allIdps.filter(idp => idp.type === 'saml' && idp.isActive);
 
       if (samlIdps.length === 1) {
         idpId = samlIdps[0]._id?.toString();
-        console.log('Using single active SAML IDP:', idpId);
+        req.logger.debug('Using single active SAML IDP', { idpId });
       } else {
-        console.log('Found', samlIdps.length, 'active SAML IDPs, cannot determine which to use');
+        req.logger.info('Cannot determine which active SAML IDP to use', { activeSamlIdps: samlIdps.length });
         return res.redirect('/login?error=missing_idp_context');
       }
     }
@@ -84,7 +84,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       const email = (info && (info.email as string)) || undefined;
 
       if (err) {
-        console.error('SAML callback error:', err);
+        req.logger.error('SAML callback error', { idpId, strategyName, error: err });
         try {
           await authFailLogRepository.create({
             strategy: 'saml',
@@ -96,16 +96,16 @@ const handleSamlCallback = async (req: any, res: any) => {
             meta: { path: req.url, status: 500 },
           });
         } catch (logErr) {
-          console.error('Failed to write AuthFailLog (saml err):', logErr);
+          req.logger.error('Failed to write AuthFailLog (saml err)', { idpId, error: logErr });
         }
 
         // Handle specific signature validation errors
         if (err.message && err.message.includes('signature')) {
-          console.error('SAML signature validation failed. Common causes:');
-          console.error('1. Certificate format mismatch (check if cert needs BEGIN/END headers)');
-          console.error('2. Clock skew between IDP and SP (check time synchronization)');
-          console.error('3. Certificate mismatch (verify the correct IDP certificate is configured)');
-          console.error('4. Signature algorithm mismatch');
+          req.logger.error('SAML signature validation failed', {
+            idpId,
+            strategyName,
+            hint: 'check certificate format and match, clock skew between IDP and SP, and signature algorithm',
+          });
           return res.redirect('/login?error=saml_signature_error');
         }
 
@@ -119,7 +119,7 @@ const handleSamlCallback = async (req: any, res: any) => {
         // Reading only `reason` logged those as a generic failure and lost the triage
         // signal the OAuth path records.
         const reason = (info && ((info.reason as string) || (info.code as string))) || 'SAML authentication failed';
-        console.error('SAML authentication failed:', reason);
+        req.logger.error('SAML authentication failed', { idpId, strategyName, reason });
 
         try {
           await authFailLogRepository.create({
@@ -132,7 +132,7 @@ const handleSamlCallback = async (req: any, res: any) => {
             meta: { path: req.url, status: 401 },
           });
         } catch (logErr) {
-          console.debug('Failed to write AuthFailLog (saml no user):', logErr);
+          req.logger.debug('Failed to write AuthFailLog (saml no user)', { idpId, error: logErr });
         }
 
         return res.redirect('/login?error=saml_auth_failed');
@@ -192,11 +192,14 @@ const handleSamlCallback = async (req: any, res: any) => {
       const signupFragment = user.isNewUser ? '&firstSignupSession=1' : '';
       const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
 
-      console.log('Redirecting to:', redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) + '...');
+      // The fragment carries the access token, so log only what precedes it.
+      req.logger.debug('Redirecting after SAML login', {
+        url: redirectUrl.split('#')[0].substring(0, LOG_URL_TRUNCATE_LENGTH),
+      });
       return res.redirect(redirectUrl);
     })(req, res);
   } catch (error) {
-    console.error('SAML callback processing error:', error);
+    req.logger.error('SAML callback processing error', { error });
     return res.redirect('/login?error=callback_error');
   }
 };

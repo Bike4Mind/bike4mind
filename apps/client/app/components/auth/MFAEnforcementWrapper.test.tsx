@@ -23,10 +23,13 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   isPublicPath: () => false,
 }));
 
-// enforceMFA on, admin settings loaded.
-const { adminSettings } = vi.hoisted(() => ({ adminSettings: { enforceMFA: 'true' } }));
+// enforceMFA on, admin settings loaded (individual tests flip either).
+const { adminSettings, adminSettingsState } = vi.hoisted(() => ({
+  adminSettings: { enforceMFA: 'true' },
+  adminSettingsState: { isLoading: false },
+}));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ settings: { ...adminSettings }, isLoading: false }),
+  useAdminSettings: () => ({ settings: { ...adminSettings }, isLoading: adminSettingsState.isLoading }),
 }));
 
 // A signed-in user with no MFA configured (so enforcement wants to auto-start setup).
@@ -34,12 +37,15 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: unknown) => unknown) => selector({ currentUser: { id: 'u1', mfa: null } }),
 }));
 
-// Not impersonating; getState is only touched on the verify path (not exercised here).
+// Not impersonating; getState is touched on the verify path and by the sign-out's funnel report.
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign((selector: (s: unknown) => unknown) => selector({ impersonating: false }), {
-    getState: () => ({ forceLogoutTokens: vi.fn() }),
+    getState: () => ({ forceLogoutTokens: vi.fn(), accessToken: 'session-tok' }),
   }),
 }));
+
+const { reportMfaEnrollmentAbandoned } = vi.hoisted(() => ({ reportMfaEnrollmentAbandoned: vi.fn() }));
+vi.mock('@client/app/utils/mfaEnrollmentFunnel', () => ({ reportMfaEnrollmentAbandoned }));
 
 const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
 vi.mock('@client/app/hooks/data/user', () => ({
@@ -73,6 +79,13 @@ vi.mock('@client/app/utils/stepUpInterceptor', () => ({
 }));
 
 import MFAEnforcementWrapper from './MFAEnforcementWrapper';
+import { MFA_ENROLLMENT_HINT_KEY, writeMfaEnrolledHint } from '@client/app/utils/mfaEnrollmentHint';
+import { MFA_STATUS_TIMEOUT_MS } from '@client/app/hooks/data/mfa';
+
+// The enrollment hint lives in localStorage; a hint left by one test must not open the gate in the next.
+beforeEach(() => {
+  localStorage.clear();
+});
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -183,6 +196,7 @@ describe('MFAEnforcementWrapper - a session stuck at the verification prompt', (
 
     fireEvent.click(signOut);
     expect(logoutMutate).toHaveBeenCalledTimes(1);
+    expect(reportMfaEnrollmentAbandoned).toHaveBeenCalledExactlyOnceWith('session-tok');
   });
 
   it('tells the user when the sign-out fails, instead of leaving them on the screen silently', async () => {
@@ -366,5 +380,242 @@ describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', ()
     await screen.findByTestId('app-content');
     expect(mfaSetupCalls()).toBe(1);
     expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
+const mfaStatusCalls = () => get.mock.calls.filter(([url]) => url === '/api/auth/mfa/status').length;
+const neverSettles = () => new Promise(() => {});
+
+describe('MFAEnforcementWrapper - a user this browser knows is enrolled', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    adminSettingsState.isLoading = false;
+    adminSettings.enforceMFA = 'true';
+  });
+
+  it('renders the app at once while the status check is still in flight', async () => {
+    writeMfaEnrolledHint('u1', true);
+    get.mockImplementation(neverSettles);
+
+    renderWrapper();
+
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+    expect(screen.queryByTestId('mfa-enforcement-loading')).toBeNull();
+    // The check still runs behind the app; the hint never replaces it.
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('renders the app at once even before admin settings have loaded', () => {
+    writeMfaEnrolledHint('u1', true);
+    adminSettingsState.isLoading = true;
+    get.mockImplementation(neverSettles);
+
+    renderWrapper();
+
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+  });
+
+  it('blocks and starts setup when the fresh status says the user is no longer enrolled', async () => {
+    // e.g. an admin force-reset their MFA since the hint was written.
+    writeMfaEnrolledHint('u1', true);
+    get.mockResolvedValue({ data: { enabled: false } });
+
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+    // The stale hint is corrected, so the next reload blocks from the start.
+    expect(JSON.parse(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY) ?? 'null')).toEqual({
+      userId: 'u1',
+      enrolled: false,
+    });
+  });
+
+  it('withdraws the app on a server refusal, then blocks once the status answers', async () => {
+    writeMfaEnrolledHint('u1', true);
+    let answer: (value: { data: { enabled: boolean } }) => void = () => {};
+    get.mockImplementation(() => new Promise(resolve => (answer = resolve)));
+
+    renderWrapper();
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    // The refusal outranks the hint: the app goes away while the in-flight check finishes.
+    await screen.findByTestId('mfa-enforcement-loading');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+
+    answer({ data: { enabled: false } });
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+  });
+
+  it('has the refusal interceptor registered before a child effect issues its first request', () => {
+    writeMfaEnrolledHint('u1', true);
+    get.mockImplementation(neverSettles);
+    let registeredAtChildEffect = -1;
+    const Child = () => {
+      React.useEffect(() => {
+        registeredAtChildEffect = interceptorUse.mock.calls.length;
+      }, []);
+      return <div data-testid="app-content" />;
+    };
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <MFAEnforcementWrapper>
+            <Child />
+          </MFAEnforcementWrapper>
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    expect(registeredAtChildEffect).toBeGreaterThan(0);
+  });
+
+  it('blocks on a server refusal even when the background status check fails', async () => {
+    writeMfaEnrolledHint('u1', true);
+    let fail: (error: Error) => void = () => {};
+    get.mockImplementation(() => new Promise((_, reject) => (fail = reject)));
+
+    renderWrapper();
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    // e.g. the status request hits its timeout after the refusal.
+    fail(new Error('timeout of 10000ms exceeded'));
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+  });
+
+  it('keeps the app up when the background check fails, as it would without a hint', async () => {
+    writeMfaEnrolledHint('u1', true);
+    get.mockRejectedValue(Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }));
+
+    renderWrapper();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+  });
+
+  it('ignores a hint written for a different user', async () => {
+    writeMfaEnrolledHint('someone-else', true);
+    get.mockImplementation(neverSettles);
+
+    renderWrapper();
+
+    expect(screen.getByTestId('mfa-enforcement-loading')).not.toBeNull();
+    expect(screen.queryByTestId('app-content')).toBeNull();
+  });
+
+  it('ignores a hint that says not enrolled, and a corrupt one', () => {
+    get.mockImplementation(neverSettles);
+
+    writeMfaEnrolledHint('u1', false);
+    const first = renderWrapper();
+    expect(screen.getByTestId('mfa-enforcement-loading')).not.toBeNull();
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    first.unmount();
+
+    localStorage.setItem(MFA_ENROLLMENT_HINT_KEY, '{not json');
+    renderWrapper();
+    expect(screen.getByTestId('mfa-enforcement-loading')).not.toBeNull();
+    expect(screen.queryByTestId('app-content')).toBeNull();
+  });
+});
+
+describe('MFAEnforcementWrapper - a user with no hint (first load on this browser)', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    adminSettingsState.isLoading = false;
+    adminSettings.enforceMFA = 'true';
+  });
+
+  it('holds the app behind the loader until the status answers, then lets an enrolled user in', async () => {
+    let answer: (value: { data: { enabled: boolean } }) => void = () => {};
+    get.mockImplementation(() => new Promise(resolve => (answer = resolve)));
+
+    renderWrapper();
+
+    // The e2e helpers wait for this message to be hidden, so it must be in the DOM while gating.
+    expect(screen.getByTestId('mfa-enforcement-loading-message')).not.toBeNull();
+    expect(screen.queryByTestId('app-content')).toBeNull();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    answer({ data: { enabled: true } });
+
+    await screen.findByTestId('app-content');
+    expect(JSON.parse(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY) ?? 'null')).toEqual({
+      userId: 'u1',
+      enrolled: true,
+    });
+  });
+
+  it('still blocks an unenrolled user under enforcement', async () => {
+    get.mockResolvedValue({ data: { enabled: false } });
+
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+  });
+
+  it('asks for the status while admin settings are still loading, not after', async () => {
+    // Before settings arrive, enforceMFA reads as its default (off).
+    adminSettingsState.isLoading = true;
+    adminSettings.enforceMFA = 'false';
+    get.mockImplementation(neverSettles);
+
+    renderWrapper();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    expect(screen.getByTestId('mfa-enforcement-loading')).not.toBeNull();
+  });
+
+  it('puts a timeout on the status request so a hung call cannot hold the app forever', async () => {
+    get.mockImplementation(neverSettles);
+
+    renderWrapper();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    expect(get).toHaveBeenCalledWith('/api/auth/mfa/status', { timeout: MFA_STATUS_TIMEOUT_MS });
+  });
+
+  it('lets the user in when the status request times out (fail-open, as for any status error)', async () => {
+    get.mockRejectedValue(Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }));
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('does not check status at all when enforcement is off and settings have loaded', async () => {
+    adminSettings.enforceMFA = 'false';
+    get.mockResolvedValue({ data: { enabled: false } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaStatusCalls()).toBe(0);
   });
 });

@@ -20,6 +20,10 @@ const notifications = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), er
 vi.mock('@client/app/utils/download', () => ({ downloadData }));
 vi.mock('sonner', () => ({ toast: notifications }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
+const user = vi.hoisted(() => ({
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.currentUser }) }));
 const openOwner = vi.hoisted(() => vi.fn());
 vi.mock('./useOpenSubscriptionRow', () => ({
   useOpenSubscriptionRow: () => openRow,
@@ -122,6 +126,7 @@ const listParams = () =>
 const lastListParams = () => listParams().at(-1);
 
 beforeEach(() => {
+  user.currentUser = { isAdmin: true };
   apiGet.mockReset();
   openRow.mockReset();
   openOwner.mockReset();
@@ -143,6 +148,15 @@ beforeEach(() => {
 });
 
 describe('AdminSubscriptions', () => {
+  it('leaves the outer padding to the admin page frame', async () => {
+    renderTab();
+    const root = await screen.findByTestId('admin-subscriptions-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+  });
+
   it('opens on the Paying view and asks the server for paying Stripe rows', async () => {
     renderTab();
     expect(await screen.findByTestId('admin-subscriptions-row-s1')).toBeTruthy();
@@ -370,6 +384,16 @@ describe('AdminSubscriptions', () => {
     await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
     fireEvent.click(screen.getByTestId('admin-subscriptions-views-all-btn'));
     await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
+  });
+
+  it('never asks a credits-only delegate for the support:read revenue trend', async () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['credits:adjust'] };
+    mockTrend([trendPoint('2026-10-28', 3_600), trendPoint('2026-10-29', 3_800)]);
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+    expect(apiGet.mock.calls.some(([url, config]) => isTrendRequest(url, config))).toBe(false);
+    expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0);
   });
 
   it('draws no sparklines until there are two days of snapshots', async () => {

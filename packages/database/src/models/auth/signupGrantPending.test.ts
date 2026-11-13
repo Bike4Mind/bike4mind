@@ -42,14 +42,25 @@ const seed: Array<Record<string, unknown> & { _id: mongoose.Types.ObjectId; key:
     tags: [PENDING_FREE_CREDITS_TAG],
     signupGrant: grant({ creditsReleased: 0 }),
   },
-  { key: 'dripping', _id: oid(3), signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }) },
+  {
+    key: 'dripping',
+    _id: oid(3),
+    signupInvite: { source: 'referral', inviteId: 'inv-1', at: heldAt },
+    signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }),
+  },
   {
     key: 'fullyDripped',
     _id: oid(4),
     signupGrant: grant({ stage: 'unlocked', unlockedBy: 'verification', creditsReleased: 300 }),
   },
   { key: 'blocked', _id: oid(5), signupGrant: grant({ blocked: { at: heldAt } }) },
-  { key: 'package', _id: oid(6), grantPackageId: 'pkg-1', signupGrant: grant({ creditsReleased: 250 }) },
+  {
+    key: 'package',
+    _id: oid(6),
+    grantPackageId: 'pkg-1',
+    signupInvite: { source: 'organization', inviteId: 'inv-2', organizationId: 'org-1', at: heldAt },
+    signupGrant: grant({ creditsReleased: 250 }),
+  },
   {
     key: 'forfeited',
     _id: oid(7),
@@ -159,6 +170,24 @@ describe('signupGrantPendingRepository.listPending', () => {
     expect(await ids({ status: 'dripping', source: 'package' })).toEqual([idOf('package')]);
   });
 
+  it('filters by whether the account signed up through an invite', async () => {
+    const ids = async (input: Parameters<typeof listAll>[0]) => (await listAll(input)).map(r => r.id).sort();
+    const all = await ids({});
+    const invited = await ids({ invite: 'invited' });
+    const uninvited = await ids({ invite: 'uninvited' });
+    expect(invited).toEqual([idOf('dripping'), idOf('package')].sort());
+    expect(uninvited).toEqual(all.filter(id => !invited.includes(id)));
+    expect(await ids({ invite: 'invited', source: 'package' })).toEqual([idOf('package')]);
+    expect(await ids({ invite: 'uninvited', source: 'package' })).toEqual([]);
+    expect(await ids({ invite: 'invited', status: 'blocked' })).toEqual([]);
+
+    const rows = await listAll();
+    const inviteSourceOf = new Map(rows.map(r => [r.id, r.inviteSource]));
+    expect(inviteSourceOf.get(idOf('dripping'))).toBe('referral');
+    expect(inviteSourceOf.get(idOf('package'))).toBe('organization');
+    expect(inviteSourceOf.get(idOf('blocked'))).toBeNull();
+  });
+
   it('labels a row dripping only while its drip can still pay, and locked otherwise', async () => {
     const statusOf = new Map((await listAll()).map(r => [r.id, r.status]));
     for (const s of seed) {
@@ -240,13 +269,82 @@ describe('signupGrantPendingRepository.summarizePending', () => {
     const rows = all.filter(r => !unpaid.has(r.id));
     expect(all.length - rows.length).toBe(2);
     expect(all.filter(r => unpaid.has(r.id)).every(r => r.remaining > 0)).toBe(true);
-    const summary = await signupGrantPendingRepository.summarizePending({ dripCap: DRIP_CAP });
-    expect(summary).toEqual({
+    const summary = await signupGrantPendingRepository.summarizePending({
+      dripCap: DRIP_CAP,
+      dailyCredits: 0,
+      day: '2026-11-10',
+      activeSince: new Date(),
+    });
+    expect(summary).toMatchObject({
       accountsWithRemaining: rows.filter(r => r.remaining > 0).length,
       totalRemaining: rows.reduce((sum, r) => sum + r.remaining, 0),
       totalDripRemaining: rows.reduce((sum, r) => sum + r.dripRemaining, 0),
     });
     expect(summary.accountsWithRemaining).toBeGreaterThan(0);
+  });
+
+  describe('activity and the drip due today', () => {
+    const DAY = '2026-11-10';
+    const DAILY = 100;
+    const activeSince = new Date('2026-11-03T00:00:00Z');
+    const dripping = (over: Partial<SignupGrant> = {}) => grant({ creditsReleased: 150, dripCredits: 50, ...over });
+    const edges = [
+      {
+        key: 'dueActive',
+        emailVerified: true,
+        lastActiveAt: new Date('2026-11-09T00:00:00Z'),
+        signupGrant: dripping({ lastDripDay: '2026-11-09' }),
+      },
+      { key: 'paidToday', emailVerified: true, signupGrant: dripping({ lastDripDay: DAY }) },
+      {
+        key: 'unverified',
+        emailVerified: false,
+        lastActiveAt: new Date('2026-10-01T00:00:00Z'),
+        signupGrant: dripping(),
+      },
+      {
+        key: 'blockedDue',
+        emailVerified: true,
+        lastActiveAt: activeSince,
+        signupGrant: { ...dripping(), blocked: { at: heldAt } },
+      },
+      { key: 'nearCap', emailVerified: true, lastActiveAt: activeSince, signupGrant: dripping({ dripCredits: 460 }) },
+    ].map((doc, n) => ({ ...doc, _id: oid(900 + n) }));
+    const summarize = (dailyCredits = DAILY) =>
+      signupGrantPendingRepository.summarizePending({ dripCap: DRIP_CAP, dailyCredits, day: DAY, activeSince });
+
+    beforeAll(async () => {
+      await User.collection.insertMany(
+        edges.map(({ key, ...doc }) => ({ ...doc, email: `${key}@example.com`, username: key, createdAt: heldAt }))
+      );
+    });
+    afterAll(async () => {
+      await User.collection.deleteMany({ _id: { $in: edges.map(doc => doc._id) } });
+    });
+
+    it('sums min(dailyCredits, drip remaining) over verified, unblocked grants not yet paid today', async () => {
+      const due = edges.filter(doc => ['dueActive', 'nearCap'].includes(doc.key));
+      const expected = due.map(doc =>
+        Math.min(DAILY, signupGrantDripRemaining(doc.signupGrant as SignupGrant, DRIP_CAP))
+      );
+      expect(expected).toEqual([100, 40]);
+      const summary = await summarize();
+      expect(summary.dripCommitToday).toBe(140);
+      expect(summary.dripAccountsToday).toBe(2);
+    });
+
+    it('commits nothing when the daily drip is off', async () => {
+      expect(await summarize(0)).toMatchObject({ dripCommitToday: 0, dripAccountsToday: 0 });
+    });
+
+    it('counts payable accounts active since the window start, leaving out blocked and missing activity', async () => {
+      const rows = await listAll();
+      const remainingOf = (key: string) =>
+        rows.find(r => r.id === String(edges.find(e => e.key === key)!._id))!.remaining;
+      const summary = await summarize();
+      expect(summary.activeAccounts).toBe(2);
+      expect(summary.activeRemaining).toBe(remainingOf('dueActive') + remainingOf('nearCap'));
+    });
   });
 
   it('counts the held queue as the rows the list labels held, of either reason', async () => {

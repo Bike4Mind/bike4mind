@@ -13,6 +13,7 @@ const signedIn: AuthState = {
   hostedAvailable: true,
   storage: 'available',
   busy: 'idle',
+  user: { id: 'u1' },
 };
 
 describe('the Settings screen', () => {
@@ -28,6 +29,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="worktree-default"');
     expect(html).toContain('data-entry="local-history"');
+    expect(html).toContain('data-entry="local-data-export"');
+    expect(html).toContain('settings-export-local-btn');
     expect(html).toContain('data-entry="local-context"');
     expect(html).toContain('settings-local-context-select');
     expect(html).toContain('settings-clear-history-btn');
@@ -42,6 +45,32 @@ describe('the Settings screen', () => {
       const html = page(section);
       for (const id of SETTINGS_SECTIONS) expect(html).toContain(`data-testid="settings-nav-${id}-btn"`);
     }
+  });
+
+  it('groups each General setting once under a named section', () => {
+    const groups = html.split(/data-testid="settings-group-[^"]+"/).slice(1);
+    expect(groups).toHaveLength(5);
+    expect(html).not.toContain('data-testid="settings-group-other"');
+    const expected = [
+      ['appearance', 'orchestrator-sound', 'nested-sessions'],
+      ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
+      ['local-context', 'token-rate', 'curated-list'],
+      ['local-history', 'local-data-export'],
+      ['server', 'updates'],
+    ];
+    expected.forEach((entries, index) => {
+      for (const id of entries) {
+        expect(groups[index]).toContain(`data-entry="${id}"`);
+        expect(html.split(`data-entry="${id}"`)).toHaveLength(2);
+        expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
+      }
+    });
+  });
+
+  it('keeps advanced worker settings behind an expandable disclosure', () => {
+    expect(html).toContain('<details');
+    expect(html).toContain('data-testid="settings-worker-models-details"');
+    expect(html).toContain('data-testid="orchestration-settings"');
   });
 
   it('gives Permissions and Import a page each', () => {
@@ -73,6 +102,22 @@ describe('the Settings screen', () => {
       expect(html).toContain(`settings-appearance-${mode}-btn`);
     }
   });
+
+  it('keeps Billing outside Settings', () => {
+    expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+    expect(html).not.toContain('billing-loading');
+  });
+
+  it.each([null, { ...signedIn, status: 'signed-out' as const }, { ...signedIn, user: undefined }])(
+    'keeps Settings independent of account billing',
+    auth => {
+      const html = markup(<SettingsScreen auth={auth} onClose={() => {}} />);
+      expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+      expect(html).not.toContain('data-testid="settings-page-billing"');
+      expect(html).not.toContain('billing-loading');
+      expect(html).toContain('data-testid="settings-page-general"');
+    }
+  );
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');

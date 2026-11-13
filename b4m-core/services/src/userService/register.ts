@@ -169,7 +169,6 @@ export const registerUser = async (
 
   let tags: string[] = [];
   const settings = await db.adminSettings.findBySettingName('defaultTags');
-  const referralCredits = await db.adminSettings.findBySettingName('ReferralCreditsAmount');
   if (settings) {
     tags = settings.settingValue
       .split(',')
@@ -216,6 +215,7 @@ export const registerUser = async (
   // True when an operator sized this signup's grant (package, subscriber or invite credits).
   let explicitAmount = false;
   let storageLimitOverride: number | null = null;
+  const isReferralInvite = resolvedInvite?.isReferral ?? false;
 
   if (invite) {
     // Merge invite-code-specific tags with admin default tags
@@ -233,11 +233,14 @@ export const registerUser = async (
         const subscriber = await db.subscribers.findByEmail(invite.email);
         if (subscriber && subscriber.inviteCode === normalizedInviteCode) {
           // Use subscriber-specific allocations if available
-          subscriberCredits = subscriber.startingCredits || 0;
+          subscriberCredits = isReferralInvite ? 0 : subscriber.startingCredits || 0;
+          // Storage sits outside the signup grant, so a referral invite keeps the subscriber's storage override.
           subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
-            `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
+            isReferralInvite
+              ? `Applying subscriber storage override for referral invite: ${subscriberStorage}MB storage for ${email}`
+              : `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
           );
         }
       } catch (error) {
@@ -270,22 +273,20 @@ export const registerUser = async (
     }
 
     // Invite code credits/storage (set when generating the code)
-    const inviteCredits = (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
+    // A referral invitee always takes the default staged grant, so a referral code sizes no credits.
+    const inviteCredits = isReferralInvite
+      ? 0
+      : (grantPackage?.legacy ? grantPackage.credits : invite.startingCredits) || 0;
     const inviteStorage = (grantPackage?.legacy ? grantPackage.storageMb : invite.startingStorage) || 0;
 
     // Priority: package > subscriber > invite code. A non-legacy package's amount is authoritative
-    // even at 0; a legacy package stands in for the invite's own amounts. Only a referral code
-    // falls back to ReferralCreditsAmount (the invitee floor, matching referralInviteCredits).
+    // even at 0; a legacy package stands in for the invite's own amounts.
     explicitAmount = packageGrantsCredits || subscriberCredits > 0 || inviteCredits > 0;
     freeCredits = packageGrantsCredits
       ? grantPackage!.credits
       : subscriberCredits > 0
         ? subscriberCredits
-        : inviteCredits > 0
-          ? inviteCredits
-          : resolvedInvite!.isReferral
-            ? parseInt(referralCredits?.settingValue || '0', 10) || 0
-            : 0;
+        : inviteCredits;
 
     // Priority: non-legacy package > subscriber > invite code (or legacy package) > default (1000)
     const signupStorage =
@@ -314,10 +315,9 @@ export const registerUser = async (
     logger.info(`Open registration (no invite) for ${email}: free credits deferred until email verification`);
   }
 
-  const isReferralInvite = resolvedInvite?.isReferral ?? false;
-  // A referral resolving no credits, and an admin bulk, unlimited or pre-source code sizing no amount,
-  // take the default staged grant.
-  const takesDefaultGrant = Boolean(invite) && (isReferralInvite ? freeCredits <= 0 : !explicitAmount);
+  // A referral, and an admin bulk, unlimited or pre-source code sizing no amount, take the default
+  // staged grant.
+  const takesDefaultGrant = Boolean(invite) && (isReferralInvite || !explicitAmount);
 
   // invite-resolved credits are deferred behind the same pending tag as the
   // open-registration grant; the amount travels on the user doc.
@@ -336,12 +336,7 @@ export const registerUser = async (
   }
 
   // Every self-serve signup trickles its grant; only an operator-sized amount stays flat.
-  const referralGrant =
-    !hasInviteCode || takesDefaultGrant
-      ? await newSignupGrant(db.adminSettings)
-      : isReferralInvite && freeCredits > 0
-        ? await newSignupGrant(db.adminSettings, freeCredits)
-        : undefined;
+  const referralGrant = !hasInviteCode || takesDefaultGrant ? await newSignupGrant(db.adminSettings) : undefined;
 
   // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
   // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
@@ -422,7 +417,7 @@ export const registerUser = async (
     pendingEmailUsed: null,
     regInvites: [],
     referredByUserId,
-    // Marked whatever the referral credits resolve to, so a later invite bonus can key off it.
+    // Marks the referral signup so a later invite bonus can key off it.
     ...(isReferralInvite && invite
       ? { signupInvite: { source: 'referral' as const, inviteId: invite.id, at: new Date() } }
       : {}),

@@ -28,6 +28,12 @@ export const inheritancePolicy = (): RolePolicy => ({
 export const rootPolicySchema = z.strictObject({
   rootSessionId: z.string().min(1),
   rootRunId: z.string().min(1),
+  /**
+   * The run id `POST /api/v1/completion-runs` issued for this root, sent with each agent turn so
+   * the server can group the run's spend. Absent until that request succeeds, and on sessions
+   * stored before it existed. `rootRunId` stays the local identity; this one is the server's.
+   */
+  serverRunId: z.string().min(1).optional(),
   policy: rolePolicySchema,
 });
 export type RootPolicy = z.infer<typeof rootPolicySchema>;
@@ -76,25 +82,94 @@ export const modelSelectionSchema = z.strictObject({
 });
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;
 
+/** Opens the error of a spawn refused only for its model request, which the thread draws muted. */
+export const MODEL_REQUEST_REFUSED = 'Model request refused:';
+
+const modelTokens = (value: string): string[] =>
+  value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+const containsRun = (haystack: readonly string[], needle: readonly string[]): boolean =>
+  haystack.some((_, start) => needle.every((token, offset) => haystack[start + offset] === token));
+
+const inCatalog = (id: string, models: readonly ChatModelOption[]): boolean =>
+  models.some(model => model.id === id || model.aliasIds?.includes(id));
+
+/**
+ * The newest of `candidates` that a family name such as `sonnet` or `gpt-6.1` names, by whole
+ * tokens of its id, name or alias ids. Only ever one of `candidates`, so an alias can never reach
+ * a model the user did not allow; an exact catalog id is never treated as an alias, or
+ * `claude-sonnet-5` could resolve to a `claude-sonnet-5-mini` variant.
+ */
+export function resolveModelAlias(
+  requested: string,
+  candidates: readonly string[],
+  models: readonly ChatModelOption[]
+): string | null {
+  const needle = modelTokens(requested);
+  if (!needle.length || inCatalog(requested, models)) return null;
+  const matches = [...new Set(candidates)]
+    .map(id => ({ id, option: models.find(model => model.id === id) }))
+    .filter(({ id, option }) =>
+      [id, option?.name ?? '', ...(option?.aliasIds ?? [])].some(source => containsRun(modelTokens(source), needle))
+    );
+  const usable = ({ option }: (typeof matches)[number]) => (option && !option.unavailable && !option.disabled ? 0 : 1);
+  matches.sort(
+    (left, right) =>
+      usable(left) - usable(right) ||
+      (right.option?.releaseDate ?? '').localeCompare(left.option?.releaseDate ?? '') ||
+      left.id.length - right.id.length ||
+      left.id.localeCompare(right.id)
+  );
+  return matches[0]?.id ?? null;
+}
+
+const effectiveDefaultFor = (parentModel: string, policy: RolePolicy, role: WorkerRole | undefined): string => {
+  const selected = role ? policy.roles[role] : 'inherit';
+  return selected === 'inherit' ? parentModel : selected;
+};
+
+/**
+ * What `requested_model_id` tells the agent it may ask for, or null to leave the field out of the
+ * schema: with no allowed override, the only model it could name is the default it gets anyway.
+ */
+export function modelRequestHint(parentModel: string, policy: RolePolicy): string | null {
+  if (!policy.allowedOverrides.length) return null;
+  const defaults = WORKER_ROLES.map(role => `${role}=${effectiveDefaultFor(parentModel, policy, role)}`);
+  return (
+    `Optional; omit for the role default (${defaults.join(', ')}). ` +
+    `Allowed: ${policy.allowedOverrides.join(', ')}. A family name like sonnet picks the newest allowed match.`
+  );
+}
+
 export function resolveWorkerModel(
   parentModel: string,
   policy: RolePolicy,
-  options: SpawnOptions
+  options: SpawnOptions,
+  models: readonly ChatModelOption[] = []
 ): Omit<ModelSelection, 'rootRunId'> {
   const role = options.role ?? options.contract?.role;
   const requested = options.requestedModelId;
   const selected = role ? policy.roles[role] : 'inherit';
-  const effectiveDefault = selected === 'inherit' ? parentModel : selected;
-  if (requested && requested !== effectiveDefault && !policy.allowedOverrides.includes(requested)) {
+  const effectiveDefault = effectiveDefaultFor(parentModel, policy, role);
+  const resolved =
+    !requested || requested === effectiveDefault || policy.allowedOverrides.includes(requested)
+      ? requested
+      : resolveModelAlias(requested, [effectiveDefault, ...policy.allowedOverrides], models);
+  if (requested && !resolved) {
+    const allowed = policy.allowedOverrides.length ? policy.allowedOverrides.join(', ') : 'none';
     throw new Error(
-      'Model override needs an explicit user model-change decision. Choose an allowed override in orchestration settings.'
+      `${MODEL_REQUEST_REFUSED} '${requested}' is not an allowed override (allowed: ${allowed}). Nothing was started. ` +
+        `Omit requested_model_id to use the role default (${effectiveDefault}), or ask the user to allow it in orchestration settings.`
     );
   }
   return {
     ...(role ? { role } : {}),
     ...(requested ? { requestedModelId: requested } : {}),
     ...(options.requirements ? { requirements: options.requirements } : {}),
-    effectiveModel: requested ?? effectiveDefault,
+    effectiveModel: resolved ?? effectiveDefault,
     source: requested ? 'override' : selected !== 'inherit' ? 'role-policy' : 'parent',
   };
 }
@@ -146,20 +221,27 @@ export function renderTaskBrief(contract: TaskContract): string {
           `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') || '(none)' : value}`
       )
       .join('\n\n') +
-    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. Skills cannot authorize model, permission or spending changes.'
+    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. In task_report, give each acceptance criterion a verification entry whose criterion is its exact text above; extra checks such as lint or typecheck count toward no criterion. Skills cannot authorize model, permission or spending changes.'
   );
 }
 
 const verificationSchema = z.strictObject({
-  criterion: text,
+  criterion: text.describe(
+    'The exact text of the acceptance criterion this check evidences. A check labelled any other way, such as lint or typecheck, counts toward no criterion.'
+  ),
   command: text,
   outcome: z.enum(['passed', 'failed', 'not-run']),
   evidence: text,
 });
 const evidenceFields = {
   changedPaths: entries,
-  verification: z.array(verificationSchema).max(32),
-  unmetCriteria: entries,
+  verification: z
+    .array(verificationSchema)
+    .max(32)
+    .describe(
+      "One entry per acceptance criterion, quoting that criterion's exact text, plus any extra checks under their own labels."
+    ),
+  unmetCriteria: entries.describe('Acceptance criteria, quoted exactly, that this attempt did not meet.'),
   handoff: text,
 };
 export const taskReportSchema = z.discriminatedUnion('status', [
@@ -225,17 +307,51 @@ export const taskActionSchema = z.discriminatedUnion('kind', [
 ]);
 export type TaskAction = z.infer<typeof taskActionSchema>;
 
+// Tolerates only case, whitespace and trailing punctuation drift; anything looser could let an
+// unrelated check stand in for a criterion. Scans backwards because an anchored `[...]+$` regex is
+// quadratic on a long run of spaces.
+const criterionKey = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && /[\s.!?;:,]/.test(value[end - 1])) end--;
+  return value.slice(0, end).trim().replace(/\s+/g, ' ').toLowerCase();
+};
+
+const quoteList = (items: readonly string[]): string => items.map(item => `\n- "${item}"`).join('');
+
+type CompletedReport = Extract<TaskReport, { status: 'completed' }>;
+
+/** Rejects a completed report that leaves an acceptance criterion with neither a matching check nor an unmet entry. */
+export function assertReportCoversCriteria(contract: TaskContract, report: CompletedReport): void {
+  const covered = new Set(
+    [...report.verification.map(check => check.criterion), ...report.unmetCriteria].map(criterionKey)
+  );
+  const missing = contract.acceptanceCriteria.filter(criterion => !covered.has(criterionKey(criterion)));
+  if (missing.length)
+    throw new Error(
+      `A completed report must give each acceptance criterion a verification entry whose criterion is that criterion's exact text, or list it in unmetCriteria. Checks under other labels count toward no criterion. Not covered:${quoteList(missing)}`
+    );
+}
+
 export function acceptTask(task: WorkerTask, assessment: string): WorkerTask {
   const state = task.state;
-  if (
-    state.status !== 'completed' ||
-    state.unmetCriteria.length ||
-    state.verification.some(check => check.outcome !== 'passed') ||
-    task.contract.acceptanceCriteria.some(
-      criterion => !state.verification.some(check => check.criterion === criterion && check.outcome === 'passed')
-    )
-  ) {
-    throw new Error('Acceptance requires passing evidence for every criterion and no failed checks or unmet criteria.');
+  if (state.status !== 'completed')
+    throw new Error(`Acceptance requires a completed task report; this task is ${state.status}.`);
+  const passed = new Set(
+    state.verification.filter(check => check.outcome === 'passed').map(check => criterionKey(check.criterion))
+  );
+  const missing = task.contract.acceptanceCriteria.filter(criterion => !passed.has(criterionKey(criterion)));
+  const failing = state.verification.filter(check => check.outcome !== 'passed');
+  if (missing.length || failing.length || state.unmetCriteria.length) {
+    const problems = [
+      missing.length &&
+        `No passed verification entry quotes these acceptance criteria:${quoteList(missing)}\nChecks under other labels count toward no criterion.`,
+      failing.length &&
+        `Checks that did not pass:${failing.map(check => `\n- "${check.criterion}" (${check.outcome})`).join('')}`,
+      state.unmetCriteria.length && `Unmet criteria reported:${quoteList(state.unmetCriteria)}`,
+    ].filter(Boolean);
+    throw new Error(
+      `Acceptance requires passing evidence for every criterion and no failed checks or unmet criteria.\n${problems.join('\n')}`
+    );
   }
   return { ...task, state: { ...state, accepted: true, assessment } };
 }

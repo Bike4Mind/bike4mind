@@ -135,6 +135,30 @@ describe('ModelCatalogRepository', () => {
     expect(history.map(row => row.note)).toEqual(['july', 'june']);
   });
 
+  it('reports when discovery first saw each model and first made it active', async () => {
+    const withStatus = (status: string, effectiveFrom: string, modelId = 'gpt-x') =>
+      snapshot({
+        modelId,
+        ownedGroups: ['identity', 'limits', 'lifecycle'],
+        patch: record({ id: modelId, lifecycle: { status } }),
+        effectiveFrom: new Date(effectiveFrom),
+      });
+    await modelCatalogRepository.append(snapshot({ source: 'seed', effectiveFrom: new Date('2026-05-01T00:00:00Z') }));
+    await modelCatalogRepository.append(withStatus('discovered', '2026-06-01T00:00:00Z'));
+    await modelCatalogRepository.append(withStatus('active', '2026-07-01T00:00:00Z'));
+    await modelCatalogRepository.append(withStatus('active', '2026-08-01T00:00:00Z'));
+    await modelCatalogRepository.append(withStatus('discovered', '2026-06-15T00:00:00Z', 'gpt-y'));
+
+    const milestones = await modelCatalogRepository.discoveryMilestones();
+
+    expect(milestones.get('gpt-x')).toEqual({
+      firstSeenAt: new Date('2026-06-01T00:00:00Z'),
+      activatedAt: new Date('2026-07-01T00:00:00Z'),
+    });
+    expect(milestones.get('gpt-y')).toEqual({ firstSeenAt: new Date('2026-06-15T00:00:00Z') });
+    expect(milestones.size).toBe(2);
+  });
+
   // The read contract exists to serve mergeCatalog's per-group precedence, so it
   // is asserted here against the real merge rather than against a paraphrase.
   describe('the row set mergeCatalog consumes', () => {

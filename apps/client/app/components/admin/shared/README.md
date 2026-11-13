@@ -52,6 +52,11 @@ The search box keeps local state and writes `query` to the URL once typing pause
 every other change is written at once.
 See `IntegrationDemandTab.tsx` for a complete query-backed example.
 
+A filter row with controls `FilterBar` has no slot for, such as native date inputs,
+uses `FilterToolbar` (the same wrapping row, every input at the 32 px toolbar height)
+with a `FilterInputLabel` in each input's start decorator. It keeps no URL state, so
+prefer `FilterBar` wherever search and filter chips are enough.
+
 `EntityHeader` supplies copy controls with visible failure feedback and relative
 timestamps with exact UTC tooltips. `SectionCard` groups read-only definition-list
 facts; use separate settings components for forms.
@@ -81,6 +86,13 @@ composed audit string ("Preset: note", or either alone). Put the before/after
 preview, a bulk dry run or extra inputs in `children`, and pass `blockedReason`
 while those inputs are not ready so the disabled commit explains itself.
 Irreversible commands add `typedConfirm`; `tone="danger"` styles only the commit.
+While `pending` is true, or a promise returned by `onConfirm` has not settled, the
+commit shows loading and Cancel is disabled. Esc, the close button and the backdrop
+still call `onClose`, so a caller that must not close mid-write checks its own
+pending state there. A caller whose `onConfirm` stops at `onClose` (a run of
+writes that checks between them) passes `cancelStopsWrite` to keep Cancel enabled.
+An unaudited dialog built on `AdminDialog` puts its buttons in
+`AdminDialogFooter`, the same row `ActionDialog` uses.
 
 ```tsx
 <ActionDialog

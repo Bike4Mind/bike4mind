@@ -1,5 +1,12 @@
-import { ApiKeyScope, type ApiKeyScopeValue, CONFINED_API_KEY_SCOPES, QA_INGEST_USER_TAG } from '@bike4mind/common';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import {
+  ApiKeyScope,
+  type ApiKeyScopeValue,
+  CONFINED_API_KEY_SCOPES,
+  QA_INGEST_USER_TAG,
+  isFullAdmin,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
@@ -15,8 +22,6 @@ import {
   FormControl,
   FormLabel,
   Input,
-  Modal,
-  ModalDialog,
   Select,
   Skeleton,
   Option,
@@ -26,15 +31,10 @@ import {
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
-import { isAdminProvisionedApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
-import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
-import {
-  ADMIN_REASON_PRESETS,
-  type AdminReasonDraft,
-  EMPTY_ADMIN_REASON,
-  composeAdminReason,
-  isAdminReasonComplete,
-} from '@client/app/components/admin/shared/adminReason';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
+import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
+import { adminActionBlockedReason } from '../Profile/userProfileModel';
 
 interface AdminGenerateApiKeyModalProps {
   open: boolean;
@@ -49,7 +49,15 @@ const ingestScopeOptions = ADMIN_ONLY_API_KEY_SCOPES.filter(s => s.value !== Api
 // replaces the selection and picking any other scope drops it.
 const confinedScopeValues = new Set<ApiKeyScopeValue>(CONFINED_API_KEY_SCOPES);
 
+const INGEST_FULL_ADMIN_ONLY = 'Only full administrators can create API keys with admin-provisioned scopes';
+
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
+  // Mirrors the mint route, which refuses admin-provisioned scopes unless the caller is a full admin.
+  const { currentUser } = useUser();
+  const canMintIngest = isFullAdmin(currentUser);
+  const mintBlocked =
+    adminActionBlockedReason(currentUser, user, 'keys:revoke') ??
+    adminActionBlockedReason(currentUser, user, 'users:impersonate');
   // Embed keys are minted through the dedicated embed flow, not this generic modal, so
   // embed:chat is excluded from the offered scopes. Built-in premium scopes gate on the admin's
   // own access, which useOptiAccess grants admins whenever the overlay is mounted, so they are
@@ -64,7 +72,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   });
   const [expirationDays, setExpirationDays] = useState<string>('never');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [confirming, setConfirming] = useState(false);
   const { handleCopyToClipboard, copied } = useCopyToClipboard({ showToast: true });
   const {
     data: allLakes,
@@ -95,7 +103,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
     setExpirationDays('never');
     setGeneratedKey(null);
-    setReason(EMPTY_ADMIN_REASON);
+    setConfirming(false);
   };
 
   const handleClose = () => {
@@ -103,17 +111,16 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     onClose();
   };
 
-  // The route requires an audit reason for admin-provisioned scopes (generate-api-key.ts).
-  const reasonRequired = formData.scopes.some(isAdminProvisionedApiKeyScope);
-
-  const handleSubmit = () => {
+  const handleSubmit = async (reason: string) => {
+    if (mintBlocked) return;
     const submitData: AdminCreateUserApiKeyRequest = {
       ...formData,
       expiresAt: expirationDays === 'never' ? undefined : dayjs().add(parseInt(expirationDays), 'days').toDate(),
       preauthorizedLakeIds: preauthorizedLakeIds.length > 0 ? preauthorizedLakeIds : undefined,
-      reason: reasonRequired ? composeAdminReason(reason) : undefined,
+      reason,
     };
-    generateMutation.mutate({ userId: user.id, data: submitData });
+    await generateMutation.mutateAsync({ userId: user.id, data: submitData });
+    setConfirming(false);
   };
 
   const toggleLake = (lakeId: string) => {
@@ -137,12 +144,13 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     setFormData({ ...formData, scopes });
   };
 
-  const renderScope = (scope: ApiKeyScopeOption) => (
+  const renderScope = (scope: ApiKeyScopeOption, disabledReason?: string) => (
     <Box key={scope.value} sx={{ mb: 1 }}>
       <Checkbox
         label={scope.label}
         checked={formData.scopes.includes(scope.value)}
         onChange={e => toggleScope(scope.value, e.target.checked)}
+        disabled={!!disabledReason}
         data-testid={`admin-generate-key-scope-${scope.value}`}
       />
       <Typography level="body-xs" color="neutral" sx={{ ml: 4 }}>
@@ -167,56 +175,58 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
 
   if (generatedKey) {
     return (
-      <Modal open={open} onClose={handleClose}>
-        <ModalDialog size="lg" sx={{ width: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-          <Typography level="h4" mb={2}>
-            API Key Generated for {user.username}
-          </Typography>
+      <AdminDialog
+        open={open}
+        onClose={handleClose}
+        title={`API key generated for ${user.username}`}
+        width={600}
+        data-testid="admin-generated-key-dialog"
+      >
+        <Alert color="warning" startDecorator={<WarningIcon />} sx={{ mb: 2 }}>
+          Copy this key now. It will not be shown again.
+        </Alert>
 
-          <Alert color="warning" startDecorator={<WarningIcon />} sx={{ mb: 2 }}>
-            Copy this key now. It will not be shown again.
-          </Alert>
+        <Box
+          sx={{
+            p: 2,
+            bgcolor: 'background.level1',
+            borderRadius: 'sm',
+            fontFamily: 'monospace',
+            fontSize: 'sm',
+            wordBreak: 'break-all',
+            border: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          {generatedKey}
+        </Box>
 
-          <Box
-            sx={{
-              p: 2,
-              bgcolor: 'background.level1',
-              borderRadius: 'sm',
-              fontFamily: 'monospace',
-              fontSize: 'sm',
-              wordBreak: 'break-all',
-              border: '1px solid',
-              borderColor: 'divider',
-            }}
+        <Stack direction="row" spacing={2} justifyContent="flex-end" mt={2}>
+          <Button
+            startDecorator={<ContentCopyIcon />}
+            variant="solid"
+            color={copied ? 'success' : 'primary'}
+            onClick={() => handleCopyToClipboard(generatedKey)}
           >
-            {generatedKey}
-          </Box>
-
-          <Stack direction="row" spacing={2} justifyContent="flex-end" mt={2}>
-            <Button
-              startDecorator={<ContentCopyIcon />}
-              variant="solid"
-              color={copied ? 'success' : 'primary'}
-              onClick={() => handleCopyToClipboard(generatedKey)}
-            >
-              {copied ? 'Copied!' : 'Copy Key'}
-            </Button>
-            <Button variant="outlined" onClick={handleClose}>
-              Done
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+            {copied ? 'Copied!' : 'Copy Key'}
+          </Button>
+          <Button variant="outlined" onClick={handleClose}>
+            Done
+          </Button>
+        </Stack>
+      </AdminDialog>
     );
   }
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog size="lg" sx={{ width: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-        <Typography level="h4" mb={2}>
-          Generate API Key for {user.username}
-        </Typography>
-
+    <>
+      <AdminDialog
+        open={open && !confirming}
+        onClose={handleClose}
+        title={`Generate API key for ${user.username}`}
+        width={600}
+        data-testid="admin-generate-key-form-dialog"
+      >
         <Stack spacing={3}>
           <FormControl required>
             <FormLabel>Key Name</FormLabel>
@@ -246,7 +256,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
                 p: 1,
               }}
             >
-              {scopeOptions.map(renderScope)}
+              {scopeOptions.map(scope => renderScope(scope))}
             </Box>
           </FormControl>
 
@@ -257,8 +267,13 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
               above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag, and a
               release-notes key can only be minted for a platform admin.
             </Typography>
+            {!canMintIngest && (
+              <Typography level="body-xs" color="warning" sx={{ mb: 1 }} data-testid="admin-generate-key-ingest-reason">
+                {INGEST_FULL_ADMIN_ONLY}
+              </Typography>
+            )}
             <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
-              {ingestScopeOptions.map(renderScope)}
+              {ingestScopeOptions.map(scope => renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY))}
             </Box>
           </FormControl>
 
@@ -320,16 +335,6 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             </Box>
           </FormControl>
 
-          {reasonRequired && (
-            <ReasonPicker
-              label="Reason for an admin-provisioned scope"
-              presets={ADMIN_REASON_PRESETS.apiKeyAdminScope}
-              value={reason}
-              onChange={setReason}
-              data-testid="admin-generate-key-reason"
-            />
-          )}
-
           <FormControl>
             <FormLabel>Expiration</FormLabel>
             <Select value={expirationDays} onChange={(_, value) => setExpirationDays(value as string)}>
@@ -385,17 +390,29 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
               Cancel
             </Button>
             <Button
-              onClick={handleSubmit}
+              onClick={() => setConfirming(true)}
               loading={generateMutation.isPending}
               disabled={
-                !formData.name || formData.scopes.length === 0 || (reasonRequired && !isAdminReasonComplete(reason))
+                !!mintBlocked || !formData.name.trim() || formData.scopes.length === 0 || lakesLoading || lakesError
               }
             >
               Generate API Key
             </Button>
           </Stack>
         </Stack>
-      </ModalDialog>
-    </Modal>
+      </AdminDialog>
+      <ActionDialog
+        open={open && confirming}
+        onClose={() => setConfirming(false)}
+        title={`Generate API key for ${user.username}`}
+        description={`Creates "${formData.name}" with ${formData.scopes.length} ${formData.scopes.length === 1 ? 'scope' : 'scopes'}. The secret will be shown once and cannot be recovered later.`}
+        reasonPresets={ADMIN_REASON_PRESETS.apiKeyAdminScope}
+        confirmLabel="Generate API key"
+        onConfirm={handleSubmit}
+        pending={generateMutation.isPending}
+        blockedReason={mintBlocked}
+        data-testid="admin-generate-key-action-dialog"
+      />
+    </>
   );
 }

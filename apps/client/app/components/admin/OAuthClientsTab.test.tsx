@@ -710,6 +710,24 @@ describe('buildEditPayload', () => {
     });
   });
 
+  it('sets, changes and clears the Overwatch product, and sends nothing when it is unchanged', () => {
+    const form = editFormFromClient(stored);
+    expect(form.overwatchProductId).toBe('');
+    expect(buildEditPayload(stored, { ...form, overwatchProductId: ' reading-app ' })).toEqual({
+      overwatchProductId: 'reading-app',
+    });
+
+    const withProduct = { ...client, overwatchProductId: 'reading-app' } as never;
+    const productForm = editFormFromClient(withProduct);
+    expect(buildEditPayload(withProduct, productForm)).toEqual({});
+    expect(buildEditPayload(withProduct, { ...productForm, overwatchProductId: 'other-app' })).toEqual({
+      overwatchProductId: 'other-app',
+    });
+    expect(buildEditPayload(withProduct, { ...productForm, overwatchProductId: '' })).toEqual({
+      overwatchProductId: null,
+    });
+  });
+
   it('keeps a legacy scope that is still ticked and appends new ones in catalogue order', () => {
     const form = editFormFromClient(stored);
     expect(buildEditPayload(stored, { ...form, scopes: ['me:read', 'email', 'legacy:x', 'openid'] })).toEqual({

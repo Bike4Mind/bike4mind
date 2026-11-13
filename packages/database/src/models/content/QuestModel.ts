@@ -1433,6 +1433,83 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // Session ids of every quest whose `images` or `videos` references this generated key, soft-deleted
+  // quests included. The video-aware sibling of findSessionIdsByImage, for deciding whether the
+  // bytes still have an owner before they are deleted.
+  async findSessionIdsByMedia(key: string): Promise<string[]> {
+    if (!key) return [];
+    const docs = await this.model
+      .find({ $or: [{ images: key }, { videos: key }] }, { sessionId: 1 })
+      .setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // Batched findSessionIdsByMedia: key -> session ids of every quest (soft-deleted included) whose
+  // `images` or `videos` holds it. Keys nothing references are absent from the map.
+  async findSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string[]>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const byKey = new Map<string, Set<string>>();
+    if (wanted.size === 0) return new Map();
+    const list = [...wanted];
+    const docs = await this.model
+      .find({ $or: [{ images: { $in: list } }, { videos: { $in: list } }] }, { sessionId: 1, images: 1, videos: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (!wanted.has(key)) continue;
+        const ids = byKey.get(key) ?? new Set<string>();
+        ids.add(String(doc.sessionId));
+        byKey.set(key, ids);
+      }
+    }
+    return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
+  }
+
+  // key -> session id of the earliest-created quest (soft-deleted included) whose `images` or `videos`
+  // holds it: where the key was produced, since import, fork and clone copy keys into newer quests.
+  // createdAt, not _id, orders them: a notebook import may keep the exported message ids.
+  async findOriginSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const origin = new Map<string, string>();
+    if (wanted.size === 0) return origin;
+    const list = [...wanted];
+    const docs = await this.model
+      .find({ $or: [{ images: { $in: list } }, { videos: { $in: list } }] }, { sessionId: 1, images: 1, videos: 1 })
+      .sort({ createdAt: 1, _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (wanted.has(key) && !origin.has(key)) origin.set(key, String(doc.sessionId));
+      }
+    }
+    return origin;
+  }
+
+  // findSessionIdsByMediaKeys over live quests only: when one message is deleted its notebook is
+  // still live, so only another live quest's reference may retain a key.
+  async findLiveSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string[]>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const byKey = new Map<string, Set<string>>();
+    if (wanted.size === 0) return new Map();
+    const list = [...wanted];
+    const filter: Record<string, unknown> = {
+      $or: [{ images: { $in: list } }, { videos: { $in: list } }],
+      deletedAt: null,
+    };
+    const docs = await this.model.find(filter, { sessionId: 1, images: 1, videos: 1 }).lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (!wanted.has(key)) continue;
+        const ids = byKey.get(key) ?? new Set<string>();
+        ids.add(String(doc.sessionId));
+        byKey.set(key, ids);
+      }
+    }
+    return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
+  }
+
   // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
   // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
   // by that organization. One full scan of the user's quests, which is why it is not on a read path.
@@ -1738,6 +1815,8 @@ function initializeQuestModel() {
     // serve/copy of a generated image, so this key -> session resolution must not be a collection
     // scan. Sparse: most quests carry no images.
     ChatHistoryItemSchema.index({ images: 1 }, { name: 'images', sparse: true });
+    // Pairs with `images` so the `$or` in findSessionIdsByMedia(Keys) is index-backed on both branches.
+    ChatHistoryItemSchema.index({ videos: 1 }, { name: 'videos', sparse: true });
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });

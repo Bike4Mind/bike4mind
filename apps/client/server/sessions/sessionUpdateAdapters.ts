@@ -2,7 +2,7 @@ import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { projectRepository, sessionRepository, fabFileRepository, cacheRepository } from '@bike4mind/database';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import type { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import type { resolveRetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
 
 /** Adapters for sessionService.updateSession, shared by PUT /api/sessions/[id] and the bulk tag write. */
 export const buildSessionUpdateAdapters = (
@@ -23,7 +23,7 @@ export const buildSessionUpdateAdapters = (
   // Imported at CALL time - see the create route for why (the resolver's graph reaches the
   // Mongoose models, and it is only needed when files are actually attached).
   resolveLakeAccess: async () =>
-    (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+    (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
   // The attachment door's lake arms, so an added lake file passes the access check.
   resolveAttachmentLakeAccess: async () =>
     (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, logger)(),

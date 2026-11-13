@@ -1,8 +1,8 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -19,12 +19,8 @@ interface RequestQuery {
 // cron that auto-cancels expired grants based on `periodEndsAt`. Already-
 // granted credits are intentionally NOT reclaimed here - the org keeps any
 // balance it has spent or accrued. Both behaviours are deliberate.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
@@ -32,6 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
+    await assertDelegateCanCreditOrganization(req.user, organization, 'revoke the grant on');
 
     const activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
       SubscriptionOwnerType.Organization,

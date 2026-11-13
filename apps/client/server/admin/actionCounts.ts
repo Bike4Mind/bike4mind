@@ -1,4 +1,11 @@
-import { ADMIN_PERMISSIONS, hasAdminPermission, isFullAdmin, type AdminPermissionId } from '@bike4mind/common';
+import {
+  ADMIN_PERMISSIONS,
+  hasAdminPermission,
+  isFullAdmin,
+  meetsAdminPermissionRequirement,
+  MODERATION_PAGE_READ,
+  type AdminPermissionId,
+} from '@bike4mind/common';
 import {
   adminApprovalRepository,
   adminAuditLogRepository,
@@ -12,6 +19,7 @@ import {
   subscriberRepository,
   userRepository,
   countNewFeedback,
+  oldestNewFeedbackAt,
 } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
@@ -42,9 +50,10 @@ export type AdminActionCountContext = {
 };
 
 export type AdminActionCounter = {
-  /** The access needed to act on the queue, not merely to view it. */
+  /** The access needed to read the queue. */
   access: AdminActionCountAccess;
   count: (context: AdminActionCountContext) => Promise<number>;
+  oldestAt?: () => Promise<Date | null>;
 };
 
 const DEAD_LETTER_CACHE_MS = 60_000;
@@ -94,17 +103,19 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
   moderationReview: {
     access: 'fullAdmin',
     count: ({ cap }) => imageModerationIncidentRepository.countPendingReview({ limit: cap }),
+    oldestAt: () => imageModerationIncidentRepository.oldestPendingReviewAt(),
   },
   heldSignupGrants: {
-    access: 'fullAdmin',
+    access: 'credits:adjust',
     count: ({ cap }) => signupGrantReleaseRepository.countHeld(undefined, { limit: cap }),
   },
   signupDomainHolds: {
-    access: 'fullAdmin',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => signupDomainHoldListRepository.countPending({ limit: cap }),
+    oldestAt: () => signupDomainHoldListRepository.oldestPendingAt(),
   },
   signupRiskReview: {
-    access: 'fullAdmin',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => userRepository.countPendingRiskReviews({ limit: cap }),
   },
   approvals: {
@@ -119,7 +130,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
       }),
   },
   publishedPages: {
-    access: 'fullAdmin',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => publishedArtifactRepository.countReported({ limit: cap }),
   },
   stripeDisputes: {
@@ -143,17 +154,44 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
   feedback: {
     access: 'fullAdmin',
     count: ({ cap }) => countNewFeedback({ limit: cap }),
+    oldestAt: oldestNewFeedbackAt,
   },
   deadLetters: {
-    access: 'settings:manage',
+    access: 'support:read',
     count: countDeadLetters,
   },
 };
 
 const canSee = (viewer: AdminActionCountViewer, access: AdminActionCountAccess): boolean =>
-  access === 'fullAdmin' ? isFullAdmin(viewer) : hasAdminPermission(viewer, access);
+  access === 'fullAdmin' ? isFullAdmin(viewer) : meetsAdminPermissionRequirement(viewer, access);
 
-/** Counts every queue the viewer may act on, in parallel; a counter that throws is logged and reported as null. */
+export async function computeAdminActionOldest(viewer: AdminActionCountViewer) {
+  const rows = await Promise.all(
+    ADMIN_ACTION_COUNT_KEYS.filter(key => canSee(viewer, ADMIN_ACTION_COUNTERS[key].access)).map(async key => {
+      const read = ADMIN_ACTION_COUNTERS[key].oldestAt;
+      if (!read)
+        return [
+          key,
+          {
+            at: null,
+            reason:
+              key === 'deadLetters'
+                ? 'SQS attributes do not expose oldest message time'
+                : 'No shared indexed oldest-item reader',
+          },
+        ] as const;
+      try {
+        const at = await read();
+        return [key, { at: at?.toISOString() ?? null, reason: at ? null : 'No dated pending item' }] as const;
+      } catch {
+        return [key, { at: null, reason: 'Oldest-item read failed or exceeded its time budget' }] as const;
+      }
+    })
+  );
+  return Object.fromEntries(rows);
+}
+
+/** Counts every queue the viewer may read, in parallel; a counter that throws is logged and reported as null. */
 export async function computeAdminActionCounts(
   viewer: AdminActionCountViewer,
   viewerUserId: string,

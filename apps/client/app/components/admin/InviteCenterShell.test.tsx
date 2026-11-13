@@ -22,6 +22,14 @@ vi.mock('./InviteCenter/Pending/PendingSection', () => ({
   PendingSection: () => <div data-testid="pending-section-stub" />,
 }));
 
+vi.mock('./InviteCenter/Rewards/RewardsSection', () => ({
+  RewardsSection: () => <div data-testid="rewards-section-stub" />,
+}));
+
+vi.mock('./InviteCenter/Schedule/ScheduleSection', () => ({
+  ScheduleSection: () => <div data-testid="schedule-section-stub" />,
+}));
+
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => routerMock.search,
   useNavigate: () => routerMock.navigate,
@@ -89,13 +97,22 @@ describe('InviteCenterShell', () => {
     });
   });
 
-  it.each([
-    ['schedule', 'The signup credit schedule is coming here'],
-    ['rewards', 'Rewards are coming here'],
-  ])('shows the %s empty state', (id, title) => {
-    routerMock.search = { inviteSection: id };
+  it('renders the schedule editor, not a stub, in the schedule section', () => {
+    routerMock.search = { inviteSection: 'schedule' };
     renderShell();
-    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByTestId('invite-center-section-schedule')).toContainElement(
+      screen.getByTestId('schedule-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('renders the rewards editor, not a stub, in the rewards section', () => {
+    routerMock.search = { inviteSection: 'rewards' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-rewards')).toContainElement(
+      screen.getByTestId('rewards-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
   it('renders the grant packages table, not a stub, in the packages section', () => {
@@ -105,15 +122,6 @@ describe('InviteCenterShell', () => {
     expect(screen.getByTestId('invite-center-section-packages')).toContainElement(tab);
     expect(tab).toHaveAttribute('data-embedded', 'true');
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
-  });
-
-  it('has no action buttons on the schedule and rewards stubs', () => {
-    for (const id of ['schedule', 'rewards']) {
-      routerMock.search = { inviteSection: id };
-      const { unmount } = renderShell();
-      expect(screen.getByTestId('admin-empty-state').querySelector('button')).toBeNull();
-      unmount();
-    }
   });
 
   it.each([['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules]])(

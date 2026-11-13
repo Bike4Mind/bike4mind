@@ -3,6 +3,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
+import RedirectProductHint from './RedirectProductHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -433,6 +434,7 @@ const Register: React.FC = () => {
             >
               {currentStep === 'form' ? t('welcome', { name: theme.branding.name }) : t('auth.checkYourEmail')}
             </Typography>
+            {currentStep === 'form' && <RedirectProductHint mode="signUp" />}
             <Typography
               className="register-subtitle"
               variant="plain"
@@ -678,6 +680,7 @@ const Register: React.FC = () => {
                               <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
                                 I agree to the{' '}
                                 <Link
+                                  data-testid="register-terms-link"
                                   href={ExternalLinks.terms}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -687,6 +690,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 ,{' '}
                                 <Link
+                                  data-testid="register-aup-link"
                                   href={ExternalLinks.acceptableUse}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -696,6 +700,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 , and{' '}
                                 <Link
+                                  data-testid="register-privacy-link"
                                   href={ExternalLinks.privacy}
                                   target="_blank"
                                   rel="noopener noreferrer"

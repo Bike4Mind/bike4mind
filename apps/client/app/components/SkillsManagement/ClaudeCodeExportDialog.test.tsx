@@ -77,7 +77,20 @@ describe('ClaudeCodeExportDialog', () => {
 
   it('warns that supporting files are not exported', () => {
     renderDialog({ skill: { ...skill, files: [{ path: 'scripts/run.py', content: 'x' }] } });
-    expect(screen.getByTestId('skill-claude-code-files-not-included')).toHaveTextContent('1 supporting file');
+    expect(screen.getByTestId('skill-claude-code-files-not-included')).toHaveTextContent(
+      'its 1 supporting file is not.'
+    );
+  });
+
+  it('pluralizes the noun and verb for several supporting files', () => {
+    const files = [
+      { path: 'a.py', content: 'x' },
+      { path: 'b.py', content: 'y' },
+    ];
+    renderDialog({ skill: { ...skill, files } });
+    expect(screen.getByTestId('skill-claude-code-files-not-included')).toHaveTextContent(
+      'its 2 supporting files are not.'
+    );
   });
 
   it('warns about Bike4Mind-only tools and agents, third-party text, and a missing import', () => {
@@ -113,6 +126,8 @@ describe('ClaudeCodeExportDialog', () => {
     const warning = screen.getByTestId('skill-claude-code-key-warning');
     expect(warning).toHaveTextContent("never to a project's .claude/settings.json");
     expect(warning).toHaveTextContent('headersHelper');
+    expect(warning).toHaveTextContent('JSON object');
+    expect(warning).toHaveTextContent('{"Authorization": "Bearer <key>"}');
     // A member who can't edit and sees no bundles gets no bundles section.
     expect(screen.queryByTestId('skill-claude-code-bundles')).not.toBeInTheDocument();
   });

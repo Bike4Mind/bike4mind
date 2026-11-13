@@ -111,6 +111,12 @@ export interface LLMContextProps {
   lastUsedImageEditModel: string | null; // Tracks last used image edit model
   enabledMcpServers: string[] | null;
   /**
+   * Custom MCP connector slugs switched off in the Tools menu; every other connector switched on
+   * in Integrations is offered. Opt-out, unlike `enabledMcpServers`, so a connector added later
+   * starts on (see ChatCompletionInvokeParamsSchema.disabledMcpConnections).
+   */
+  disabledMcpConnections: string[];
+  /**
    * Agent-mode composer toggle state.
    *
    * `enabled`: when true, `routeQuery()` is forced to `agent_executor` via
@@ -198,6 +204,7 @@ const DEFAULTS = {
   lastUsedImageModel: null,
   lastUsedImageEditModel: null,
   enabledMcpServers: null,
+  disabledMcpConnections: [] as string[],
   agentMode: { enabled: false, source: 'toggle' as const },
   disableAutoRouteForThisSession: false,
 };

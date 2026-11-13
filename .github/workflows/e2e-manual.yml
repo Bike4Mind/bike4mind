@@ -23,6 +23,9 @@ on:
           - Auth
           - Existing User Login
           - Signup
+          - MFA
+          - Referrals
+          - Launch Readiness
           - Admin
           - Notebook
           - Prompts
@@ -36,7 +39,9 @@ on:
           - Data Lake
           - Skills
           - Credits
+          - Free Tier Limits
           - Teams
+          - Studio
           - WebSocket Auth
           - Static Asset
         default: All tests
@@ -75,13 +80,16 @@ jobs:
           GATE_RUN: ${{ inputs.gate_run }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup add a
-          # spec-file filter). Scheduled runs have no test_project -> full suite.
+          # Map the dropdown to Playwright args (whole projects; Auth/Existing User Login/Signup/MFA/Free Tier Limits
+          # add a spec-file filter). Scheduled runs have no test_project -> full suite.
           case "$TEST_PROJECT" in
             ""|"All tests")     ARGS="" ;;
             "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
             "Existing User Login") ARGS="--project=unauthenticated e2e/existing-user-login.spec.ts" ;;
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "MFA")              ARGS="--project=unauthenticated e2e/mfa.spec.ts" ;;
+            "Referrals")        ARGS="--project=referrals" ;;
+            "Launch Readiness") ARGS="--project=launch-readiness" ;;
             "Admin")            ARGS="--project=admin" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;
@@ -95,7 +103,9 @@ jobs:
             "Data Lake")        ARGS="--project=data-lake" ;;
             "Skills")           ARGS="--project=skills" ;;
             "Credits")          ARGS="--project=credits" ;;
+            "Free Tier Limits") ARGS="--project=credits e2e/free-tier-limits.spec.ts" ;;
             "Teams")            ARGS="--project=teams" ;;
+            "Studio")           ARGS="--project=studio" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
             "Static Asset")     ARGS="--project=static-asset" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;

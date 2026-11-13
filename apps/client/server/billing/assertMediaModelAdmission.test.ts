@@ -17,7 +17,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: mocks.settings,
 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: mocks.entitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: mocks.entitlements }));
 import { assertMediaModelAdmission, filterAdmittedMediaModels } from './assertMediaModelAdmission';
 
 describe('media model admission', () => {

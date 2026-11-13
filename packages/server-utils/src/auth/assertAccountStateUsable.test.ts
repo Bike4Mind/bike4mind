@@ -19,11 +19,29 @@ describe('assertAccountStateUsable', () => {
   });
 
   it.each([
-    ['banned', 'This account is suspended for a violation of our Terms of Service'],
+    ['banned', 'This account is suspended for violating our Terms of Service.'],
     ['disputePending', 'on hold pending a payment review'],
     ['suspended', 'Your account is suspended'],
   ])('rejects an account blocked for %s', (reason, message) => {
     expect(() => assertAccountStateUsable({ reason } as never)).toThrow(message);
+  });
+
+  it('refuses an expired persona with a 403', () => {
+    const past = new Date(Date.now() - 60_000);
+    expect(() => assertAccountStateUsable({ isPersona: true, personaExpiresAt: past } as never)).toThrow(
+      'This test persona has expired.'
+    );
+  });
+
+  it('allows a live persona', () => {
+    const future = new Date(Date.now() + 60_000);
+    expect(() => assertAccountStateUsable({ isPersona: true, personaExpiresAt: future } as never)).not.toThrow();
+  });
+
+  it('reports a banned persona as banned, not expired', () => {
+    expect(() =>
+      assertAccountStateUsable({ reason: 'banned', isPersona: true, personaExpiresAt: new Date(0) } as never)
+    ).toThrow('suspended for violating our Terms of Service');
   });
 
   it('refuses an admin-suspended account with a classified 403 naming the category, never the signals', () => {

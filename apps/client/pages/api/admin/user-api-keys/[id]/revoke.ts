@@ -1,10 +1,11 @@
-import { ApiKeyStatus, ConflictError, ForbiddenError } from '@bike4mind/common';
+import { ApiKeyStatus, ConflictError } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
+  assertCanActOnKeyOwner,
   auditKeyRef,
   endKeyRealtimeConnections,
   loadApiKeyOrThrow,
@@ -15,19 +16,19 @@ import {
 /**
  * POST /api/admin/user-api-keys/[id]/revoke  { reason }
  *
- * Admin-only: disables any user's key, stamping the acting admin as `revokedBy` (which is what lets
+ * Requires keys:revoke: disables any user's key, stamping the acting admin as `revokedBy` (which is what lets
  * the same admin undo it through /restore). The key is read from the database on every request
  * (apiKeyAuth keeps no key cache), so the revoke bites on the next call; realtime sockets opened with
  * the key are ended too. The revoke and its strict audit row commit together.
  */
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
     const keyId = readApiKeyIdParam(req);
     const reason = parseAdminActionReason(req.body?.reason);
 
     const key = await loadApiKeyOrThrow(keyId);
+    await assertCanActOnKeyOwner(req.user, key.userId, 'revoke API keys of');
     if (key.status === ApiKeyStatus.DISABLED) throw new ConflictError('API key is already revoked');
 
     const adminId = req.user.id;

@@ -18,6 +18,7 @@ import {
   validateSkillAllowedTools,
   validateSkillFiles,
   validateSkillClaudeCodeAllowedTools,
+  validateSkillClaudeCodeModel,
 } from '@server/utils/skillValidation';
 import { ShareableSkill, globalSkillScanFor } from '@server/utils/skillAccess';
 import { scanGlobalSkillUpdate } from '@server/skillMarket/globalSkillUpdate';
@@ -67,6 +68,7 @@ export function validateNewSkill(body: Partial<ISkill>) {
     allowedTools: validateSkillAllowedTools(body.allowedTools),
     files: validateSkillFiles(body.files),
     claudeCodeAllowedTools: validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools),
+    claudeCodeModel: validateSkillClaudeCodeModel(body.claudeCodeModel),
     disableModelInvocation: Boolean(body.disableModelInvocation),
   };
 }
@@ -81,7 +83,7 @@ export async function insertSkill(
   scope: SkillScope,
   onDuplicateName: (name: string) => Error = name => new BadRequestError(`A skill named "${name}" already exists`)
 ): Promise<ISkillDocument> {
-  const { argumentHint, allowedTools, files, claudeCodeAllowedTools, ...rest } = fields;
+  const { argumentHint, allowedTools, files, claudeCodeAllowedTools, claudeCodeModel, ...rest } = fields;
   try {
     return await skillRepository.create({
       ...rest,
@@ -89,6 +91,7 @@ export async function insertSkill(
       ...(allowedTools !== undefined && { allowedTools }),
       ...(files?.length ? { files } : {}),
       ...(claudeCodeAllowedTools?.length && { claudeCodeAllowedTools }),
+      ...(claudeCodeModel && { claudeCodeModel }),
       ...scope,
       isGlobalRead: false,
       isGlobalWrite: false,
@@ -122,6 +125,7 @@ export async function applySkillUpdate(
   if (body.claudeCodeAllowedTools !== undefined) {
     patch.claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
   }
+  if (body.claudeCodeModel !== undefined) patch.claudeCodeModel = validateSkillClaudeCodeModel(body.claudeCodeModel);
   if (body.disableModelInvocation !== undefined) {
     patch.disableModelInvocation = Boolean(body.disableModelInvocation);
   }

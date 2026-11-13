@@ -11,15 +11,24 @@ const { mockLoginAs, mockIssueSession, mockRecord, mockDeny, mockSetRefreshCooki
     mockSetAdminReturnCookie: vi.fn(),
   }));
 
+// adminApi stays real: the permission guard it installs is part of what is under test.
+const route = vi.hoisted(() => ({ guard: null as null | ((req: unknown, res: unknown, next: () => void) => void) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    const chain: any = {
+      use: (guard: (req: unknown, res: unknown, next: () => void) => void) => {
+        route.guard = guard;
+        return chain;
+      },
+      post: (fn: any) => fn,
+    };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 const txEvents: string[] = [];
-const { mockPolicy, mockFindById, mockRequestApproval, mockRedeem } = vi.hoisted(() => ({
+const { mockPolicy, mockFindById, mockFindFresh, mockRequestApproval, mockRedeem } = vi.hoisted(() => ({
+  mockFindFresh: vi.fn(),
   mockPolicy: vi.fn(),
   mockFindById: vi.fn(),
   mockRequestApproval: vi.fn(),
@@ -31,7 +40,10 @@ vi.mock('@server/admin/approvals/service', () => ({
   redeemApproval: (...a: unknown[]) => mockRedeem(...a),
 }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
+  userRepository: {
+    findById: (...a: unknown[]) => mockFindById(...a),
+    findByIdWithMfaSecrets: (...a: unknown[]) => mockFindFresh(...a),
+  },
   SupportAccess: { create: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     txEvents.push('tx:start');
@@ -47,6 +59,12 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   adminService: { loginAs: (...a: unknown[]) => mockLoginAs(...a) },
+}));
+vi.mock('@bike4mind/auth/mfaService', () => ({
+  verifyMFA: vi.fn().mockResolvedValue({ verified: true }),
+  isUserLockedOut: () => false,
+  getLockoutTimeRemaining: () => 0,
+  recordFailedMfaAttempt: vi.fn(),
 }));
 vi.mock('@server/auth/issueSession', () => ({
   issueSessionForRequest: (...a: unknown[]) => mockIssueSession(...a),
@@ -377,5 +395,91 @@ describe('impersonation target role changes', () => {
     expect(mockIssueSession).not.toHaveBeenCalled();
     expect(mockSetRefreshCookie).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/users/:id/loginAs - delegated users:impersonate', () => {
+  const delegate = { id: 'd1', name: 'Delegate', email: 'd@example.com', isAdmin: false, mfa: { totpEnabled: true } };
+  const run = (
+    user: Record<string, unknown>,
+    body: Record<string, unknown> = { mfaToken: '123456', reason: REASON },
+    targetId = 'target1'
+  ) => {
+    const { req, res } = post(body, targetId);
+    Object.assign(req, { user });
+    const call = (async () => {
+      route.guard!(req, res, () => {});
+      return (handler as unknown as (r: unknown, s: unknown) => Promise<unknown>)(req, res);
+    })();
+    return { res, call };
+  };
+
+  beforeEach(async () => {
+    txEvents.length = 0;
+    const { loginAs } = await import('../../../../../../../b4m-core/services/src/adminService/loginAs');
+    mockPolicy.mockReset().mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockFindById.mockReset().mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: false });
+    mockFindFresh
+      .mockReset()
+      .mockImplementation(async () => ({ ...delegate, adminPermissions: ['users:impersonate'] }));
+    mockRequestApproval.mockReset();
+    mockRedeem.mockReset();
+    mockRecord.mockReset().mockResolvedValue(null);
+    mockIssueSession
+      .mockReset()
+      .mockResolvedValue({ accessToken: 'tok', refreshToken: 'target-refresh', sid: 'sid-1' });
+    mockLoginAs.mockReset().mockImplementation((...a: Parameters<typeof loginAs>) => loginAs(...a));
+  });
+
+  it('refuses a delegate without users:impersonate before anything runs', async () => {
+    const { call } = run({ ...delegate, adminPermissions: ['support:read'] });
+    await expect(call).rejects.toMatchObject({ statusCode: 403, message: 'Missing permission: users:impersonate' });
+    expect(mockLoginAs).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate with the permission start a session on a non-admin target', async () => {
+    const { res, call } = run({ ...delegate, adminPermissions: ['users:impersonate'] });
+    await call;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockIssueSession).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin target and never stores an approval request', async () => {
+    mockFindById.mockResolvedValue({ id: 'target1', name: 'Target Admin', isAdmin: true });
+    const { call } = run({ ...delegate, adminPermissions: ['users:impersonate'] });
+    await expect(call).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+    expect(mockIssueSession).not.toHaveBeenCalled();
+  });
+
+  it('audits a delegate impersonating themselves as a denial', async () => {
+    mockDeny.mockReset().mockImplementation(async () => {
+      throw new ForbiddenError('Admins cannot perform this action on their own account.');
+    });
+    const { call } = run(
+      { ...delegate, adminPermissions: ['users:impersonate'] },
+      { mfaToken: '123456', reason: REASON },
+      'd1'
+    );
+    await expect(call).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockDeny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.impersonation.denied', attempted: 'user.impersonation.started' })
+    );
+    expect(mockLoginAs).not.toHaveBeenCalled();
+  });
+
+  it('still answers 202 for a full admin on an admin target', async () => {
+    mockFindById.mockResolvedValue({ id: 'target1', name: 'Target Admin', isAdmin: true });
+    mockFindFresh.mockResolvedValue({ id: 'admin1', isAdmin: true, mfa: { totpEnabled: true } });
+    mockRequestApproval.mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+    const { res, call } = run({ id: 'admin1', name: 'Admin', isAdmin: true, mfa: { totpEnabled: true } });
+    await call;
+    expect(res._getStatusCode()).toBe(202);
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiresFullAdmin: true }),
+      expect.anything()
+    );
   });
 });

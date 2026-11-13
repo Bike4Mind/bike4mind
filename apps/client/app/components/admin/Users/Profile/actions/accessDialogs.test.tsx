@@ -11,10 +11,12 @@ type ProductAccessStubProps = {
 
 const mocks = vi.hoisted(() => ({
   update: vi.fn(),
+  updateRole: vi.fn(),
   currentUser: { id: 'admin-1' } as { id: string } | null,
 }));
 
 vi.mock('./useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
+vi.mock('./useAdminUserRoleUpdate', () => ({ useAdminUserRoleUpdate: () => mocks.updateRole }));
 vi.mock('./useAdminUserTagsUpdate', () => ({ useAdminUserTagsUpdate: () => mocks.update }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: ['pilot', 'Developer'] }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
@@ -64,6 +66,7 @@ describe('access dialogs', () => {
     vi.clearAllMocks();
     mocks.currentUser = { id: 'admin-1' };
     mocks.update.mockImplementation(async (input: { tags?: string[] }) => input.tags ?? []);
+    mocks.updateRole.mockImplementation(async (input: { isAdmin: boolean }) => input.isAdmin);
   });
 
   describe('ChangeRoleDialog', () => {
@@ -79,7 +82,7 @@ describe('access dialogs', () => {
       expect(screen.getByTestId('change-role-dialog-role-customer')).toHaveAttribute('aria-pressed', 'true');
     });
 
-    it('promotes to Super Admin with isAdmin and a roleChangeReason, then undoes it', async () => {
+    it('promotes to Super Admin through the role route with a reason, then undoes it', async () => {
       const { onClose } = renderRole(buildProfile({ tags: ['vip'] }));
 
       fireEvent.click(screen.getByTestId('change-role-dialog-role-super-admin'));
@@ -91,34 +94,54 @@ describe('access dialogs', () => {
       fireEvent.click(confirmButton('change-role-dialog'));
 
       await waitFor(() =>
-        expect(mocks.update).toHaveBeenCalledWith({
-          isAdmin: true,
-          tags: ['vip'],
-          roleChangeReason: 'Joined the admin team',
-        })
+        expect(mocks.updateRole).toHaveBeenCalledWith({ isAdmin: true, reason: 'Joined the admin team' })
       );
+      expect(mocks.update).not.toHaveBeenCalled();
       expect(onClose).toHaveBeenCalled();
       fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
       await waitFor(() =>
-        expect(mocks.update).toHaveBeenLastCalledWith({
-          isAdmin: false,
-          tags: ['vip'],
-          roleChangeReason: 'Undo: Joined the admin team',
-        })
+        expect(mocks.updateRole).toHaveBeenLastCalledWith({ isAdmin: false, reason: 'Undo: Joined the admin team' })
       );
+      expect(mocks.update).not.toHaveBeenCalled();
     });
 
-    it('makes a Developer by adding the tag, without a roleChangeReason', async () => {
+    it('promotes a Developer to Super Admin, then strips the developer tag', async () => {
+      renderRole(buildProfile({ tags: ['vip', 'Developer'] }));
+
+      fireEvent.click(screen.getByTestId('change-role-dialog-role-super-admin'));
+      pickReason('change-role-dialog');
+      fireEvent.click(confirmButton('change-role-dialog'));
+
+      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ tags: ['vip'] }));
+      expect(mocks.updateRole).toHaveBeenCalledWith({ isAdmin: true, reason: 'Joined the admin team' });
+      expect(mocks.updateRole.mock.invocationCallOrder[0]).toBeLessThan(mocks.update.mock.invocationCallOrder[0]);
+    });
+
+    it('writes no tags when the role route fails, and keeps the dialog open', async () => {
+      mocks.updateRole.mockRejectedValue(new Error('step-up cancelled'));
+      const { onClose } = renderRole(buildProfile({ tags: ['Developer'] }));
+
+      fireEvent.click(screen.getByTestId('change-role-dialog-role-super-admin'));
+      pickReason('change-role-dialog');
+      fireEvent.click(confirmButton('change-role-dialog'));
+
+      await waitFor(() => expect(mocks.updateRole).toHaveBeenCalled());
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('makes a Developer by adding the tag, without touching the role route', async () => {
       renderRole(buildProfile({ tags: ['vip'] }));
 
       fireEvent.click(screen.getByTestId('change-role-dialog-role-developer'));
       pickReason('change-role-dialog');
       fireEvent.click(confirmButton('change-role-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ isAdmin: false, tags: ['vip', 'Developer'] }));
+      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ tags: ['vip', 'Developer'] }));
+      expect(mocks.updateRole).not.toHaveBeenCalled();
     });
 
-    it('demotes a Super Admin to Customer with a roleChangeReason', async () => {
+    it('demotes a Super Admin to Customer through the role route with a reason', async () => {
       renderRole(buildProfile({ isAdmin: true, tags: [] }));
 
       fireEvent.click(screen.getByTestId('change-role-dialog-role-customer'));
@@ -126,12 +149,9 @@ describe('access dialogs', () => {
       fireEvent.click(confirmButton('change-role-dialog'));
 
       await waitFor(() =>
-        expect(mocks.update).toHaveBeenCalledWith({
-          isAdmin: false,
-          tags: [],
-          roleChangeReason: 'Joined the admin team',
-        })
+        expect(mocks.updateRole).toHaveBeenCalledWith({ isAdmin: false, reason: 'Joined the admin team' })
       );
+      expect(mocks.update).not.toHaveBeenCalled();
     });
 
     it('is blocked for your own account whatever you pick', () => {

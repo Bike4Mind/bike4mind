@@ -1,10 +1,16 @@
 import React, { useState } from 'react';
+import { AbuseAssessmentReasons } from './AbuseAssessmentReasons';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
+  abuseAssessmentAccountProfileSchema,
   hasAdminPermission,
+  assessmentCompletionSequenceSchema,
+  assessmentCompletionSynchronySchema,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentResult,
   type AbuseAssessmentSkipReason,
+  type ShadowDetectionVerdict,
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
@@ -14,7 +20,7 @@ import {
 } from '@client/app/hooks/data/shadowDetections';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import { StatusChip, formatUtc } from './shared';
+import { AiSuggestion, StatusChip, formatUtc, type AiOverrideReason, type AiSuggestionData } from './shared';
 
 const muted = { color: 'admin.inkMuted' } as const;
 
@@ -54,53 +60,238 @@ const percent = (value: number): string => `${Math.round(value * 100)}%`;
 
 const formatDate = (iso: string): string => formatUtc(new Date(iso));
 
+const yesNo = (value: boolean | null): string => (value === null ? 'unknown' : value ? 'yes' : 'no');
+const count = (value: number): string => value.toLocaleString('en-US');
+
+/** One line per fact of a v2 account profile, in the words the admin user page uses. */
+export function describeAccountProfile(profile: AbuseAssessmentAccountProfile): string[] {
+  const { signupNetwork: network, email, spend, linkedAccounts: linked } = profile;
+  const lines = [
+    `Signup: ${profile.signupMethod === 'otc' ? 'email code' : profile.signupMethod}; hosting/VPN network ` +
+      `${yesNo(network.hosting)}, anonymous IP ${yesNo(network.anonymousIp)}, JA4 ${network.ja4Present ? 'present' : 'absent'}`,
+  ];
+  if (email) {
+    const traits = [
+      email.plusAddressed && (email.randomLookingPlusTag ? 'plus-addressed, random-looking tag' : 'plus-addressed'),
+      email.generatedLocalPart && 'generated-looking name',
+      email.consumerMailDomain ? 'webmail domain' : 'own domain',
+    ].filter((trait): trait is string => typeof trait === 'string');
+    lines.push(`Email: ${traits.join(', ')}`);
+  }
+  if (profile.minutesToTwoFactor !== null)
+    lines.push(`Two-factor: ${count(profile.minutesToTwoFactor)} min after signup`);
+  if (profile.minutesToFirstSpend !== null)
+    lines.push(`First spend: ${count(profile.minutesToFirstSpend)} min after signup`);
+  if (spend) {
+    const models = spend.byModel
+      .map(entry => `${entry.model ?? 'no model'} ${percent(entry.creditShare)} (${count(entry.creditsPerEvent)}/call)`)
+      .join(', ');
+    lines.push(`Spend: ${count(spend.totalCredits)} credits${models ? ` - ${models}` : ''}`);
+  }
+  if (linked) {
+    lines.push(
+      `Linked within ${linked.windowHours}h: ${count(linked.total)}${linked.truncated ? '+' : ''} ` +
+        `(${count(linked.blocked)} blocked; signup IP ${linked.sharedSignupIp}, JA4 ${linked.sharedJa4}, ` +
+        `mailbox ${linked.sharedMailbox}, mail domain ${linked.sharedMailDomain})`
+    );
+  }
+  return lines;
+}
+
+/** Stored summaries are returned as recorded, so v1 rows (no profile) simply render nothing here. */
+function profilesOf(featureSummary: Record<string, unknown>): { ref: string; lines: string[] }[] {
+  const accounts = Array.isArray(featureSummary.accounts) ? featureSummary.accounts : [];
+  return accounts.flatMap((account: unknown) => {
+    if (!account || typeof account !== 'object') return [];
+    const { ref, profile } = account as { ref?: unknown; profile?: unknown };
+    const parsed = abuseAssessmentAccountProfileSchema.safeParse(profile);
+    return typeof ref === 'string' && parsed.success ? [{ ref, lines: describeAccountProfile(parsed.data) }] : [];
+  });
+}
+
+const AccountProfiles: React.FC<{ featureSummary: Record<string, unknown> }> = ({ featureSummary }) => {
+  const profiles = profilesOf(featureSummary);
+  if (profiles.length === 0) return null;
+  return (
+    <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid="shadow-detection-assessment-profiles">
+      {profiles.map(({ ref, lines }) => (
+        <Box key={ref}>
+          <Typography level="body-xs" fontWeight="lg">
+            {ref}
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {lines.map(line => (
+              <Typography key={line} component="li" level="body-xs">
+                {line}
+              </Typography>
+            ))}
+          </Box>
+        </Box>
+      ))}
+    </Stack>
+  );
+};
+
 const ResultChip: React.FC<{ item: AbuseAssessmentRow; testId?: string }> = ({ item, testId }) => (
   <StatusChip tone={RESULT_DISPLAY[item.result].tone} label={RESULT_DISPLAY[item.result].label} data-testid={testId} />
 );
 
-const LatestAssessment: React.FC<{ item: AbuseAssessmentRow }> = ({ item }) => (
-  <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
-    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-      <ResultChip item={item} testId="shadow-detection-assessment-result" />
-      {item.confidence !== null && (
-        <Typography level="body-sm" data-testid="shadow-detection-assessment-confidence">
-          Confidence {percent(item.confidence)}
+const SequenceEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSequenceSchema.safeParse(summary.completionSequence);
+  if (!parsed.success) return null;
+  const evidence = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-sequence">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Coordinated API activity - review only</Typography>
+        <Typography level="body-sm">
+          {evidence.status === 'observed'
+            ? `${evidence.memberRefs.length} summarized accounts repeated the same settlement order across ${evidence.rounds} rounds, with ${evidence.minRequestsPerRound}-${evidence.maxRequestsPerRound} recorded requests per round.`
+            : 'Sequence evidence is incomplete: some participants or source evidence could not be included.'}
+        </Typography>
+        <Typography level="body-sm">
+          This is coordination evidence, not proof of abuse or the same operator. Legitimate schedulers and team
+          automation can look the same. These detections cannot trigger automated containment.
+        </Typography>
+        <Typography level="body-xs">
+          Only retained successful API-completion settlements are covered; settlement order is not request start order.
+        </Typography>
+        {evidence.status === 'observed' && evidence.scanTruncated && (
+          <Typography level="body-sm">The source scan reached a cap; this observation is incomplete.</Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
+
+const SynchronyEvidence: React.FC<{ summary: Record<string, unknown> }> = ({ summary }) => {
+  const parsed = assessmentCompletionSynchronySchema.safeParse(summary.completionSynchrony);
+  if (!parsed.success) return null;
+  const value = parsed.data;
+  return (
+    <Alert color="neutral" data-testid="assessment-completion-synchrony">
+      <Stack gap={0.5}>
+        <Typography level="title-sm">Synchronized API calls - review only</Typography>
+        <Typography level="body-sm">
+          {value.status === 'observed'
+            ? `${value.memberRefs.length} accounts shared ${value.bursts} request-start bursts and ${value.synchronizedModelSwitches} requested-model switches. ${value.dailyCapRejectedRequests} matched requests were stopped by daily free-tier caps.`
+            : 'Participants or request-start evidence could not be fully included.'}
+        </Typography>
+        <Typography level="body-sm">
+          Timing and model choices support coordination, not proof of one operator, the same prompts or misuse. These
+          observations cannot trigger automated containment.
+        </Typography>
+        {value.status === 'observed' && (value.scanTruncated || value.legacyRows > 0) && (
+          <Typography level="body-xs">
+            Coverage is incomplete because the scan was capped or older rows lack request-start metadata.
+          </Typography>
+        )}
+      </Stack>
+    </Alert>
+  );
+};
+
+// The verdict an admin would record to agree with the model; `unknown` proposes nothing.
+const RESULT_VERDICT: Partial<Record<AbuseAssessmentResult, { verdict: ShadowDetectionVerdict; label: string }>> = {
+  abuse: { verdict: 'confirmed_abuse', label: 'Confirmed abuse' },
+  legitimate_automation: { verdict: 'legitimate_automation', label: 'Legitimate automation' },
+  insufficient_evidence: { verdict: 'insufficient_evidence', label: 'Insufficient evidence' },
+};
+
+/** The assessment as an AI suggestion, or null when it proposes no verdict. */
+export const assessmentToSuggestion = (
+  item: AbuseAssessmentRow
+): { verdict: ShadowDetectionVerdict; suggestion: AiSuggestionData } | null => {
+  const proposal = RESULT_VERDICT[item.result];
+  if (!proposal) return null;
+  return {
+    verdict: proposal.verdict,
+    // The model's reasons render below the suggestion (AbuseAssessmentReasons), not in it. The word reads
+    // the proposed result's own probability, as the row chip does, not `confidence` (a spread measure).
+    // No createdAt: the model line below already dates the assessment.
+    suggestion: {
+      id: item.id,
+      proposal: proposal.label,
+      probability: item.probabilities.find(entry => entry.value === item.result)?.probability ?? null,
+    },
+  };
+};
+
+type DecisionProps = {
+  /** Fills the host's verdict control with the proposed verdict; the host records it. */
+  onAccept?: (verdict: ShadowDetectionVerdict) => void;
+  /** Leaves the verdict to the admin, with the optional why-wrong pick. */
+  onOverride?: (reason?: AiOverrideReason) => void;
+  /** Opens the suggestion with its why-wrong picker showing. */
+  initialOverriding?: boolean;
+};
+
+const LatestAssessment: React.FC<{ item: AbuseAssessmentRow } & DecisionProps> = ({
+  item,
+  onAccept,
+  onOverride,
+  initialOverriding,
+}) => {
+  const proposed = assessmentToSuggestion(item);
+  return (
+    <Stack gap={0.75} data-testid="shadow-detection-assessment-latest">
+      {proposed ? (
+        <AiSuggestion
+          variant="detail"
+          suggestion={proposed.suggestion}
+          onAccept={onAccept && (() => onAccept(proposed.verdict))}
+          onOverride={onOverride}
+          initialOverriding={initialOverriding}
+          data-testid="shadow-detection-assessment-suggestion"
+        />
+      ) : (
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <ResultChip item={item} testId="shadow-detection-assessment-result" />
+          {item.confidence !== null && (
+            <Typography level="body-sm" data-testid="shadow-detection-assessment-confidence">
+              Confidence {percent(item.confidence)}
+            </Typography>
+          )}
+        </Stack>
+      )}
+      <AbuseAssessmentReasons reasons={item.reasons ?? []} />
+      {item.result === 'unknown' && (
+        <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
+          {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
         </Typography>
       )}
-    </Stack>
-    {item.result === 'unknown' && (
-      <Typography level="body-sm" data-testid="shadow-detection-assessment-failure">
-        {item.failure ? FAILURE_MESSAGES[item.failure] : 'No usable answer came back.'}
+      {item.probabilities.length > 0 && (
+        <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-assessment-probabilities">
+          {item.probabilities.map(entry => (
+            <Typography key={entry.value} component="li" level="body-sm">
+              {RESULT_DISPLAY[entry.value].label}: {percent(entry.probability)}
+            </Typography>
+          ))}
+        </Box>
+      )}
+      <SequenceEvidence summary={item.featureSummary} />
+      <SynchronyEvidence summary={item.featureSummary} />
+      <Typography level="body-xs" sx={muted}>
+        {item.model}
+        {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v
+        {item.evidenceVersion} / {item.trigger === 'sweep' ? 'automatic sweep' : 'requested by an admin'} /{' '}
+        {formatDate(item.assessedAt)}
       </Typography>
-    )}
-    {item.probabilities.length > 0 && (
-      <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="shadow-detection-assessment-probabilities">
-        {item.probabilities.map(entry => (
-          <Typography key={entry.value} component="li" level="body-sm">
-            {RESULT_DISPLAY[entry.value].label}: {percent(entry.probability)}
-          </Typography>
-        ))}
+      <Box component="details" data-testid="shadow-detection-assessment-evidence">
+        <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
+          What the model saw
+        </Box>
+        <AccountProfiles featureSummary={item.featureSummary} />
+        <Box
+          component="pre"
+          sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}
+        >
+          {JSON.stringify(item.featureSummary, null, 2)}
+        </Box>
       </Box>
-    )}
-    <Typography level="body-xs" sx={muted}>
-      {item.model}
-      {item.modelVersion ? ` (${item.modelVersion})` : ''} / policy v{item.policyVersion} / evidence v
-      {item.evidenceVersion} / {item.trigger === 'sweep' ? 'automatic sweep' : 'requested by an admin'} /{' '}
-      {formatDate(item.assessedAt)}
-    </Typography>
-    <Box component="details" data-testid="shadow-detection-assessment-evidence">
-      <Box component="summary" sx={{ cursor: 'pointer', typography: 'body-sm' }}>
-        What the model saw
-      </Box>
-      <Box
-        component="pre"
-        sx={{ m: 0, mt: 0.5, p: 1, fontSize: 'xs', overflow: 'auto', maxHeight: '20rem', bgcolor: 'admin.canvas' }}
-      >
-        {JSON.stringify(item.featureSummary, null, 2)}
-      </Box>
-    </Box>
-  </Stack>
-);
+    </Stack>
+  );
+};
 
 const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }) => (
   <Stack gap={0.25} data-testid="shadow-detection-assessment-earlier">
@@ -119,10 +310,16 @@ const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }
   </Stack>
 );
 
-type Props = { detectionId: string; enabled: boolean };
+type Props = { detectionId: string; enabled: boolean } & DecisionProps;
 
 /** An advisory model assessment of one detection, shown beside the facts it was made from. */
-export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, enabled }) => {
+export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({
+  detectionId,
+  enabled,
+  onAccept,
+  onOverride,
+  initialOverriding,
+}) => {
   const assessments = useAbuseAssessments(detectionId, { enabled });
   const request = useRequestAbuseAssessment();
   const { currentUser } = useUser();
@@ -162,7 +359,12 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({ detectionId, e
           {getErrorMessage(assessments.error)}
         </Alert>
       ) : latest ? (
-        <LatestAssessment item={latest} />
+        <LatestAssessment
+          item={latest}
+          onAccept={onAccept}
+          onOverride={onOverride}
+          initialOverriding={initialOverriding}
+        />
       ) : (
         <Typography level="body-sm" sx={muted} data-testid="shadow-detection-assessment-empty">
           Not assessed yet.

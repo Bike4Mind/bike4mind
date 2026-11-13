@@ -1122,7 +1122,7 @@ export class SlackClient {
    */
   async searchMessages(query: string, count: number = 20, cursor?: string): Promise<SlackSearchResult | null> {
     try {
-      this.logger.info('Searching Slack messages', { query, count, cursor });
+      this.logger.info('Searching Slack messages', { queryLength: query.length, count, cursor });
       const result = await this.client.search.messages({
         query,
         count,

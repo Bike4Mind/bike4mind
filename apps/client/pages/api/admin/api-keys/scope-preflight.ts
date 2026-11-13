@@ -182,6 +182,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
         // Treat it as holding nothing: it cannot be re-minted, and reporting it
         // as `allow` would hide a row the operator should still see.
         const heldScopes = scopesByKeyId.get(entry.keyId) ?? [];
+        // No grandfathering here: the preflight lists who breaks once the legacy key window ends.
         const { outcome } = decideScopeGate(requiredScopes, heldScopes, staged);
         return { ...entry, heldScopes, outcome };
       })

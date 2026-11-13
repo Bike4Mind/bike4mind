@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const route = vi.hoisted(() => ({ guard: null as null | ((req: unknown, res: unknown, next: () => void) => void) }));
 const { mockUserFind, mockListKeys, mockGetUsage, mockCountRequests, mockDescribeAccess } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),
   mockListKeys: vi.fn(),
@@ -15,7 +16,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
-        use: () => chain,
+        use: (guard: never) => {
+          route.guard ??= guard;
+          return chain;
+        },
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
     );
@@ -47,7 +51,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   apiKeyUsageLogRepository: { countRequestsByKeyWindows: (...a: unknown[]) => mockCountRequests(...a) },
 }));
 
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   describeApiKeyAccess: (...a: unknown[]) => mockDescribeAccess(...a),
 }));
 
@@ -62,7 +66,6 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
 import handler from '../user-api-keys';
 // These resolve to the mocked classes above, so instanceof pins which error
 // (and therefore which status) each guard maps to.
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -71,7 +74,12 @@ const ACCESS = { mode: 'paid', allowed: false, basis: 'no_paid_subscription' };
 const run = ({ user, userId = 'u1' }: { user?: unknown; userId?: string | string[] } = {}) => {
   const { req, res } = createMocks({ method: 'GET', query: { userId } });
   if (user) (req as Record<string, unknown>).user = user;
-  return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
+  // adminApi stays real: its permission guard runs first, as it does in the router.
+  const promise = (async () => {
+    route.guard!(req, res, () => {});
+    return (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+  })();
+  return { res, promise };
 };
 
 // Stands in for a hydrated document: the handler reads keys through toJSON.
@@ -88,16 +96,30 @@ beforeEach(() => {
 describe('GET /api/admin/users/:userId/user-api-keys', () => {
   it('rejects non-admins with ForbiddenError before touching any data source', async () => {
     const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, message: 'Missing permission: support:read' });
     expect(mockUserFind).not.toHaveBeenCalled();
     expect(mockListKeys).not.toHaveBeenCalled();
   });
 
   it('rejects an unauthenticated request (no req.user) with ForbiddenError', async () => {
     const { promise } = run();
-    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
     expect(mockUserFind).not.toHaveBeenCalled();
     expect(mockListKeys).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate holding only keys:revoke, since this is a read', async () => {
+    const { promise } = run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] } });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockUserFind).not.toHaveBeenCalled();
+  });
+
+  it('lets a support:read delegate list a user keys', async () => {
+    mockUserFind.mockResolvedValue({ id: 'u1' });
+    mockListKeys.mockResolvedValue([]);
+    const { res, promise } = run({ user: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('rejects a userId that arrives as an array', async () => {

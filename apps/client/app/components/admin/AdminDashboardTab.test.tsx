@@ -27,6 +27,10 @@ vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,
 }));
 vi.mock('./AiAdvisory/AiAdvisoryStrip', () => ({ AiAdvisoryStrip: () => null }));
+vi.mock('./MorningBriefCard', () => ({ MorningBriefCard: () => <div data-testid="admin-morning-brief" /> }));
+vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({
+  CampaignWatchesPanel: () => <div data-testid="persistent-watches">Persistent watches</div>,
+}));
 vi.mock('./Signups/NewSignupsTile', () => ({
   NewSignupsTile: () => <div data-testid="admin-dashboard-signups-tile" />,
 }));
@@ -72,6 +76,7 @@ describe('AdminDashboardTab', () => {
   it('does not show an extension section when no routes contribute a dashboard', () => {
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.queryByText('More dashboards')).not.toBeInTheDocument();
+    expect(screen.getByTestId('persistent-watches')).toBeInTheDocument();
   });
 
   it.each([

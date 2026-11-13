@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   heldCreditRewardRepository,
+  shadowDetectionRepository,
   signupGrantBudgetRepository,
   signupProtectionRepository,
 } from '@bike4mind/database';
@@ -32,9 +33,13 @@ export const signupProtection: SignupProtection = {
         const outcome = await postMessageToSlackWithOutcome(
           alert.threshold === 'missing'
             ? `${pool} setting is missing or invalid for ${alert.day}; its free grants are paused until it is set.`
-            : alert.threshold === 100
-              ? `${pool} exhausted for ${alert.day}: ${paid}; new grants are held.`
-              : `${pool} at ${alert.threshold}% for ${alert.day}: ${paid}.`,
+            : alert.threshold === 'drip_cap_default'
+              ? alert.budget > 0
+                ? `Signup drip cap is not set for ${alert.day}; the activity drip is using the default cap of ${alert.budget.toLocaleString('en-US')} credits.`
+                : `Signup drip cap is not set for ${alert.day}; no activity drip is paid until it is set.`
+              : alert.threshold === 100
+                ? `${pool} exhausted for ${alert.day}: ${paid}; new grants are held.`
+                : `${pool} at ${alert.threshold}% for ${alert.day}: ${paid}.`,
           'SlackSecurityAlertsWebhookUrl',
           { timeoutMs: 3000 }
         );
@@ -67,6 +72,9 @@ export const signupProtection: SignupProtection = {
     } catch (error) {
       Logger.globalInstance.error('Signup domain hold alert failed', error);
     }
+  },
+  async hasOpenAccountCampaign(userId) {
+    return (await shadowDetectionRepository.countOpenForUser(userId, 'accountCampaign')) > 0;
   },
   // One datum per matching source, so a list that starts refusing real users shows as its own series.
   async recordDisposableRefusal({ sources }) {

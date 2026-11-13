@@ -1,5 +1,3 @@
-import { execFileSync } from 'node:child_process';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
@@ -289,20 +287,45 @@ describe('data holder registry', () => {
     const parentPath = path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '';
     expect(isArray(path) || (parentPath !== '' && isArray(parentPath))).toBe(true);
   });
+});
 
+const SECONDS_PER_DAY = 24 * 60 * 60;
+
+function ttlIndexesOf(modelName: string): { field: string; days: number }[] {
+  return mongoose
+    .model(modelName)
+    .schema.indexes()
+    .filter(([, options]) => typeof options?.expireAfterSeconds === 'number')
+    .map(([fields, options]) => ({
+      field: Object.keys(fields).join(','),
+      days: Number(options.expireAfterSeconds) / SECONDS_PER_DAY,
+    }));
+}
+
+const retainedReferences = classifiedModels.flatMap(name =>
+  referencesOf(DATA_HOLDER_REGISTRY[name]).flatMap(reference =>
+    reference.action === 'retain' ? [{ modelName: name, reference }] : []
+  )
+);
+
+describe('retention periods', () => {
   it.each(
-    classifiedModels.flatMap(name => {
-      const holder = DATA_HOLDER_REGISTRY[name];
-      return holder.kind === 'holder' ? (holder.beforeErasure ?? []).map(fn => [name, fn] as const) : [];
-    })
-  )('%s: beforeErasure function %s is exported from the repo', (_modelName, functionName) => {
-    const repoRoot = path.resolve(__dirname, '../../../..');
-    // A text match, not a type check: it accepts `export [async] function fn` and `export const fn`.
-    const pattern = `export ((async )?function|const) ${functionName}([^A-Za-z0-9_]|$)`;
-    const matches = execFileSync('git', ['grep', '-l', '-E', pattern, '--', '*.ts'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    expect(matches.trim()).not.toBe('');
+    retainedReferences.flatMap(({ modelName, reference }) =>
+      reference.retention.expiresBy === 'ttlIndex'
+        ? [[modelName, reference.path, reference.retention.field, reference.retention.days] as const]
+        : []
+    )
+  )('%s: retained %s expires through a TTL index on %s after %d days', (modelName, _path, field, days) => {
+    expect(ttlIndexesOf(modelName)).toContainEqual({ field, days });
+  });
+
+  // A model with a TTL index deletes its records on that timer whatever the registry says, so a
+  // policy or condition period would overstate how long the record is kept.
+  it.each(
+    retainedReferences.flatMap(({ modelName, reference }) =>
+      reference.retention.expiresBy === 'ttlIndex' ? [] : [[modelName, reference.path] as const]
+    )
+  )('%s: retained %s has no TTL index the registry does not declare', modelName => {
+    expect(ttlIndexesOf(modelName)).toEqual([]);
   });
 });

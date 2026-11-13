@@ -411,6 +411,8 @@ apps/client/pages/api/feedback/[id]/delete.ts
 apps/client/pages/api/feedback/[id]/read.ts
 apps/client/pages/api/feedback/[id]/update.ts
 apps/client/pages/api/feedback/index.ts
+apps/client/pages/api/file-links/[token].ts  # deliberately unauthenticated (auth: false): emailed and Slack links are opened signed out; the signed token is the credential, access is rechecked per click, rate limited
+apps/client/pages/api/files/[id]/content.ts  # deliberately unauthenticated (auth: false): <img>/<video> loads cannot send a bearer token; the HMAC sig bound to file id, storage path and expiry is the capability; rate limited, re-checks deletion and moderation, 302s to a short-lived S3 link
 apps/client/pages/api/files/[id]/index.ts
 apps/client/pages/api/files/[id]/moderate.ts
 apps/client/pages/api/files/[id]/upload.ts
@@ -518,6 +520,7 @@ apps/client/pages/api/mementos/groom.ts
 apps/client/pages/api/mementos/index.ts
 apps/client/pages/api/memory/[kind]/[id].ts
 apps/client/pages/api/memory/[kind]/[id]/events.ts
+apps/client/pages/api/modal-images/[name].ts  # deliberately unauthenticated (auth: false): email clients load modal images signed out; serves only keys a modal references, rate limited, read-only
 apps/client/pages/api/modals/[id]/delete.ts
 apps/client/pages/api/modals/[id]/update.ts
 apps/client/pages/api/modals/create.ts
@@ -583,6 +586,7 @@ apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
 apps/client/pages/api/overwatch/v1/hops.ts  # confined Overwatch ingest scope, like v1/events beside it, kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
+apps/client/pages/api/personas/redeem.ts  # deliberately unauthenticated (auth: false): the single-use login code minted by POST /api/v1/personas is the credential; persona accounts only, 5-minute expiry, consumed atomically, rate limited
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
 apps/client/pages/api/projects/[id]/index.ts
@@ -620,23 +624,9 @@ apps/client/pages/api/publish/widget.ts
 apps/client/pages/api/pyodide-sandbox.ts
 apps/client/pages/api/qa/runs.ts
 apps/client/pages/api/qa/uploads.ts
-apps/client/pages/api/quest-graphs/[id]/index.ts
-apps/client/pages/api/quest-graphs/[id]/nodes.ts
-apps/client/pages/api/quest-graphs/index.ts
-apps/client/pages/api/quest-master-plans/[id]/blockers.ts
-apps/client/pages/api/quest-master-plans/[id]/decisions.ts
-apps/client/pages/api/quest-master-plans/[id]/handoff.ts
 apps/client/pages/api/quest-master-plans/[id]/index.ts
-apps/client/pages/api/quest-master-plans/[id]/resolve-blocker.ts
-apps/client/pages/api/quest-master-plans/[id]/review-gate.ts
-apps/client/pages/api/quest-master-plans/[id]/subquest-progress.ts
-apps/client/pages/api/quest-nodes/[id]/run.ts
-apps/client/pages/api/quest-plans/[id]/clone.ts
-apps/client/pages/api/quest-plans/[id]/continue.ts
 apps/client/pages/api/quest-plans/[id]/export.ts
-apps/client/pages/api/quest-plans/[id]/index.ts
 apps/client/pages/api/quest-plans/[id]/progress.ts
-apps/client/pages/api/quest-plans/index.ts
 apps/client/pages/api/quests/[id]/check-timeout.ts
 apps/client/pages/api/quests/[id]/client-timing.ts
 apps/client/pages/api/quests/[id]/files.ts

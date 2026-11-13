@@ -176,7 +176,7 @@ export interface CreateFabFileAdapters {
  * same setting.
  */
 export const MAX_FILE_SIZE_DEFAULT_MB = settingsMap.MaxFileSize.defaultValue ?? 30;
-const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
+const DEFAULT_EXPIRE_IN_SECONDS = 3600;
 
 /**
  * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
@@ -315,8 +315,27 @@ export const prepareFabFile = async (
   return buildData;
 };
 
+/** Splits the response-only signed URLs off a prepared FabFile so the persisted row never carries them. */
+export const stripSignedUrls = (prepared: Omit<IFabFileDocument, 'id'>) => {
+  const { fileUrl, fileUrlExpireAt, presignedUrl, ...persistable } = prepared;
+  const signed: Pick<IFabFileDocument, 'fileUrl' | 'fileUrlExpireAt' | 'presignedUrl'> = {
+    ...(fileUrl !== undefined && { fileUrl }),
+    ...(fileUrlExpireAt !== undefined && { fileUrlExpireAt }),
+    ...(presignedUrl !== undefined && { presignedUrl }),
+  };
+  return { persistable, signed };
+};
+
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
   adapters: CreateFabFileAdapters
-) => adapters.db.fabFiles.create(await prepareFabFile(userId, parameters, adapters));
+) => {
+  const { persistable, signed } = stripSignedUrls(await prepareFabFile(userId, parameters, adapters));
+  const created = await adapters.db.fabFiles.create(persistable);
+  const plain =
+    typeof (created as { toJSON?: unknown }).toJSON === 'function'
+      ? (created as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : created;
+  return { ...plain, ...signed };
+};

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackType } from '@bike4mind/common';
 import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 import {
   DEFAULT_FEEDBACK_VIEW,
@@ -65,6 +65,26 @@ describe('the subject param', () => {
   });
 });
 
+describe('the type param', () => {
+  it('keeps known types in severity order and drops the rest', () => {
+    expect(FEEDBACK_SEARCH_PARSERS.feedbackType(['Thumbs Up', 'Spam', 'Bug'])).toEqual([
+      FeedbackType.BUG,
+      FeedbackType.THUMBS_UP,
+    ]);
+  });
+
+  it('reads no known type as every type', () => {
+    expect(FEEDBACK_SEARCH_PARSERS.feedbackType(['Spam'])).toBeUndefined();
+    expect(feedbackViewFromSearch({ feedbackType: ['Spam'] }).types).toEqual([]);
+  });
+
+  it('round-trips a picked type and writes nothing for none', () => {
+    const view = { ...DEFAULT_FEEDBACK_VIEW, types: [FeedbackType.THUMBS_DOWN] };
+    expect(feedbackViewFromSearch(feedbackViewToSearch(view)).types).toEqual([FeedbackType.THUMBS_DOWN]);
+    expect(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW).feedbackType).toBeUndefined();
+  });
+});
+
 describe('the limit param', () => {
   const parseLimit = FEEDBACK_SEARCH_PARSERS.feedbackLimit;
 
@@ -97,6 +117,18 @@ describe('the order param', () => {
   });
 });
 
+describe('the received param', () => {
+  it.each(['24h', '7d', '30d'] as const)('round-trips %s', window => {
+    const view = feedbackViewFromSearch({ feedbackReceived: window });
+    expect(view.received).toBe(window);
+    expect(feedbackViewToSearch(view).feedbackReceived).toBe(window);
+  });
+
+  it.each([['90d'], ['24H'], [''], [7], [undefined]])('reads %j as any age', value => {
+    expect(feedbackViewFromSearch({ feedbackReceived: value }).received).toBeUndefined();
+  });
+});
+
 describe('feedbackViewFromSearch', () => {
   it('is the default view for a bare feedback URL', () => {
     expect(feedbackViewFromSearch({ tab: 'feedback' })).toEqual(DEFAULT_FEEDBACK_VIEW);
@@ -113,6 +145,7 @@ describe('feedbackViewFromSearch', () => {
       feedbackViewFromSearch({
         feedbackStatus: 'Closed,InProgress',
         feedbackSubject: 'turn',
+        feedbackType: ['Bug'],
         feedbackOrg: 'Acme',
         feedbackOrder: 'asc',
         feedbackPage: '3',
@@ -121,6 +154,7 @@ describe('feedbackViewFromSearch', () => {
     ).toEqual({
       statusFilters: statusFilters(FeedbackStatus.InProgress, FeedbackStatus.Closed),
       subject: 'turn',
+      types: [FeedbackType.BUG],
       organizations: ['Acme'],
       sortAscending: true,
       page: 3,
@@ -133,6 +167,7 @@ describe('feedbackViewFromSearch', () => {
       feedbackViewFromSearch({
         feedbackStatus: 'Open',
         feedbackSubject: 'everything',
+        feedbackType: ['Spam'],
         feedbackOrg: [],
         feedbackOrder: 'yes',
         feedbackPage: 0,
@@ -152,6 +187,7 @@ describe('feedbackViewToSearch', () => {
     const view: FeedbackView = {
       statusFilters: statusFilters(FeedbackStatus.New, FeedbackStatus.Closed),
       subject: 'product',
+      types: [FeedbackType.BUG, FeedbackType.THUMBS_DOWN],
       organizations: ['Acme', 'Globex'],
       sortAscending: true,
       page: 2,
@@ -163,6 +199,7 @@ describe('feedbackViewToSearch', () => {
     expect(withoutUndefined(search)).toEqual({
       feedbackStatus: 'New,Closed',
       feedbackSubject: 'product',
+      feedbackType: [FeedbackType.BUG, FeedbackType.THUMBS_DOWN],
       feedbackOrg: ['Acme', 'Globex'],
       feedbackOrder: 'asc',
       feedbackPage: 2,
@@ -173,7 +210,35 @@ describe('feedbackViewToSearch', () => {
 
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
-      ['feedbackLimit', 'feedbackOrder', 'feedbackOrg', 'feedbackPage', 'feedbackStatus', 'feedbackSubject'].sort()
+      [
+        'feedbackArea',
+        'feedbackLimit',
+        'feedbackOrder',
+        'feedbackOrg',
+        'feedbackPage',
+        'feedbackReceived',
+        'feedbackResolution',
+        'feedbackSeverity',
+        'feedbackStatus',
+        'feedbackSubject',
+        'feedbackType',
+      ].sort()
     );
+  });
+});
+
+describe('resolution/status URL consistency', () => {
+  it.each([undefined, 'New', 'New,Closed'])(
+    'normalizes resolution with status=%s to exactly Closed',
+    feedbackStatus => {
+      const view = feedbackViewFromSearch({ feedbackResolution: 'fixed', feedbackStatus });
+      expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.Closed));
+      expect(view.resolution).toBe('fixed');
+    }
+  );
+  it('ignores an invalid resolution without changing independent statuses', () => {
+    const view = feedbackViewFromSearch({ feedbackResolution: 'invalid', feedbackStatus: 'New,Closed' });
+    expect(view.resolution).toBeUndefined();
+    expect(view.statusFilters).toEqual(statusFilters(FeedbackStatus.New, FeedbackStatus.Closed));
   });
 });

@@ -1,9 +1,9 @@
 import { IRegInviteDocument, RegInviteStatusType } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { RegInviteEvents } from '@bike4mind/common';
-import { ForbiddenError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -23,13 +23,9 @@ const UpdateRegisterInviteSchema = z
     'Nothing to update'
   );
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<unknown, unknown, unknown>(async (req, res) => {
     const user = req.user;
-
-    if (!user.isAdmin) {
-      throw new ForbiddenError('Permission denied');
-    }
 
     const { ids, ...updates } = parseOrBadRequest(UpdateRegisterInviteSchema, req.body);
 

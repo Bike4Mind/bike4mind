@@ -151,7 +151,8 @@ describe('POST /api/fabfiles/[id]/apply-edit storage accounting', () => {
       const [args] = h.commitContentRewrite.mock.calls[0];
       expect(args).toMatchObject({ fabFileId: FILE_ID, newSize: 30, filter: { filePath: 'files/u1/doc' } });
       expect(args.set.filePath).toEqual(h.upload.mock.calls[0][1]);
-      expect(args.set).toMatchObject({ fileUrl: null, fileUrlExpireAt: null });
+      expect(args.set).not.toHaveProperty('fileUrl');
+      expect(args.set).not.toHaveProperty('fileUrlExpireAt');
     });
 
     it('refuses growth past the quota before uploading the new version', async () => {

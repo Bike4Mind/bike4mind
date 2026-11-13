@@ -1,4 +1,4 @@
-import { CreditHolderType, type UserModerationStatus } from '@bike4mind/common';
+import { CreditHolderType, assertCanActOnAdminTarget, type UserModerationStatus } from '@bike4mind/common';
 import {
   User,
   UserApiKey,
@@ -14,7 +14,7 @@ import {
 import { adminAuditService, authSessionService, creditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
-import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
+import { LIVE_API_KEY_STATUS } from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
 import {
   loadCreditGrantPolicy,
   requestAuditWriter,
@@ -26,8 +26,11 @@ import {
   addBlockedEmailDomains,
   readBlockedEmailDomains,
   removeBlockedEmailDomains,
-} from '@server/admin/blockedEmailDomains';
-import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+} from '@bike4mind/server-utils/admin/blockedEmailDomains';
+import {
+  cancelAccountSubscriptions,
+  subscriptionCancellationAudit,
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import type { ApplyDeps, ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';
@@ -43,6 +46,7 @@ const BULK_USER_PROJECTION = {
   email: 1,
   username: 1,
   isAdmin: 1,
+  adminPermissions: 1,
   isBanned: 1,
   isModerated: 1,
   tags: 1,
@@ -57,6 +61,7 @@ type BulkUserRow = {
   email?: string | null;
   username?: string | null;
   isAdmin?: boolean | null;
+  adminPermissions?: string[] | null;
   isBanned?: boolean | null;
   isModerated?: boolean | null;
   tags?: string[] | null;
@@ -71,6 +76,7 @@ const toBulkUser = (row: BulkUserRow): BulkUser => ({
   email: row.email ?? null,
   username: row.username ?? null,
   isAdmin: row.isAdmin === true,
+  adminPermissions: row.adminPermissions ?? [],
   isBanned: row.isBanned === true,
   isModerated: row.isModerated === true,
   tags: row.tags ?? [],
@@ -301,6 +307,7 @@ export function usersBulkUndoDeps(
   const write = requestAuditWriter(req);
   return {
     db: usersBulkDb,
+    authorizeTarget: user => assertCanActOnAdminTarget(req.user, user, 'undo actions on'),
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
     audit: auditFor(write, reason),

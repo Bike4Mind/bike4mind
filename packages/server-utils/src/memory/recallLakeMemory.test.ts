@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { recallLakeMemory } from './recallLakeMemory';
 
 /**
@@ -177,7 +178,7 @@ describe('recallLakeMemory source dates', () => {
   it('keeps the facts when the date read fails', async () => {
     // Dating is a nicety layered on top of the grounding; losing the FabFile read must cost the
     // dates for the turn, never the beliefs themselves.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const recalled = await runWith({
       beliefs: [sourced('b1', ['doc-1'])],
       resolveSourceDates: async () => {

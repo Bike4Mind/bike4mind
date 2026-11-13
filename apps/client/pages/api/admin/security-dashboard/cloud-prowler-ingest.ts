@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
+import { verifyIngestToken } from '@server/security/ingestToken';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
@@ -51,9 +51,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     return res.status(500).json({ error: 'Prowler ingest token is not configured.' });
   }
 
-  const providedTokenHeader = req.headers['x-security-ingest-token'];
-  const providedToken = Array.isArray(providedTokenHeader) ? providedTokenHeader[0] : providedTokenHeader;
-  if (!providedToken || !safeCompareTokens(String(providedToken), ingestToken)) {
+  if (!verifyIngestToken(req, 'x-security-ingest-token', ingestToken)) {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 

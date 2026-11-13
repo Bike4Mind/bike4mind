@@ -99,6 +99,19 @@ export const signupProtectionRepository: SignupProtectionRepository = {
       .limit(1000)
       .lean();
   },
+  async reholdWatched(review) {
+    const { cohortUserIds, ...rest } = review;
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain: review.domain, status: 'released', 'autoDecision.policy': 'advisory-decision' },
+      // The old verdict goes too: it judged the released cohort, not this burst, and would read as a fresh one.
+      {
+        $set: rest,
+        $addToSet: { cohortUserIds: { $each: cohortUserIds ?? [] } },
+        $unset: { autoDecision: 1, reviewedAt: 1, reviewedBy: 1, assessment: 1 },
+      }
+    );
+    return result.modifiedCount === 1;
+  },
   async findReview(domain) {
     return SignupDomainReviewModel.findOne({ domain }).lean();
   },
@@ -186,6 +199,14 @@ export const signupDomainHoldListRepository = {
       limit: options.limit,
     }).exec();
   },
+  async oldestPendingAt(): Promise<Date | null> {
+    const row = await SignupDomainReviewModel.findOne(holdListQuery({ status: 'pending' }))
+      .sort({ triggeredAt: 1 })
+      .select({ triggeredAt: 1 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.triggeredAt ?? null;
+  },
   /** Rows per status view under the same reason filter and visibility window. */
   async countByStatus(
     filter: Omit<SignupDomainHoldListFilter, 'status'>
@@ -224,6 +245,28 @@ export const signupDomainReviewRepository = {
       { domain, reason, status: 'held_pending_review' },
       {
         $set: { status: 'blocked', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
+        $unset: { reviewedBy: 1 },
+      }
+    );
+    return result.modifiedCount === 1;
+  },
+  /**
+   * Moves a still-pending hold to `released` on behalf of an automated policy; paying out the held
+   * credits is the caller's next step. `paidUserIds` join the cohort, which is what the watch on an
+   * automatically released domain pays (signupProtection.ts). False when an admin (or another run) decided it first.
+   */
+  async autoRelease(
+    domain: string,
+    reason: string,
+    policy: SignupDomainHoldAutoPolicy,
+    decidedAt: Date,
+    paidUserIds: string[]
+  ): Promise<boolean> {
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain, reason, status: 'held_pending_review' },
+      {
+        $set: { status: 'released', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
+        $addToSet: { cohortUserIds: { $each: paidUserIds } },
         $unset: { reviewedBy: 1 },
       }
     );

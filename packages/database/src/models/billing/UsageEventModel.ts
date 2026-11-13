@@ -1,6 +1,8 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  COMPLETION_RUN_PURPOSES,
+  COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
@@ -12,6 +14,7 @@ import {
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
+  IAdminSpendModel,
   IOwnerSpendModel,
   IOwnerUsageSummary,
   IPlatformConsumerUsage,
@@ -49,9 +52,19 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 // spend spans many accounts.
 const SPEND_ACCOUNT_LIMIT = 50;
 
-// Same payload guard for the "by model" list: a catalog with many provider/model
-// variants would otherwise ship every one. Comfortably above a realistic catalog.
+// Same payload guard for the "by model" list, which has one row per requested/executed
+// model pair; without it a large catalog would ship every one.
 const SPEND_MODEL_LIMIT = 100;
+
+// Old rows lack executed*, so always coalesce to the requested provider/model.
+const EXECUTED_MODEL_GROUP_KEY = {
+  executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
+  executedModel: { $ifNull: ['$executedModel', '$model'] },
+} as const;
+const EXECUTED_MODEL_FIELDS = {
+  executedProvider: '$_id.executedProvider',
+  executedModel: '$_id.executedModel',
+} as const;
 
 /**
  * One row per provider API call: provider-side quantities and
@@ -173,6 +186,22 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
       ),
       required: false,
     },
+    // Mirrors UsageEventRun. No index yet: run totals are read by a later reader.
+    run: {
+      type: new Schema(
+        {
+          runId: { type: String, required: true },
+          role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
+          purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
+          taskId: { type: String, required: false, maxlength: 128 },
+          attemptId: { type: String, required: false, maxlength: 128 },
+          parentSessionId: { type: String, required: false, maxlength: 128 },
+          sessionId: { type: String, required: false, maxlength: 128 },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -192,6 +221,9 @@ UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s optional source filter over a time window.
 UsageEventSchema.index({ source: 1, createdAt: -1 });
+// Supports the hourly completion sequence/synchrony sweeps' 24h scan of completion_api rows.
+// Built via migration 20260921240075_ensure-usage-event-feature-status-index, not autoIndex.
+UsageEventSchema.index({ feature: 1, status: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 // Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
@@ -205,6 +237,14 @@ UsageEventSchema.index(
 );
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
+
+/** An account's spend from spendProfileByUsers. */
+export type IUserSpendProfile = {
+  firstSpendAt: Date;
+  totalCredits: number;
+  /** Largest first; `model` is null for spend recorded without one. */
+  byModel: { model: string | null; credits: number; events: number }[];
+};
 
 export class UsageEventRepository extends BaseRepository<IUsageEventDocument> implements IUsageEventRepository {
   /** `loadFundingSnapshot` is omitted only by tests that do not exercise the funding stamp. */
@@ -283,7 +323,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $group: {
           _id: null,
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
         },
       },
     ]);
@@ -300,7 +340,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           _id: null,
           events: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
           latestAt: { $max: '$createdAt' },
         },
       },
@@ -326,11 +366,58 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $group: {
           _id: '$userId',
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
         },
       },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
+  /**
+   * Per account since `since`: when it first spent credits and its spend by model (largest first,
+   * at most `maxModels`). Served by {userId, createdAt}; ids with no spend are absent.
+   */
+  async spendProfileByUsers(userIds: string[], since: Date, maxModels = 5): Promise<Record<string, IUserSpendProfile>> {
+    if (userIds.length === 0) return {};
+    const credits = { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] };
+    const rows = await this.model
+      .aggregate<{
+        _id: { userId: string; model: string | null };
+        credits: number;
+        events: number;
+        firstAt: Date;
+      }>([
+        { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
+        { $match: { $expr: { $gt: [credits, 0] } } },
+        {
+          $group: {
+            _id: { userId: '$userId', model: '$model' },
+            credits: { $sum: credits },
+            events: { $sum: 1 },
+            firstAt: { $min: '$createdAt' },
+          },
+        },
+      ])
+      .option({ maxTimeMS: 2000 });
+    const profiles: Record<string, IUserSpendProfile> = {};
+    for (const row of rows) {
+      const id = String(row._id.userId);
+      const profile = (profiles[id] ??= { firstSpendAt: row.firstAt, totalCredits: 0, byModel: [] });
+      if (row.firstAt < profile.firstSpendAt) profile.firstSpendAt = row.firstAt;
+      profile.totalCredits += row.credits;
+      profile.byModel.push({ model: row._id.model ?? null, credits: row.credits, events: row.events });
+    }
+    for (const profile of Object.values(profiles)) {
+      profile.byModel = profile.byModel
+        .sort((a, b) => {
+          const leftModel = a.model ?? '';
+          const rightModel = b.model ?? '';
+          const modelOrder = leftModel < rightModel ? -1 : leftModel > rightModel ? 1 : 0;
+          return b.credits - a.credits || modelOrder;
+        })
+        .slice(0, maxModels);
+    }
+    return profiles;
   }
 
   async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {
@@ -342,7 +429,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         $project: {
           userId: 1,
           reservedCredits: 1,
-          settledCredits: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] },
+          settledCredits: '$creditsCharged',
         },
       },
       { $addFields: { ratio: { $divide: ['$settledCredits', '$reservedCredits'] } } },
@@ -374,8 +461,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
             provider: '$provider',
             model: '$model',
-            executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
-            executedModel: { $ifNull: ['$executedModel', '$model'] },
+            ...EXECUTED_MODEL_GROUP_KEY,
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },
@@ -388,8 +474,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           day: '$_id.day',
           provider: '$_id.provider',
           model: '$_id.model',
-          executedProvider: '$_id.executedProvider',
-          executedModel: '$_id.executedModel',
+          ...EXECUTED_MODEL_FIELDS,
           requests: 1,
           cogsUsd: 1,
           creditsCharged: 1,
@@ -488,7 +573,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       match.createdAt = createdAt;
     }
     if (userId) match.userId = userId;
-    if (model) match.model = model;
+    if (model) match.$or = [{ model }, { executedModel: model }];
 
     const spendSums = {
       requests: { $sum: 1 },
@@ -504,7 +589,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       activeAccounts: Array<{ count: number }>;
       latency: Array<{ values: number[] }>;
       status: Array<{ _id: string; count: number }>;
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       byAccount: ISpendAccountBucket[];
       dailyCost: ISpendCostDay[];
     }>([
@@ -531,9 +616,17 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           // settlements, media), so a credit sort would truncate away real top cost
           // drivers. Secondary keys make the cap deterministic across equal-cost ties.
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { cogsUsd: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
           // failures and p95 feed the Spend tab's per-account threshold flags.
@@ -714,7 +807,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ownerType: CreditHolderType,
     days: number = 30
   ): Promise<IOwnerUsageSummary> {
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // setDate, like the ledger queries, so both cuts of GET /api/usage share one cutoff.
+    const from = new Date();
+    from.setDate(from.getDate() - days);
 
     // Every breakdown shares the same three sums, so $group + $project them once.
     const spendSums = {
@@ -799,7 +894,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       overTime: IOwnerSpendDay[];
       byFeature: IOwnerSpendFeature[];
       byConsumer: IPlatformConsumerUsage[];
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       totals: IUsageSpendBucket[];
     }>([
       { $match: match },
@@ -836,9 +931,17 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { creditsCharged: -1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { creditsCharged: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
           ],
           totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
         },
@@ -857,8 +960,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async sessionUsageSummary(
     sessionId: string,
-    owner?: { ownerId: string; ownerType: CreditHolderType }
+    owner?: { ownerId: string; ownerType: CreditHolderType },
+    options: { includeExecuted?: boolean } = {}
   ): Promise<ISessionUsageSummary> {
+    const executedKey = options.includeExecuted ? EXECUTED_MODEL_GROUP_KEY : {};
+    const executedFields = options.includeExecuted ? EXECUTED_MODEL_FIELDS : {};
     // Every cut shares the same sums (spend + token quantities), so define once.
     const sums = {
       requests: { $sum: 1 },
@@ -891,8 +997,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...sums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...fields } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...executedKey }, ...sums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...executedFields, ...fields } },
             { $sort: { creditsCharged: -1 } },
           ],
           totals: [{ $group: { _id: null, ...sums } }, { $project: { _id: 0, ...fields } }],

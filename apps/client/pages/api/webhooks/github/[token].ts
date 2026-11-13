@@ -3,6 +3,7 @@
  *
  * This endpoint accepts the routing token in the URL path instead of a header,
  * which is required because GitHub webhooks don't support custom headers.
+ * The token segment is redacted from request logs (server/middlewares/requestLogUrl.ts).
  *
  * URL format: POST /api/webhooks/github/{routingToken}
  *

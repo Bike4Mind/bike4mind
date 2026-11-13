@@ -79,7 +79,7 @@ vi.mock('@server/auth/withAccountNotPurging', () => ({
   withAccountNotPurging: async <T>(_userId: string, operation: () => Promise<T>) => operation(),
 }));
 // The per-network signup caps are covered in signupNetworkLimits.test.ts and pages/api/otc/__tests__/verify.test.ts.
-vi.mock('@server/auth/signupNetworkLimits', () => ({
+vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
   createSignupRiskCollector: vi.fn(() => vi.fn()),
 }));
@@ -88,6 +88,7 @@ vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
 }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   grantPackageRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),

@@ -131,7 +131,7 @@ const handler = baseApi()
           throw new BadRequestError('User not authenticated');
         }
 
-        req.logger.info(`[HelpChat] Question received: "${question.slice(0, 50)}..."`);
+        req.logger.info('[HelpChat] Question received', { questionLength: question.length });
 
         // Get API keys early - needed for both embedding query and LLM call
         const dbAdapters = {

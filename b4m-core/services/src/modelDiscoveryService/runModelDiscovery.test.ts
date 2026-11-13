@@ -1504,19 +1504,30 @@ describe('runModelDiscovery', () => {
       expect(second.passes).toBeGreaterThanOrEqual(2);
     });
 
-    it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
+    it('promotes an image model on its build literal, which no source quotes', async () => {
       const image: DiscoveredModel = {
+        modelId: 'gpt-image-2',
+        patch: { ...gpt6.patch, id: 'gpt-image-2', name: 'GPT Image 2', type: 'image' },
+      };
+      const imaging = harness([openaiSource([image])], { modelDiscoveryAutoEnable: 'priced' });
+
+      const result = await runModelDiscovery(imaging.adapters, imaging.options);
+
+      expect(result.diff[0].blockedBy ?? []).not.toContain('no-trusted-price');
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
+    });
+
+    it('words a text-typed id whose only literal is non-text as awaiting a price', async () => {
+      const mistyped: DiscoveredModel = {
         modelId: 'gpt-image-1',
         patch: { ...gpt6.patch, id: 'gpt-image-1', name: 'GPT Image 1' },
       };
-      const imaging = harness([openaiSource([image])]);
+      const imaging = harness([openaiSource([mistyped])]);
 
       const result = await runModelDiscovery(imaging.adapters, imaging.options);
 
       expect(result.diff[0].blockedBy).toContain('no-trusted-price');
-      expect(imaging.catalog.rows[0].patch).toMatchObject({
-        autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
-      });
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
     });
 
     it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
@@ -2254,6 +2265,124 @@ describe('runModelDiscovery', () => {
       // Charged, unlike a retryable upstream: the model answered, and without the
       // charge it would be re-probed with live calls every run forever.
       expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
+    });
+  });
+
+  describe('model-list refresh', () => {
+    const withRefresh = (bench: Harness) => {
+      const onModelListChanged = vi.fn(async () => {});
+      bench.adapters.onModelListChanged = onModelListChanged;
+      return onModelListChanged;
+    };
+
+    it('refreshes once when a run promotes a model onto the list', async () => {
+      const onModelListChanged = withRefresh(bench);
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.metrics.ModelsPromoted).toBe(1);
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+      expect(bench.infos.some(line => line.includes('model lists refreshed for 1 model(s): gpt-6'))).toBe(true);
+    });
+
+    it('refreshes before the run document reports the run finished', async () => {
+      const onModelListChanged = withRefresh(bench);
+      let finishedWhenRefreshed: unknown = 'not called';
+      onModelListChanged.mockImplementation(async () => {
+        finishedWhenRefreshed = bench.runs.docs[0]?.finishedAt;
+      });
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(finishedWhenRefreshed).toBeUndefined();
+    });
+
+    it('does not refresh when a run writes nothing', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+      const onModelListChanged = withRefresh(bench);
+      bench.advance(60_000);
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(onModelListChanged).not.toHaveBeenCalled();
+    });
+
+    it('does not refresh when the only row written is for a model that stays unpromoted', async () => {
+      const dissenting = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 20, outputPerMTok: 80 } }],
+        });
+      const refused = harness([openaiSource(), dissenting('models.dev'), dissenting('litellm')]);
+      const onModelListChanged = withRefresh(refused);
+
+      await runModelDiscovery(refused.adapters, refused.options);
+
+      expect(refused.catalog.rows.map(row => row.modelId)).toContain('gpt-6');
+      expect(onModelListChanged).not.toHaveBeenCalled();
+      expect(refused.infos.some(line => line.includes('model lists left as they were'))).toBe(true);
+    });
+
+    it('does not refresh in report mode', async () => {
+      const reporting = harness([openaiSource()], { modelDiscoveryMode: 'report' });
+      const onModelListChanged = withRefresh(reporting);
+
+      await runModelDiscovery(reporting.adapters, reporting.options);
+
+      expect(onModelListChanged).not.toHaveBeenCalled();
+    });
+
+    it('refreshes once when the run throws after a promotion landed', async () => {
+      const onModelListChanged = withRefresh(bench);
+      bench.state.recordSighting = vi.fn().mockRejectedValue(new Error('state store down'));
+      bench.state.recordMiss = vi.fn().mockRejectedValue(new Error('state store down'));
+
+      await expect(runModelDiscovery(bench.adapters, bench.options)).rejects.toThrow('state store down');
+
+      expect(bench.catalog.rows.map(row => row.modelId)).toContain('gpt-6');
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes for every written model when the catalog re-read fails', async () => {
+      const onModelListChanged = withRefresh(bench);
+      let absenceApplied = false;
+      const recordSighting = bench.state.recordSighting.bind(bench.state);
+      const recordMiss = bench.state.recordMiss.bind(bench.state);
+      bench.state.recordSighting = async (modelId, at) => {
+        absenceApplied = true;
+        return recordSighting(modelId, at);
+      };
+      bench.state.recordMiss = async (modelId, at) => {
+        absenceApplied = true;
+        return recordMiss(modelId, at);
+      };
+      const rowsInForce = bench.catalog.rowsInForceWithRejects.bind(bench.catalog);
+      bench.catalog.rowsInForceWithRejects = async at => {
+        if (absenceApplied) throw new Error('catalog read timed out');
+        return rowsInForce(at);
+      };
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+      expect(
+        bench.warnings.some(
+          line =>
+            line.includes('catalog re-read failed') && line.includes('every written model: catalog read timed out')
+        )
+      ).toBe(true);
+    });
+
+    it('keeps the run when the refresh throws', async () => {
+      const onModelListChanged = withRefresh(bench);
+      onModelListChanged.mockRejectedValue(new Error('cache unreachable'));
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.outcome).toBe('ok');
+      expect(bench.runs.docs[0]).toMatchObject({ status: 'ok' });
+      expect(bench.errors.some(line => line.includes('model-list refresh failed: cache unreachable'))).toBe(true);
     });
   });
 });

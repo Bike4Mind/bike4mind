@@ -119,6 +119,7 @@ export const ShareTokenEntrySchema = z.object({
   token: z.string().optional(),
   createdAt: z.date().optional(),
   revokedAt: z.date().nullish(),
+  expiresAt: z.date().nullish(),
   viewCount: z.int().nonnegative().prefault(0),
   lastViewedAt: z.date().nullish(),
 });
@@ -461,7 +462,8 @@ export const PublishedArtifactSchema = z.object({
   /** Group id a viewer must belong to when gated cross-scope. */
   gatedToGroupId: z.string().optional(),
 
-  /** Every share link ever minted, revoked ones included. THE single representation of a
+  /** The share links minted for this artifact, revoked ones included up to a cap that prunes
+   *  the oldest revoked/expired entries (live ones are never pruned). THE single representation of a
    *  share link as of #3523, which dropped the `shareToken` / `shareTokenUpdatedAt` scalars
    *  that #3255 step 3 kept mirrored here for rollback safety. Unguessable capability tokens
    *  for no-sign-in `/a/<token>` links, distinct from `publicId` (which stays stable for
@@ -581,7 +583,15 @@ export type UploadUrlRequest = z.infer<typeof UploadUrlRequestSchema>;
 
 export const UploadUrlResponseSchema = z.object({
   draftId: z.uuid(),
-  uploadUrls: z.array(z.object({ path: z.string(), url: z.string(), expiresAt: z.string() })),
+  uploadUrls: z.array(
+    z.object({
+      path: z.string(),
+      url: z.string(),
+      expiresAt: z.string(),
+      /** Headers the PUT must send. Absent for a presigned URL, which carries its own signature. */
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+  ),
 });
 export type UploadUrlResponse = z.infer<typeof UploadUrlResponseSchema>;
 

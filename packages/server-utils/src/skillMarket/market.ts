@@ -182,6 +182,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
   ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
+  ...(skill.claudeCodeModel ? { claudeCodeModel: skill.claudeCodeModel } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
   ...(skill.files?.length
     ? {
@@ -235,13 +236,21 @@ export function serializeListing(listing: ISkillListing | ISkillListingDocument,
   };
 }
 
+/** True when the listing's author is the one who approved the version, so no second person looked at it. */
+export const isSelfApproved = (
+  v: Pick<ISkillListingVersion, 'reviewStatus' | 'reviewerUserId'>,
+  authorUserId: string
+) => v.reviewStatus === 'approved' && !!v.reviewerUserId && String(v.reviewerUserId) === String(authorUserId);
+
 /** Fields of a version a non-author viewer may see: the approved snapshot and its honest summary. */
-export const publicVersionView = (v: ISkillListingVersion) => ({
+export const publicVersionView = (v: ISkillListingVersion, authorUserId: string) => ({
   id: String(v.id),
   version: v.version,
   snapshot: v.snapshot,
   honestSummary: v.honestSummary,
   riskTier: v.riskTier,
+  selfApproved: isSelfApproved(v, authorUserId),
+  reviewStatus: v.reviewStatus,
   createdAt: v.createdAt,
 });
 

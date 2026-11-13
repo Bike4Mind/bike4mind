@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.bike4mind.com/schemas/export-v2/agent.schema.json",
+  "title": "Agent v2 record",
+  "type": "object",
+  "required": ["notebookId", "id", "name", "createdAt"],
+  "properties": {
+    "notebookId": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "configuration": { "type": "object" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  },
+  "additionalProperties": true
+}

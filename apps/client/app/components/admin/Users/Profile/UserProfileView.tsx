@@ -9,13 +9,16 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd } from '../../shared';
+import { AdminPermissionAction } from '../../shared/MissingPermission';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
+import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
   ApiKeyTrustDialog,
   CancelDeletionDialog,
+  FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
   DeleteUserDialog,
@@ -28,7 +31,7 @@ import {
   ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { UserProfileHeader, deletionBlockedReason } from './UserProfileHeader';
+import { UserProfileHeader, deletionBlockedReason, moderationBlockedReason } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { UserRiskBadges } from './UserRiskBadges';
@@ -38,6 +41,7 @@ import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
 import { ActivityTab } from './tabs/ActivityTab';
 import { AdminLogTab } from './tabs/AdminLogTab';
 import { SignInsTab } from './tabs/SignInsTab';
+import { UserBillingTab } from './tabs/UserBillingTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { DELETION_SOURCE_LABELS, displayName, formatDeletionDay, type AdminUserProfile } from './userProfileModel';
 
@@ -69,6 +73,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
+    case 'permissions':
+      return <AdminPermissionsDialog {...props} />;
     case 'productAccess':
       return <ProductAccessDialog {...props} />;
     case 'tags':
@@ -81,6 +87,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ApiKeyTrustDialog {...props} />;
     case 'newAccountSpendCap':
       return <NewAccountSpendCapDialog {...props} />;
+    case 'fileEmbeddingWindowReset':
+      return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
     case 'subscription':
@@ -186,8 +194,23 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
   onReinstate,
   onLiftRestriction,
 }) => {
+  const { currentUser } = useUser();
   if (!user.isBanned && !user.isModerated) return null;
   const tone = user.isBanned ? 'bad' : 'warn';
+  const blocked = moderationBlockedReason(currentUser, user);
+  const liftButton = (
+    <Button
+      size="sm"
+      variant="outlined"
+      color="neutral"
+      disabled={!!blocked}
+      onClick={user.isBanned ? onReinstate : onLiftRestriction}
+      sx={{ bgcolor: 'admin.surface' }}
+      data-testid="user-profile-reinstate-btn"
+    >
+      {user.isBanned ? 'Reinstate' : 'Lift restriction'}
+    </Button>
+  );
   return (
     <Stack
       role="status"
@@ -219,16 +242,9 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         )}
       </Typography>
-      <Button
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        onClick={user.isBanned ? onReinstate : onLiftRestriction}
-        sx={{ bgcolor: 'admin.surface' }}
-        data-testid="user-profile-reinstate-btn"
-      >
-        {user.isBanned ? 'Reinstate' : 'Lift restriction'}
-      </Button>
+      <AdminPermissionAction requirement="users:moderate" blockedReason={blocked}>
+        {() => liftButton}
+      </AdminPermissionAction>
     </Stack>
   );
 };
@@ -277,6 +293,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
         return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':
         return <CreditsTab user={user} onAdjust={() => setAction('credits')} />;
+      case 'billing':
+        return <UserBillingTab userId={user.id} />;
       case 'keys':
         return <ApiKeysTab user={user} />;
       case 'signins':

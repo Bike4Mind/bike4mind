@@ -108,19 +108,19 @@ describe('business metric Slack message', () => {
       ])
     );
     expect(signups).toBe(
-      ':small_red_triangle_down: *Verified signups* down 18.6%\n' +
+      ':arrow_down_small: *Verified signups* down 18.6%  |  :warning: check for a problem\n' +
         'Now *192*, previous 236, 7-day median 285\n' +
-        '_Fewer accounts verified their email than yesterday. Usually traffic or verification-email delivery; check bounces and the email provider if it keeps falling._'
+        '_Fewer new accounts signed up and verified their email than in the same hours yesterday. Usually traffic or verification-email delivery; check bounces and the email provider if it keeps falling._'
     );
     expect(credits).toContain(
-      ':small_red_triangle: *Credits charged* up 44.1%\nNow *9,811 credits*, previous 6,811 credits, 7-day median 6,811 credits'
+      ':arrow_up_small: *Credits charged* up 44.1%  |  :mag: check for abuse\nNow *9,811 credits*, previous 6,811 credits, 7-day median 6,811 credits'
     );
     expect(credits).toContain('young accounts');
     expect(spend).toContain(
-      '*Estimated OpenAI spend* up 112.5%\nNow *USD 42.50*, previous USD 20.00, median warming up'
+      '*Estimated OpenAI spend* up 112.5%  |  :mag: check for abuse\nNow *USD 42.50*, previous USD 20.00, median warming up'
     );
     expect(receipts).toContain(
-      '*Stripe receipts (USD)* up from zero\nNow *USD 1,234.56*, previous USD 0.00, 7-day median USD 1.00'
+      '*Stripe receipts (USD)* up from zero  |  :mag: check for abuse\nNow *USD 1,234.56*, previous USD 0.00, 7-day median USD 1.00'
     );
     expect(receipts).toContain('Radar');
   });
@@ -280,7 +280,17 @@ describe('business metric Slack message', () => {
       }),
     ]);
     expect(growth.attachments[0].color).toBe('#36C5F0');
-    expect(sectionTexts(growth)[0]).toContain(':arrow_up_small: *Paying subscribers* up 33.0%');
+    expect(sectionTexts(growth)[0]).toMatch(/^:arrow_up_small: \*Paying subscribers\* up 33\.0%\n/);
+  });
+
+  it('names the closed-day baseline in the meaning text of a daily compare', () => {
+    const message = formatBusinessMetricSlackMessage(daily, [
+      anomaly({ metricName: 'verifiedSignups', direction: 'increase', current: 33, previous: 0, percent: null }),
+    ]);
+    const section = sectionTexts(message)[0];
+    expect(section).toContain(':arrow_up_small: *Verified signups* up from zero  |  :mag: check for abuse');
+    expect(section).toContain('than the day before.');
+    expect(section).not.toContain('yesterday');
   });
 
   it('escapes Slack control sequences in labels and meanings', () => {

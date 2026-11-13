@@ -40,6 +40,67 @@ describe('readMonthlyAllowance', () => {
 });
 
 describe('AccountService', () => {
+  it('submits feedback with the signed-in identity to the web feedback endpoint', async () => {
+    const post = vi.fn().mockResolvedValue({ delivery: { channels: { slack: { outcome: 'skipped' } } } });
+    const account = new AccountService({
+      logger: { warn: () => {} },
+      getApiClient: () => ({ post }) as unknown as AuthenticatedApiClient,
+    });
+    const user = { id: 'u1', username: 'reporter', email: 'r@example.test' };
+    const result = await account.sendFeedback('Great app', user);
+    expect(result).toEqual({ ok: true });
+    expect(post).toHaveBeenCalledWith('/api/feedback', {
+      userId: 'u1',
+      username: 'reporter',
+      userEmail: 'r@example.test',
+      tags: ['feedback', 'cs'],
+      content: 'Great app',
+    });
+  });
+
+  it('refuses empty or signed-out submissions without a network call', async () => {
+    const post = vi.fn();
+    const account = new AccountService({
+      logger: { warn: () => {} },
+      getApiClient: () => ({ post }) as unknown as AuthenticatedApiClient,
+    });
+    expect((await account.sendFeedback(' ', { id: 'u1' })).ok).toBe(false);
+    expect((await account.sendFeedback('hello')).ok).toBe(false);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes delivery failure and lost text from skipped notifications', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce({ delivery: { channels: { email: { outcome: 'failed' } } } })
+      .mockResolvedValueOnce({ contentStored: false });
+    const account = new AccountService({
+      logger: { warn: () => {} },
+      getApiClient: () => ({ post }) as unknown as AuthenticatedApiClient,
+    });
+    const user = { id: 'u1' };
+    await expect(account.sendFeedback('hello', user)).resolves.toMatchObject({
+      ok: true,
+      warning: expect.stringContaining('notify'),
+    });
+    await expect(account.sendFeedback('hello', user)).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('save'),
+    });
+  });
+
+  it('reports a failed request without exposing the submitted text', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('secret report text'));
+    const account = new AccountService({
+      logger: { warn: () => {} },
+      getApiClient: () => ({ post }) as unknown as AuthenticatedApiClient,
+    });
+    await expect(account.sendFeedback('secret report text', { id: 'u1' })).resolves.toEqual({
+      ok: false,
+      error: 'Could not submit your feedback. Please try again.',
+    });
+  });
+
   it('forwards the monthly allowance with the personal balance', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { balance: 25_000, monthly_allowance: 50_000 } });
     await expect(service(get).credits()).resolves.toEqual({ balance: 25_000, monthlyAllowance: 50_000 });

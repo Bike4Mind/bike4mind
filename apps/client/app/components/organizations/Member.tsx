@@ -6,6 +6,7 @@ import {
   IOrganizationDocument,
   isOrgMember,
   isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
   IUserDocument,
   Permission,
 } from '@bike4mind/common';
@@ -153,6 +154,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
+  // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
+  const canManageManagers =
+    !!currentUser && !organization.personal && isOrgOwnerOrPlatformAdmin(currentUser, organization);
+
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {
     return organization.userId || currentUser?.id || '';
@@ -165,7 +170,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     (selectedUserIds: string[]) => {
       selectedUserIds.forEach(id => {
         shareDocument.mutate({
-          description: `You've been invited to join the organization`,
+          description: `You've been invited to join the team`,
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
@@ -204,7 +209,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               loading={shareDocument.isPending}
               onClick={() =>
                 shareDocument.mutate({
-                  description: "You've been invited to join the organization",
+                  description: "You've been invited to join the team",
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,
@@ -536,6 +541,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               canInviteMembers={canInviteMembers}
               canRevokeMembers={!!currentUser && canRevokeOrgMember(currentUser, organization, user.id)}
               canManageCreditBudgets={canManageCreditBudgets}
+              canManageManagers={canManageManagers}
             />
           </Fragment>
         ))}

@@ -40,8 +40,33 @@ vi.mock('sonner', () => ({
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: mocks.useNavigate,
   useSearch: mocks.useSearch,
+  Link: ({
+    to,
+    params,
+    children,
+    ...rest
+  }: {
+    to: string;
+    params?: Record<string, string>;
+    children: React.ReactNode;
+  }) => (
+    <a href={to.replace('$userId', params?.userId ?? '')} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 vi.mock('papaparse', () => ({ default: { unparse: mocks.papaUnparse } }));
+// The drawer reads its record through React Query and has its own test; here only the wiring counts.
+vi.mock('./FeedbackDetailDrawer', () => ({
+  default: (props: { feedbackId?: string; onClose: () => void }) =>
+    props.feedbackId ? (
+      <div data-testid="feedback-detail-drawer-stub" data-feedback-id={props.feedbackId}>
+        <button onClick={props.onClose}>close drawer</button>
+      </div>
+    ) : null,
+}));
+// Covered by FeedbackTrendStrip.test.tsx; it reads its own query, which these tests do not provide.
+vi.mock('./FeedbackTrendStrip', () => ({ default: () => null }));
 
 import FeedbackTab from './index';
 
@@ -90,12 +115,17 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
       [FeedbackStatus.Closed]: false,
     },
     selectedOrganizations: [],
+    types: [],
     sortAscending: false,
   },
   setSearchTerm: vi.fn(),
   setStatusFilters: vi.fn(),
   setSelectedOrganizations: vi.fn(),
   setSubject: vi.fn(),
+  setResolution: vi.fn(),
+  setTypes: vi.fn(),
+  setReceived: vi.fn(),
+  showOnly: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
 };
@@ -119,6 +149,9 @@ const makeOperationsReturn = (
   isError: false,
   refreshFeedback: vi.fn(),
   handleStatusChange: vi.fn(),
+  feedbackToClose: null,
+  cancelClose: vi.fn(),
+  confirmClose: vi.fn(),
   handleDeleteFeedbackClick: vi.fn(),
   confirmDeleteFeedback: vi.fn(),
   feedbackToDelete: null,
@@ -159,7 +192,54 @@ describe('FeedbackTab', () => {
     await waitFor(() => expect(mocks.papaUnparse).toHaveBeenCalledTimes(1));
 
     const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
-    expect(csvRows[0]).toMatchObject({ HelpArticle: 'features/export' });
+    expect(csvRows[0]).toMatchObject({
+      HelpArticle: 'features/export',
+      Type: 'Feedback',
+      Subject: 'Help',
+      UserId: 'user-1',
+      Username: 'reporter',
+      UserEmail: 'reporter@example.com',
+    });
+  });
+
+  it('exports the captured client context as CSV columns, blank for older reports', async () => {
+    const withContext = {
+      ...helpFeedbackItem,
+      clientContext: {
+        platform: 'web' as const,
+        appVersion: '1.2.3',
+        path: '/notebooks',
+        viewport: { width: 1280, height: 720 },
+        model: 'some-model',
+        userAgent: 'agent/1.0',
+      },
+    };
+    const legacy = { ...helpFeedbackItem, clientContext: undefined };
+    mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([withContext]));
+    mocks.getAllFeedbackForExport.mockResolvedValue({ items: [withContext, legacy], truncated: false });
+
+    renderFeedbackTab();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => expect(mocks.papaUnparse).toHaveBeenCalledTimes(1));
+
+    const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(csvRows[0]).toMatchObject({
+      Platform: 'web',
+      AppVersion: '1.2.3',
+      Page: '/notebooks',
+      Viewport: '1280x720',
+      Model: 'some-model',
+      UserAgent: 'agent/1.0',
+    });
+    expect(csvRows[1]).toMatchObject({
+      Platform: '',
+      AppVersion: '',
+      Page: '',
+      Viewport: '',
+      Model: '',
+      UserAgent: '',
+    });
   });
 
   // The hook and the subject mapping are unit-tested on their own; what only a mounted render can
@@ -201,6 +281,101 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-subject-btn'));
 
       expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('type filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('sends the picked type to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-type'));
+      await userEvent.click(screen.getByTestId(`admin-filter-feedback-type-${FeedbackType.THUMBS_DOWN}`));
+
+      expect(defaultFiltersReturn.setTypes).toHaveBeenCalledWith([FeedbackType.THUMBS_DOWN]);
+    });
+  });
+
+  describe('received filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('sends the picked window to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received-7d'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith('7d');
+    });
+
+    it('clears the window back to any time', async () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: { ...defaultFiltersReturn.filters, received: '7d' },
+      });
+
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('row content', () => {
+    it('labels each report with its type and subject', () => {
+      mocks.useFeedbackOperations.mockReturnValue(
+        makeOperationsReturn([makeFeedbackItem({ type: FeedbackType.BUG, subject: 'turn' })])
+      );
+
+      renderFeedbackTab();
+
+      const meta = screen.getByTestId('feedback-row-type-fb-1');
+      expect(meta).toHaveTextContent('Bug');
+      expect(screen.getByText('Conversation turn')).toBeInTheDocument();
+    });
+
+    it('shows an untyped report as Feedback', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ type: undefined })]));
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-row-type-fb-1')).toHaveTextContent('Feedback');
+    });
+
+    it('says so when a rating carries no comment', () => {
+      mocks.useFeedbackOperations.mockReturnValue(
+        makeOperationsReturn([makeFeedbackItem({ type: FeedbackType.THUMBS_DOWN, content: '' })])
+      );
+
+      renderFeedbackTab();
+
+      expect(screen.getByText('No comment')).toBeInTheDocument();
+    });
+
+    it('links the reporter to their admin profile', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ userId: LONG_USER_ID })]));
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-row-reporter-link-fb-1')).toHaveAttribute(
+        'href',
+        `/admin/users/${LONG_USER_ID}`
+      );
+    });
+
+    it('shows a reporter id that is not a user id as plain text', () => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+
+      renderFeedbackTab();
+
+      expect(screen.queryByTestId('feedback-row-reporter-link-fb-1')).not.toBeInTheDocument();
+      expect(screen.getByText('reporter')).toBeInTheDocument();
     });
   });
 
@@ -302,7 +477,7 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(screen.getByRole('region', { name: 'Feedback' })).toHaveStyle({ overflowX: 'auto' });
-      expect(screen.getByTestId('feedback-table')).toHaveStyle({ minWidth: '56rem' });
+      expect(screen.getByTestId('feedback-table')).toHaveStyle({ minWidth: '44rem' });
     });
 
     it('shows the reporter id truncated, with the full id behind the copy chip', () => {
@@ -381,6 +556,43 @@ describe('FeedbackTab', () => {
         expect(open.textContent).toBe(label);
       });
 
+      it('offers an email draft to the reporter, with the report quoted', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const email = await screen.findByTestId('feedback-row-email-reporter-fb-1');
+
+        expect(email.textContent).toBe('Email reporter');
+        expect(email).not.toHaveAttribute('target');
+        const href = email.getAttribute('href') ?? '';
+        expect(href).toMatch(/^mailto:reporter%40example\.com\?subject=/);
+        expect(decodeURIComponent(href.split('&body=')[1])).toBe('> Some feedback content');
+      });
+
+      it('lists the email action with the links, above the delete divider', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ sessionId: 'sess-1' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        const conversation = await screen.findByTestId('feedback-row-open-conversation-fb-1');
+        const email = screen.getByTestId('feedback-row-email-reporter-fb-1');
+        const divider = screen.getByRole('separator');
+
+        expect(conversation.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(email.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+
+      it('hides the email action for a report with no email', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem({ userEmail: '' })]));
+
+        renderFeedbackTab();
+        openRowMenu();
+
+        expect(await screen.findByTestId('feedback-row-copy-link-fb-1')).toBeInTheDocument();
+        expect(screen.queryByTestId('feedback-row-email-reporter-fb-1')).toBeNull();
+      });
+
       it('offers no conversation for a report with no session', async () => {
         mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
 
@@ -418,12 +630,12 @@ describe('FeedbackTab', () => {
       expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No feedback matches these filters');
       await userEvent.click(screen.getByTestId('feedback-empty-clear-btn'));
 
-      expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
-      expect(defaultFiltersReturn.setSelectedOrganizations).toHaveBeenCalledWith([]);
-      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledWith({
-        [FeedbackStatus.New]: true,
-        [FeedbackStatus.InProgress]: true,
-        [FeedbackStatus.Closed]: true,
+      expect(defaultFiltersReturn.showOnly).toHaveBeenCalledWith({
+        statusFilters: {
+          [FeedbackStatus.New]: true,
+          [FeedbackStatus.InProgress]: true,
+          [FeedbackStatus.Closed]: true,
+        },
       });
     });
 
@@ -474,6 +686,93 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(handlePageChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('detail drawer', () => {
+    const item = makeFeedbackItem();
+    const lastSearch = (navigate: ReturnType<typeof vi.fn>) => {
+      const [{ search, replace }] = navigate.mock.calls.at(-1) as [
+        { search: (previous: Record<string, unknown>) => Record<string, unknown>; replace: boolean },
+      ];
+      return { search: search({ tab: 'feedback', feedbackStatus: 'New' }), replace };
+    };
+
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+    });
+
+    it('opens the report a row click names, keeping the rest of the URL', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      await userEvent.click(screen.getByText('Some feedback content'));
+
+      expect(lastSearch(navigate)).toEqual({
+        search: { tab: 'feedback', feedbackStatus: 'New', feedbackId: 'fb-1' },
+        replace: true,
+      });
+    });
+
+    it('opens the report from the keyboard with Enter', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      screen.getByTestId('feedback-row-fb-1').focus();
+      await userEvent.keyboard('{Enter}');
+
+      expect(lastSearch(navigate).search).toMatchObject({ feedbackId: 'fb-1' });
+    });
+
+    it('does not open the drawer from the status select or the row menu', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+
+      renderFeedbackTab();
+      await userEvent.click(screen.getByTestId('feedback-row-status-select-fb-1'));
+      fireEvent.click(screen.getByTestId('feedback-row-actions-fb-1'));
+
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('opens from ?feedbackId= and marks the row as the open one', () => {
+      mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
+
+      renderFeedbackTab();
+
+      expect(screen.getByTestId('feedback-detail-drawer-stub')).toHaveAttribute('data-feedback-id', 'fb-1');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('clears ?feedbackId= on close and returns focus to the row', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+      mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
+
+      const { rerender } = renderFeedbackTab();
+      await userEvent.click(screen.getByText('close drawer'));
+      expect(lastSearch(navigate).search).toMatchObject({ feedbackId: undefined });
+
+      mocks.useSearch.mockReturnValue({});
+      rerender(<FeedbackTab />);
+
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveFocus();
+    });
+
+    it('returns focus to the table region when the closed report has no row', async () => {
+      const navigate = vi.fn();
+      mocks.useNavigate.mockReturnValue(navigate);
+      mocks.useSearch.mockReturnValue({ feedbackId: 'not-in-the-list' });
+
+      const { rerender } = renderFeedbackTab();
+      await userEvent.click(screen.getByText('close drawer'));
+
+      mocks.useSearch.mockReturnValue({});
+      rerender(<FeedbackTab />);
+
+      expect(screen.getByTestId('feedback-table-region')).toHaveFocus();
     });
   });
 });

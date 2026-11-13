@@ -17,6 +17,11 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
+  trustedDomains: [],
+  reviewDomains: [],
+  unlistedSources: 'review',
+  autoAdmitTrusted: false,
+  maxAutoAdmits: 3,
   allowedDomains: [],
   blockedDomains: [],
   minRelevance: 0.6,
@@ -44,6 +49,19 @@ describe('DataLakeResearchConfigRepository', () => {
       costCeilingMicroUsd: 50_000,
     });
     expect(created.lastRunAt).toBeNull();
+  });
+
+  it('round-trips the auto-admit levers, and an old document reads as off with the default cap', async () => {
+    const on = await repo.createConfig(input({ autoAdmitTrusted: true, maxAutoAdmits: 7 }));
+    expect(on).toMatchObject({ autoAdmitTrusted: true, maxAutoAdmits: 7 });
+
+    const { id } = await repo.createConfig(input({ name: 'old' }));
+    await DataLakeResearchConfigModel.collection.updateOne(
+      { name: 'old' },
+      { $unset: { autoAdmitTrusted: '', maxAutoAdmits: '' } }
+    );
+    const read = await repo.findByIdInLake(id, LAKE);
+    expect(read).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
   });
 
   it('lists one lake newest first, and never another lake', async () => {
@@ -208,6 +226,85 @@ describe('DataLakeResearchConfigRepository', () => {
       const stored = await repo.findByIdInLake(config.id, LAKE);
       expect(stored?.nextRunAt).toBeNull();
       expect(stored?.lastScheduledOutcome).toBeNull();
+    });
+  });
+
+  describe('source tiers', () => {
+    const rawLegacy = (overrides: Record<string, unknown> = {}) =>
+      DataLakeResearchConfigModel.collection.insertOne({
+        dataLakeId: LAKE,
+        name: 'Legacy',
+        query: 'q',
+        maxResults: 10,
+        maxProposals: 5,
+        blockedDomains: ['bad.example'],
+        minRelevance: 0.6,
+        costCeilingMicroUsd: 50_000,
+        proposedTags: [],
+        trigger: 'on_demand',
+        createdByUserId: 'user-1',
+        ...overrides,
+      });
+
+    it('reads a raw legacy document back upgraded, keeping allowedDomains', async () => {
+      const { insertedId } = await rawLegacy({ allowedDomains: ['a.example'] });
+
+      const read = await repo.findByIdInLake(String(insertedId), LAKE);
+
+      expect(read).toMatchObject({
+        trustedDomains: [],
+        reviewDomains: ['a.example'],
+        unlistedSources: 'drop',
+        allowedDomains: ['a.example'],
+        blockedDomains: ['bad.example'],
+      });
+    });
+
+    it('reads a raw legacy document with no allow list as other sites to review', async () => {
+      const { insertedId } = await rawLegacy();
+      const [listed] = await repo.listByLake(LAKE);
+      expect(listed).toMatchObject({ unlistedSources: 'review', reviewDomains: [], allowedDomains: [] });
+      expect(listed.id).toBeDefined();
+      expect(String(listed.id)).toBe(String(insertedId));
+    });
+
+    it('applies an edit old code made to allowedDomains after the migration ran', async () => {
+      const { insertedId } = await rawLegacy({
+        trustedDomains: [],
+        reviewDomains: ['old.example'],
+        unlistedSources: 'drop',
+        allowedDomains: ['edited.example'],
+      });
+      const read = await repo.findByIdInLake(String(insertedId), LAKE);
+      expect(read).toMatchObject({ reviewDomains: ['edited.example'], unlistedSources: 'drop' });
+    });
+
+    it('returns the upgraded shape from the scheduler claim', async () => {
+      await rawLegacy({ allowedDomains: ['a.example'], cadence: 'daily', nextRunAt: new Date('2026-01-01') });
+      const [claimed] = await repo.claimDueConfigs(new Date('2026-02-01'), new Date('2026-02-02'), 5);
+      expect(claimed).toMatchObject({ reviewDomains: ['a.example'], unlistedSources: 'drop' });
+    });
+
+    it('stores the tier fields written by new code and returns the derived allowedDomains', async () => {
+      const created = await repo.createConfig(
+        input({ reviewDomains: ['r.example'], unlistedSources: 'drop', allowedDomains: ['r.example'] })
+      );
+      const raw = await DataLakeResearchConfigModel.collection.findOne({ dataLakeId: LAKE });
+      expect(raw).toMatchObject({ unlistedSources: 'drop', allowedDomains: ['r.example'] });
+      expect(created).toMatchObject({ reviewDomains: ['r.example'], unlistedSources: 'drop' });
+    });
+
+    it('does not default unlistedSources, which is how a legacy document is recognized', async () => {
+      const { insertedId } = await rawLegacy({ allowedDomains: [] });
+      const hydrated = await DataLakeResearchConfigModel.findById(insertedId);
+      expect(hydrated?.unlistedSources).toBeUndefined();
+    });
+
+    it('keeps an undeclared stored field in toJSON, so the upgrade sees it', async () => {
+      const { insertedId } = await rawLegacy({ allowedDomains: [], somethingUndeclared: 1 });
+      const hydrated = await DataLakeResearchConfigModel.findById(insertedId);
+      expect(hydrated?.toJSON()).toHaveProperty('somethingUndeclared');
+      expect(await repo.findByIdInLake(String(insertedId), LAKE)).toMatchObject({ unlistedSources: 'review' });
     });
   });
 });

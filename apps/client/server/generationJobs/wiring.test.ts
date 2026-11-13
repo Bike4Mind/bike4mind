@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ALL_IMAGE_MODELS,
+  IMAGE_MODEL_CATALOG,
   StorageLimitError,
   type IGenerationJobDocument,
   type ImageProviderId,
@@ -101,9 +103,11 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 
 import { adminSettingsRepository } from '@bike4mind/database';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
+  buildImageProviders,
   buildMusicProviders,
   buildProviders,
   checkStorageFor,
@@ -216,6 +220,12 @@ describe('provider key selection', () => {
     expect(usableApiKey(selectProviderKey('xai', { xai: 'expired' } as never))).toBeNull();
   });
 
+  it('maps bfl to the BFL key and applies placeholder checks', () => {
+    expect(selectProviderKey('bfl', { bfl: 'b-key' } as never)).toBe('b-key');
+    expect(usableApiKey(selectProviderKey('bfl', { bfl: null } as never))).toBeNull();
+    expect(usableApiKey(selectProviderKey('bfl', { bfl: 'your-api-key' } as never))).toBeNull();
+  });
+
   it('throws for a provider id with no mapping', () => {
     expect(() => selectProviderKey('unmapped' as VideoProviderId, {} as never)).toThrow(/no API key mapping/);
   });
@@ -256,21 +266,28 @@ describe('music provider key selection', () => {
 });
 
 describe('image provider key selection', () => {
-  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key' } as never;
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key' } as never;
 
-  it('maps openai and gemini to the keys the chat image paths use', () => {
+  it('maps each provider to the key the chat image paths use', () => {
     expect(selectImageProviderKey('openai', keys)).toBe('o-key');
     expect(selectImageProviderKey('gemini', keys)).toBe('g-key');
+    expect(selectImageProviderKey('bfl', keys)).toBe('b-key');
+    expect(selectImageProviderKey('xai', keys)).toBe('x-key');
     expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
-  });
-
-  it('gives providers without an image job adapter no key', () => {
-    expect(selectImageProviderKey('bfl', keys)).toBeNull();
-    expect(selectImageProviderKey('xai', keys)).toBeNull();
   });
 
   it('throws for a provider id with no mapping', () => {
     expect(() => selectImageProviderKey('unmapped' as ImageProviderId, keys)).toThrow(/no API key mapping/);
+  });
+});
+
+describe('buildImageProviders', () => {
+  // createImageJobs refuses a model whose provider is not registered (model_unavailable).
+  it.each(['bfl', 'xai'] as const)('serves every %s catalog model', providerId => {
+    const registry = createImageProviderRegistry(buildImageProviders());
+    const models = ALL_IMAGE_MODELS.filter(model => IMAGE_MODEL_CATALOG[model].provider === providerId);
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) expect(registry.get(providerId)?.models).toContain(model);
   });
 });
 
@@ -413,18 +430,25 @@ describe('buildProviders', () => {
     delete process.env.ENABLE_TEST_VIDEO_PROVIDER;
   });
 
-  it('registers Gemini Omni, xAI and Veo unconditionally, Gemini first', () => {
-    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo']);
+  it('registers Gemini Omni, xAI, Veo and BFL unconditionally, Gemini first', () => {
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'bfl']);
   });
 
   it('adds the test provider only when enabled', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
-    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'test']);
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'bfl', 'test']);
   });
 
   it('builds a registry the catalog-owner check accepts', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
     expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
+  });
+});
+
+describe('buildImageProviders', () => {
+  it('registers the OpenAI, Gemini, BFL and xAI adapters, which the catalog accepts', () => {
+    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai']);
+    expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
   });
 });
 

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   Button,
   Chip,
@@ -11,6 +11,7 @@ import {
   Option,
   Select,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -18,8 +19,16 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
-import { useNavigate, useSearch } from '@tanstack/react-router';
-import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS } from '@bike4mind/common';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import {
+  FEEDBACK_ID_PARAM,
+  FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
+  FEEDBACK_RESOLUTIONS,
+  FEEDBACK_RESOLUTION_LABELS,
+} from '@bike4mind/common';
+import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { CSV_FORMULA_PREFIX } from '@client/app/utils/csv';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -37,15 +46,28 @@ import {
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP, adminFocus, adminFocusScope } from '../shared/adminStyles';
+import { parseObjectId } from '../adminSearchValues';
 import UserIdChip from '../Users/UserIdChip';
 import { useFeedbackOperations } from './hooks/useFeedbackOperations';
 import { useFeedbackFilters } from './hooks/useFeedbackFilters';
 import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
-import FocusedFeedbackCard from './FocusedFeedbackCard';
-import { copyFeedbackRecordLink, feedbackConversationPath } from './FeedbackRowLinks';
+import FeedbackDetailDrawer from './FeedbackDetailDrawer';
+import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
+import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
-import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS, toSubjectFilter } from './constants';
+import FeedbackTrendStrip from './FeedbackTrendStrip';
+import { FEEDBACK_RECEIVED_LABELS, FEEDBACK_RECEIVED_WINDOWS } from './feedbackTrends';
+import {
+  FEEDBACK_STATUS_LABELS,
+  FEEDBACK_STATUS_ORDER,
+  FEEDBACK_SUBJECT_LABELS,
+  FEEDBACK_TYPE_LABELS,
+  FEEDBACK_TYPE_ORDER,
+  FEEDBACK_TYPE_TONES,
+  feedbackTypeOf,
+  toSubjectFilter,
+} from './constants';
 import { checkedStatuses, toStatusFilters } from './feedbackTabSearch';
 
 type FeedbackRow = IExtendedFeedbackDocument;
@@ -58,6 +80,19 @@ const SUBJECT_FILTER_OPTIONS = FEEDBACK_SUBJECTS.map(subject => ({
   value: subject,
   label: FEEDBACK_SUBJECT_LABELS[subject],
 }));
+const TYPE_FILTER_OPTIONS = FEEDBACK_TYPE_ORDER.map(type => ({
+  value: type,
+  label: FEEDBACK_TYPE_LABELS[type],
+}));
+const RECEIVED_FILTER_OPTIONS = FEEDBACK_RECEIVED_WINDOWS.map(range => ({
+  value: range,
+  label: FEEDBACK_RECEIVED_LABELS[range],
+}));
+
+// Tags the producers add that only restate the type chip; the rest (help, slash command,
+// marketing...) still say where a report came from.
+const TYPE_RESTATING_TAGS = new Set(['bug', 'bugReport', 'feedback']);
+const VISIBLE_TAG_COUNT = 2;
 
 const reporterName = (row: FeedbackRow) => row.username || row.userEmail || 'an unknown user';
 
@@ -72,49 +107,93 @@ const formatCreatedAt = (createdAt: Date | string) =>
   });
 
 const CreatedCell = ({ row }: { row: FeedbackRow }) => (
-  <Stack gap={0.25} alignItems="flex-start">
-    <Typography level="body-sm">{formatCreatedAt(row.createdAt)}</Typography>
-    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+  <Tooltip title={formatCreatedAt(row.createdAt)} placement="top-start">
+    <Typography level="body-sm" noWrap data-testid={`feedback-row-created-${row._id}`}>
       {relativeTimeFormat(new Date(row.createdAt))}
     </Typography>
-    {row.tags && row.tags.length > 0 && (
-      <Stack direction="row" flexWrap="wrap" gap={0.5}>
-        {row.tags.map((tag, index) => (
-          <Chip key={`${tag}-${index}`} size="sm" variant="soft" color="neutral">
-            {tag}
-          </Chip>
-        ))}
-      </Stack>
-    )}
-  </Stack>
+  </Tooltip>
 );
+
+const ReporterName = ({ row }: { row: FeedbackRow }) => {
+  const name = (
+    <Typography level="body-sm" noWrap title={row.username} sx={{ maxWidth: '100%', color: 'inherit' }}>
+      {row.username}
+    </Typography>
+  );
+  // Reports without an account (the waitlist form writes 'Unknown') have no profile to open.
+  const userId = parseObjectId(row.userId);
+  if (!userId) return name;
+  return (
+    <Link
+      to="/admin/users/$userId"
+      params={{ userId }}
+      data-testid={`feedback-row-reporter-link-${row._id}`}
+      style={{ flexShrink: 0, maxWidth: '70%', textDecoration: 'none', color: 'var(--joy-palette-admin-link)' }}
+    >
+      {name}
+    </Link>
+  );
+};
 
 const ReporterCell = ({ row }: { row: FeedbackRow }) => {
   const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
   return (
-    <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
-      {organization && (
-        <Typography level="body-sm" fontWeight={600} noWrap title={organization} sx={{ maxWidth: '100%' }}>
-          {organization}
+    <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0, maxWidth: '100%' }}>
+      <Stack direction="row" alignItems="baseline" gap={0.75} sx={{ minWidth: 0, width: '100%' }}>
+        {row.username && <ReporterName row={row} />}
+        {organization && (
+          <Typography level="body-xs" noWrap title={organization} sx={{ color: 'admin.inkMuted', minWidth: 0 }}>
+            {organization}
+          </Typography>
+        )}
+      </Stack>
+      <Stack direction="row" alignItems="center" gap={0.5} sx={{ minWidth: 0, maxWidth: '100%' }}>
+        {row.userEmail && (
+          <Typography level="body-xs" noWrap title={row.userEmail} sx={{ color: 'admin.inkMuted', minWidth: 0 }}>
+            {row.userEmail}
+          </Typography>
+        )}
+        {row.userId && <UserIdChip userId={row.userId} />}
+      </Stack>
+    </Stack>
+  );
+};
+
+const ReportMeta = ({ row }: { row: FeedbackRow }) => {
+  const type = feedbackTypeOf(row.type);
+  const tags = (row.tags ?? []).filter(tag => !TYPE_RESTATING_TAGS.has(tag));
+  const hiddenTags = tags.length - VISIBLE_TAG_COUNT;
+  return (
+    <Stack direction="row" flexWrap="wrap" alignItems="center" gap={0.75}>
+      <StatusChip
+        tone={FEEDBACK_TYPE_TONES[type]}
+        label={FEEDBACK_TYPE_LABELS[type]}
+        data-testid={`feedback-row-type-${row._id}`}
+      />
+      {row.subject && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          {FEEDBACK_SUBJECT_LABELS[row.subject]}
         </Typography>
       )}
-      {row.username && (
-        <Typography level="body-sm" noWrap title={row.username} sx={{ maxWidth: '100%' }}>
-          {row.username}
-        </Typography>
+      {tags.slice(0, VISIBLE_TAG_COUNT).map((tag, index) => (
+        <Chip key={`${tag}-${index}`} size="sm" variant="soft" color="neutral">
+          {tag}
+        </Chip>
+      ))}
+      {hiddenTags > 0 && (
+        <Tooltip title={tags.slice(VISIBLE_TAG_COUNT).join(', ')} placement="top">
+          <Chip size="sm" variant="soft" color="neutral">
+            +{hiddenTags}
+          </Chip>
+        </Tooltip>
       )}
-      {row.userEmail && (
-        <Typography level="body-xs" noWrap title={row.userEmail} sx={{ color: 'admin.inkMuted', maxWidth: '100%' }}>
-          {row.userEmail}
-        </Typography>
-      )}
-      {row.userId && <UserIdChip userId={row.userId} />}
     </Stack>
   );
 };
 
 const ContentCell = ({ row }: { row: FeedbackRow }) => (
   <Stack gap={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+    <ReportMeta row={row} />
     <HelpContextChip feedbackItem={row} />
     {row.contentTruncated && (
       <StatusChip tone="warn" label="Truncated" data-testid="feedback-content-truncated-badge" />
@@ -123,13 +202,18 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
       level="body-sm"
       sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
     >
-      {getFeedbackDisplayContent(row, '')}
+      {getFeedbackDisplayContent(row, '') || (
+        <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
+          No comment
+        </Typography>
+      )}
     </Typography>
   </Stack>
 );
 
 const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: FeedbackRow) => void }) => {
   const conversationPath = feedbackConversationPath(row);
+  const reporterMailto = feedbackReporterMailto(row);
   return (
     <Dropdown>
       <MenuButton
@@ -164,6 +248,11 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
             {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
           </MenuItem>
         )}
+        {reporterMailto && (
+          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+            Email reporter
+          </MenuItem>
+        )}
         <ListDivider />
         <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
           Delete feedback
@@ -181,10 +270,16 @@ const FeedbackTab: React.FC = () => {
 
   const {
     filters,
+    setArea,
+    setSeverity,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setResolution,
+    setTypes,
+    setReceived,
+    showOnly,
     toggleSortDirection,
     filterParams,
   } = useFeedbackFilters();
@@ -198,6 +293,9 @@ const FeedbackTab: React.FC = () => {
     isError,
     refreshFeedback,
     handleStatusChange,
+    feedbackToClose,
+    cancelClose,
+    confirmClose,
     handleDeleteFeedbackClick,
     confirmDeleteFeedback,
     feedbackToDelete,
@@ -213,18 +311,51 @@ const FeedbackTab: React.FC = () => {
     if (totalSettled && currentPage > totalPages) handlePageChange(totalPages);
   }, [totalSettled, currentPage, totalPages, handlePageChange]);
 
-  // A deep link names one report. It is pinned above the list rather than highlighted in place:
-  // with server-side paging and filtering the linked report is usually not on the current page.
-  const { [FEEDBACK_ID_PARAM]: focusedFeedbackId } = useSearch({ strict: false }) as { feedbackId?: string };
+  // `?feedbackId=` is the drawer's open state, so a copied or Slack link opens the same report.
+  // Fetched by id inside the drawer: the linked report may not be on this page or match the filters.
+  const { [FEEDBACK_ID_PARAM]: openFeedbackId } = useSearch({ strict: false }) as { feedbackId?: string };
   const navigate = useNavigate();
 
-  const dismissFocusedFeedback = () => {
-    navigate({
-      to: '/admin',
-      search: previous => ({ ...previous, [FEEDBACK_ID_PARAM]: undefined }),
-      replace: true,
-    });
-  };
+  const setOpenFeedbackId = useCallback(
+    (feedbackId: string | undefined) => {
+      navigate({
+        to: '/admin',
+        search: previous => ({ ...previous, [FEEDBACK_ID_PARAM]: feedbackId }),
+        replace: true,
+      });
+    },
+    [navigate]
+  );
+  const openFeedback = useCallback((feedbackId: string) => setOpenFeedbackId(feedbackId), [setOpenFeedbackId]);
+  const closeFeedback = useCallback(() => setOpenFeedbackId(undefined), [setOpenFeedbackId]);
+
+  const detailNavigation = useFeedbackDetailNavigation({
+    rowIds: currentFeedback.map(row => row._id),
+    openId: openFeedbackId,
+    page: currentPage,
+    pageSize: itemsPerPage,
+    total,
+    settled: totalSettled,
+    failed: isError,
+    onPageChange: handlePageChange,
+    open: openFeedback,
+  });
+
+  // Closing returns focus to the row of the report last shown, which after previous/next is not
+  // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
+  // id is arbitrary text.
+  const tableRegionRef = useRef<HTMLDivElement>(null);
+  const previousOpenId = useRef(openFeedbackId);
+  useEffect(() => {
+    const closedId = previousOpenId.current;
+    previousOpenId.current = openFeedbackId;
+    if (!closedId || openFeedbackId) return;
+    const rows = tableRegionRef.current?.querySelectorAll<HTMLElement>('[data-row-id]') ?? [];
+    const row = Array.from(rows).find(row => row.dataset.rowId === closedId);
+    // The row can be gone (status change under a filter, deep link): the drawer skips its own
+    // focus restore, so without this focus would fall to <body>.
+    (row ?? tableRegionRef.current)?.focus();
+  }, [openFeedbackId]);
 
   // Pages through every match server-side. Exporting `currentFeedback` would silently emit one
   // page now that the list is paginated, which reads as a complete export of a much smaller
@@ -248,12 +379,26 @@ const FeedbackTab: React.FC = () => {
 
     const csvData = exported.items.map(feedbackItem => ({
       ID: feedbackItem._id,
+      CreatedAt: feedbackItem.createdAt,
       Status: feedbackItem.status,
+      Resolution: feedbackItem.resolution ? FEEDBACK_RESOLUTION_LABELS[feedbackItem.resolution] : '',
+      Type: FEEDBACK_TYPE_LABELS[feedbackTypeOf(feedbackItem.type)],
+      Subject: feedbackItem.subject ? FEEDBACK_SUBJECT_LABELS[feedbackItem.subject] : '',
+      UserId: feedbackItem.userId,
       Username: feedbackItem.username,
+      UserEmail: feedbackItem.userEmail ?? '',
       Content: getFeedbackDisplayContent(feedbackItem, ''),
       HelpArticle: feedbackItem.helpContext?.slug ?? '',
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
+      Platform: feedbackItem.clientContext?.platform ?? '',
+      AppVersion: feedbackItem.clientContext?.appVersion ?? '',
+      Page: feedbackItem.clientContext?.path ?? '',
+      Viewport: feedbackItem.clientContext?.viewport
+        ? `${feedbackItem.clientContext.viewport.width}x${feedbackItem.clientContext.viewport.height}`
+        : '',
+      Model: feedbackItem.clientContext?.model ?? '',
+      UserAgent: feedbackItem.clientContext?.userAgent ?? '',
     }));
 
     const csv = Papa.unparse(csvData, { escapeFormulae: CSV_FORMULA_PREFIX });
@@ -284,48 +429,55 @@ const FeedbackTab: React.FC = () => {
   }));
 
   const hasFilters =
+    filters.area !== undefined ||
+    filters.severity !== undefined ||
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
+    filters.resolution !== undefined ||
+    filters.types.length > 0 ||
+    filters.received !== undefined ||
     filters.selectedOrganizations.length > 0;
-  const clearFilters = () => {
-    setSearchTerm('');
-    setStatusFilters(toStatusFilters(FEEDBACK_STATUS_ORDER));
-    setSubject(undefined);
-    setSelectedOrganizations([]);
-  };
+  const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
   const firstLoad = loading && currentFeedback.length === 0;
   const rowToDelete = currentFeedback.find(row => row._id === feedbackToDelete);
 
   const columns: DataColumn<FeedbackRow>[] = [
-    { id: 'createdAt', label: 'Created', sortable: true, width: '10rem', render: row => <CreatedCell row={row} /> },
-    { id: 'reporter', label: 'Reporter', width: '14rem', render: row => <ReporterCell row={row} /> },
+    { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
+    { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
     { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
     {
       id: 'status',
       label: 'Status',
-      width: '9.5rem',
+      width: '8.5rem',
       render: row => (
-        <Select
-          size="sm"
-          value={row.status}
-          onChange={(_, value) => void handleStatusChange(row, value)}
-          slotProps={{
-            button: {
-              'aria-label': `Status of the report from ${reporterName(row)}`,
-              'data-testid': `feedback-row-status-select-${row._id}`,
-            },
-          }}
-          sx={{ width: '100%', minWidth: 0 }}
-        >
-          {FEEDBACK_STATUS_ORDER.map(status => (
-            <Option key={status} value={status}>
-              {FEEDBACK_STATUS_LABELS[status]}
-            </Option>
-          ))}
-        </Select>
+        <Stack gap={0.5}>
+          <Select
+            size="sm"
+            value={row.status}
+            onChange={(_, value) => void handleStatusChange(row, value)}
+            slotProps={{
+              button: {
+                'aria-label': `Status of the report from ${reporterName(row)}`,
+                'data-testid': `feedback-row-status-select-${row._id}`,
+              },
+            }}
+            sx={{ width: '100%', minWidth: 0 }}
+          >
+            {FEEDBACK_STATUS_ORDER.map(status => (
+              <Option key={status} value={status}>
+                {FEEDBACK_STATUS_LABELS[status]}
+              </Option>
+            ))}
+          </Select>
+          {row.resolution && (
+            <Typography level="body-xs" data-testid={`feedback-row-resolution-${row._id}`}>
+              {FEEDBACK_RESOLUTION_LABELS[row.resolution]}
+            </Typography>
+          )}
+        </Stack>
       ),
     },
   ];
@@ -365,6 +517,8 @@ const FeedbackTab: React.FC = () => {
         }
       />
 
+      <FeedbackTrendStrip showOnly={showOnly} />
+
       <Stack
         direction="row"
         flexWrap="wrap"
@@ -387,6 +541,42 @@ const FeedbackTab: React.FC = () => {
           options={STATUS_FILTER_OPTIONS}
           onChange={setStatuses}
         />
+        <FilterChip
+          id="feedback-type"
+          label="Type"
+          multiple
+          value={filters.types}
+          options={TYPE_FILTER_OPTIONS}
+          onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
+        />
+        <FilterChip
+          id="feedback-area"
+          label="Area"
+          value={filters.area}
+          options={FEEDBACK_AI_AREAS.map(value => ({ value, label: value }))}
+          onChange={value => setArea(FEEDBACK_AI_AREAS.find(area => area === value))}
+        />
+        <FilterChip
+          id="feedback-severity"
+          label="Severity"
+          value={filters.severity}
+          options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
+          onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
+        />
+        <FilterChip
+          id="feedback-resolution"
+          label="Resolution"
+          value={filters.resolution}
+          options={FEEDBACK_RESOLUTIONS.map(value => ({ value, label: FEEDBACK_RESOLUTION_LABELS[value] }))}
+          onChange={value => setResolution(FEEDBACK_RESOLUTIONS.find(resolution => resolution === value))}
+        />
+        <FilterChip
+          id="feedback-received"
+          label="Received"
+          value={filters.received}
+          options={RECEIVED_FILTER_OPTIONS}
+          onChange={value => setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value))}
+        />
         {/* Single-select, because GET /api/feedback takes one subject or none. */}
         <FilterChip
           id="feedback-subject"
@@ -407,9 +597,13 @@ const FeedbackTab: React.FC = () => {
         )}
       </Stack>
 
-      {focusedFeedbackId && <FocusedFeedbackCard feedbackId={focusedFeedbackId} onDismiss={dismissFocusedFeedback} />}
-
-      <Stack gap={1} sx={{ minWidth: 0 }}>
+      <Stack
+        ref={tableRegionRef}
+        tabIndex={-1}
+        data-testid="feedback-table-region"
+        gap={1}
+        sx={{ minWidth: 0, outline: 'none' }}
+      >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
           label="Feedback"
@@ -417,6 +611,8 @@ const FeedbackTab: React.FC = () => {
           rows={currentFeedback}
           columns={columns}
           getRowId={row => row._id}
+          onRowActivate={row => openFeedback(row._id)}
+          activeRowId={openFeedbackId}
           rowTestId={row => `feedback-row-${row._id}`}
           loading={firstLoad}
           error={isError ? 'Could not load feedback.' : undefined}
@@ -457,7 +653,7 @@ const FeedbackTab: React.FC = () => {
             onPageSizeChange: handleItemsPerPageChange,
           }}
           rowActions={row => <FeedbackRowMenu row={row} onDelete={handleDeleteFeedbackClick} />}
-          minWidth="56rem"
+          minWidth="44rem"
           maxHeight="none"
         />
       </Stack>
@@ -476,13 +672,24 @@ const FeedbackTab: React.FC = () => {
           )
         }
         reasonPresets={ADMIN_REASON_PRESETS.feedbackDeletion}
-        // DELETE /api/feedback/:id/delete takes no reason, so the one picked here is neither sent nor stored.
-        reasonAudited={false}
         confirmLabel="Delete feedback"
         tone="danger"
-        onConfirm={() => confirmDeleteFeedback()}
+        onConfirm={confirmDeleteFeedback}
         data-testid="feedback-delete-dialog"
       />
+
+      <FeedbackDetailDrawer
+        feedbackId={openFeedbackId}
+        listRow={currentFeedback.find(row => row._id === openFeedbackId)}
+        position={detailNavigation.position}
+        onPrevious={detailNavigation.onPrevious}
+        onNext={detailNavigation.onNext}
+        onClose={closeFeedback}
+        onStatusChange={handleStatusChange}
+      />
+      {feedbackToClose && (
+        <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
+      )}
     </Stack>
   );
 };

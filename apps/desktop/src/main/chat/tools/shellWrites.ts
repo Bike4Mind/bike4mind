@@ -1,13 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { wslLocation, wslUncPath } from '../../wsl/wslPath';
 import { isWithin, resolveOperand } from './paths';
-import { findOnPath, WINDOWS_ROOTED } from './userPath';
+import { findOnPath, resolveUserPath, WINDOWS_ROOTED } from './userPath';
 import { own } from '@shared/ownKeys';
 
 /**
@@ -300,12 +302,40 @@ function tarExtraction(
 /** Archive members an extraction lists before the scan reads them as paths instead of a whole tree. */
 const LISTED_MEMBERS = 10_000;
 
-/** The granted roots of the scan running now, for the git calls that do not take them. */
-const scanRoots = new AsyncLocalStorage<readonly string[]>();
+/** The granted roots of the scan running now, for the git calls that do not take them, and its PATH lookups. */
+const scanRoots = new AsyncLocalStorage<{ roots: readonly string[] }>();
 
 /** Runs `scan` with `roots` as the granted roots git is found outside of (see pathOutside). */
 export function withGrantedRoots<T>(roots: readonly string[], scan: () => Promise<T>): Promise<T> {
-  return scanRoots.run(roots, scan);
+  return scanRoots.run({ roots }, scan);
+}
+
+/** pathOutside and the programs found on it, by PATH and roots: reading PATH entries is slow over a WSL mount. */
+const outsidePaths = new Map<string, Promise<string>>();
+const foundPrograms = new Map<string, Promise<string | null>>();
+
+function outsidePath(roots: readonly string[]): Promise<string> {
+  const key = JSON.stringify([process.env.PATH ?? '', roots]);
+  let path = outsidePaths.get(key);
+  if (path === undefined) outsidePaths.set(key, (path = pathOutside(roots)));
+  return path;
+}
+
+/** `program` on pathOutside(roots). */
+async function scanProgram(program: string, roots: readonly string[]): Promise<{ path: string; file: string } | null> {
+  const outside = await outsidePath(roots);
+  const name = `${program}\0${outside}`;
+  let file = foundPrograms.get(name);
+  if (file === undefined) {
+    file = findOnPath(program, outside);
+    foundPrograms.set(name, file);
+    // A program not found is looked for again, as it may be installed meanwhile.
+    void file.then(found => {
+      if (found === null && foundPrograms.get(name) === file) foundPrograms.delete(name);
+    });
+  }
+  const found = await file;
+  return found === null ? null : { path: outside, file: found };
 }
 
 /**
@@ -317,14 +347,18 @@ async function pathOutside(roots: readonly string[]): Promise<string> {
   const separator = windows ? ';' : ':';
   const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => root)));
   const granted = [...roots, ...realRoots];
-  const kept: string[] = [];
-  for (const raw of (process.env.PATH ?? '').split(separator)) {
-    const entry = raw.trim().replace(/^"(.*)"$/, '$1');
-    if (windows ? !WINDOWS_ROOTED.test(entry) : !isAbsolute(entry)) continue;
-    const places = [entry, await realpath(entry).catch(() => entry)];
-    if (!places.some(place => granted.some(root => isWithin(root, place)))) kept.push(entry);
-  }
-  return kept.join(separator);
+  const entries = (process.env.PATH ?? '')
+    .split(separator)
+    .map(raw => raw.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(entry => (windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)));
+  // Links are read side by side: each is a round trip over a WSL mount.
+  const kept = await Promise.all(
+    entries.map(async entry => {
+      const places = [entry, await realpath(entry).catch(() => entry)];
+      return places.some(place => granted.some(root => isWithin(root, place))) ? null : entry;
+    })
+  );
+  return kept.filter((entry): entry is string => entry !== null).join(separator);
 }
 
 /** Runs a listing program from its own folder with `path` as its only PATH, so it starts nothing from the project. */
@@ -363,9 +397,9 @@ async function listArchive(
 ): Promise<string | null> {
   if (archive.startsWith('-') || /^[\\/]{2}/.test(archive)) return null;
   if (/^[^/\\]*:/.test(archive.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
-  const path = await pathOutside(roots);
-  const file = await findOnPath(program, path);
-  if (file === null) return null;
+  const found = await scanProgram(program, roots);
+  if (found === null) return null;
+  const { path, file } = found;
   const absolute = resolve(cwd, archive);
   if (program === 'unzip') return runListing(file, [...args, '--', absolute], path);
   let gnu = gnuTar.get(file);
@@ -417,9 +451,9 @@ async function findSelected(
     else if (!((test === '-print' || test === '-print0') && index === tests.length - 1)) return null;
   }
   if (process.platform === 'win32') return null;
-  const path = await pathOutside(roots);
-  const file = await findOnPath('find', path);
-  if (file === null) return null;
+  const program = await scanProgram('find', roots);
+  if (program === null) return null;
+  const { path, file } = program;
   const starts = folders.map(folder =>
     folder.startsWith('-') || folder.startsWith('(') || folder === '!' ? `./${folder}` : folder
   );
@@ -665,7 +699,23 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
  * the empty tree with no lazy fetch, so no filter, textconv or fetch the repository configures runs. Its exit code
  * and output; null when it could not run, timed out or overran.
  */
-async function gitRun(directory: string, args: readonly string[]): Promise<{ code: number; stdout: string } | null> {
+async function gitRun(directory: string, args: readonly string[]): Promise<GitResult | null> {
+  const launch = await gitLaunch(directory, args);
+  return launch && gitExec(launch);
+}
+
+type GitResult = { code: number; stdout: string };
+
+interface GitLaunch {
+  file: string;
+  args: string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  timeout: number;
+}
+
+/** How gitRun runs `git args` in `directory`; null when there is no git to run. */
+async function gitLaunch(directory: string, args: readonly string[]): Promise<GitLaunch | null> {
   const inherited = await gitCommandEnv(directory);
   const env: NodeJS.ProcessEnv = Object.fromEntries(
     Object.entries(inherited ?? process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))
@@ -683,6 +733,8 @@ async function gitRun(directory: string, args: readonly string[]): Promise<{ cod
         '--no-optional-locks',
         '-c',
         `core.attributesFile=${nullDevice}`,
+        '-c',
+        'safe.bareRepository=explicit',
         '-C',
         gitArgumentPath(directory, directory),
         ...args,
@@ -693,23 +745,22 @@ async function gitRun(directory: string, args: readonly string[]): Promise<{ cod
   if (!command) return null;
   if (!inherited) {
     // Bare `git` would resolve through this process's PATH from the project folder.
-    const path = await pathOutside(scanRoots.getStore() ?? []);
-    const file = await findOnPath('git', path);
-    if (file === null) return null;
+    const found = await scanProgram('git', scanRoots.getStore()?.roots ?? []);
+    if (found === null) return null;
+    const { path, file } = found;
     for (const name of Object.keys(env)) if (name.toUpperCase() === 'PATH') delete env[name];
     env.PATH = path;
     command.file = file;
   }
+  return { ...command, env, timeout: quickGitTimeout(inherited) };
+}
+
+function gitExec({ file, args, cwd, env, timeout }: GitLaunch): Promise<GitResult | null> {
   return new Promise(done => {
-    execFile(
-      command.file,
-      command.args,
-      { cwd: command.cwd, env, timeout: quickGitTimeout(inherited), maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
-      (error, stdout) => {
-        if (!error) done({ code: 0, stdout });
-        else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
-      }
-    );
+    execFile(file, args, { cwd, env, timeout, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) => {
+      if (!error) done({ code: 0, stdout });
+      else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
+    });
   });
 }
 
@@ -723,6 +774,301 @@ async function upstreamTracked(cwd: string): Promise<boolean | null> {
 async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
   const result = await gitRun(directory, args);
   return result?.code === 0 ? result.stdout : null;
+}
+
+/** `git --list-cmds` answers by PATH, granted roots and WSL distro, which pick the git and the programs it finds. */
+const commandListings = new Map<string, Promise<GitResult | null>>();
+
+/**
+ * The names git lists for `categories` (`builtins,main`) from `directory`; an empty set when this git has no such
+ * listing, and null when it could not tell.
+ */
+async function gitCommandListing(directory: string, categories: string): Promise<ReadonlySet<string> | null> {
+  const result = await cachedGit(directory, categories, [`--list-cmds=${categories}`]);
+  if (result === null) return null;
+  // git exits 128 on a category it does not know.
+  return new Set(result.code === 0 ? result.stdout.split(/\r?\n/).filter(Boolean) : []);
+}
+
+/** A git query answered once per PATH, granted roots and WSL distro, under `label`. */
+function cachedGit(directory: string, label: string, args: readonly string[]): Promise<GitResult | null> {
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const key = JSON.stringify([process.env.PATH ?? '', roots, wslLocation(directory)?.distro ?? '', label]);
+  let listed = commandListings.get(key);
+  if (listed === undefined) {
+    listed = gitLaunch(directory, args).then(launch => launch && gitExec(launch));
+    commandListings.set(key, listed);
+    // Only a success, or git's exit 128 for a listing type it does not know, is kept; any other outcome is asked again.
+    void listed.then(result => {
+      const kept = result !== null && (result.code === 0 || (result.code === 128 && label === 'deprecated'));
+      if (!kept && commandListings.get(key) === listed) commandListings.delete(key);
+    });
+  }
+  return listed;
+}
+
+/** Whether the git the shell runs honors `safe.bareRepository` (2.38 and later); false when it could not tell. */
+export async function gitRefusesImplicitBare(directory: string): Promise<boolean> {
+  const version =
+    wslLocation(directory) === null
+      ? await shellGitVersion(directory)
+      : await cachedGit(directory, 'version', ['--version']);
+  const match = /(\d+)\.(\d+)/.exec(version?.code === 0 ? version.stdout : '');
+  return match !== null && (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 38));
+}
+
+const shellGits = new Map<string, Promise<GitResult | null>>();
+
+/**
+ * `git --version` of the git the shell runs: the first on its PATH (see resolveUserPath). Null when a project folder
+ * on that PATH holds a git, which the scan never starts, or none is found.
+ */
+async function shellGitVersion(directory: string): Promise<GitResult | null> {
+  const userPath = await resolveUserPath();
+  const file = await findOnPath('git', userPath);
+  if (file === null || (await projectPathProgram(directory, 'git'))) return null;
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const real = await realpath(file).catch(() => file);
+  if ([file, real].some(place => roots.some(root => isWithin(root, place)))) return null;
+  let listed = shellGits.get(file);
+  if (listed === undefined) {
+    const outside = await outsidePath(roots);
+    listed = runListing(file, ['--version'], outside).then(stdout => (stdout === null ? null : { code: 0, stdout }));
+    shellGits.set(file, listed);
+    void listed.then(result => {
+      if (result === null && shellGits.get(file) === listed) shellGits.delete(file);
+    });
+  }
+  return listed;
+}
+
+/** Whether git lists `name` as a builtin, which runs in-process; false when the listing cannot be read. */
+export async function gitListsBuiltin(directory: string, name: string): Promise<boolean> {
+  return (await gitCommandListing(directory, 'builtins'))?.has(name) === true;
+}
+
+/**
+ * How git takes `name` before any alias: `own` (a builtin or `git-<name>` program, which no alias overrides),
+ * `deprecated` (a builtin an alias overrides), `none` (an alias, if anything); null when git could not tell.
+ */
+export async function gitCommandKind(directory: string, name: string): Promise<'own' | 'deprecated' | 'none' | null> {
+  const own = await gitCommandListing(directory, 'builtins,main');
+  if (own === null) return null;
+  if (own.has(name)) {
+    const deprecated = await gitCommandListing(directory, 'deprecated');
+    if (deprecated === null) return null;
+    return deprecated.has(name) ? 'deprecated' : 'own';
+  }
+  const others = await gitCommandListing(directory, 'others');
+  if (others === null) return null;
+  if (others.has(name)) return 'own';
+  // git runs `git-<name>` from any PATH entry, including the ones gitLaunch leaves out as the project's.
+  return (await projectPathProgram(directory, `git-${name}`)) ? null : 'none';
+}
+
+/** The absolute entries of a PATH within a granted root, by their lexical or real location; by PATH and roots. */
+const rootedEntries = new Map<string, Promise<Set<string>>>();
+
+/** The folders of the shell's PATH (see resolveUserPath) a project controls: relative or empty entries from `directory`, and entries in a granted root. */
+export async function projectPathFolders(directory: string): Promise<string[]> {
+  if (wslLocation(directory) !== null) return [];
+  const windows = process.platform === 'win32';
+  const separator = windows ? ';' : ':';
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const entries = (await resolveUserPath()).split(separator).map(raw => raw.trim().replace(/^"(.*)"$/, '$1'));
+  const key = JSON.stringify([entries, roots]);
+  let rooted = rootedEntries.get(key);
+  if (rooted === undefined) {
+    rooted = (async () => {
+      const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => root)));
+      const granted = [...roots, ...realRoots];
+      const inside = await Promise.all(
+        entries
+          .filter(entry => (windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)))
+          .map(async entry => {
+            const places = [entry, await realpath(entry).catch(() => entry)];
+            return places.some(place => granted.some(root => isWithin(root, place))) ? entry : null;
+          })
+      );
+      return new Set(inside.filter((entry): entry is string => entry !== null));
+    })();
+    rootedEntries.set(key, rooted);
+  }
+  const inRoots = await rooted;
+  return entries
+    .filter(entry => !(windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) || inRoots.has(entry))
+    .map(entry => ((windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) ? entry : resolve(directory, entry)));
+}
+
+/** Whether `program` is in a PATH folder a project controls (see projectPathFolders), which the scan's git does not search. */
+export async function projectPathProgram(directory: string, program: string): Promise<boolean> {
+  const folders = await projectPathFolders(directory);
+  return (
+    folders.length > 0 && (await findOnPath(program, folders.join(process.platform === 'win32' ? ';' : ':'))) !== null
+  );
+}
+
+/** The git dir and common dir git reads config from in `directory`, absolute; none outside a repository, null when git could not say. */
+export async function gitDirectories(directory: string): Promise<string[] | null> {
+  const lines = (output: string): string[] => [...new Set(output.split(/\r?\n/).filter(Boolean))];
+  const absolute = await gitRun(directory, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir']);
+  if (absolute === null) return null;
+  if (absolute.code === 0) return lines(absolute.stdout);
+  const plain = await gitRun(directory, ['rev-parse', '--git-dir', '--git-common-dir']);
+  if (plain === null) return null;
+  // git exits 128 outside a repository.
+  if (plain.code !== 0) return plain.code === 128 ? [] : null;
+  return lines(plain.stdout).map(line => resolve(directory, line));
+}
+
+/** Whether `program` is in one of `entries`, folders a script put on PATH, as host paths. */
+export async function pathHolds(entries: readonly string[], program: string): Promise<boolean> {
+  return (
+    entries.length > 0 && (await findOnPath(program, entries.join(process.platform === 'win32' ? ';' : ':'))) !== null
+  );
+}
+
+/** The aliases git reads in a folder, by lowercased name, and whether help.autocorrect may run a command it guesses. */
+export interface GitAliases {
+  /** Null for an alias set with no value, which git refuses. */
+  aliases: ReadonlyMap<string, string | null>;
+  autocorrect: boolean;
+  /** The files config includes name, as host paths; null when they cannot be placed (a WSL folder). */
+  includes: readonly string[] | null;
+}
+
+/** help.autocorrect values under which git only names the command it guesses. */
+const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
+
+/**
+ * What git reads of aliases and includes in `directory`; with `user`, the global config and its init.templateDir one
+ * (a relative one taken from `from`, where git runs) for a repository not yet made. Null when git could not tell.
+ */
+export async function gitAliases(directory: string, user = false, from = directory): Promise<GitAliases | null> {
+  const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$|^init\.templatedir$`;
+  const lists = await Promise.all(
+    (user
+      ? [
+          ['--system', '--includes'],
+          ['--global', '--includes'],
+        ]
+      : [[]]
+    ).map(scope => gitRun(directory, ['config', ...scope, '-z', '--show-origin', '--get-regexp', keys]))
+  );
+  let stdout = '';
+  for (const listed of lists) {
+    // git config exits 1, printing nothing, when no key matches.
+    if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+    stdout += listed.stdout;
+  }
+  const aliases = new Map<string, string | null>();
+  let autocorrect = false;
+  let templateDir = null as string | null;
+  const included: { origin: string; path: string }[] = [];
+  let relativeInclude = false;
+  let templateFile = '';
+  const absorb = (text: string, fromTemplate = false): void => {
+    // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
+    const fields = text.split('\0');
+    for (let at = 0; at + 1 < fields.length; at += 2) {
+      const origin = fields[at] as string;
+      const entry = fields[at + 1] as string;
+      const newline = entry.indexOf('\n');
+      const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
+      const value = newline === -1 ? null : entry.slice(newline + 1);
+      if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
+      else if (key === 'init.templatedir') templateDir = value || null;
+      else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
+      else if (value) {
+        if (fromTemplate && origin === `file:${templateFile}` && !isAbsolute(value) && !/^~(\/|$)/.test(value)) {
+          relativeInclude = true;
+        }
+        included.push({ origin, path: value });
+      }
+    }
+  };
+  absorb(stdout);
+  if (user && templateDir !== null) {
+    // git copies the template's config into the repository it makes, where its aliases apply.
+    const home = templateDir === '~' || templateDir.startsWith('~/');
+    if (templateDir.startsWith('~') && !home) return null;
+    const file = join(home ? join(homedir(), templateDir.slice(1)) : resolve(from, templateDir), 'config');
+    templateFile = file;
+    // git only warns about a config file it cannot read, so readability is checked here.
+    const present = await access(file, constants.R_OK).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' || error.code === 'ENOTDIR' ? false : null)
+    );
+    if (present === null) return null;
+    if (present) {
+      const listed = await gitRun(directory, [
+        'config',
+        '--file',
+        file,
+        '--includes',
+        '-z',
+        '--show-origin',
+        '--get-regexp',
+        keys,
+      ]);
+      if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+      // git resolves a relative include from the new `.git`, which this read cannot place.
+      relativeInclude = false;
+      absorb(listed.stdout, true);
+      if (relativeInclude) return null;
+    }
+  }
+  return { aliases, autocorrect, includes: await includeTargets(directory, included) };
+}
+
+/**
+ * Where includes read in `directory` point: a relative path is taken from the folder of the file that names it, which
+ * git reports from the top of the work tree it moved to.
+ */
+async function includeTargets(
+  directory: string,
+  included: readonly { origin: string; path: string }[]
+): Promise<string[] | null> {
+  if (included.length === 0) return [];
+  if (wslLocation(directory)) return null;
+  const top = included.some(({ origin }) => !isAbsolute(origin.replace(/^file:/, '')))
+    ? ((await gitToplevel(directory)) ?? directory)
+    : directory;
+  const targets: string[] = [];
+  for (const { origin, path } of included) {
+    if (!origin.startsWith('file:')) return null;
+    const from = dirname(resolve(top, origin.slice('file:'.length)));
+    targets.push(path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : resolve(from, path));
+  }
+  return targets;
+}
+
+/** An alias value split into words as git splits it (split_cmdline); null for an unclosed quote or a trailing backslash. */
+export function splitGitAlias(value: string): string[] | null {
+  const words: string[] = [];
+  let word = '';
+  let quote = '';
+  for (let at = 0; at < value.length; at++) {
+    let char = value[at] as string;
+    if (quote === '' && /[ \t\n\v\f\r]/.test(char)) {
+      words.push(word);
+      word = '';
+      while (at + 1 < value.length && /[ \t\n\v\f\r]/.test(value[at + 1] as string)) at++;
+    } else if (quote === '' && (char === "'" || char === '"')) {
+      quote = char;
+    } else if (char === quote) {
+      quote = '';
+    } else {
+      if (char === '\\' && quote !== "'") {
+        if (++at >= value.length) return null;
+        char = value[at] as string;
+      }
+      word += char;
+    }
+  }
+  if (quote !== '') return null;
+  words.push(word);
+  return words;
 }
 
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
@@ -741,8 +1087,12 @@ interface GitGrammar {
 
 interface GitArgs {
   positionals: string[];
-  /** Options given, by long name or letter, with their values. */
+  /** Options given, by long name or letter, with their values; the last value of a repeated one. */
   given: Map<string, string | true>;
+  /** Every value of a valued option, in order, by long name or letter. */
+  values: [string, string][];
+  /** Every flag, in order, by long name or letter, so `-ff` holds `f` twice. */
+  flags: string[];
   /** Words after `--`. */
   paths: string[];
   /** An option outside the grammar, which the scan cannot read. */
@@ -751,7 +1101,7 @@ interface GitArgs {
 
 /** Reads `args` as git's parse-options does, taking a long option's unique abbreviation for it. */
 function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
-  const read: GitArgs = { positionals: [], given: new Map(), paths: [], unknown: false };
+  const read: GitArgs = { positionals: [], given: new Map(), values: [], flags: [], paths: [], unknown: false };
   const names = [...(grammar.flags ?? []), ...(grammar.long ?? [])];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
@@ -767,16 +1117,22 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
         read.unknown = true;
         continue;
       }
-      read.given.set(name, value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true));
+      const taken = value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true);
+      read.given.set(name, taken);
+      if (typeof taken === 'string') read.values.push([name, taken]);
+      else read.flags.push(name);
     } else if (arg.length > 1 && arg.startsWith('-')) {
       for (let at = 1; at < arg.length; at++) {
         const letter = arg[at] as string;
         if ((grammar.valued ?? '').includes(letter)) {
-          read.given.set(letter, arg.slice(at + 1) || (args[++index] ?? ''));
+          const taken = arg.slice(at + 1) || (args[++index] ?? '');
+          read.given.set(letter, taken);
+          read.values.push([letter, taken]);
           break;
         }
         if (!(grammar.letters ?? '').includes(letter)) read.unknown = true;
         read.given.set(letter, true);
+        read.flags.push(letter);
       }
     } else {
       read.positionals.push(arg);
@@ -980,6 +1336,8 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
     long: ['whitespace', 'exclude', 'include', 'patch-format', 'quoted-cr', 'empty'],
   },
   clean: { letters: 'dfxXnq', valued: 'e', flags: ['force', 'dry-run', 'quiet'], long: ['exclude'] },
+  rm: { letters: 'nqrf', flags: ['dry-run', 'quiet', 'cached', 'ignore-unmatch', 'sparse', 'force'] },
+  mv: { letters: 'vnfk', flags: ['verbose', 'dry-run', 'force', 'sparse'] },
 };
 
 /** A revision the scan hands to git as one: no option, expansion or space can hide in it. */
@@ -1079,6 +1437,8 @@ function movesRefs(sub: string, args: readonly string[], restores: boolean): boo
 /** What a git call that writes the work tree writes: `.claude` files and symlinks; unread when the scan cannot tell. */
 interface TreeWrite {
   files: string[];
+  /** Folders removed whole, with whatever is in them. */
+  trees?: string[];
   links: boolean;
   unread: boolean;
 }
@@ -1208,7 +1568,11 @@ async function treeDiff(
  */
 async function treeListing(repository: string, target: string, destination: string): Promise<TreeWrite> {
   if (!REVISION.test(target) || target.startsWith('-')) return UNREAD_TREE;
-  const raw = await gitQuery(repository, ['ls-tree', '-r', '-z', '--full-tree', target]);
+  const list = ['ls-tree', '-r', '-z', '--full-tree', target];
+  // The shell's git refuses to discover a bare repository, so a bare clone source is named by --git-dir.
+  const raw =
+    (await gitQuery(repository, list)) ??
+    (await gitQuery(repository, [`--git-dir=${gitArgumentPath(repository, repository)}`, ...list]));
   if (raw === null) return UNREAD_TREE;
   const files: string[] = [];
   let links = false;
@@ -1549,12 +1913,16 @@ async function settingsListed(top: string, args: readonly string[]): Promise<str
 /** What `git clean` would remove, from its own dry run with the same choice of files. */
 async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   const options = ['d', 'x', 'X'].filter(letter => read.given.has(letter)).map(letter => `-${letter}`);
-  const excludes = [read.given.get('e'), read.given.get('exclude')].filter(
-    (value): value is string => typeof value === 'string'
-  );
+  // Each `-e` adds a pattern, which under `-X` is one more to remove.
+  const excludes = read.values.filter(([name]) => name === 'e' || name === 'exclude').map(([, value]) => value);
+  // The dry run gets each word as written here, which a quote or backslash left inside it would change.
+  if ([...excludes, ...read.positionals, ...read.paths].some(word => /['"\\]/.test(word))) return UNREAD_TREE;
+  // A second `-f` removes nested repositories too, which the dry run lists only when given it as well.
+  const forces = read.flags.filter(flag => flag === 'f' || flag === 'force').length;
   const listed = await gitQuery(cwd, [
     'clean',
     '-n',
+    ...(forces > 1 ? ['-f', '-f'] : []),
     ...options,
     ...excludes.map(pattern => `--exclude=${pattern}`),
     '--',
@@ -1563,12 +1931,17 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   ]);
   if (listed === null) return UNREAD_TREE;
   const files: string[] = [];
+  const trees: string[] = [];
   for (const line of listed.split('\n')) {
     const removed = /^Would remove (.+)$/.exec(line)?.[1];
-    if (removed) files.push(resolveOperand(cwd, removed.replace(/\/$/, '')));
+    // Git C-quotes names with non-ASCII bytes, quotes, backslashes or controls, including the trailing `/`.
+    // Without decoding that format neither the path nor whether it is a whole folder is known.
+    if (removed?.startsWith('"')) return UNREAD_TREE;
+    if (removed?.endsWith('/')) trees.push(resolveOperand(cwd, removed.slice(0, -1)));
+    else if (removed) files.push(resolveOperand(cwd, removed));
     else if (line.trim() !== '' && !line.startsWith('Would skip')) return UNREAD_TREE;
   }
-  return { files, links: false, unread: false };
+  return { files, trees, links: false, unread: false };
 }
 
 /**
@@ -1686,6 +2059,41 @@ async function gitTreeWrites(
     }
     case 'clean':
       return moved || read.unknown ? UNREAD_TREE : cleanWrites(read, cwd);
+    case 'rm': {
+      if (has(read, 'cached', 'n', 'dry-run')) return NO_TREE;
+      const specs = [...read.positionals, ...read.paths];
+      if (specs.length === 0) return NO_TREE;
+      // Bash expands braces and `~` before git reads a pathspec; icase widens what one matches.
+      const icase = /^(1|true|yes|on)$/i.test(process.env.GIT_ICASE_PATHSPECS ?? '');
+      if (moved || read.unknown || icase || specs.some(spec => /[{}]|^~/.test(spec))) return UNREAD_TREE;
+      const root = await top();
+      const listed =
+        root === null ? null : await gitQuery(cwd, ['ls-files', '-s', '-z', '--full-name', '--', ...specs]);
+      if (listed === null) return UNREAD_TREE;
+      const removed: TreeWrite = { files: [], trees: [], links: false, unread: false };
+      for (const entry of listed.split('\0')) {
+        const [, mode, path = ''] = /^(\d+) \S+ \d\t([^]*)$/.exec(entry) ?? [];
+        // A submodule goes with its whole work tree.
+        if (mode === '160000') removed.trees?.push(`${root}/${path}`);
+        else if (mode !== undefined && inSettings(path)) removed.files.push(`${root}/${path}`);
+      }
+      return removed;
+    }
+    case 'mv': {
+      const named = [...read.positionals, ...read.paths];
+      if (has(read, 'n', 'dry-run') || named.length < 2) return NO_TREE;
+      if (moved || read.unknown || named.some(word => /[{}]|^~/.test(word))) return UNREAD_TREE;
+      const sources = named.slice(0, -1);
+      const destination = named.at(-1) as string;
+      const target = resolveOperand(cwd, treeOf(destination));
+      const into = !hasGlob(destination) && (await stat(target).catch(() => null))?.isDirectory() === true;
+      // A folder moves whole, untracked files and all; a glob bash expands may name any source under its folder.
+      const trees = sources.map(source => resolveOperand(cwd, treeOf(source)));
+      for (const source of sources) {
+        trees.push(into && !hasGlob(source) ? join(target, basename(source)) : target);
+      }
+      return { files: [], trees, links: false, unread: false };
+    }
     case 'worktree': {
       // `move` carries the tree's relative links to a new place, like mv.
       if (args[0] === 'move') return UNREAD_TREE;
@@ -1698,6 +2106,9 @@ async function gitTreeWrites(
       if (target === undefined && !has(add, 'b', 'B', 'd', 'detach')) return UNREAD_TREE;
       return treeListing(cwd, target ?? 'HEAD', resolveOperand(cwd, path));
     }
+    case 'init':
+      // A template dir, from `--template` (any prefix of it) or `-c init.templateDir`, puts hooks in the repository.
+      return moved || args.some(arg => /^--t/.test(arg)) ? UNREAD_TREE : NO_TREE;
     case 'clone': {
       const [source, folder] = read.positionals;
       if (moved || read.unknown || source === undefined) return UNREAD_TREE;
@@ -1774,25 +2185,85 @@ function gitRestored(sub: string, args: readonly string[]): { paths: string[]; s
 }
 
 /** git's global options that leave the repository and work tree where the folder puts them. */
-const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
+export const PLAIN_GIT_OPTIONS: ReadonlySet<string> = new Set([
+  '--no-pager',
+  '-P',
+  '-p',
+  '--paginate',
+  '--no-optional-locks',
+]);
+
+/**
+ * git's global options that take their value as the next word (`--attr-source HEAD`); the long ones except
+ * `--shallow-file` also take `--name=value`. Shared with the shell scan so both read where the subcommand starts alike.
+ */
+export const GIT_VALUED_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--attr-source',
+  '--super-prefix',
+  '--shallow-file',
+]);
+
+/** git's global options that take no value; `--exec-path` and `--list-cmds` take one only as `--name=value`. */
+const GIT_VALUELESS_OPTIONS: ReadonlySet<string> = new Set([
+  ...PLAIN_GIT_OPTIONS,
+  '--bare',
+  '--no-replace-objects',
+  '--no-lazy-fetch',
+  '--no-advice',
+  '--literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--no-literal-pathspecs',
+  '--icase-pathspecs',
+  '--exec-path',
+  '--html-path',
+  '--man-path',
+  '--info-path',
+]);
+
+/** Options after which git runs `version` or `help` and reads nothing else. */
+const GIT_HELP_OPTIONS: ReadonlySet<string> = new Set(['--version', '-v', '--help', '-h']);
+
+/** Whether `arg` is a global option git knows, in its separate or `--name=value` form. */
+const knownGitOption = (arg: string): boolean => {
+  const name = arg.split('=')[0] as string;
+  return (
+    GIT_VALUELESS_OPTIONS.has(arg) ||
+    GIT_VALUED_OPTIONS.has(arg) ||
+    (arg.startsWith('--') && (GIT_VALUED_OPTIONS.has(name) || ['--exec-path', '--list-cmds'].includes(name)))
+  );
+};
 
 /**
  * `git [-C dir] [-c k=v] <sub> ...`: the subcommand, its arguments, the folder git runs in, and whether a global
- * option other than `-C` and the pager ones may point git at another repository or work tree.
+ * option other than `-C` and the pager ones may point git at another repository or work tree. `unread` is set when
+ * a global option is one the scan does not know, which leaves where the subcommand starts open.
  */
-function gitSubcommand(
+export function gitSubcommand(
   args: readonly string[],
   cwd: string
-): { sub: string; rest: string[]; cwd: string; moved: boolean } | null {
+): { sub: string; rest: string[]; cwd: string; moved: boolean; unread?: true } | null {
   let directory = cwd;
   let moved = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
     if (arg === '-C') directory = resolveOperand(directory, args[++index] ?? '.');
-    else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    else if (!arg.startsWith('-')) {
+      // After a global option, a word that is no command name (`HEAD`, a path) means an option took it as a value.
+      if (index > 0 && !/^[a-z][a-z0-9-]*$/.test(arg))
+        return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
+      return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    } else if (GIT_HELP_OPTIONS.has(arg)) return null;
+    else if (!knownGitOption(arg)) return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
     else if (!PLAIN_GIT_OPTIONS.has(arg)) {
       moved = true;
-      if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path'].includes(arg)) index++;
+      if (GIT_VALUED_OPTIONS.has(arg)) index++;
     }
   }
   return null;
@@ -1865,6 +2336,7 @@ async function writesOf(
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
+    if (git.unread) return { files: [], trees: [], unread: true };
     const script = context.script;
     const moved = git.moved || context.env || script.refsMoved === true;
     const { writes, restores } = await gitWrites(git, node, moved, script);
@@ -1874,6 +2346,15 @@ async function writesOf(
   return { files: inPlaceEdit(program, args), trees: [] };
 }
 
+/**
+ * A quote, escape, expansion, glob or brace in a program word, which leaves what runs to bash. Shared with the
+ * shell scan, so both treat the same subcommand spellings as unread.
+ */
+export const SPELLED_PROGRAM = /['"\\$`*?[{}]/;
+
+/** git subcommands that remove, move or overwrite the work-tree paths their words name. */
+const REMOVES_PATHS = new Set(['clean', 'rm', 'mv']);
+
 /** What one git call writes, and whether it only rewrote paths (`git checkout -- <path>`), leaving HEAD where it was. */
 async function gitWrites(
   git: { sub: string; rest: string[]; cwd: string },
@@ -1882,6 +2363,11 @@ async function gitWrites(
   script: GitScript
 ): Promise<{ writes: InPlaceWrites; restores: boolean }> {
   const relocate = (path: string): string => resolveOperand(git.cwd, path);
+  // A subcommand bash rewrites (`cle''an`, `cl$x`) may be any of them, and an expansion in a word of `git clean`,
+  // `rm` or `mv` may name any path to remove, move or overwrite.
+  if (SPELLED_PROGRAM.test(git.sub) || (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg)))) {
+    return { writes: { files: [], trees: [], unread: true }, restores: false };
+  }
   if (git.sub === 'apply') {
     return { writes: { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true }, restores: true };
   }
@@ -1912,7 +2398,7 @@ async function gitWrites(
   if (tree === null) return { writes: { files: [], trees: [] }, restores: false };
   const writes: InPlaceWrites = {
     files: tree.files,
-    trees: [],
+    trees: tree.trees ?? [],
     ...(tree.links ? { links: true } : {}),
     ...(tree.unread ? { unread: true } : {}),
   };

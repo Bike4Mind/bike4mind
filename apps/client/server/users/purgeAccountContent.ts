@@ -14,17 +14,25 @@ import {
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   memoryPrincipalKeyRepository,
+  abuseEvalSetRepository,
   shadowDetectionRepository,
+  campaignWatchRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { getGeneratedImageStorage, getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { publishThumbnailPrefix } from '@bike4mind/server-utils/utils/publishThumbnails';
-import { buildPublishS3KeyPrefix } from '@server/services/publish/paths';
+import { buildPublishS3KeyPrefix } from '@bike4mind/server-utils/services/publish/paths';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
-import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
-import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
+import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import {
+  type CdnInvalidationBatch,
+  createCdnInvalidationBatch,
+  generatedCdnPath,
+} from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 100;
@@ -50,7 +58,10 @@ function collectionFor(modelName: string) {
   return database.collection<PurgeRecord>(mongoose.model<Record<string, unknown>>(modelName).collection.name);
 }
 
-const ownerFilter = (userId: string) => ({ userId: { $in: [userId, new mongoose.Types.ObjectId(userId)] } });
+const ownerFilter = (userId: string) => {
+  const objectId = new mongoose.Types.ObjectId(userId);
+  return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
+};
 const personalFilter = (userId: string, personalOrganizationIds: readonly string[]) => ({
   $or: [
     { ...ownerFilter(userId), organizationId: { $in: [null, ''] } },
@@ -62,7 +73,8 @@ async function purgeNotebookMedia(
   userId: string,
   personalOrganizationIds: readonly string[],
   sessionId: string,
-  assertLease: () => Promise<void>
+  assertLease: () => Promise<void>,
+  cdn: CdnInvalidationBatch
 ) {
   const quests = collectionFor(Quest.modelName);
   const cursor = quests.find({ sessionId }, { projection: { images: 1, videos: 1 } });
@@ -91,6 +103,7 @@ async function purgeNotebookMedia(
       if (retained || (await collectionFor(FabFile.modelName).findOne({ 'sourceMetadata.generatedCopyKey': key })))
         continue;
       await getGeneratedImageStorage().deletePermanently(key);
+      cdn.add(generatedCdnPath(key));
     }
   }
 }
@@ -98,7 +111,8 @@ async function purgeNotebookMedia(
 async function purgeNotebooks(
   userId: string,
   personalOrganizationIds: readonly string[],
-  assertLease: () => Promise<void>
+  assertLease: () => Promise<void>,
+  cdn: CdnInvalidationBatch
 ) {
   const sessions = collectionFor(Session.modelName);
   while (true) {
@@ -110,7 +124,7 @@ async function purgeNotebooks(
     for (const notebook of batch) {
       await assertLease();
       const sessionId = String(notebook._id);
-      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease);
+      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease, cdn);
       // The parent survives every failure, so a retry retains the key to all dependent messages.
       await collectionFor(Quest.modelName).deleteMany({ sessionId });
       for (const model of ['SessionAgentConfig', 'SessionToolApproval']) {
@@ -459,6 +473,7 @@ async function purgePersonalMemory(
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
+  await deleteFeedbackAiForUser(userId, { assertLease });
   const workspaces = await collectionFor('Organization')
     .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
     .toArray();
@@ -467,7 +482,13 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await withdrawAuthorListings(userId);
   await purgePublishedOriginals(userId, personalOrganizationIds, assertLease);
   await purgePersonalSkills(userId, personalOrganizationIds, assertLease);
-  await purgeNotebooks(userId, personalOrganizationIds, assertLease);
+  // Flushed even when a later notebook throws: the media already erased is gone either way.
+  const cdn = createCdnInvalidationBatch('account-notebook-media', logger);
+  try {
+    await purgeNotebooks(userId, personalOrganizationIds, assertLease, cdn);
+  } finally {
+    await cdn.flush();
+  }
   await purgeArtifacts(userId, personalOrganizationIds, assertLease);
   await purgePersonalMemory(userId, personalOrganizationIds, assertLease);
   await purgeDeepAgentRecords(userId, assertLease);
@@ -520,6 +541,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'UserUsagePatternSignals',
     'AdminUserNote',
     'AdminUserNoteRevision',
+    'FeedbackNote',
   ]) {
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));
@@ -565,5 +587,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await retainDeletedSignupTraces(userId);
   await authEventRepository.deleteAllForUser(userId);
   await shadowDetectionRepository.removeUser(userId);
+  await campaignWatchRepository.removeUser(userId);
+  await abuseEvalSetRepository.removeUser(userId);
   logger.info(`[AccountDeletion] Purged personal content for user ${userId}`);
 }

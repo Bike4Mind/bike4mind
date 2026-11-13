@@ -44,7 +44,7 @@ const handler = baseApi()
             throw new BadRequestError('File has no content');
           }
 
-          console.log(`[Auto-Rename API] File details:`, {
+          req.logger.debug('[Auto-Rename API] File details', {
             fileId: file.id,
             fileName: file.fileName,
             filePath: file.filePath,
@@ -81,16 +81,19 @@ const handler = baseApi()
             expiresIn: 60,
           });
 
-          console.log(`[Auto-Rename API] Generated signed URL for S3 key: ${s3Key}`);
+          req.logger.debug('[Auto-Rename API] Generated signed URL', { s3Key });
 
           const contentResponse = await fetch(signedUrl);
 
           if (!contentResponse.ok) {
-            const errorText = await contentResponse.text();
-            console.error(`[Auto-Rename API] Failed to fetch file content:`, {
+            try {
+              await contentResponse.body?.cancel();
+            } catch (error) {
+              req.logger.warn('Failed to release file content response', { fileId: id, error });
+            }
+            req.logger.error('[Auto-Rename API] Failed to fetch file content', {
               status: contentResponse.status,
               statusText: contentResponse.statusText,
-              errorBody: errorText.substring(0, 500),
               filePath: file.filePath,
             });
             throw new BadRequestError('Failed to fetch file content from storage');
@@ -100,10 +103,9 @@ const handler = baseApi()
 
           // Check if content looks like an XML error
           if (originalContent.startsWith('<?xml') && originalContent.includes('Error')) {
-            console.error(
-              '[Auto-Rename API] S3 returned XML error instead of file content:',
-              originalContent.substring(0, 200)
-            );
+            req.logger.error('[Auto-Rename API] S3 returned XML error instead of file content', {
+              filePath: file.filePath,
+            });
             throw new BadRequestError('File content is not accessible. The file may have been moved or deleted.');
           }
 
@@ -116,7 +118,7 @@ const handler = baseApi()
           }
 
           // Get the operations model (optimized for fast operations like gpt-4o-mini)
-          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel();
+          const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
 
           // Get file extension to preserve it (including compound extensions like .tar.gz, .test.ts)
           const getFileExtension = (filename: string): string => {
@@ -182,7 +184,7 @@ ${contentToAnalyze}
 
 Return only the filename (without extension) in kebab-case:`;
 
-          console.log(`[Auto-Rename API] Invoking model: ${modelId}`);
+          req.logger.debug('[Auto-Rename API] Invoking model', { model: modelId });
 
           // Metered per call: a timed-out call keeps running and settles its own usage when it ends.
           const meteredLlm = meterCompletionBackend(
@@ -244,9 +246,9 @@ Return only the filename (without extension) in kebab-case:`;
           suggestedName = suggestedName.replace(/^-+|-+$/g, '');
 
           if (!suggestedName || suggestedName.length < 2) {
-            console.error('[Auto-Rename API] AI model returned invalid filename', {
+            req.logger.error('[Auto-Rename API] AI model returned invalid filename', {
               model: modelId,
-              rawResponse: suggestedName,
+              sanitizedLength: suggestedName.length,
               contentLength: originalContent.length,
             });
             throw new InternalServerError(
@@ -294,7 +296,7 @@ Return only the filename (without extension) in kebab-case:`;
 
           suggestedFileName = await checkDuplicate(suggestedFileName);
 
-          console.log(`[Auto-Rename API] Generated filename: ${suggestedFileName}`);
+          req.logger.debug('[Auto-Rename API] Generated filename', { fileId: id, suggestedFileName });
 
           // Return the suggestion without applying it
           return res.json({
@@ -306,7 +308,7 @@ Return only the filename (without extension) in kebab-case:`;
         } catch (error) {
           // A credit refusal (422 out of credits, 429 free-tier daily cap) keeps its own status.
           if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
-          console.error('Auto-rename error:', error);
+          req.logger.error('Auto-rename error', { fileId: id, error });
           throw new BadRequestError(error instanceof Error ? error.message : 'Failed to auto-rename file');
         }
       })

@@ -38,6 +38,7 @@ import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliati
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
+import './adminMorningBrief';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -480,6 +481,22 @@ const signupIpRetentionCron = runsScheduledJobs
     })
   : undefined;
 
+// Persona expiry sweep - bans every test persona past personaExpiresAt and revokes its sessions and keys.
+// With PersonaMintEnabled off it bans every live persona, which makes that setting the stage kill switch.
+const personaExpirySweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('personaExpirySweep', {
+      schedule: 'cron(5 * * * ? *)', // Hourly at :05
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/personaExpirySweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
 // Signup risk sweep - requests a risk evidence refresh for every unsettled account in the window (the
 // per-user claim dedupes against in-flight refreshes), repairing dropped triggers. Sends to
 // riskEvidenceQueue, so it links the queue.
@@ -512,6 +529,20 @@ const accountCampaignSweepCron = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/accountCampaignSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+const completionSequenceSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('completionSequenceSweep', {
+      schedule: 'cron(30 * * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/completionSequenceSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],
@@ -1606,8 +1637,10 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  personaExpirySweepCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
+  completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

@@ -7,6 +7,7 @@ import { eventBus } from './bus';
 import { notebookCurationQueue, riskEvidenceQueue, riskEvidenceQueueDLQ, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
+import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
 import { appUrlForLambdaEnv } from './router';
 
 // Stripe events
@@ -95,6 +96,11 @@ const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
 });
 const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
 
+// Recipient domains the worker drops instead of handing to the transport. The E2E suites sign up
+// and invite synthetic test.com users on every non-production stage, and SES would otherwise
+// bounce those and count them against the stage's configuration set metrics.
+const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';
+
 export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
@@ -105,8 +111,10 @@ export const emailSendSubscription = eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
+      ...mailTransportEnvironment,
+      MAIL_SINK_DOMAINS: mailSinkDomains,
     },
-    permissions: [emailEventsDeadLetter.sendPermission],
+    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
     transform: emailEventsDeadLetter.functionTarget,
   },
   {
@@ -150,7 +158,8 @@ export const notificationPushSubscription = eventBus.subscribe(
   },
   {
     pattern: {
-      detailType: ['notification.push'],
+      // One Lambda handles both and routes on the detail-type; a live activity frame shares the push DLQ.
+      detailType: ['notification.push', 'notification.liveActivity'],
     },
     transform: pushEventsDeadLetter.ruleTarget,
   }

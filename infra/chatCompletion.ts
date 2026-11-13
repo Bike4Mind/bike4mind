@@ -29,9 +29,13 @@ import { websocketApi } from './websocket';
  *
  * Shutdown trade-off: on SIGTERM (deploy / scale-in / unhealthy-task replacement) in-flight
  * quests drain for up to DRAIN_TIMEOUT_MS (server.ts), which is set under this task's
- * stopTimeout; a quest still running is cut off. The container removes the cold-start + 15-min
- * ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
- * because the image makes node PID 1 with tsx as an in-process loader - see Dockerfile.chatcompletion.
+ * stopTimeout; a quest still running is cut off. To keep scale-in and deploys off busy tasks, the
+ * service sets ECS task scale-in protection while it has in-flight work (taskProtection.ts). It is
+ * refreshed through a busy stretch up to a cap, which bounds how long one task can hold off a
+ * deploy; a task busy past the cap falls back on the drain. The container removes the
+ * cold-start + 15-min ceiling for normal processing, but not shutdown-time cancellation. The
+ * drain only runs at all because the image makes node PID 1 with tsx as an in-process loader -
+ * see Dockerfile.chatcompletion.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
  * service's load balancer and gets a 202 back immediately; the service processes the quest
@@ -77,20 +81,71 @@ const ecsSecretNames = [
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
   'CHAT_COMPLETION_INTERNAL_SECRET',
+  'GOOGLE_CLIENT_SECRET',
+  'GITHUB_CLIENT_SECRET',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_CLIENT_SECRET',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_WEBHOOK_SECRET',
+  'MAIL_PASSWORD',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_ADMIN_API_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'GEMINI_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_ADMIN_API_KEY',
+  'XAI_API_KEY',
+  'MOONSHOT_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'OKTA_CLIENT_SECRET',
+  'NPM_TOKEN',
+  'SLACK_SIGNING_SECRET',
+  'SLACK_CLIENT_SECRET',
+  'SECOPS_ZAP_DISPATCH_TOKEN',
+  'SECOPS_ZAP_INGEST_TOKEN',
+  'SECOPS_PROWLER_INGEST_TOKEN',
+  'SECOPS_PROWLER_WORKFLOW_TOKEN',
+  'SECOPS_ATTACK_SIMULATION_INGEST_TOKEN',
+  'RATE_LIMIT_INGEST_TOKEN',
+  'NCMEC_API_KEY',
+  'E2E_CLEANUP_SECRET',
+  'GA_SERVICE_ACCOUNT_KEY',
+  'YOUTUBE_API_KEY',
+  'LINKEDIN_CLIENT_SECRET',
+  'OPTIHASHI_API_TOKEN',
+  'OPTIHASHI_WEBHOOK_SECRET',
+  'OPTIHASHI_WEBHOOK_SECRET_PREVIOUS',
+  'OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS',
+  'OVERWATCH_INGEST_KEY',
 ] as const;
 const ecsSecretResources: sst.Secret[] = [
   ...ecsSecretNames.map(n => secrets[n]),
   secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN,
 ];
 const linkedSecrets = $dev ? allSecrets : allSecrets.filter(s => !ecsSecretResources.includes(s));
-// The PEM key size is operator-chosen and may exceed the 4 KB Standard tier limit, so it alone is Advanced tier.
+// PEM and service-account JSON sizes are operator-chosen and may exceed the 4 KB Standard tier limit.
+const ecsAdvancedSecretNames = [
+  'OAUTH_RSA_PRIVATE_KEY',
+  'APPLE_PRIVATE_KEY',
+  'GITHUB_LAKE_APP_PRIVATE_KEY',
+  'GA_SERVICE_ACCOUNT_KEY',
+];
+// Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
+const originVerifyEnabled = !$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true';
 const ecsSecretGroups = $dev
   ? undefined
   : [
       ecsResourceSecrets('ChatCompletion', Object.fromEntries(ecsSecretNames.map(n => [n, secrets[n]])), {
-        advanced: ['OAUTH_RSA_PRIVATE_KEY'],
+        advanced: ecsAdvancedSecretNames,
       }),
-      ecsEnvSecret('ChatCompletion', 'OPTIHASHI_INSTANCE_SERVICE_TOKEN', secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN),
+      ecsEnvSecret(
+        'ChatCompletion',
+        'OPTIHASHI_INSTANCE_SERVICE_TOKEN',
+        secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value
+      ),
+      ...(originVerifyEnabled
+        ? [ecsEnvSecret('ChatCompletion', 'ORIGIN_VERIFY_SECRET', originVerifySecret.result)]
+        : []),
     ];
 const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));
 
@@ -154,6 +209,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // Lumina5/ModelSunset (deprecated model pins) and Lumina5/AnthropicAPI (rate limits)
     // are emitted from llm-adapters on this path. PutMetricData takes no resource scope.
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+    // Scale-in protection while quests are in flight, set through the ECS agent endpoint
+    // (apps/client/server/chatCompletion/taskProtection.ts), which signs with the task role.
+    { actions: ['ecs:UpdateTaskProtection'], resources: ['*'] },
     {
       actions: [
         'transcribe:StartTranscriptionJob',
@@ -188,10 +246,6 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // inside the VPC.
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     ...providerFederation.environment,
-    // Same gate and kill switch as the frontend (infra/web.ts); not under `sst dev`.
-    ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
-      ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
-      : {}),
   },
   logging: {
     // Long enough to investigate a model-fallback or billing report after the fact; these

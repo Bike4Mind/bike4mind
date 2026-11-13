@@ -71,12 +71,12 @@ describe('useAdminSignupGrantPendingSummary', () => {
     const summary = { accountsWithRemaining: 1, totalRemaining: 10, totalDripRemaining: 5, trickle: null, queue: null };
     apiGet.mockResolvedValue({ data: summary });
     const { queryClient, Wrapper } = setup();
-    const { result } = renderHook(() => useAdminSignupGrantPendingSummary(), { wrapper: Wrapper });
+    const { result } = renderHook(() => useAdminSignupGrantPendingSummary(7), { wrapper: Wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiGet).toHaveBeenCalledWith('/api/admin/signup-grants/pending-summary');
+    expect(apiGet).toHaveBeenCalledWith('/api/admin/signup-grants/pending-summary', { params: { activeDays: 7 } });
     expect(result.current.data).toEqual(summary);
-    expect(queryClient.getQueryData([...PENDING_GRANTS_QUERY_KEY, 'pending-summary'])).toEqual(summary);
+    expect(queryClient.getQueryData([...PENDING_GRANTS_QUERY_KEY, 'pending-summary', 7])).toEqual(summary);
   });
 });
 

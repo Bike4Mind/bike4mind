@@ -27,6 +27,9 @@ export interface ISkill {
    */
   claudeCodeAllowedTools?: string[];
 
+  /** Claude Code `model` from an imported SKILL.md (alias or model id), kept for exports. Never used inside Bike4Mind. */
+  claudeCodeModel?: string;
+
   /** When true, the skill is hidden from the LLM tool catalog (user-invocation only). */
   disableModelInvocation?: boolean;
 

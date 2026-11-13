@@ -39,8 +39,10 @@ const mockFindByModelId = vi.fn();
 const mockPendingSuggestions = vi.fn();
 const mockResolveSuggestion = vi.fn();
 const mockPriceRowsInForce = vi.fn();
+const mockReadModelListRevision = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 vi.mock('@bike4mind/database', () => ({
   whenCatalogSeeded: async () => true,
+  readModelListRevision: mockReadModelListRevision,
   apiKeyRepository: {},
   adminSettingsRepository: {
     getSettingsValue: async (key: string) =>
@@ -81,6 +83,11 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
+const mockBumpModelListRevision = vi.hoisted(() => vi.fn(async () => 'rev-1'));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelListRevision', () => ({
+  bumpModelListRevision: mockBumpModelListRevision,
+}));
+
 import handler from '../model-deprecation-status';
 
 const LIVE_MODEL = { id: 'gpt-live', name: 'Live', backend: 'openai' };
@@ -114,11 +121,18 @@ const SUGGESTION = {
   suggestedAt: new Date('2026-07-20T00:00:00Z'),
 };
 
-function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
+function call(options: {
+  method: 'GET' | 'POST';
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  query?: object;
+  body?: object;
+}) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
@@ -144,6 +158,13 @@ describe('GET /api/admin/model-deprecation-status', () => {
     expect(mockRowsInForce).not.toHaveBeenCalled();
   });
 
+  it('lists live models under the current model-list revision, so a just-finished run shows', async () => {
+    mockReadModelListRevision.mockResolvedValueOnce('rev-7');
+    await call({ method: 'GET' }).run();
+
+    expect(mockGetAvailableModels).toHaveBeenCalledWith(null, { includePrivate: true, catalogRevision: 'rev-7' });
+  });
+
   it('keeps the original keys and adds the queue, the expired view and the stale references', async () => {
     const { res, run } = call({ method: 'GET', query: { daysAhead: '30' } });
     await run();
@@ -153,6 +174,22 @@ describe('GET /api/admin/model-deprecation-status', () => {
     expect(body.expiringOrExpired).toEqual([]);
     expect(body.queue).toEqual([
       { modelId: 'gpt-sunset', suggestion: expect.objectContaining({ replacedBy: 'gpt-live' }) },
+    ]);
+  });
+
+  it('tags queue items with the backend and, for absence, the miss count the accept note cites', async () => {
+    mockPendingSuggestions.mockResolvedValue([
+      { modelId: 'gpt-live', missCount: 0, suggestion: SUGGESTION },
+      { modelId: 'ghost-model', missCount: 5, suggestion: { ...SUGGESTION, source: 'absence' } },
+    ]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().queue).toEqual([
+      // Live list first: the merged model carries its backend.
+      { modelId: 'gpt-live', backend: 'openai', suggestion: expect.any(Object) },
+      // Unknown to both lists: no backend key at all, so the client falls back to the id.
+      { modelId: 'ghost-model', missCount: 5, suggestion: expect.objectContaining({ source: 'absence' }) },
     ]);
   });
 
@@ -233,6 +270,17 @@ describe('POST /api/admin/model-deprecation-status', () => {
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: { modelId: 'gpt-sunset', action: 'dismiss' } });
     await expect(run()).rejects.toThrow(/missing permission/i);
+    expect(mockResolveSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate holding settings:manage', async () => {
+    const { run } = call({
+      method: 'POST',
+      isAdmin: false,
+      adminPermissions: ['settings:manage'],
+      body: { modelId: 'gpt-sunset', action: 'dismiss' },
+    });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
     expect(mockResolveSuggestion).not.toHaveBeenCalled();
   });
 
@@ -521,7 +569,48 @@ describe('POST /api/admin/model-deprecation-status', () => {
     await run();
     expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'dismissed');
     expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
     expect(res._getJSONData().state).toMatchObject({ modelId: 'gpt-sunset' });
+  });
+
+  it('refreshes model lists once the accepted lifecycle row is in force', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    await run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockBumpModelListRevision.mock.invocationCallOrder[0]);
+  });
+
+  it('still settles the accept when the model-list refresh fails', async () => {
+    mockBumpModelListRevision.mockRejectedValueOnce(new Error('cache unreachable'));
+    const { req, res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    const warn = vi.fn();
+    (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'accepted');
+    expect(warn).toHaveBeenCalledWith('[model-deprecation-status] model-list refresh failed', {
+      error: 'cache unreachable',
+    });
+  });
+
+  it('does not refresh model lists for an accept that answers 409', async () => {
+    mockPriceRowsInForce.mockResolvedValue([]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
   });
 });
 
@@ -549,6 +638,17 @@ describe('POST /api/admin/model-deprecation-status admin audit', () => {
       action: 'settings.model_lifecycle.suggestion_resolved',
       target: { kind: 'settings', id: 'gpt-sunset' },
       details: { resolution: 'dismiss' },
+    });
+  });
+
+  it('keeps a dismiss note in the audit entry when one is given', async () => {
+    await call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'dismiss', note: '  duplicate of an accepted signal ' },
+    }).run();
+
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      details: { resolution: 'dismiss', note: 'duplicate of an accepted signal' },
     });
   });
 

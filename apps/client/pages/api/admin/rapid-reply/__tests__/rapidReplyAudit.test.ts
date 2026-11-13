@@ -57,7 +57,15 @@ vi.mock('@bike4mind/database/ai', () => ({
   rapidReplyMappingRepository: h.mappings,
 }));
 vi.mock('@bike4mind/database/infra', () => ({ adminSettingsRepository: { getSettingsValue: h.settings } }));
-vi.mock('@bike4mind/database', () => ({ sessionRepository: { create: h.sessionCreate, delete: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({
+  sessionRepository: { create: h.sessionCreate, delete: vi.fn() },
+  rapidReplyResultRepository: { findByQuestId: vi.fn(), findBySessionId: vi.fn(), delete: vi.fn() },
+}));
+vi.mock('@server/rapidReply/generateRapidReply', () => ({
+  generateRapidReply: vi.fn(),
+  saveRapidReplyResult: vi.fn(),
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm', () => ({ ChatCompletionProcess: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn(), SQSService: vi.fn() }));
@@ -86,6 +94,7 @@ const call = async (
 ) => {
   const { req, res } = createMocks({ method, body: options.body ?? {}, query: options.id ? { id: options.id } : {} });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: options.isAdmin ?? true, email: 'a@example.com' };
+  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   await (handler as Handler)(req, res);
   return { req, res };
 };
@@ -99,6 +108,15 @@ const mapping = {
   systemPrompt: 'SECRET MAPPING PROMPT',
   priority: 1,
 };
+
+// EnableRapidReply is the toggle chat reads; RapidReplySettings carries no `enabled` as the admin page saves it.
+const mockSettings = (
+  enableRapidReply: boolean,
+  rapidReplySettings: Record<string, unknown> | null = { transitionMode: 'replace' }
+) =>
+  h.settings.mockImplementation(async (key: string) =>
+    key === 'EnableRapidReply' ? enableRapidReply : rapidReplySettings
+  );
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -481,7 +499,7 @@ describe('rapid reply test run admin audit', () => {
     { enabled: true, configuredMapping: null, reason: 'No mapping configured' },
     { enabled: true, configuredMapping: { ...mapping, enabled: false }, reason: 'Mapping disabled' },
   ])('records a failed test_run for $reason', async ({ enabled, configuredMapping, reason }) => {
-    h.settings.mockResolvedValue({ enabled });
+    mockSettings(enabled);
     h.mappings.findByMainModel.mockResolvedValue(configuredMapping);
 
     const { req, res } = await call(testRun, 'POST', {
@@ -502,7 +520,7 @@ describe('rapid reply test run admin audit', () => {
   });
 
   it('records test_run even when the run itself failed', async () => {
-    h.settings.mockResolvedValue({ enabled: true });
+    mockSettings(true);
     h.mappings.findByMainModel.mockResolvedValue({
       ...mapping,
       maxLatency: 2000,
@@ -526,8 +544,31 @@ describe('rapid reply test run admin audit', () => {
     expect(h.createLog.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
 
+  it('runs the test when EnableRapidReply is on and RapidReplySettings has no enabled field', async () => {
+    mockSettings(true);
+    h.mappings.findByMainModel.mockResolvedValue({ ...mapping, maxLatency: 2000, maxTokens: 150, usageCount: 1 });
+    h.prompts.findByModelPair.mockResolvedValue([]);
+    h.sessionCreate.mockRejectedValue(new Error('boom'));
+
+    const { res } = await call(testRun, 'POST', { body: { mainModelId: 'main-a' } });
+
+    expect(h.settings).toHaveBeenCalledWith('EnableRapidReply');
+    expect(h.sessionCreate).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData()).toMatchObject({ testResults: { enabled: true, settings: { globalEnabled: true } } });
+  });
+
+  it('reports disabled when EnableRapidReply is off, even if RapidReplySettings.enabled is true', async () => {
+    mockSettings(false, { enabled: true });
+    h.mappings.findByMainModel.mockResolvedValue(mapping);
+
+    const { res } = await call(testRun, 'POST', { body: { mainModelId: 'main-a' } });
+
+    expect(res._getJSONData()).toMatchObject({ success: false, testResults: { reason: 'System disabled' } });
+    expect(h.sessionCreate).not.toHaveBeenCalled();
+  });
+
   it('records a failed test_run before throwing when settings are missing', async () => {
-    h.settings.mockResolvedValue(null);
+    mockSettings(true, null);
 
     await expect(call(testRun, 'POST', { body: { mainModelId: 'main-a' } })).rejects.toThrow(
       'Rapid Reply settings not found'
@@ -537,7 +578,7 @@ describe('rapid reply test run admin audit', () => {
   });
 
   it('records a failed test_run before rethrowing a prompt lookup failure', async () => {
-    h.settings.mockResolvedValue({ enabled: true });
+    mockSettings(true);
     h.mappings.findByMainModel.mockResolvedValue(mapping);
     h.prompts.findByModelPair.mockRejectedValue(new Error('db down'));
 
@@ -547,7 +588,7 @@ describe('rapid reply test run admin audit', () => {
   });
 
   it('records test_run before rethrowing a legacy log failure', async () => {
-    h.settings.mockResolvedValue({ enabled: true });
+    mockSettings(true);
     h.mappings.findByMainModel.mockResolvedValue({ ...mapping, maxTokens: 150, usageCount: 1 });
     h.prompts.findByModelPair.mockResolvedValue([]);
     h.sessionCreate.mockRejectedValue(new Error('boom'));
@@ -559,7 +600,7 @@ describe('rapid reply test run admin audit', () => {
   });
 
   it('bounds a long mainModelId in the test_run entry', async () => {
-    h.settings.mockResolvedValue({ enabled: false });
+    mockSettings(false);
 
     await call(testRun, 'POST', { body: { mainModelId: 'x'.repeat(500) } });
 
@@ -569,7 +610,7 @@ describe('rapid reply test run admin audit', () => {
   });
 
   it('drops a non-numeric simulateLatency from the test_run entry', async () => {
-    h.settings.mockResolvedValue({ enabled: false });
+    mockSettings(false);
 
     await call(testRun, 'POST', { body: { mainModelId: 'main-a', simulateLatency: 'x'.repeat(500) } });
 
@@ -581,7 +622,7 @@ describe('rapid reply test run admin audit', () => {
     {
       name: 'mapping lookup',
       arrange: () => {
-        h.settings.mockResolvedValue({ enabled: true });
+        mockSettings(true);
         h.mappings.findByMainModel.mockRejectedValue(new Error('db down'));
       },
     },

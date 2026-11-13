@@ -45,7 +45,7 @@ vi.mock('@server/services/publish', () => ({
 }));
 // The real settlePublication runs; its own collaborators are stubbed here.
 vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: mocks.checkPublishQuota }));
-vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: mocks.invalidatePublishCdn,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));

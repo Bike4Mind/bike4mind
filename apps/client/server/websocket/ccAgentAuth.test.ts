@@ -20,14 +20,28 @@ import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as unknown as Logger;
 
-const resolve = () =>
+const resolve = (recordKeyUse = false) =>
   resolveBridgeWsAuth({
     accessToken: 'jwt-token',
     connectionId: 'conn-1',
     endpoint: 'https://example.test/test',
     logger,
     handlerName: 'TEST',
+    recordKeyUse,
   });
+
+describe('resolveBridgeWsAuth key use', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Connection.findOne).mockReturnValue({ lean: () => Promise.resolve({ userId: 'u1' }) } as never);
+  });
+
+  it.each([true, false])('passes recordUse %s through to the bridge key check', async recordKeyUse => {
+    await resolve(recordKeyUse);
+
+    expect(verifyBridgeApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: recordKeyUse });
+  });
+});
 
 describe('resolveBridgeWsAuth JWT fallback', () => {
   beforeEach(() => {

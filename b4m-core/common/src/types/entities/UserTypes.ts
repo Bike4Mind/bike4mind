@@ -316,6 +316,7 @@ export const USER_RISK_SIGNAL_TYPES = [
   'signup_token_missing',
   'signup_token_invalid',
   'signup_token_expired',
+  'signup_token_reused',
 ] as const;
 export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
 
@@ -444,6 +445,11 @@ export interface IUser extends ICreditHolder {
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
    */
   freeCreditClaimEmail?: string | null;
+  /**
+   * The opaque id LLM providers receive for this account (toProviderEndUserId of `_id`). Stored only so
+   * an admin can resolve a provider safety notice to the account; `select: false` on the model.
+   */
+  providerEndUserId?: string;
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
   signupGrantAssessment?: SignupGrantAssessment;
@@ -485,6 +491,12 @@ export interface IUser extends ICreditHolder {
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
+  /**
+   * Set only on an organization's service account (an `isSystem` user that owns the org's API keys,
+   * see constants/orgServiceAccount.ts). Binds the account to that one org; it never sits on the
+   * org's `users[]` roster, so it takes no seat and is not listed as a member.
+   */
+  serviceAccountOrganizationId?: string;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -554,6 +566,9 @@ export interface IUser extends ICreditHolder {
   aupAcceptedAt?: Date | null;
   /** True when the user attested to being 18 or older. No DOB is collected or stored. */
   ageAttestedAdult?: boolean | null;
+  /** Terms version (`CURRENT_POLICY_VERSION`) accepted on Stripe Checkout's consent checkbox, and when. */
+  checkoutTermsAcceptedVersion?: string | null;
+  checkoutTermsAcceptedAt?: Date | null;
 
   // email verification
   emailVerified: boolean;
@@ -905,6 +920,27 @@ export interface IUser extends ICreditHolder {
    */
   isInternal?: boolean;
 
+  /**
+   * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted
+   * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
+   */
+  isPersona?: boolean;
+
+  /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
+  personaExpiresAt?: Date | null;
+
+  /** The name the persona was minted under; a re-mint of a live name returns this account. */
+  personaName?: string | null;
+
+  /** The user who minted this persona; only they (or an admin) may re-mint or delete it. */
+  personaOwnerId?: string | null;
+
+  /** SHA-256 of the persona's single-use login code. Secret: never serialized. */
+  personaLoginCodeHash?: string | null;
+
+  /** When the persona's login code stops being redeemable. */
+  personaLoginCodeExpiresAt?: Date | null;
+
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
 }
@@ -933,6 +969,13 @@ export interface IUserAcquisition {
   lastTouch?: IUserAcquisitionTouch;
   /** Absent for a signup that followed no verified hop. */
   verifiedTouch?: IUserVerifiedTouch;
+  /**
+   * The product of the OAuth client the account was created to sign in to (apps/client
+   * server/analytics/oauthSignupCredit.ts): `source` is the client's Overwatch product, `medium`
+   * is `oauth` and `content` the client_id. Written once, with consent, by the server that issued
+   * the authorization code, so the browser never names it.
+   */
+  oauthTouch?: IUserAcquisitionTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;
@@ -1040,6 +1083,14 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /**
+   * Reapplies a reversed grant release's saved fields only while signupGrant.creditsReleased still equals
+   * `creditsReleased` (or signupGrant is absent when null). False when nothing matched.
+   */
+  restoreReleasedGrantState: (
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ) => Promise<boolean>;
   /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
   markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**
@@ -1091,6 +1142,12 @@ export interface IUserRepository
    * it, so a recalculated absolute value never overwrites an adjustment it did not see.
    */
   setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /**
+   * Sets `planStorageLimit` and re-derives the enforced `storageLimit` in one write, so a manual
+   * `storageLimitOverride` keeps winning (same precedence as resolveUserStorageLimit). A row without the
+   * override field first gets its legacy-derived override written. False when the user does not exist.
+   */
+  setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

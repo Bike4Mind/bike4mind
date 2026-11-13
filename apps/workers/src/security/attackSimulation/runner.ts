@@ -126,13 +126,17 @@ export const handler = async (event: RunnerEvent = {}, _context?: Context): Prom
     probeErrors: [],
   });
 
+  const ingestToken =
+    Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
+  const simulationToken = ingestToken && !isPlaceholderValue(ingestToken) ? ingestToken : undefined;
+
   const probes = [
     { name: 'e2eExposure', run: () => e2eExposureProbe(targetUrl, stage) },
     { name: 'otcSendFlood', run: () => otcSendFloodProbe(targetUrl) },
     { name: 'refreshTokenSecurity', run: () => refreshTokenSecurityProbe(targetUrl) },
     { name: 'adminAuthz', run: () => adminAuthzProbe(targetUrl) },
     { name: 'openRedirect', run: () => openRedirectProbe(targetUrl) },
-    { name: 'ingestTokenSecurity', run: () => ingestTokenSecurityProbe(targetUrl) },
+    { name: 'ingestTokenSecurity', run: () => ingestTokenSecurityProbe(targetUrl, simulationToken) },
   ];
 
   const allFindings: AttackSimulationFinding[] = [];
@@ -164,9 +168,6 @@ export const handler = async (event: RunnerEvent = {}, _context?: Context): Prom
   }
 
   const finishedAt = new Date();
-
-  const ingestToken =
-    Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
 
   if (!ingestToken || isPlaceholderValue(ingestToken)) {
     const message = 'Attack simulation ingest token is not configured.';

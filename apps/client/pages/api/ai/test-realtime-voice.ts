@@ -29,7 +29,7 @@ const handler = baseApi().post(async (req, res) => {
     .parse(req.body);
 
   const { text, voice } = validatedBody;
-  console.log('[DEBUG] Test Realtime Voice - Text:', text.substring(0, 50) + '...', 'Voice:', voice);
+  console.log('[DEBUG] Test Realtime Voice', { textLength: text.length, voice });
 
   // Get voice settings from admin settings
   const settings = await getSettingsMap(

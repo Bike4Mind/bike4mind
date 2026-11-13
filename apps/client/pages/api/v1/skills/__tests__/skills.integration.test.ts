@@ -246,13 +246,14 @@ describe('POST /api/v1/skills', () => {
     );
   });
 
-  it('keeps Claude Code fields and reports frontmatter keys it has no field for', async () => {
+  it('keeps the Claude Code tools and model, and reports no dropped keys', async () => {
     const md = '---\nname: a-skill\ndescription: d\nallowed-tools: Read, Bash(git add:*)\nmodel: opus\n---\n\nBody\n';
     const res = await create({ skill_md: md });
     expect(res._getStatusCode()).toBe(201);
-    expect(res._getJSONData().dropped_fields).toEqual(['model']);
+    const body = SaveSkillResponseSchema.strict().parse(res._getJSONData());
+    expect(body.dropped_fields).toEqual([]);
     expect(h.create).toHaveBeenCalledWith(
-      expect.objectContaining({ claudeCodeAllowedTools: ['Read', 'Bash(git add:*)'] })
+      expect.objectContaining({ claudeCodeAllowedTools: ['Read', 'Bash(git add:*)'], claudeCodeModel: 'opus' })
     );
   });
 
@@ -322,9 +323,18 @@ describe('PUT /api/v1/skills/{id}', () => {
       description: 'New.',
       body: 'New body',
       claudeCodeAllowedTools: [],
+      claudeCodeModel: '',
       disableModelInvocation: false,
     });
     expect(options).toMatchObject({ unset: ['argumentHint'] });
+  });
+
+  it('writes the SKILL.md model and returns it as claude_code_model', async () => {
+    h.update.mockImplementationOnce(async (patch: Partial<ISkill>) => ({ ...SKILL, ...patch }));
+    const res = await update({ skill_md: '---\nname: review-pr\ndescription: New.\nmodel: haiku\n---\n\nNew body\n' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.update.mock.calls[0][0]).toMatchObject({ claudeCodeModel: 'haiku' });
+    expect(SaveSkillResponseSchema.strict().parse(res._getJSONData()).claude_code_model).toBe('haiku');
   });
 
   it('replaces the files when sent, and clears them with an empty map', async () => {
@@ -401,9 +411,22 @@ describe('GET /api/v1/skills/{id} and /mine', () => {
     });
   });
 
+  it('returns claude_code_model only when the skill has one', async () => {
+    expect(PublicSkillSchema.strict().parse((await get())._getJSONData())).not.toHaveProperty('claude_code_model');
+    h.findById.mockResolvedValue({ ...SKILL, claudeCodeModel: 'opus' });
+    expect(PublicSkillSchema.strict().parse((await get())._getJSONData()).claude_code_model).toBe('opus');
+  });
+
   it('answers 404 for a skill the caller cannot see', async () => {
     h.findById.mockResolvedValue({ ...SKILL, userId: 'someone-else' });
     expect((await get())._getStatusCode()).toBe(404);
+  });
+
+  it('lists claude_code_model on mine only for skills that have one', async () => {
+    h.search.mockResolvedValue({ data: [{ ...SKILL, claudeCodeModel: 'opus' }, SKILL], hasMore: false, total: 2 });
+    const body = MySkillsResponseSchema.strict().parse((await mine())._getJSONData());
+    expect(body.data[0].claude_code_model).toBe('opus');
+    expect(body.data[1]).not.toHaveProperty('claude_code_model');
   });
 
   it('lists your own skills without bodies, filtered to the caller', async () => {

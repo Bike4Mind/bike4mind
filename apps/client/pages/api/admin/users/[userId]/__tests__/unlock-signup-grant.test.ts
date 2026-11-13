@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   config: null as unknown,
+  uses: [] as Array<(req: unknown, res: unknown, next: () => void) => void>,
   unlock: vi.fn(),
   findById: vi.fn(),
   audit: vi.fn(),
@@ -16,17 +17,20 @@ vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtecti
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
-    return {
-      use: () => ({
-        post: (fn: typeof h.handler) => {
-          h.handler = fn;
-          return {};
-        },
-      }),
+    const chain = {
+      use: (fn: unknown) => {
+        if (typeof fn === 'function') h.uses.push(fn as (typeof h.uses)[number]);
+        return chain;
+      },
+      post: (fn: typeof h.handler) => {
+        h.handler = fn;
+        return chain;
+      },
     };
+    return chain;
   },
 }));
-vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
+vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById },
   adminSettingsRepository: {},
@@ -45,9 +49,14 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.audit,
 }));
 await import('../unlock-signup-grant');
+const invoke = async (req: unknown, res: unknown) => {
+  for (const middleware of h.uses) middleware(req, res, () => undefined);
+  return h.handler!(req, res);
+};
 const request = () => ({
+  method: 'POST',
   query: { userId: 'user-1' },
-  user: { id: 'admin-1', isAdmin: true },
+  user: { id: 'admin-1', isAdmin: true } as Record<string, unknown>,
   body: { reason: 'Support approved request', unlockReason: 'card_verified' },
 });
 
@@ -73,12 +82,21 @@ describe('admin signup unlock', () => {
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
     h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'nothing_remaining' });
   });
-  it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly' });
-    const req = request();
-    req.user.isAdmin = false;
-    await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Admin access required');
+  it('is jwt-only and refuses a caller without credits:adjust before invoking the grant', async () => {
+    expect(h.config).toEqual({ auth: 'jwtOnly', allowedMethods: ['POST'] });
+    for (const user of [
+      { id: 'admin-1', isAdmin: false },
+      { id: 'admin-1', adminPermissions: ['support:read'] },
+    ]) {
+      await expect(invoke({ ...request(), user }, { json: vi.fn() })).rejects.toThrow(
+        'Missing permission: credits:adjust'
+      );
+    }
     expect(h.unlock).not.toHaveBeenCalled();
+  });
+  it('lets a delegate holding credits:adjust release', async () => {
+    await invoke({ ...request(), user: { id: 'admin-1', adminPermissions: ['credits:adjust'] } }, { json: vi.fn() });
+    expect(h.unlock).toHaveBeenCalledOnce();
   });
   it('requires an audit reason', async () => {
     const req = request();
@@ -118,6 +136,12 @@ describe('admin signup unlock', () => {
     expect(await adapters.validators.admin()).toBe(false);
     h.findById.mockResolvedValue({ isAdmin: true });
     expect(await adapters.validators.admin()).toBe(true);
+    h.findById.mockResolvedValue({ adminPermissions: ['credits:adjust'] });
+    expect(await adapters.validators.admin()).toBe(true);
+    h.findById.mockResolvedValue({ adminPermissions: ['support:read'] });
+    expect(await adapters.validators.admin()).toBe(false);
+    h.findById.mockResolvedValue(null);
+    expect(await adapters.validators.admin()).toBe(false);
     await adapters.audit({ credits: 28, creditTransactionId: 'tx-1' });
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
@@ -127,6 +151,22 @@ describe('admin signup unlock', () => {
         related: { creditTransactionId: 'tx-1' },
       })
     );
+  });
+  it.each([
+    ['a full admin', { id: 'user-1', isAdmin: true }],
+    ['another delegate', { id: 'user-1', adminPermissions: ['support:read'] }],
+  ])('refuses a delegate acting on %s before any credits move', async (_label, target) => {
+    h.findById.mockResolvedValue(target);
+    const delegate = { id: 'admin-1', isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(h.handler!({ ...request(), user: delegate }, { json: vi.fn() })).rejects.toThrow(
+      'Only full administrators can release signup credits for users with admin access'
+    );
+    expect(h.unlock).not.toHaveBeenCalled();
+  });
+  it('lets a full admin act on an account with admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', isAdmin: true });
+    await h.handler!(request(), { json: vi.fn() });
+    expect(h.unlock).toHaveBeenCalledOnce();
   });
 });
 

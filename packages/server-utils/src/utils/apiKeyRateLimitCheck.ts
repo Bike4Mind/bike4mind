@@ -1,4 +1,6 @@
 import { cacheRepository } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { createHash } from 'node:crypto';
 import {
   UserApiKeyEvents,
   IUserApiKeyRateLimit,
@@ -6,6 +8,7 @@ import {
   type ApiKeyRateLimitUsage,
 } from '@bike4mind/common';
 import { logEvent } from './analyticsLog';
+import { Logger } from '@bike4mind/observability';
 
 const MINUTE_IN_MS = 60_000;
 const DAY_IN_MS = 86_400_000;
@@ -92,6 +95,18 @@ export function buildRateLimitKeys(
   };
 }
 
+async function resolveRateLimitKeys(keyId: string, counter: RateLimitCounter = 'request') {
+  if (counter === 'management') return buildRateLimitKeys(keyId, counter);
+  const key = await userApiKeyRepository.findById(keyId);
+  if (key?.metadata?.createdFrom !== 'oauth-exchange') return buildRateLimitKeys(keyId, counter);
+  if (!key.userId || !key.metadata.oauthClientId) throw new Error('Invalid federated quota identity');
+  // Hash a tuple so client ids cannot collide with delimiters or ordinary key ids.
+  const identity = createHash('sha256')
+    .update(JSON.stringify([key.userId.toString(), key.metadata.oauthClientId]))
+    .digest('hex');
+  return buildRateLimitKeys(`federated:${identity}`, counter);
+}
+
 // Defined by the admin response schema (apiKeyRateLimitUsageSchema), so the producer, the response
 // contract and the admin UI share one shape.
 export type RateLimitUsage = ApiKeyRateLimitUsage;
@@ -116,7 +131,7 @@ export interface ResetApiKeyRateLimitResult {
 
 /** Minimal logging surface `resetApiKeyRateLimit` needs - satisfied by both `console` and a
  * request-scoped logger, so callers with request correlation (e.g. `req.logger`) can pass it
- * through instead of every failure landing in `console.warn` with no way to trace it back. */
+ * through instead of every failure landing in the unscoped global logger with no way to trace it back. */
 interface CounterLogger {
   warn: (message: string) => void;
 }
@@ -168,9 +183,8 @@ export async function resetApiKeyRateLimit(
   keyId: string,
   options: { alsoResetManagement?: boolean; logger?: CounterLogger } = {}
 ): Promise<ResetApiKeyRateLimitResult> {
-  const logger = options.logger ?? console;
-  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
-  const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
+  const logger = options.logger ?? Logger.globalInstance;
+  const request = deleteRequestCounterGroup(keyId, logger);
 
   let management: Promise<CounterClearResult> | undefined;
   if (options.alsoResetManagement) {
@@ -185,6 +199,24 @@ export async function resetApiKeyRateLimit(
   }
 
   return { request: requestResult.usage, management: managementResult?.usage };
+}
+
+function warnCounterReset(logger: CounterLogger, message: string): void {
+  try {
+    logger.warn(message);
+  } catch {
+    // A broken logger must never turn an otherwise-successful clear into a failure.
+  }
+}
+
+async function deleteRequestCounterGroup(keyId: string, logger: CounterLogger): Promise<CounterClearResult> {
+  try {
+    const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
+    return await deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
+  } catch (error) {
+    warnCounterReset(logger, `[API_KEY_RATE_LIMIT] Failed to clear request counter for API key ${keyId}: ${error}`);
+    return { usage: undefined, cleared: false };
+  }
 }
 
 /**
@@ -217,18 +249,17 @@ async function deleteCounterGroup(
     cacheRepository.deleteByKeyAndReturn(dayKey),
   ]);
 
-  const warn = (message: string) => {
-    try {
-      logger.warn(message);
-    } catch {
-      // A broken logger must never turn an otherwise-successful clear into a failure.
-    }
-  };
   if (minuteResult.status === 'rejected') {
-    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`);
+    warnCounterReset(
+      logger,
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`
+    );
   }
   if (dayResult.status === 'rejected') {
-    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`);
+    warnCounterReset(
+      logger,
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`
+    );
   }
 
   const hasRejection = minuteResult.status === 'rejected' || dayResult.status === 'rejected';
@@ -275,7 +306,7 @@ function docsToUsage(
  * a separate read (see its docstring), and no other caller needs one.
  */
 export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
-  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId);
   const [minuteDoc, dayDoc] = await Promise.all([
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
@@ -382,7 +413,7 @@ export async function checkApiKeyRateLimit(
   const { requestsPerMinute: reportedRequestsPerMinute, requestsPerDay: reportedRequestsPerDay } = rateLimit;
 
   try {
-    const { minuteKey, dayKey } = buildRateLimitKeys(keyId, counter);
+    const { minuteKey, dayKey } = await resolveRateLimitKeys(keyId, counter);
 
     // Step 1: Atomically try to increment the minute counter (only if under
     // limit). The returned expiresAt is the real window end -> exact Retry-After.
@@ -393,6 +424,7 @@ export async function checkApiKeyRateLimit(
     if (!minuteResult.success) {
       // Minute limit exceeded - reject immediately
       await logRateLimitEvent(context, keyId, 'minute', requestsPerMinute, minuteResult.count);
+      const day = readCounter(await cacheRepository.findByKey(dayKey));
 
       return {
         allowed: false,
@@ -405,8 +437,8 @@ export async function checkApiKeyRateLimit(
           minuteCount: minuteResult.count,
           minuteResetAt,
           dayLimit: requestsPerDay,
-          dayCount: 0, // Day counter untouched on a minute-limit rejection
-          dayResetAt: Date.now() + DAY_IN_MS, // Nominal; the day header is informational here
+          dayCount: day.count,
+          dayResetAt: day.resetAt ? day.resetAt * 1000 : Date.now() + DAY_IN_MS,
           reportedMinuteLimit: reportedRequestsPerMinute,
           reportedDayLimit: reportedRequestsPerDay,
         }),
@@ -480,7 +512,7 @@ export async function checkApiKeyRateLimit(
       }),
     };
   } catch (error) {
-    console.error('[API_KEY_RATE_LIMIT] Error checking rate limit:', error);
+    Logger.error('[API_KEY_RATE_LIMIT] Error checking rate limit', { error });
     throw error;
   }
 }
@@ -574,7 +606,7 @@ async function logRateLimitEvent(
     },
   }).catch(error => {
     // Don't fail the request if analytics logging fails
-    console.error('[API_KEY_RATE_LIMIT] Failed to log rate limit event:', error);
+    Logger.error('[API_KEY_RATE_LIMIT] Failed to log rate limit event', { error });
   });
 }
 

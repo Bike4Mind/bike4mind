@@ -1,4 +1,10 @@
-import { InviteType, IUserDocument, Permission, IOrganizationDocument } from '@bike4mind/common';
+import {
+  InviteType,
+  IUserDocument,
+  Permission,
+  IOrganizationDocument,
+  orgAclRowConfersMembership,
+} from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
 import { getAppFileUrl } from '@client/app/utils/s3';
@@ -6,16 +12,18 @@ import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, C
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
-  useRemoveMemberFromOrganization,
   useLeaveOrganization,
   useSetMemberCreditOverride,
+  useSetOrganizationManager,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import CreditLimitModal from './CreditLimitModal';
+import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 
 interface OrganizationUserCardProps {
@@ -32,6 +40,8 @@ interface OrganizationUserCardProps {
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
   canManageCreditBudgets: boolean;
+  /** Viewer may make or remove managers (`isOrgOwnerOrPlatformAdmin`, the manager route's gate). */
+  canManageManagers: boolean;
 }
 
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
@@ -40,7 +50,9 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   canInviteMembers,
   canRevokeMembers,
   canManageCreditBudgets,
+  canManageManagers,
 }) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
@@ -58,7 +70,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     },
   });
   const isOwner = user?.id === organization.userId;
-  const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
+  const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
@@ -74,31 +86,31 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           Pending
         </Chip>
       ) : isOwner ? (
-        <Chip size="sm" variant="soft" color="primary">
-          Owner
+        <Chip size="sm" variant="soft" color="primary" data-testid="organization-user-card-owner-chip">
+          {t('organization.roles.owner')}
+        </Chip>
+      ) : isManager ? (
+        <Chip size="sm" variant="soft" color="success" data-testid="organization-user-card-manager-chip">
+          {t('organization.roles.manager')}
         </Chip>
       ) : (
-        user.permissions.map(permission => (
-          <Chip key={permission} size="sm" variant="soft">
-            {permission === Permission.share ? 'Admin' : permission === Permission.update ? 'Editor' : 'Viewer'}
+        <>
+          <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
+            {t('organization.roles.member')}
           </Chip>
-        ))
+          {/* Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
+              routes/organizations/$id.tsx), so the owner needs to see who holds it. */}
+          {user.permissions.some(p => p === Permission.share || p === Permission.update) && (
+            <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
+              {t('organization.access.can_edit_settings')}
+            </Chip>
+          )}
+        </>
       )}
     </Stack>
   );
-  const handleRemoveMember = useCallback(
-    async (userId: string) => {
-      confirm({
-        title: 'Remove Member',
-        description: 'Are you sure you want to remove this member?',
-        type: 'danger',
-        onOk: async () => {
-          await removeMember({ organizationId, userId });
-        },
-      });
-    },
-    [organizationId, confirm, removeMember]
-  );
+  const [offboarding, setOffboarding] = useState(false);
+  const handleRemoveMember = useCallback(() => setOffboarding(true), []);
 
   const handleLeaveOrganization = useCallback(async () => {
     confirm({
@@ -115,9 +127,15 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const canRevoke = canRevokeMembers && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
   const canCancelInvite = user.status === 'pending' && canInviteMembers;
+  // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
+  const canToggleManager =
+    canManageManagers &&
+    user.status === 'accepted' &&
+    (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
   // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
   // the pool is capped like anyone's.
-  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite);
+  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite || canToggleManager);
+  const setManager = useSetOrganizationManager();
   const canSetCreditLimit = canManageCreditBudgets && user.status === 'accepted';
 
   const [editingLimit, setEditingLimit] = useState(false);
@@ -156,6 +174,15 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             Set monthly limit
           </MenuItem>
         )}
+        {!isOwner && canToggleManager && (
+          <MenuItem
+            onClick={() => setManager.mutate({ organizationId, userId: user.id, isManager: !isManager })}
+            disabled={setManager.isPending}
+            data-testid={isManager ? 'organization-user-card-remove-manager' : 'organization-user-card-make-manager'}
+          >
+            {isManager ? 'Remove manager' : 'Make manager'}
+          </MenuItem>
+        )}
         {!isOwner && canCancelInvite && (
           <MenuItem
             onClick={() =>
@@ -179,7 +206,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           </MenuItem>
         )}
         {!isOwner && canRevoke && (
-          <MenuItem onClick={() => handleRemoveMember(user.id)} data-testid="organization-user-card-revoke-access">
+          <MenuItem onClick={handleRemoveMember} data-testid="organization-user-card-revoke-access">
             Revoke Access
           </MenuItem>
         )}
@@ -192,6 +219,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     </Dropdown>
   );
 
+  const offboardDialog = canRevoke && (
+    <OffboardMemberDialog
+      organizationId={organizationId}
+      member={offboarding ? { id: user.id, name: user.name } : null}
+      onClose={() => setOffboarding(false)}
+    />
+  );
+
   const creditLimitModal = canSetCreditLimit && (
     <CreditLimitModal
       open={editingLimit}
@@ -200,7 +235,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       description={
         organization.maxCreditsPerMember == null
           ? 'Overrides the team default, which is currently no limit.'
-          : `Overrides the organization default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
+          : `Overrides the team default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
       }
       currentValue={creditUsage?.isOverride ? creditUsage.cap : null}
       allowZero
@@ -245,6 +280,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
         </Stack>
         {creditLimitModal}
+        {offboardDialog}
       </Box>
     );
   }
@@ -296,6 +332,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {actionsMenu}
       </Box>
       {creditLimitModal}
+      {offboardDialog}
     </Box>
   );
 };

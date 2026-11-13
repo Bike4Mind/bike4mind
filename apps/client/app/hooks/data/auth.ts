@@ -142,6 +142,8 @@ export function useSendOTC() {
         };
       }
     },
+    // A form token is bound to the first email it is submitted with; a corrected email needs a fresh one.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['signupFormToken'] }),
   });
 }
 

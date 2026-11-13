@@ -248,6 +248,97 @@ describe('role routing and task runtime compatibility', () => {
     ).toBe(true);
   });
 
+  it('refuses a child when the account changes while its inherited policy is loading', async () => {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'Delegate the bounded task');
+    await waitStream(0);
+
+    let scope = store.scopeKey();
+    vi.spyOn(store, 'scopeKey').mockImplementation(() => scope);
+    const createChild = vi.spyOn(store, 'create');
+    const get = store.get.bind(store);
+    let policyRead = false;
+    let releasePolicy!: () => void;
+    const policyReady = new Promise<void>(resolve => {
+      releasePolicy = resolve;
+    });
+    let reachedPolicy = false;
+    vi.spyOn(service, 'listModels').mockImplementationOnce(async () => {
+      policyRead = true;
+      return { models };
+    });
+    vi.spyOn(store, 'get').mockImplementation(async id => {
+      const snapshot = await get(id);
+      if (policyRead && id === parent.id) {
+        policyRead = false;
+        reachedPolicy = true;
+        await policyReady;
+      }
+      return snapshot;
+    });
+
+    tool(0, 'session_spawn', { prompt: 'Bounded child task', title: 'Child', contract });
+    try {
+      await vi.waitUntil(() => reachedPolicy, { timeout: 5000, interval: 5 });
+      scope = 'another-account';
+      releasePolicy();
+      await vi.waitUntil(() => events.some(event => event.type === 'tool-end' && event.call.name === 'session_spawn'));
+
+      const refused = events.find(event => event.type === 'tool-end' && event.call.name === 'session_spawn');
+      expect(createChild).not.toHaveBeenCalled();
+      expect(refused?.type === 'tool-end' && refused.call.error).toContain('Account changed before launch');
+      expect((await store.list()).filter(session => session.origin?.parentSessionId === parent.id)).toEqual([]);
+      expect(post.mock.calls.every((_call, index) => wire(index).model === 'planner')).toBe(true);
+    } finally {
+      releasePolicy();
+    }
+  });
+
+  it('resolves a family alias to the newest allowed catalog model and offers the field only when overrides exist', async () => {
+    models.push(
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', releaseDate: '2026-09-01', supportsTools: true }
+    );
+    const spawnField = (index: number) =>
+      wire(index).options?.tools?.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.parameters
+        .properties.requested_model_id;
+
+    const closed = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+    });
+    await service.setSessionOrchestrate(closed.id, true);
+    const refusedIndex = streams.length;
+    expect(await spawn(closed, { role: 'implementation', requested_model_id: 'sonnet' })).toBeUndefined();
+    expect(spawnField(refusedIndex)).toBeUndefined();
+    const refusal = events.find(
+      event => event.type === 'tool-end' && event.sessionId === closed.id && event.call.name === 'session_spawn'
+    );
+    expect(refusal?.type === 'tool-end' && refusal.call.error).toMatch(
+      /^Model request refused: 'sonnet' is not an allowed override \(allowed: none\)\. Nothing was started\. Omit requested_model_id to use the role default \(worker\)/
+    );
+
+    const open = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+      allowedOverrides: ['claude-sonnet-4-6', 'claude-sonnet-5'],
+    });
+    await service.setSessionOrchestrate(open.id, true);
+    const openIndex = streams.length;
+    const child = await spawn(open, { role: 'implementation', requested_model_id: 'sonnet' });
+    expect(spawnField(openIndex)).toMatchObject({ description: expect.stringContaining('claude-sonnet-5') });
+    expect(child?.model).toBe('claude-sonnet-5');
+    expect((await store.get(child?.id ?? ''))?.workerSelection).toMatchObject({
+      requestedModelId: 'sonnet',
+      effectiveModel: 'claude-sonnet-5',
+      source: 'override',
+    });
+  });
+
   it('persists escalation evidence; denial and duplicate delivery make no paid attempt; parent acceptance requires passing results', async () => {
     const parent = await created();
     await policy();
@@ -284,6 +375,21 @@ describe('role routing and task runtime compatibility', () => {
     await expect(service.actOnTask(parent.id, child.id, { kind: 'accept', assessment: 'Turn ended' })).rejects.toThrow(
       /Acceptance/
     );
+    await expect(
+      service.actOnTask(child.id, child.id, {
+        kind: 'report',
+        report: {
+          status: 'completed',
+          changedPaths: ['src/feature.ts'],
+          verification: [
+            { criterion: 'Targeted tests', command: 'pnpm test feature', outcome: 'passed', evidence: '1 test passed' },
+          ],
+          unmetCriteria: [],
+          handoff: 'Labelled by command',
+        },
+      })
+    ).rejects.toThrow(/Not covered:\n- "Focused test passes"/);
+    expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'blocked' });
     await service.actOnTask(child.id, child.id, {
       kind: 'report',
       report: {

@@ -39,6 +39,14 @@ const NON_PREMIUM_BASE = {
   SECRET_ENCRYPTION_KEY: { value: 'a'.repeat(64) },
 };
 
+// config.ts is re-imported after resetModules and gets its own observability
+// module, so the warn mock must be registered before the dynamic import.
+function mockWarn() {
+  const warn = vi.fn();
+  vi.doMock('@bike4mind/observability', () => ({ Logger: { warn } }));
+  return warn;
+}
+
 function mockResourceWithUnlinked(premiumOverrides: Record<string, { value: string } | { stage: string }> = {}) {
   const linked = { ...NON_PREMIUM_BASE, ...premiumOverrides };
   vi.doMock('sst', () => ({
@@ -58,7 +66,7 @@ describe('Config eager-read hardening', () => {
 
   it('resolves unlinked premium-overlay secrets to undefined instead of throwing on import', async () => {
     mockResourceWithUnlinked();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = mockWarn();
 
     const { Config } = await import('./config');
 
@@ -82,7 +90,6 @@ describe('Config eager-read hardening', () => {
     // stage is diagnosable in logs rather than silently non-functional.
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OPTIHASHI_API_URL'));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_URL'));
-    warnSpy.mockRestore();
   });
 
   it('does not let one unlinked premium secret take down the hard-required reads', async () => {
@@ -116,16 +123,17 @@ describe('Config eager-read hardening', () => {
       OPTIHASHI_API_URL: { value: 'https://optihashi.example.com' },
       OVERWATCH_INGEST_ENABLED: { value: 'true' },
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = mockWarn();
 
     const { Config } = await import('./config');
 
     expect(Config.OPTIHASHI_API_URL).toBe('https://optihashi.example.com');
+    // The mock is live: unlinked siblings still warn, only the linked names stay silent.
+    expect(warnSpy).toHaveBeenCalled();
     expect(Config.OVERWATCH_INGEST_ENABLED).toBe('true');
     // Linked fields never hit the catch, so no warning for them specifically.
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OPTIHASHI_API_URL'));
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_ENABLED'));
-    warnSpy.mockRestore();
   });
 });
 

@@ -9,9 +9,10 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
-import { ChevronDown, Ellipsis, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { ChevronDown, Command, Ellipsis, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { Avatar, Box, Chip, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
+import { openAdminCommandPalette } from './shared/adminKeyboard';
 import {
   AdminTab,
   SIDEBAR_SECTIONS,
@@ -500,6 +501,19 @@ export const SidebarNav = ({
               </IconButton>
             </Tooltip>
           )}
+          <Tooltip title={`Command palette (${commandKeyHint})`} placement="right">
+            <IconButton
+              variant="plain"
+              color="neutral"
+              aria-label="Open command palette"
+              data-testid="admin-sidebar-rail-command-btn"
+              {...focusableProps}
+              onClick={openAdminCommandPalette}
+              sx={iconButtonSx()}
+            >
+              <NavIcon Icon={Command} />
+            </IconButton>
+          </Tooltip>
           {visibleSections.map(section => {
             const sectionActive = section.key === activeSectionKey;
             const sectionHasWork = section.items.some(hasWaitingWork);
@@ -620,10 +634,23 @@ export const SidebarNav = ({
             </Chip>
           )}
           <Box
-            component="kbd"
+            component="button"
+            type="button"
             title="Command palette"
+            aria-label="Open command palette"
+            aria-keyshortcuts="Meta+k Control+k"
             data-testid="admin-sidebar-command-hint"
-            sx={{ ...kbdSx, ml: 'auto' }}
+            onClick={openAdminCommandPalette}
+            sx={{
+              ...kbdSx,
+              ml: 'auto',
+              cursor: 'pointer',
+              position: 'relative',
+              // A 16 px key cap; the hit area extends to a usable target without changing the brand row.
+              '&::after': { content: '""', position: 'absolute', inset: '-8px -4px' },
+              '&:hover': { color: 'admin.ink', borderColor: 'admin.inkMuted' },
+              ...adminFocus,
+            }}
           >
             {commandKeyHint}
           </Box>

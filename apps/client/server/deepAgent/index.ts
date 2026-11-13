@@ -44,7 +44,10 @@ export {
   buildSystemApiKeyTable,
   type ResolvedBackend,
 } from '@bike4mind/server-utils/deepAgent/resolveBackend';
-export { createDeepAgentToolMaterializer, type DeepAgentToolMaterializerConfig } from './toolMaterializer';
+export {
+  createDeepAgentToolMaterializer,
+  type DeepAgentToolMaterializerConfig,
+} from '@bike4mind/server-utils/deepAgent/toolMaterializer';
 export {
   enrollDeepAgent,
   enrollDeepAgentWithDefaults,

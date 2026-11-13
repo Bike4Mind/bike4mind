@@ -4,6 +4,7 @@ import {
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -19,6 +20,11 @@ describe('normalizeResearchLevers', () => {
       query: 'coastal erosion',
       maxResults: RESEARCH_MAX_RESULTS_DEFAULT,
       maxProposals: RESEARCH_MAX_PROPOSALS_DEFAULT,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      autoAdmitTrusted: false,
+      maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
       allowedDomains: [],
       blockedDomains: [],
       minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
@@ -152,6 +158,88 @@ describe('normalizeResearchLevers', () => {
     it('ignores non-string entries rather than stringifying them', () => {
       const input = { query: 'q', allowedDomains: [null, 7, 'ok.com'] as unknown as string[] };
       expect(normalizeResearchLevers(input).allowedDomains).toEqual(['ok.com']);
+    });
+  });
+
+  describe('source tiers', () => {
+    it('keeps an allow list that normalizes to nothing unrestricted', () => {
+      const levers = normalizeResearchLevers({ query: 'q', allowedDomains: ['*.'] });
+      expect(levers.unlistedSources).toBe('review');
+      expect(levers.reviewDomains).toEqual([]);
+    });
+
+    it('maps a non-empty legacy allow list to the review list with other sites dropped', () => {
+      const levers = normalizeResearchLevers({ query: 'q', allowedDomains: ['https://Example.com/docs'] });
+      expect(levers).toMatchObject({
+        reviewDomains: ['example.com'],
+        unlistedSources: 'drop',
+        allowedDomains: ['example.com'],
+      });
+    });
+
+    it('normalizes both new lists', () => {
+      const levers = normalizeResearchLevers({
+        query: 'q',
+        trustedDomains: ['https://example.com/docs'],
+        reviewDomains: ['*.Review.example'],
+        unlistedSources: 'review',
+      });
+      expect(levers.trustedDomains).toEqual(['example.com']);
+      expect(levers.reviewDomains).toEqual(['review.example']);
+    });
+
+    it('caps both new lists', () => {
+      const many = Array.from({ length: RESEARCH_DOMAIN_LIST_MAX + 10 }, (_v, i) => `d${i}.com`);
+      const levers = normalizeResearchLevers({ query: 'q', trustedDomains: many, reviewDomains: many });
+      expect(levers.trustedDomains).toHaveLength(RESEARCH_DOMAIN_LIST_MAX);
+      expect(levers.reviewDomains).toHaveLength(RESEARCH_DOMAIN_LIST_MAX);
+    });
+
+    it('fails closed on a stored unlistedSources that is not a valid value', () => {
+      const bad = 'bogus' as unknown as 'review';
+      expect(
+        normalizeResearchLevers({ query: 'q', reviewDomains: ['a.com'], unlistedSources: bad }).unlistedSources
+      ).toBe('drop');
+      expect(normalizeResearchLevers({ query: 'q', unlistedSources: bad }).unlistedSources).toBe('review');
+    });
+
+    it('derives allowedDomains for both unlistedSources values', () => {
+      const lists = { query: 'q', trustedDomains: ['t.com'], reviewDomains: ['r.com'] };
+      expect(normalizeResearchLevers({ ...lists, unlistedSources: 'drop' }).allowedDomains).toEqual(['t.com', 'r.com']);
+      expect(normalizeResearchLevers({ ...lists, unlistedSources: 'review' }).allowedDomains).toEqual([]);
+    });
+
+    it('does not throw on drop with empty lists, so a stored config can still run', () => {
+      const levers = normalizeResearchLevers({ query: 'q', unlistedSources: 'drop' });
+      expect(levers).toMatchObject({ unlistedSources: 'drop', allowedDomains: [] });
+    });
+  });
+
+  describe('auto-admit levers', () => {
+    it('defaults to off with the default cap', () => {
+      expect(normalizeResearchLevers({ query: 'q' })).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
+    });
+
+    it('turns on only for a strict true', () => {
+      const coerce = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', autoAdmitTrusted: value as boolean }).autoAdmitTrusted;
+      expect(coerce(true)).toBe(true);
+      expect(coerce('true')).toBe(false);
+      expect(coerce(1)).toBe(false);
+      expect(coerce(undefined)).toBe(false);
+    });
+
+    it('clamps the cap to 1..25 and falls back on a non-number', () => {
+      const cap = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', maxAutoAdmits: value as number }).maxAutoAdmits;
+      expect(cap(0)).toBe(1);
+      expect(cap(999)).toBe(25);
+      expect(cap(7.9)).toBe(7);
+      expect(cap('x')).toBe(3);
+    });
+
+    it('does not clamp the cap against maxProposals', () => {
+      expect(normalizeResearchLevers({ query: 'q', maxProposals: 2, maxAutoAdmits: 10 }).maxAutoAdmits).toBe(10);
     });
   });
 

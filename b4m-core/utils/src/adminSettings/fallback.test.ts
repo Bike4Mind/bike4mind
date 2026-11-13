@@ -16,6 +16,7 @@ import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
 import {
+  AnthropicBackend,
   LlmTimeoutError,
   createAnthropicRequestTimeoutError,
   createAnthropicStreamTimeoutError,
@@ -625,7 +626,8 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
     ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5-5'],
     ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
-    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
+    // Its direct twin retires 2026-11-30, so the chain leads with Anthropic's named replacement.
+    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-5-5'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],
   ];
 
@@ -1127,4 +1129,83 @@ describe('expected completion outcomes', () => {
     expect(isExpectedCompletionError(null)).toBe(false);
     expect(isOpenAiPolicyRefusalError(new Error('cyber_policy_configuration_error'))).toBe(false);
   });
+});
+
+describe('Fable 5.1 / 5.2 safety-classifier refusal fallback, end to end', () => {
+  const roster = [
+    'claude-fable-5-1',
+    'claude-fable-5-2',
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+  ].map(id => createModelInfo({ id, backend: ModelBackend.Anthropic }));
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const refusalEvents = [
+    { type: 'message_start', message: { usage: { input_tokens: 12, output_tokens: 0 } } },
+    { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { input_tokens: 12, output_tokens: 0 } },
+    { type: 'message_stop' },
+  ];
+  const refusalBody = { content: [], stop_reason: 'refusal', usage: { input_tokens: 12, output_tokens: 0 } };
+
+  async function refusalFrom(model: string, stream: boolean): Promise<Error> {
+    const backend = new AnthropicBackend('test-key');
+    const events = {
+      [Symbol.asyncIterator]: async function* () {
+        yield* refusalEvents;
+      },
+      controller: { abort: () => {} },
+    };
+    (backend as unknown as { _api: unknown })._api = {
+      messages: { create: async () => (stream ? events : refusalBody) },
+    };
+    try {
+      await backend.complete(
+        model,
+        [{ role: 'user', content: 'benign security question' }],
+        { stream },
+        async () => {}
+      );
+    } catch (error) {
+      return error as Error;
+    }
+    throw new Error(`${model} resolved on a refusal`);
+  }
+
+  it.each([
+    ['claude-fable-5-2', true],
+    ['claude-fable-5-2', false],
+    ['claude-fable-5-1', true],
+    ['claude-fable-5-1', false],
+  ])('continues a refused %s request (stream=%s) on claude-opus-4-8', async (id, stream) => {
+    const error = await refusalFrom(id, stream);
+    expect(isSafetyRefusalError(error)).toBe(true);
+    expect(shouldTriggerFallback(error)).toBe(true);
+
+    const refused = roster.find(model => model.id === id)!;
+    const result = await getLlmWithFallback(refused, undefined, roster, apiKeyTable, mockLogger, {
+      excludeModelIds: new Set([id]),
+    });
+    expect(result?.attempt).toBe(1);
+    expect(result?.model.id).toBe('claude-opus-4-8');
+  });
+
+  it.each(['claude-fable-5-1', 'claude-fable-5-2'])(
+    'moves %s to gpt-5 when the Anthropic spend limit is hit',
+    async id => {
+      const gpt4oMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+      const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+      const refused = roster.find(model => model.id === id)!;
+      // gpt-4o-mini is listed first so a last-resort scan would pick it instead of the chain's tail.
+      const result = await getLlmWithFallback(
+        refused,
+        undefined,
+        [gpt4oMini, ...roster, gpt5],
+        { ...apiKeyTable, openai: 'valid-key' },
+        mockLogger,
+        { excludeModelIds: new Set([id]), excludeBackends: new Set<string>([ModelBackend.Anthropic]) }
+      );
+      expect(result?.model.id).toBe('gpt-5');
+    }
+  );
 });

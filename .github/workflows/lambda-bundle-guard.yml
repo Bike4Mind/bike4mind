@@ -39,12 +39,6 @@ on:
       - scripts/check-lambda-bundle.mjs
       - scripts/__tests__/check-lambda-bundle.test.mjs
       - .github/workflows/lambda-bundle-guard.yml
-  # Also run on the merge queue so the check reports there if it later becomes a
-  # required check. It earns its keep in the queue specifically: two dependency
-  # PRs that each bundle fine alone can resolve to a version neither one tested
-  # once they are combined, and a push to main auto-deploys staging.
-  merge_group:
-    branches: [main]
 
 env:
   NODE_VERSION: '24'
@@ -56,7 +50,7 @@ concurrency:
 jobs:
   bundle:
     name: Lambda handlers bundle
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read

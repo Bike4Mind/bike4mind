@@ -3,12 +3,15 @@ import { useEffect, useMemo } from 'react';
 import { IMcpServerResponse } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
 
 /**
  * Keeps enabledMcpServers in LLM state synchronized with the database.
  * - Initializes enabledMcpServers when it is null and servers are available.
  * - Cleans up stale server entries when a server is removed from the database
  *   (e.g. GitHub OAuth revoked).
+ * - Drops custom connector slugs from disabledMcpConnections once that connector is gone, so a new
+ *   connector that reuses the slug starts on. Only against a loaded list, never the empty placeholder.
  */
 export function useMcpServerSync(): void {
   const enabledMcpServers = useLLM(s => s.enabledMcpServers);
@@ -35,4 +38,14 @@ export function useMcpServerSync(): void {
       }
     }
   }, [enabledMcpServers, availableMcpServers, mcpServersData, setLLM]);
+
+  const disabledMcpConnections = useLLM(s => s.disabledMcpConnections);
+  const { all: connections, loaded: connectionsLoaded } = useComposerMcpConnections();
+
+  useEffect(() => {
+    if (!connectionsLoaded || !Array.isArray(disabledMcpConnections) || disabledMcpConnections.length === 0) return;
+    const slugs = new Set(connections.map(connection => connection.slug));
+    const stillValid = disabledMcpConnections.filter(slug => slugs.has(slug));
+    if (stillValid.length !== disabledMcpConnections.length) setLLM({ disabledMcpConnections: stillValid });
+  }, [connections, connectionsLoaded, disabledMcpConnections, setLLM]);
 }

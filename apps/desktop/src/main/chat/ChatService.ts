@@ -1,12 +1,16 @@
 import {
   acceptTask,
+  assertReportCoversCriteria,
+  modelRequestHint,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
   spawnOptionsSchema,
   taskActionSchema,
   rolePolicySchema,
+  type ModelSelection,
   type RolePolicy,
+  type RootPolicy,
   type SpawnOptions,
   type TaskAction,
 } from '@shared/orchestration';
@@ -16,7 +20,7 @@ import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
+import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -39,6 +43,7 @@ import type {
   ChatRelayOrigin,
   ChatReplyRound,
   ChatSentRound,
+  ChatSettledCharge,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -178,9 +183,11 @@ import {
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
+  withRunFallback,
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
+import type { CompletionRunMinter } from './completionRuns';
 import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
@@ -236,6 +243,7 @@ import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
 import {
   QUESTION_CANCELLED,
+  partAllowed,
   type ApprovalGate,
   type ApprovalSettledBy,
   type ApprovalSettlement,
@@ -258,11 +266,13 @@ import type { PermissionScopeKey, PermissionService } from './permissions/Permis
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
-import type { CompiledRule, PermissionRuleSet } from './permissions/rules';
+import type { CompiledRule, PermissionRuleSet, PermissionSubject } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
+  type ApprovalAlways,
   type ApprovalOption,
+  type ApprovalPart,
   type ApprovalPrompt,
   type BrowserContext,
   type BrowserProvider,
@@ -279,6 +289,7 @@ import {
   type SuggestionOutcome,
   type SkillContext,
   type ImageContext,
+  type KeptImage,
   type ScreenCapturer,
   type ScreenContext,
   type ModelContext,
@@ -531,7 +542,7 @@ export interface ChatServiceDeps {
    * only by the approval card's "Always allow"; no tool can reach it.
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
-    Partial<Pick<PermissionService, 'dispose'>>;
+    Partial<Pick<PermissionService, 'dispose' | 'projectRoot' | 'rememberProjectAllows'>>;
   capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
@@ -624,6 +635,11 @@ export interface ChatServiceDeps {
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
+  /**
+   * Issues the server run id an orchestrated session's turns are attributed to (see
+   * completionRuns.ts). Absent in tests that do not exercise it; turns are then sent without `run`.
+   */
+  mintCompletionRun?: CompletionRunMinter;
   /** True in the device-local scope (signed out by choice); false for an account whose session expired. */
   isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
@@ -682,6 +698,8 @@ interface RawRound {
   timing: ChatRoundTiming;
   usage?: ChatUsage;
   sent: ChatSentRound;
+  requestId?: string;
+  settled?: ChatSettledCharge;
 }
 
 /**
@@ -1811,21 +1829,121 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     if (!session || this.deps.store.scopeKey() !== scope) return null;
     if (orchestrate && !session.orchestrationPolicy) {
-      const policy = await this.deps.store.getRolePolicy();
-      const saved = await this.deps.store.setOrchestrationPolicy(
-        sessionId,
-        {
-          rootSessionId: sessionId,
-          rootRunId: randomUUID(),
-          policy,
-        },
-        scope
-      );
+      const rootPolicy: RootPolicy = {
+        rootSessionId: sessionId,
+        rootRunId: randomUUID(),
+        policy: await this.deps.store.getRolePolicy(),
+      };
+      // No server run is minted here: the first orchestrated turn mints one, so a toggle that never
+      // sends a turn leaves no server row behind.
+      const saved = await this.deps.store.setOrchestrationPolicy(sessionId, rootPolicy, scope);
       if (!saved) return null;
     }
     if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
     if (this.deps.store.scopeKey() !== scope) return null;
     return this.deps.store.setOrchestrate(sessionId, orchestrate);
+  }
+
+  /**
+   * Server run ids by local `rootRunId`, for a worker whose root no longer carries the policy (its
+   * orchestrate flag expired on restart) and whose own copy predates the id.
+   */
+  private serverRuns = new Map<string, string>();
+
+  /**
+   * Mint the server's run id for an orchestration root and record it on the root's policy and on
+   * the requesting session's own copy. `undefined` when none could be had; the minter has logged why.
+   */
+  private async mintServerRun(
+    requesterId: string,
+    policy: RootPolicy,
+    scope: string | null
+  ): Promise<string | undefined> {
+    const api = this.deps.getApiClient();
+    if (!api || !this.deps.mintCompletionRun) return undefined;
+    const run = await this.deps.mintCompletionRun(policy.rootRunId, api.getAxiosInstance(), policy.rootSessionId);
+    if (!run) return undefined;
+    this.serverRuns.set(policy.rootRunId, run.runId);
+    await this.recordServerRun(requesterId, policy, run.runId, scope);
+    return run.runId;
+  }
+
+  private async recordServerRun(
+    requesterId: string,
+    policy: RootPolicy,
+    serverRunId: string,
+    scope: string | null
+  ): Promise<void> {
+    try {
+      for (const id of new Set([policy.rootSessionId, requesterId])) {
+        await this.deps.store.setServerRunId(id, policy.rootRunId, serverRunId, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not record run attribution: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * The `run` an orchestrated session's agent turn is sent with; `undefined` outside orchestration
+   * or when no server run id could be had, which sends the turn unattributed rather than holding
+   * it. Prefers the ROOT's current policy over the session's own copy: a worker copied its policy
+   * at spawn, possibly before the root's id arrived. An id found only on the root or in memory is
+   * copied onto the session, since after a restart the root's policy and the map are both gone.
+   */
+  private async runAttribution(session: ChatSession): Promise<CompletionRunAttribution | undefined> {
+    const policy = session.orchestrationPolicy;
+    if (!policy || !this.deps.mintCompletionRun) return undefined;
+    const scope = this.deps.store.scopeKey();
+    const root =
+      policy.rootSessionId === session.id ? session : await this.deps.store.get(policy.rootSessionId).catch(() => null);
+    const rootPolicy = root?.orchestrationPolicy?.rootRunId === policy.rootRunId ? root.orchestrationPolicy : undefined;
+    const known = rootPolicy?.serverRunId ?? policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
+    if (known && known !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
+    const serverRunId = known ?? (await this.mintServerRun(session.id, policy, scope));
+    if (!serverRunId) {
+      this.deps.logger.warn(`CHAT: no server run id for session ${session.id}; sending its turn unattributed`);
+      return undefined;
+    }
+    const attemptId = session.workerTask?.attempts.at(-1)?.id;
+    return {
+      runId: serverRunId,
+      role: session.origin ? 'worker' : 'root',
+      purpose: 'turn',
+      // A worker session carries exactly one task, so its id names the task.
+      ...(session.workerTask ? { taskId: session.id } : {}),
+      ...(attemptId ? { attemptId } : {}),
+      ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
+    };
+  }
+
+  /**
+   * Forget a run id the server refused, so the next turn mints a fresh one. Only where it still
+   * holds `refusedRunId`: a refusal arriving after a newer id was minted leaves the newer one.
+   */
+  private async forgetServerRun(session: ChatSession, refusedRunId: string): Promise<void> {
+    const policy = session.orchestrationPolicy;
+    if (!policy) return;
+    this.deps.logger.warn(`CHAT: server refused run attribution for session ${session.id}; resending without it`);
+    if (this.serverRuns.get(policy.rootRunId) === refusedRunId) this.serverRuns.delete(policy.rootRunId);
+    const scope = this.deps.store.scopeKey();
+    try {
+      for (const id of new Set([policy.rootSessionId, session.id])) {
+        await this.deps.store.clearServerRunId(id, policy.rootRunId, refusedRunId, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * The policy a worker spawned now inherits: the parent's STORED copy when it still belongs to the
+   * same run, since the server run id may have landed after the parent's turn read its session.
+   */
+  private async currentPolicyFor(parent: ChatSession, snapshot: RootPolicy): Promise<RootPolicy> {
+    const stored = (await this.deps.store.get(parent.id).catch(() => null))?.orchestrationPolicy;
+    const current = stored?.rootRunId === snapshot.rootRunId ? stored : snapshot;
+    const serverRunId = current.serverRunId ?? this.serverRuns.get(current.rootRunId);
+    return serverRunId ? { ...current, serverRunId } : current;
   }
 
   getRolePolicy(): Promise<RolePolicy> {
@@ -1892,6 +2010,7 @@ export class ChatService {
           task.resolvedDecisions.includes(action.report.decisionId)
         )
           return summarizeSession(child);
+        if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
         next = {
           ...task,
           state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,
@@ -2868,6 +2987,8 @@ export class ChatService {
           text: last.content,
           toolCallIds: (last.toolCalls ?? []).map(call => call.id),
           ...(startedOn ? { model: startedOn } : {}),
+          ...(last.requestId ? { requestId: last.requestId } : {}),
+          ...(last.settled ? { settled: last.settled } : {}),
         },
       ],
       toolCalls: last.toolCalls ?? [],
@@ -3366,6 +3487,13 @@ export class ChatService {
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+      // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
+      let run = api && !localTurn ? await this.runAttribution(session) : undefined;
+      const dropRun = async (): Promise<void> => {
+        const refused = run?.runId;
+        run = undefined;
+        if (refused) await this.forgetServerRun(session, refused);
+      };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
       // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
@@ -3445,7 +3573,11 @@ export class ChatService {
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = modelOption?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
-        ? { vision, prepare: this.deps.prepareImage }
+        ? {
+            vision,
+            prepare: this.deps.prepareImage,
+            keep: (source, display, caption) => this.keepToolImage(sessionId, source, display, caption),
+          }
         : undefined;
       // A wrapper only: nothing is listed or captured until the model calls the tool.
       const screenCapturer = this.deps.screen;
@@ -3484,6 +3616,8 @@ export class ChatService {
               endpoint: serverConfig.endpoint,
               models: catalog?.models ?? [],
               sessionModel: session.model,
+              run: () => (run ? { ...run, purpose: 'explore' } : undefined),
+              onRunRejected: dropRun,
               onUsage: spent => {
                 usage = addUsage(usage, spent);
                 if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
@@ -3533,6 +3667,9 @@ export class ChatService {
               delegates: orchestrating,
               structuredTask: !!session.workerTask,
               managedDelegation: !!session.origin && !!session.orchestrationPolicy,
+              spawnModelHint: session.orchestrationPolicy
+                ? modelRequestHint(session.model, session.orchestrationPolicy.policy)
+                : null,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -3540,6 +3677,7 @@ export class ChatService {
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
+      this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
       // it carries on.
@@ -3726,7 +3864,7 @@ export class ChatService {
         // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
         // and one continued on another model needs them to say which model spent what.
         const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
-        const keepRounds = toolCalls.length > 0 || continuedOnOther || rounds.some(round => round.reasoning);
+        const keepRounds = continuedOnOther || keepsRounds(rounds, toolCalls);
         const finalContent = joinRounds(rounds.map(round => round.text));
         const lastTiming = produced[produced.length - 1]?.timing;
         const promptCache: ChatPromptCacheStamp | undefined =
@@ -3743,6 +3881,7 @@ export class ChatService {
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
+          ...(keepRounds ? {} : plainRequestOf(rounds)),
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
@@ -3789,6 +3928,8 @@ export class ChatService {
         let turnText = '';
         let turnThinking: unknown[] | undefined;
         let turnUsage: ChatUsage | undefined;
+        let turnRequestId: string | undefined;
+        let turnSettled: ChatSettledCharge | undefined;
         let turnReasoning = '';
         const splitThinking = createThinkFilter();
         const timer = startRoundTimer();
@@ -3832,9 +3973,21 @@ export class ChatService {
         );
         setPhase(WAITING);
         const onCompletionEvent = (event: CompletionStreamEvent): void => {
-          // `error` never reaches here (the transport throws on it); `meta` carries no reply.
-          if (event.type === 'meta') probe?.frame('meta');
-          if (event.type === 'error' || event.type === 'meta') return;
+          // `error` never reaches here (the transport throws on it); `meta` and `settled` carry no reply.
+          if (event.type === 'meta') {
+            probe?.frame('meta');
+            if (event.requestId) turnRequestId = event.requestId;
+            return;
+          }
+          if (event.type === 'settled') {
+            turnRequestId ??= event.requestId;
+            turnSettled = {
+              creditsCharged: event.creditsCharged,
+              ...(event.usdCost !== undefined ? { usdCost: event.usdCost } : {}),
+            };
+            return;
+          }
+          if (event.type === 'error') return;
           if (event.text || event.type === 'tool_use') timer.firstToken();
           if (event.text) {
             const split = splitThinking.push(event.text);
@@ -3879,23 +4032,31 @@ export class ChatService {
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
               (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
-          : await streamRound(
-              api!.getAxiosInstance(),
-              serverConfig.endpoint,
-              {
-                model: session.model,
-                messages: cacheable ? withCacheBreakpoints(wire) : wire,
-                tools,
-                thinking: askForThinking,
-                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
-                sessionId,
-                ...effortField,
-                ...generationField,
-                ...cacheTtlField,
-                ...(maxTokens ? { maxTokens } : {}),
-              },
-              onCompletionEvent,
-              controller.signal
+          : await streamRound(() =>
+              withRunFallback(
+                run,
+                attribution =>
+                  streamCompletion(
+                    api!.getAxiosInstance(),
+                    serverConfig.endpoint,
+                    {
+                      model: session.model,
+                      messages: cacheable ? withCacheBreakpoints(wire) : wire,
+                      tools,
+                      thinking: askForThinking,
+                      // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
+                      sessionId,
+                      ...(attribution ? { run: attribution } : {}),
+                      ...effortField,
+                      ...generationField,
+                      ...cacheTtlField,
+                      ...(maxTokens ? { maxTokens } : {}),
+                    },
+                    onCompletionEvent,
+                    controller.signal
+                  ),
+                dropRun
+              )
             );
         append(splitThinking.flush());
         const timing = timer.end();
@@ -3913,6 +4074,8 @@ export class ChatService {
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          ...(turnRequestId ? { requestId: turnRequestId } : {}),
+          ...(turnSettled ? { settled: turnSettled } : {}),
           sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
@@ -4248,7 +4411,13 @@ export class ChatService {
               ],
               ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
             }
-          : {}),
+          : failedSettlement(
+              storedRounds(
+                produced.map(round => ({ round, text: round.text })),
+                session.model
+              ),
+              toolCalls
+            )),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
@@ -4340,6 +4509,10 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      // A reply that keeps rounds holds each request's charge there; clearing these keeps a
+      // continued plain reply from also holding its first request's charge on the message.
+      requestId: message.requestId,
+      settled: message.settled,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
       questComplete: message.questComplete,
@@ -4638,6 +4811,32 @@ export class ChatService {
     if (!store) return undefined;
     const stored = await store.save(sessionId, bytes, 'image/png');
     return { kind: 'image', url: stored.url, mimeType: stored.mimeType, byteLength: stored.byteLength, caption };
+  }
+
+  private async keepToolImage(
+    sessionId: string,
+    source: Buffer,
+    display: KeptImage,
+    caption: string
+  ): Promise<ChatMedia | undefined> {
+    const store = this.deps.media;
+    if (!store) return undefined;
+    try {
+      const stored = await store.saveForContent(sessionId, source, display.bytes, display.mediaType);
+      return {
+        kind: 'image',
+        url: stored.url,
+        mimeType: stored.mimeType,
+        byteLength: stored.byteLength,
+        caption,
+        ...(display.width && display.height ? { width: display.width, height: display.height } : {}),
+      };
+    } catch (error) {
+      this.deps.logger.warn(
+        `CHAT: could not keep a read image for the transcript: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return undefined;
+    }
   }
 
   /**
@@ -5941,11 +6140,7 @@ export class ChatService {
         validated.contract ||
         validated.requirements
       );
-      const selection =
-        managed && explicitWorkerChoice
-          ? { ...resolveWorkerModel(parent.model, managed.policy, validated), rootRunId: managed.rootRunId }
-          : undefined;
-      if (!managed && (validated.role || validated.requestedModelId || validated.contract || validated.requirements)) {
+      if (!managed && explicitWorkerChoice) {
         return {
           ok: false,
           reason: 'model-policy',
@@ -5953,12 +6148,14 @@ export class ChatService {
             'Turn on Orchestrate to use role routing or task contracts. Legacy free-text spawn is still available.',
         };
       }
-      if (selection) {
+      let selection: ModelSelection | undefined;
+      if (managed && explicitWorkerChoice) {
         try {
           const { models } = await this.listModels();
-          const contextWindow = models.find(model => model.id === selection.effectiveModel)?.contextWindow;
+          const resolved = resolveWorkerModel(parent.model, managed.policy, validated, models);
+          const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
-          validateWorkerModel(selection.effectiveModel, models, {
+          validateWorkerModel(resolved.effectiveModel, models, {
             localOnly: this.deviceLocal() || isLocalModel(parent.model),
             ...validated.requirements,
             contextTokens:
@@ -5968,6 +6165,7 @@ export class ChatService {
                   ? briefTokens
                   : undefined,
           });
+          selection = { ...resolved, rootRunId: managed.rootRunId };
         } catch (error) {
           return { ok: false, reason: 'model-policy', message: error instanceof Error ? error.message : String(error) };
         }
@@ -5980,8 +6178,15 @@ export class ChatService {
         };
       const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
+      const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
+      if (this.deps.store.scopeKey() !== scope)
+        return {
+          ok: false,
+          reason: 'model-policy',
+          message: 'Account changed before launch. Try again in the intended account.',
+        };
       const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
-        ...(managed ? { orchestrationPolicy: managed } : {}),
+        ...(inherited ? { orchestrationPolicy: inherited } : {}),
         ...(selection ? { workerSelection: selection } : {}),
         ...(validated.contract
           ? {
@@ -6839,6 +7044,22 @@ export class ChatService {
       };
     }
 
+    // A script with no reason to ask that holds for all of it is decided part by part, and asks only
+    // about the parts that no rule, "Allow in this chat" or the mode already covers.
+    // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
+    const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
+      return {
+        input: applyOption(call.input, runnable[0]),
+        approval: approvalRecord('allowed', parts.decidedBy),
+        mode,
+        patterns,
+      };
+    }
+    const asked: AskedCard = parts ? narrowToParts(prompt, subject, parts) : { prompt, subject };
+
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
@@ -6862,13 +7083,18 @@ export class ChatService {
     let coveredBy: ChatApprovalDecidedBy | undefined;
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
-    const alwaysScope = prompt.always
-      ? describeAlways(prompt.always, context.workingDirectory)
+    const alwaysScope = asked.prompt.always
+      ? describeAlways(asked.prompt.always, context.workingDirectory)
       : prompt.alwaysCovers
         ? { shown: prompt.alwaysCovers, full: prompt.alwaysCovers }
         : undefined;
     // An ask rule outranks any allow, so a rule saved from its card would never apply.
-    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
+    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(asked.subject, asked.prompt) : [];
+    const projectRoot =
+      permissionScope.project && everywhere.length > 0
+        ? ((await this.deps.permissions?.projectRoot?.(permissionScope.project).catch(() => null)) ?? null)
+        : null;
+    const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
       prompt.key,
@@ -6883,7 +7109,8 @@ export class ChatService {
             ...call,
             status: 'awaiting-approval',
             approvalId,
-            approvalDetail: prompt.detail,
+            approvalDetail: asked.prompt.detail,
+            ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
@@ -6896,6 +7123,9 @@ export class ChatService {
               : {}),
             ...(choice ? { approvalChoice: choice } : {}),
             ...(everywhere.length > 0 ? { approvalRules: everywhere } : {}),
+            ...(projectRoot && forProject.length > 0
+              ? { approvalProjectRules: forProject, approvalProject: projectRoot }
+              : {}),
           },
         });
       },
@@ -6922,14 +7152,25 @@ export class ChatService {
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
             }
             const covering = standingAnswer();
-            if (covering) coveredBy = { kind: 'chat-allowance' };
-            return covering;
+            if (covering) {
+              coveredBy = { kind: 'chat-allowance' };
+              return covering;
+            }
+            // A parallel call may have tainted the reply since this card opened.
+            const fresher =
+              byPart && !taintedParts() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+            if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
+              coveredBy = fresher.decidedBy;
+              return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
+            }
+            return null;
           } catch (error) {
             this.deps.logger.warn(`PERMISSIONS: could not recheck ${call.name}: ${String(error)}`);
             return null;
           }
         },
-        ...(prompt.always ? { always: prompt.always } : {}),
+        ...(asked.prompt.always ? { always: asked.prompt.always } : {}),
+        ...(asked.parts ? { partial: true } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
         // instruction about one call, never a policy for every later one.
@@ -6939,6 +7180,7 @@ export class ChatService {
 
     // Whether "always" actually reached every session; a failed save leaves it this chat's only.
     let savedEverywhere = false;
+    let savedForProject = false;
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
       const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
@@ -6954,6 +7196,20 @@ export class ChatService {
       );
       savedEverywhere = saved === true;
       await gate.settleCovered(saved ? undefined : sessionId);
+    } else if (answer.decision === 'always' && answer.project && projectRoot && forProject.length > 0) {
+      const saved = await this.deps.permissions?.rememberProjectAllows?.(projectRoot, forProject).then(
+        () => true,
+        error => {
+          this.deps.logger.warn(`PERMISSIONS: could not save ${forProject.join(', ')}: ${String(error)}`);
+          context.report?.notice({
+            kind: 'permissions-save-failed',
+            text: `The rule could not be saved for this project: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+          });
+          return false;
+        }
+      );
+      savedForProject = saved === true;
+      await gate.settleCovered(savedForProject ? undefined : sessionId);
     } else if (answer.decision === 'always') {
       await gate.settleCovered(sessionId);
     }
@@ -6984,7 +7240,12 @@ export class ChatService {
 
     const picked = findOption(prompt, answer.optionId);
     const card = shownCard(answer, requestedAt, askedBecause);
-    const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
+    const decidedBy = cardDecider(
+      answer.settledBy,
+      { ...answer, everywhere: savedEverywhere, project: savedForProject === true },
+      picked,
+      coveredBy
+    );
 
     // Keyed on the OPTION rather than on the decision, so an answer naming this option can only
     // ever redirect - never run the tool because it arrived with some other decision on it.
@@ -8261,9 +8522,9 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
  */
 const THINK_MARKER = /<\/?think>/;
 
-async function streamRound(...args: Parameters<typeof streamCompletion>): Promise<Error | null> {
+async function streamRound(send: () => Promise<void>): Promise<Error | null> {
   try {
-    await streamCompletion(...args);
+    await send();
     return null;
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));
@@ -8616,9 +8877,110 @@ function cardDecider(
   if (picked?.redirect) return { kind: 'user', answer: 'redirect', ...choice };
   if (answer.decision === 'deny' || answer.decision === 'redirect') return { kind: 'user', answer: 'deny' };
   if (answer.decision === 'always') {
-    return { kind: 'user', answer: 'always', ...choice, ...(answer.everywhere ? { everywhere: true as const } : {}) };
+    return {
+      kind: 'user',
+      answer: 'always',
+      ...choice,
+      ...(answer.everywhere ? { everywhere: true as const } : {}),
+      ...(answer.project ? { project: true as const } : {}),
+    };
   }
   return { kind: 'user', answer: 'once', ...choice };
+}
+
+interface PartDecision {
+  /** The parts no rule, chat allowance or mode covers. */
+  uncovered: ApprovalPart[];
+  /** Folders outside the shared ones that neither a rule nor "Allow in this chat" covers. */
+  directories: string[];
+  /** What covered the call, once nothing is left uncovered. */
+  decidedBy: ChatApprovalDecidedBy;
+}
+
+/** Whether the conversation's mode runs this part unasked. */
+function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
+  if (mode === 'full') return part.ask?.mode !== 'full';
+  return mode === 'auto' && part.ask === undefined;
+}
+
+/**
+ * Each part of a `byPart` shell prompt, decided on its own: by an allow rule, an "Allow in this chat" given here
+ * or in a session that spawned this one, or the mode. Null for any other prompt, which is decided whole.
+ */
+function decideParts(
+  prompt: ApprovalPrompt,
+  subject: PermissionSubject,
+  rules: PermissionRuleSet | undefined,
+  gate: ApprovalGate,
+  sessionId: string,
+  mode: ChatApprovalMode
+): PartDecision | null {
+  const always = prompt.always;
+  if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
+  const byRule = rules?.size ? rules.shellParts(subject) : null;
+  const allowed = gate.allowedPatterns(sessionId, always.namespace);
+  let rule: CompiledRule | null = null;
+  let allowance = false;
+  const uncovered: ApprovalPart[] = [];
+  always.commands.forEach((part, index) => {
+    const covering = byRule?.[index] ?? null;
+    if (covering) rule ??= covering;
+    else if (partAllowed(allowed, part)) allowance = true;
+    else if (!modeCovers(mode, part)) uncovered.push(part);
+  });
+  // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
+  const allByRule = always.commands.every((_, index) => byRule?.[index]);
+  const outside = allByRule
+    ? always.directories.filter(directory => !rules?.coversFolder(directory))
+    : always.directories;
+  const directories = gate.uncoveredDirectories(sessionId, outside);
+  const decidedBy: ChatApprovalDecidedBy = allowance
+    ? { kind: 'chat-allowance' }
+    : rule
+      ? ruleDecider(rule)
+      : { kind: 'mode', mode };
+  return { uncovered, directories, decidedBy };
+}
+
+interface AskedCard {
+  prompt: ApprovalPrompt;
+  subject: PermissionSubject;
+  /** See ChatToolCall.approvalParts. */
+  parts?: { text: string; reason?: string }[];
+}
+
+const shownPart = (part: ApprovalPart): { text: string; reason?: string } => ({
+  text: part.words ?? part.text,
+  ...(part.ask ? { reason: part.ask.reason } : {}),
+});
+
+/** The card for only the undecided parts: its "always" answers, and any rule saved from it, cover just those. */
+function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts: PartDecision): AskedCard {
+  const always = prompt.always as ApprovalAlways;
+  const kept = new Set(parts.uncovered);
+  const commands = subject.shell?.commands.filter((_, index) => kept.has(always.commands[index] as ApprovalPart));
+  const { askInFull: _full, ...rest } = prompt;
+  return {
+    prompt: {
+      ...rest,
+      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
+      always: { ...always, commands: parts.uncovered, directories: parts.directories },
+    },
+    subject: subject.shell
+      ? { ...subject, shell: { ...subject.shell, commands: commands ?? [], directories: parts.directories } }
+      : subject,
+    ...(parts.uncovered.length > 0 && (always.commands.length > 1 || parts.uncovered.some(part => part.ask))
+      ? { parts: parts.uncovered.map(shownPart) }
+      : {}),
+  };
+}
+
+/**
+ * The rules "Allow in this project" saves: only when every rule is a prefix, so a one-off command with a
+ * SHA or an id in it is never saved where it would never match again.
+ */
+function projectRules(rules: readonly string[]): string[] {
+  return rules.every(rule => /^Bash\(.+:\*\)$/s.test(rule)) ? [...rules] : [];
 }
 
 /** Why a question-style card was closed unanswered; a racing click or recheck counts as the close. */
@@ -8887,6 +9249,8 @@ function storedRounds(runs: { round: RawRound; text: string }[], model: string):
         toolCallIds: round.toolCallIds,
         timing: round.timing,
         ...(round.usage ? { usage: round.usage } : {}),
+        ...(round.requestId ? { requestId: round.requestId } : {}),
+        ...(round.settled ? { settled: round.settled } : {}),
         model,
         ...(round.reasoning.trim() ? { reasoning: round.reasoning.trim() } : {}),
         sent: round.sent,
@@ -8894,6 +9258,37 @@ function storedRounds(runs: { round: RawRound; text: string }[], model: string):
       // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
       .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
   );
+}
+
+/**
+ * Whether a reply is stored with its rounds. A plain reply keeps none, but one that ran tools or
+ * reasoned needs them, and one that made several settled requests needs them to keep each
+ * request's charge apart. Charges live on rounds or on the message, never both; see plainRequestOf.
+ */
+function keepsRounds(rounds: readonly ChatReplyRound[], toolCalls: readonly ChatToolCall[]): boolean {
+  const settledApart = rounds.length > 1 && rounds.some(round => round.requestId || round.settled);
+  return toolCalls.length > 0 || settledApart || rounds.some(round => round.reasoning);
+}
+
+/** The one request of a reply stored without rounds, whose charge then rides the message. */
+function plainRequestOf(rounds: readonly ChatReplyRound[]): Pick<ChatMessage, 'requestId' | 'settled'> {
+  const only = rounds.length === 1 ? rounds[0] : undefined;
+  return {
+    ...(only?.requestId ? { requestId: only.requestId } : {}),
+    ...(only?.settled ? { settled: only.settled } : {}),
+  };
+}
+
+/**
+ * What a failed fresh reply stores of the requests it already made, so the charges they settled
+ * are not lost with the turn. Nothing when none settled, which leaves the failure stored as before.
+ */
+function failedSettlement(
+  rounds: ChatReplyRound[],
+  toolCalls: readonly ChatToolCall[]
+): Pick<ChatMessage, 'rounds' | 'requestId' | 'settled'> {
+  if (!rounds.some(round => round.requestId || round.settled)) return {};
+  return keepsRounds(rounds, toolCalls) ? { rounds } : plainRequestOf(rounds);
 }
 
 /** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */

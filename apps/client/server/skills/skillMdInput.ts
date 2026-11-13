@@ -11,7 +11,10 @@ export function skillFieldsFromSkillMd(
   skillMd: string,
   { nameOptional = false }: { nameOptional?: boolean } = {}
 ): {
-  fields: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'claudeCodeAllowedTools' | 'disableModelInvocation'> &
+  fields: Pick<
+    ISkill,
+    'description' | 'body' | 'argumentHint' | 'claudeCodeAllowedTools' | 'claudeCodeModel' | 'disableModelInvocation'
+  > &
     Partial<Pick<ISkill, 'name'>>;
   dropped: string[];
 } {
@@ -35,6 +38,7 @@ export function skillFieldsFromSkillMd(
       body: fields.body ?? '',
       argumentHint: fields.argumentHint,
       claudeCodeAllowedTools: fields.claudeCodeAllowedTools ?? [],
+      claudeCodeModel: fields.claudeCodeModel ?? '',
       disableModelInvocation: fields.disableModelInvocation ?? false,
     },
     dropped,

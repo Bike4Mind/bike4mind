@@ -27,12 +27,16 @@ const PaymentModal = ({
   return (
     <Modal open={isOpen} onClose={onClose}>
       <ModalDialog
+        data-testid="payment-modal-dialog"
         sx={{
           minWidth: '400px',
           maxWidth: '600px',
           borderRadius: 'md',
           p: 3,
           boxShadow: 'lg',
+          // Joy caps the dialog at the viewport height; scroll inside it so the Stripe form and
+          // its submit button stay reachable in a short window.
+          overflowY: 'auto',
           zIndex: 1400, // Higher than the parent modal
         }}
       >

@@ -70,5 +70,6 @@ describe('toAnnotationDto', () => {
     // No deletedAt / deletedBy / updatedAt leak into the public DTO.
     expect(Object.keys(dto)).not.toContain('deletedAt');
     expect(Object.keys(dto)).not.toContain('deletedBy');
+    expect(Object.keys(dto)).not.toContain('authorId');
   });
 });

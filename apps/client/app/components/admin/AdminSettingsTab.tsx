@@ -10,7 +10,6 @@ import {
   API_SERVICE_GROUPS,
   Category,
   CATEGORY_ICONS,
-  type SettingKey,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
@@ -43,8 +42,8 @@ import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
-import { AdminTab } from './adminSidebarConfig';
-import { useAdminModal } from './useAdminModal';
+import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
+import { useOpenSettingHome } from './useOpenSettingHome';
 
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -153,26 +152,6 @@ type SettingConfig = SettingDefinition<string>;
 // runtime shape, and the update route accepts its key once registered.
 type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
-// Edited only on the Growth and Pricing tab (GROWTH_PRICING_SECTIONS in AdminGrowthPricingTab); the
-// Credits System group links there instead.
-export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
-  'allowOpenRegistration',
-  'enforceCredits',
-  'pricePerCredit',
-  'lowCreditsThreshold',
-  'enableTeamPlan',
-  'teamPlanMinSeats',
-  'teamPlanMaxSeats',
-  'teamPlanCreditsPerSeat',
-  'ReferralCreditsAmount',
-  'ReferralFirstAnswerCredits',
-  'ReferralFirstPaymentCredits',
-  'ReferralSecondPaymentCredits',
-  'ReferralHoldDays',
-  'ReferralInvitesPerUser',
-  'ReferralAlertRewardsPerDay',
-]);
-
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
 const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationReviewerEmails',
@@ -184,7 +163,7 @@ const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
-  const setAdminTab = useAdminModal(s => s.setActiveTab);
+  const openSettingHome = useOpenSettingHome();
   const serverConfig = useConfig();
 
   // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
@@ -239,9 +218,12 @@ const AdminSettingsTab: React.FC = () => {
     [searchTerm, matchesSearch]
   );
 
-  // The Growth and Pricing keys have no editor here, so a search for one points to the tab instead.
-  const growthPricingMatchesSearch = useMemo(
-    () => !!searchTerm && [...GROWTH_PRICING_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
+  // Keys with a home page have no editor here, so a search for one points to its home instead.
+  const matchedHomes = useMemo(
+    () =>
+      searchTerm
+        ? SETTING_HOMES.filter(home => home.keys.some(key => matchesSearch(settingsMap[key], searchTerm)))
+        : [],
     [searchTerm, matchesSearch]
   );
 
@@ -253,7 +235,7 @@ const AdminSettingsTab: React.FC = () => {
 
       if (hiddenSettingKeys.has(settingConfig.key)) return false;
 
-      if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
+      if (HOME_BY_KEY.has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
@@ -277,6 +259,10 @@ const AdminSettingsTab: React.FC = () => {
           'secopsTriageConfig',
           // Overwatch rollup sync is an internal cron-lock document, not user-configurable
           'overwatchRollupSync',
+          // Model list revision is an internal stamp rewritten by the model-list refresh
+          'modelListRevision',
+          // Model access revision is an internal stamp rewritten by model access writes
+          'modelAccessRevision',
           // PR Status Digest settings are edited inline in the PR Status Digest tab
           'prReportRepo',
           'prReportIdentityMap',
@@ -511,19 +497,20 @@ const AdminSettingsTab: React.FC = () => {
               rather than the AI category: it only makes sense next to the numbers it advises on. */}
           {groupId === API_SERVICE_GROUPS.DATA_LAKE_COST.id && <EmbeddingProviderLimits />}
 
-          {groupId === API_SERVICE_GROUPS.CREDITS.id && (
-            <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
-              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
-              <Link
-                component="button"
-                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
-                data-testid="admin-settings-credits-growth-pricing-link"
-              >
-                Growth and Pricing
-              </Link>
-              .
-            </Typography>
-          )}
+          {groupId === API_SERVICE_GROUPS.CREDITS.id &&
+            SETTING_HOMES.map(home => (
+              <Typography key={home.id} level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
+                {home.summary}{' '}
+                <Link
+                  component="button"
+                  onClick={() => openSettingHome(home)}
+                  data-testid={`admin-settings-credits-${home.id}-link`}
+                >
+                  {home.label}
+                </Link>
+                .
+              </Typography>
+            ))}
         </Box>
       </SettingsSection>
     );
@@ -642,23 +629,24 @@ const AdminSettingsTab: React.FC = () => {
             </FormControl>
           </Stack>
 
-          {growthPricingMatchesSearch && (
+          {matchedHomes.map(home => (
             <Typography
+              key={home.id}
               level="body-sm"
               sx={{ px: '1rem', pt: 1 }}
-              data-testid="admin-settings-search-growth-pricing-hint"
+              data-testid={`admin-settings-search-${home.id}-hint`}
             >
-              Signup, starter credits, credit pricing and team-plan limits are edited on{' '}
+              {home.summary}{' '}
               <Link
                 component="button"
-                onClick={() => setAdminTab(AdminTab.GrowthPricing)}
-                data-testid="admin-settings-search-growth-pricing-link"
+                onClick={() => openSettingHome(home)}
+                data-testid={`admin-settings-search-${home.id}-link`}
               >
-                Growth and Pricing
+                {home.label}
               </Link>
               .
             </Typography>
-          )}
+          ))}
 
           {allTabs ? (
             <Stack

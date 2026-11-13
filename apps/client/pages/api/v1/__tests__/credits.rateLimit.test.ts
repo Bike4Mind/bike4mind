@@ -19,7 +19,7 @@ const { captured, mockGetSettingsMap, mockTryIncrement } = vi.hoisted(() => ({
 }));
 
 // Wraps the real middleware so the resolver is also exercised against its enforcement contract.
-vi.mock('@server/middlewares/rateLimit', async () => {
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () => {
   const real = await vi.importActual<{ rateLimit: (o: LimiterOptions) => Middleware }>(
     '@bike4mind/server-utils/middlewares/rateLimit'
   );

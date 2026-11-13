@@ -55,6 +55,8 @@ describe('baseApi request logging', () => {
     ['POST', '/api/auth/apple/callback?state=state-token', '/api/auth/apple/callback'],
     ['GET', '/api/auth/github', '/api/auth/github'],
     ['GET', undefined, ''],
+    ['GET', '/a/synthetic-share-token-0123456789', '/a/[redacted]'],
+    ['GET', '/api/publish/serve/a/synthetic-share-token-0123456789/x.js', '/api/publish/serve/a/[redacted]/x.js'],
   ])('logs %s %s without query parameters', async (method, url, path) => {
     const info = vi.fn();
     const req = { method, url, headers: {}, logger: { info, withMetadata: () => ({ info }) } };
@@ -71,6 +73,7 @@ describe('baseApi request logging', () => {
     expect(JSON.stringify(info.mock.calls)).not.toContain('inviteCode');
     expect(JSON.stringify(info.mock.calls)).not.toContain('REF-123');
     expect(JSON.stringify(info.mock.calls)).not.toContain('redirectTo');
+    expect(JSON.stringify(info.mock.calls)).not.toContain('synthetic-share-token');
     expect(req.url).toBe(url);
   });
 });

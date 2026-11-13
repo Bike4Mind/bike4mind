@@ -7,6 +7,10 @@ import HeldSignupGrantsTab from './HeldSignupGrantsTab';
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: getMock, post: postMock } }));
+const user = vi.hoisted(() => ({
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.currentUser }) }));
 
 const theme = extendTheme({ ...getThemeConfig() });
 const rows = ['a', 'b'].map(letter => ({
@@ -30,11 +34,26 @@ function renderTab() {
 }
 
 beforeEach(() => {
+  user.currentUser = { isAdmin: true };
   getMock.mockReset().mockResolvedValue({ data: { data: rows, nextCursor: null } });
   postMock.mockReset();
 });
 
 describe('HeldSignupGrantsTab', () => {
+  it('lets a support:read delegate see the held list but not release it', async () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[0].id}`));
+    expect(screen.getByTestId('held-signup-grants-release-btn')).toBeDisabled();
+  });
+
+  it('lets a credits:adjust delegate release', async () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['credits:adjust'] };
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[0].id}`));
+    expect(screen.getByTestId('held-signup-grants-release-btn')).not.toBeDisabled();
+  });
+
   it('keeps release disabled until a row is selected', async () => {
     renderTab();
     await screen.findByTestId(`held-signup-grants-select-${rows[0].id}`);
@@ -47,7 +66,10 @@ describe('HeldSignupGrantsTab', () => {
         data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
       })
       .mockResolvedValueOnce({
-        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'reversed', credits: 12 }] },
+        data: {
+          batchId: 'batch-1',
+          results: [{ userId: rows[1].id, outcome: 'reversed', credits: 12, heldRestored: true }],
+        },
       });
     const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
@@ -59,7 +81,7 @@ describe('HeldSignupGrantsTab', () => {
     invalidate.mockClear();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-dialog')).toHaveTextContent(
-      'permanently debits the credits granted by this release'
+      'returns the accounts to the held list'
     );
     expect(postMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('held-signup-grants-revoke-confirm-btn'));
@@ -70,6 +92,42 @@ describe('HeldSignupGrantsTab', () => {
     expect(screen.getByTestId('held-signup-grants-revoke-btn')).toBeDisabled();
     expect(getMock).toHaveBeenCalledTimes(3);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+  });
+
+  it('says when an account was left alone because it was granted more since the release', async () => {
+    postMock
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
+      })
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'state_changed', credits: 12 }] },
+      });
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
+    expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent(
+      'Revoked 0 of 1 grants. Accounts that received more credits since the release were left as they are.'
+    );
+  });
+
+  it('says when a release saved no account state, so only the credits were taken back', async () => {
+    postMock
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
+      })
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'reversed', credits: 12 }] },
+      });
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
+    expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent(
+      'Revoked 1 of 1 grants. Releases without saved account state only had their credits taken back and were not returned to the held list.'
+    );
   });
 
   it('allows another revoke when the previous one left a retryable entry', async () => {

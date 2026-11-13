@@ -10,22 +10,28 @@ import {
   mongoose,
   type IUserObject,
 } from '@bike4mind/database';
-import { ADMIN_USER_PROJECTION, type AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import { ADMIN_USER_PROJECTION, type AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import type {
   AdminUsersFilter,
   AdminUsersListParams,
   AdminUsersListResponse,
   AdminUsersSummary,
-} from '@client/app/utils/adminUsersFilter';
-import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
-import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
-import { funnelStepUserIds } from '@server/analytics/activationFunnel';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
+import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
+import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@bike4mind/server-utils/users/signupAnomaly';
+import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '@server/analytics/activationFunnel';
 import { signupVerdictUserIds } from '@server/analytics/realSignup';
-import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
-import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
+import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
+import {
+  LIVE_API_KEY_STATUS,
+  adminUsersSort,
+  buildAdminUsersMatch,
+  organizationNamesOf,
+} from '@bike4mind/server-utils/admin/usersList/adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
-const LIST_MAX_TIME_MS = 10_000;
+// Shared with the Analytics funnel so its counts and this drill-down fail on the same terms.
+const LIST_MAX_TIME_MS = COHORT_MAX_TIME_MS;
 const SPEND_WINDOW_MS = 30 * 86_400_000;
 // The active ids feed an `_id: { $in }` match, so the list has to stay small enough for one query document.
 export const ACTIVE_USERS_MAX = 50_000;
@@ -88,7 +94,9 @@ export async function adminUsersPipeline(
       ? funnelStepUserIds({ ...cohortWindow(filter, 'funnelStep'), step: filter.funnelStep }, cohortOptions)
       : undefined,
     filter.aiVerdict
-      ? listAiAbuseAdvisories(now).then(({ advisories }) => advisories.map(advisory => advisory.userId))
+      ? listAiAbuseAdvisories(now, { includeLinkedAccounts: false }).then(({ advisories }) =>
+          advisories.map(advisory => advisory.userId)
+        )
       : undefined,
   ]);
   const match = buildAdminUsersMatch(filter, {
@@ -171,7 +179,9 @@ export async function listAdminUsers(
       const id = String(row._id);
       // withSafeOrganization keeps its input's type, but it has replaced the populated org with the safe shape.
       const { authProviders, ...listed } = row as IUserObject & { authProviders?: { strategy?: string }[] };
-      const user = withSafeOrganization(User.hydrate(listed).toJSON(), viewer) as unknown as AdminUserListItem;
+      const safe = withSafeOrganization(User.hydrate(listed).toJSON(), viewer);
+      // The list is cross-tenant: a delegate is not scoped to their own org, so keep only identity.
+      const user = (viewer.isAdmin ? safe : withOrganizationIdentityOnly(safe)) as unknown as AdminUserListItem;
       return {
         ...user,
         signupMethod: authProviders?.[0]?.strategy ?? 'email',
@@ -183,6 +193,12 @@ export async function listAdminUsers(
     page: params.page,
     totalPages: Math.ceil(totalUsers / params.limit),
   };
+}
+
+function withOrganizationIdentityOnly<T extends { organizationId?: unknown }>(row: T): T {
+  const org = row.organizationId as { id?: unknown; name?: unknown } | null | undefined;
+  if (typeof org !== 'object' || org === null || !('name' in org)) return row;
+  return { ...row, organizationId: { id: org.id, name: org.name } };
 }
 
 /**

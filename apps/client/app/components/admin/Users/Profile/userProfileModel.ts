@@ -1,16 +1,39 @@
 import {
   CLIENT_SURFACES,
   DEVELOPER_USER_TAGS,
+  canAccessAdmin,
+  hasAdminPermission,
   hasDeveloperUserTag,
+  isFullAdmin,
+  missingAdminPermissionMessage,
+  type AdminPermissionId,
   type AccountDeletionSource,
   type ClientSurface,
-  type ILoginRecord,
+  type UserSignIn,
+  type UserSignInsPage,
   type IUserDocument,
   type OrganizationMemberRole,
 } from '@bike4mind/common';
 export { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
+
+type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
+
+/**
+ * Why an admin action on this profile is unavailable, or null. Mirrors the server gate: the permission,
+ * and full admin for a target with admin access.
+ */
+export const adminActionBlockedReason = (
+  actor: AdminIdentity,
+  target: AdminIdentity,
+  permission: AdminPermissionId
+): string | null => {
+  if (!hasAdminPermission(actor, permission)) return missingAdminPermissionMessage(permission);
+  if (canAccessAdmin(target) && !isFullAdmin(actor))
+    return 'Only full administrators can act on accounts with admin access';
+  return null;
+};
 
 /**
  * A user as the profile page has it: GET /api/users/[id] returns the whole document, so fields the
@@ -96,10 +119,9 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
   AdminUser: 'Admin',
 };
 
-/** The most recent sign-in; records are appended, but sort anyway since nothing guarantees it. */
-export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
-  [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
-  null;
+/** The newest successful sign-in among the loaded sign-in pages (each newest first), or null. */
+export const latestSignIn = (pages: readonly UserSignInsPage[]): UserSignIn | null =>
+  pages.flatMap(page => page.entries).find(entry => entry.event === 'login_success') ?? null;
 
 export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
   web: 'Web',
@@ -114,4 +136,15 @@ export const clientSurfacesSummary = (user: Pick<AdminUserProfile, 'clientUsage'
     surface => CLIENT_SURFACE_LABELS[surface]
   );
   return names.length > 0 ? names.join(' \u00b7 ') : null;
+};
+
+export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string; description: string }> = {
+  'support:read': { label: 'Support read', description: 'View users, organizations, logs and settings.' },
+  'credits:adjust': { label: 'Adjust credits', description: 'Grant or deduct credits.' },
+  'users:moderate': { label: 'Moderate users', description: 'Suspend, restrict and reinstate accounts.' },
+  'users:impersonate': { label: 'Impersonate', description: 'Sign in as another user.' },
+  'keys:revoke': { label: 'Revoke keys', description: 'Revoke API and embed keys.' },
+  'users:delete': { label: 'Delete users', description: 'Schedule and run account deletion.' },
+  'settings:manage': { label: 'Manage settings', description: 'Change admin settings, tags and product access.' },
+  'models:curate': { label: 'Curate models', description: 'Change which models are offered.' },
 };

@@ -14,6 +14,10 @@ import { blankStringLiterals } from './scopeCoverageHelpers';
  * that also serves non-admins), is in RAW_GATE_ALLOWLIST, or is in OUTSIDE_ADMIN_GATE. The allowlist
  * only shrinks: migrate a route, then delete its entry. Every entry must name a route that exists and
  * still gates raw, so a stale entry fails the suite.
+ *
+ * ADMIN_ROUTES_ELSEWHERE extends the scan to admin-only routes that live outside `pages/api/admin`.
+ * Mixed-audience routes that branch on isAdmin for owner-or-admin logic are not listed: they use
+ * requireAdminPermission() on their admin branch instead.
  */
 
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
@@ -32,80 +36,25 @@ const OUTSIDE_ADMIN_GATE = new Map<string, string>([
   ['qa/report/[runId]/[token]/[...path].ts', 'report assets, authorized by the run-scoped token in the path'],
 ]);
 
+const API_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
+
+const ADMIN_ROUTES_ELSEWHERE = [
+  'auth/mfa/force-reset.ts',
+  'inbox/admin-send.ts',
+  'reg-invites/migrate.ts',
+  'reg-invites/update.ts',
+  'security/blocked-ips.ts',
+  'security/blocked-ips/evaluate.ts',
+  'settings/fetch.ts',
+  'settings/index.ts',
+  'settings/update.ts',
+];
+
 const RAW_GATE_ALLOWLIST = new Set<string>([
-  'abuse/bulk-execute.ts',
-  'abuse/bulk-preview.ts',
-  'credit-adjustments.ts',
-  'held-signup-grants/index.ts',
-  'held-signup-grants/release.ts',
-  'held-signup-grants/revoke.ts',
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
-  'organizations/[id]/convert-to-paid.ts',
-  'organizations/[id]/group-types.ts',
-  'organizations/[id]/revoke.ts',
-  'organizations/[id]/seats.ts',
-  'organizations/[id]/top-up.ts',
-  'organizations/grant.ts',
-  'organizations/grants.ts',
-  'published-artifacts/[id]/takedown.ts',
-  'rate-limits.ts',
-  'signup-domain-holds.ts',
-  'signup-risk-reviews.ts',
-  'subscriptions/[id]/admin-log.ts',
-  'subscriptions/[id]/comp.ts',
-  'subscriptions/[id]/index.ts',
-  'subscriptions/[id]/sync.ts',
-  'subscriptions/by-stripe/[stripeSubscriptionId].ts',
-  'subscriptions/export.ts',
-  'subscriptions/index.ts',
-  'subscriptions/summary.ts',
-  'user-api-keys/[id]/rate-limit.ts',
-  'user-api-keys/[id]/reset-rate-limit.ts',
-  'user-api-keys/[id]/restore.ts',
-  'user-api-keys/[id]/revoke.ts',
-  'user-api-keys/[id]/rotate.ts',
-  'users/[userId]/activity.ts',
-  'users/[userId]/api-key-trust.ts',
-  'users/[userId]/compliance.ts',
-  'users/[userId]/credit-history.ts',
-  'users/[userId]/credit-ledger-export.ts',
-  'users/[userId]/credit-ledger.ts',
-  'users/[userId]/credit-summary.ts',
-  'users/[userId]/credit-transactions.ts',
-  'users/[userId]/entitlements.ts',
-  'users/[userId]/generate-api-key.ts',
-  'users/[userId]/grant-subscription.ts',
-  'users/[userId]/linked-accounts.ts',
-  'users/[userId]/new-account-spend-cap.ts',
-  'users/[userId]/profile.ts',
-  'users/[userId]/resend-email-change.ts',
-  'users/[userId]/resend-verification.ts',
-  'users/[userId]/revoke-api-keys.ts',
-  'users/[userId]/risk-evidence.ts',
-  'users/[userId]/risk-flags.ts',
-  'users/[userId]/sessions.ts',
-  'users/[userId]/sign-ins.ts',
-  'users/[userId]/signup-cluster.ts',
-  'users/[userId]/subscriptions.ts',
-  'users/[userId]/subscriptions/[subscriptionId]/credits.ts',
-  'users/[userId]/subscriptions/[subscriptionId]/remove.ts',
-  'users/[userId]/support-access.ts',
-  'users/[userId]/timeline.ts',
-  'users/[userId]/unlock-signup-grant.ts',
-  'users/[userId]/unverify-email.ts',
-  // Receipts require full admin access, matching the credit ledger and summary routes.
+  // Receipts stay full-admin only for now; the credit ledger and summary routes they sit beside are CREDITS_PAGE_READ.
   'users/[userId]/usage-receipt.ts',
-  'users/[userId]/user-api-keys.ts',
-  'users/[userId]/verify-email.ts',
-  'users/bulk/execute.ts',
-  'users/bulk/preview.ts',
-  'users/bulk/undo.ts',
-  'users/email-verification.ts',
-  'users/export.ts',
-  'users/index.ts',
-  'users/signup-verdicts.ts',
-  'users/summary.ts',
 ]);
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
@@ -201,6 +150,15 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
 
   it.each(files.map(f => [rel(f), f]))('%s', (name, file) => {
     if (RAW_GATE_ALLOWLIST.has(name) || OUTSIDE_ADMIN_GATE.has(name)) return;
+    expect(
+      usesRawIsAdminGate(readFileSync(file, 'utf8')),
+      `${name} gates on raw isAdmin; use adminApi() with a per-method adminPermissions entry`
+    ).toBe(false);
+  });
+
+  it.each(ADMIN_ROUTES_ELSEWHERE)('pages/api/%s', name => {
+    const file = path.join(API_DIR, name);
+    expect(existsSync(file), `${name} no longer exists; remove it from ADMIN_ROUTES_ELSEWHERE`).toBe(true);
     expect(
       usesRawIsAdminGate(readFileSync(file, 'utf8')),
       `${name} gates on raw isAdmin; use adminApi() with a per-method adminPermissions entry`

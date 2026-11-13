@@ -147,7 +147,7 @@ function makeRes() {
   return { res, headers, getSent: () => sent };
 }
 
-const oneFile = [{ fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' }];
+const oneFile = [{ filePath: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' }];
 
 describe('GET /api/files/download', () => {
   beforeEach(() => {
@@ -161,8 +161,8 @@ describe('GET /api/files/download', () => {
       // isImageServeable gates on moderationStatus alone now (even non-images), so these
       // fixtures need an explicit 'clean' to be zipped - not exercising the gate itself
       // here, that's covered by the next test.
-      { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
-      { fileUrl: 'u2', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'u2', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
     ]);
 
     const req = reqWithAbility();
@@ -221,12 +221,12 @@ describe('GET /api/files/download', () => {
 
   it('skips held/blocked uploaded images and a not-yet-cleared non-image, keeps clean files', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
-      { fileUrl: 'u2', mimeType: 'image/png', fileName: 'held.png', moderationStatus: 'pending' },
-      { fileUrl: 'u3', mimeType: 'image/png', fileName: 'blocked.png', moderationStatus: 'blocked' },
-      { fileUrl: 'u4', mimeType: 'image/png', fileName: 'clean.png', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'u2', mimeType: 'image/png', fileName: 'held.png', moderationStatus: 'pending' },
+      { filePath: 'u3', mimeType: 'image/png', fileName: 'blocked.png', moderationStatus: 'blocked' },
+      { filePath: 'u4', mimeType: 'image/png', fileName: 'clean.png', moderationStatus: 'clean' },
       // A non-image with an unset moderationStatus is now held too.
-      { fileUrl: 'u5', mimeType: 'text/plain', fileName: 'mid-scan.txt' },
+      { filePath: 'u5', mimeType: 'text/plain', fileName: 'mid-scan.txt' },
     ]);
 
     const req = reqWithAbility();
@@ -246,7 +246,7 @@ describe('GET /api/files/download', () => {
   it('exports a file with a 255-character name by capping the temp entry name', async () => {
     const fileName = `${'a'.repeat(251)}.pdf`;
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'application/pdf', fileName, moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'application/pdf', fileName, moderationStatus: 'clean' },
     ]);
 
     const { res, getSent } = makeRes();
@@ -261,7 +261,7 @@ describe('GET /api/files/download', () => {
 
   it('leaves out files once the export size budget is reached and names them in the README', async () => {
     const rows = Array.from({ length: 81 }, (_, i) => ({
-      fileUrl: `u${i}`,
+      filePath: `u${i}`,
       mimeType: 'text/plain',
       fileName: `f${i}.txt`,
       moderationStatus: 'clean',
@@ -287,7 +287,7 @@ describe('GET /api/files/download', () => {
   it('exports more files than one batch, passing each extracted content through', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue(
       Array.from({ length: 7 }, (_, i) => ({
-        fileUrl: `u${i}`,
+        filePath: `u${i}`,
         mimeType: 'text/plain',
         fileName: `f${i}.txt`,
         moderationStatus: 'clean',
@@ -305,7 +305,7 @@ describe('GET /api/files/download', () => {
 
   it('cleans up temp files even when zipping fails', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
     ]);
     (zipFiles as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));
 
@@ -332,8 +332,8 @@ describe('GET /api/files/download', () => {
   // nothing, and the archive is empty. Asserting only "a zip came back" cannot see that.
   it("selects the caller's own files through the real ability and zips them", async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
-      { fileUrl: 'u2', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
+      { filePath: 'u2', mimeType: 'text/plain', fileName: 'b.txt', moderationStatus: 'clean' },
     ]);
 
     const { res, getSent } = makeRes();
@@ -469,7 +469,7 @@ describe('GET /api/files/download', () => {
   // shortened document must be recorded rather than looking complete.
   it('renames a converted document to .txt and records the shortening in README.txt', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'application/pdf', fileName: 'contract.pdf', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'application/pdf', fileName: 'contract.pdf', moderationStatus: 'clean' },
     ]);
     (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(50001));
 
@@ -486,7 +486,7 @@ describe('GET /api/files/download', () => {
 
   it('records a file cut to exactly the cap with no ellipsis (cut ended in } or ])', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'application/json', fileName: 'data.json', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'application/json', fileName: 'data.json', moderationStatus: 'clean' },
     ]);
     (getContentFromFabfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce('x'.repeat(49999) + '}');
 
@@ -519,7 +519,7 @@ describe('GET /api/files/download', () => {
 
   it('keeps the original name for a file that is already text', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { fileUrl: 'u1', mimeType: 'text/markdown', fileName: 'notes.md', moderationStatus: 'clean' },
+      { filePath: 'u1', mimeType: 'text/markdown', fileName: 'notes.md', moderationStatus: 'clean' },
     ]);
 
     const { res } = makeRes();

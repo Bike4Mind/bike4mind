@@ -67,9 +67,9 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           color="neutral"
           role="status"
           data-testid="undo-toast"
-          sx={adminFocusScope}
+          sx={{ ...adminFocusScope, flexWrap: 'wrap', rowGap: 1 }}
         >
-          <Stack gap={0.5} sx={{ minWidth: 0 }}>
+          <Stack gap={0.5} sx={{ flex: '1 1 12rem', minWidth: 0 }}>
             <Typography level="body-sm" textColor="inherit" data-testid="undo-toast-message">
               {toast.message}
             </Typography>
@@ -79,14 +79,14 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               </Typography>
             )}
           </Stack>
-          <Stack direction="row" gap={1} sx={{ ml: 'auto' }}>
+          <Stack direction="row" gap={1} sx={{ ml: 'auto', flexShrink: 0 }}>
             {toast.onViewAudit && (
               <Button
                 size="sm"
                 variant="plain"
                 color="neutral"
                 onClick={toast.onViewAudit}
-                sx={{ color: 'inherit' }}
+                sx={{ color: 'inherit', flexShrink: 0, whiteSpace: 'nowrap' }}
                 data-testid="undo-toast-audit-btn"
               >
                 View audit entry
@@ -98,6 +98,7 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 variant="soft"
                 color="neutral"
                 loading={undoing}
+                sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
                 onClick={() => void handleUndo()}
                 data-testid="undo-toast-undo-btn"
               >

@@ -9,11 +9,10 @@ import {
   type IUserApiKeyDocument,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
-import { describeApiKeyAccess } from '@server/utils/apiKeyAccessGate';
+import { describeApiKeyAccess } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 // Hydrated docs only emit schema paths (and drop the key hashes) through toJSON.
 function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
@@ -23,7 +22,7 @@ function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
 /**
  * GET /api/admin/users/[userId]/user-api-keys
  *
- * Admin-only list of the API keys a user owns (docs whose userId is the
+ * Admin list (support:read) of the API keys a user owns (docs whose userId is the
  * target user - this includes org-billed keys the user minted, but not org
  * keys minted by someone else). All statuses are returned so support can see
  * disabled and expired keys too.
@@ -41,12 +40,8 @@ function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
  * layer, by UserApiKeyModel's toJSON transform, so the docs must stay hydrated - do not
  * switch this path to .lean().
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'support:read' } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId } = req.query as { userId?: string | string[] };
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');

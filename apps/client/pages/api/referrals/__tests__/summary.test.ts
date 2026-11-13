@@ -32,7 +32,15 @@ describe('GET /api/referrals/summary', () => {
   });
 
   it("returns the signed-in user's own summary and nobody else's", async () => {
-    const summary = { enabled: true, invited: 3, active: 2, subscribed: 1, creditsEarned: 7000, recentRewards: [] };
+    const summary = {
+      enabled: true,
+      invited: 3,
+      active: 2,
+      subscribed: 1,
+      creditsEarned: 7000,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 0 },
+    };
     h.getSummary.mockResolvedValue(summary);
     const json = vi.fn();
     const status = vi.fn(() => ({ json }));

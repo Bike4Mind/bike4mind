@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import { MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 import { buildDatalakeTag, createDataLake, isDatalakeTagWellFormed, previewDataLakeSlug } from './createDataLake';
+import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
+
+// The cap has its own unit tests (assertLakeCountWithinCap.test.ts); these mocks keep it out of
+// the way, and one test below pins that createDataLake calls it before inserting.
+vi.mock('./assertLakeCountWithinCap', () => ({ assertLakeCountWithinCap: vi.fn(async () => undefined) }));
 
 describe('isDatalakeTagWellFormed (trap 4: org-qualified vs plain datalake tag)', () => {
   it('accepts the org-qualified form for an org lake', () => {
@@ -349,5 +355,20 @@ describe('createDataLake maps a unique-index rejection of the insert (#5701)', (
     await expect(createDataLake('creator', params, { db: makeDb(unknownIndex) } as never)).rejects.toBe(unknownIndex);
     const other = new Error('connection reset');
     await expect(createDataLake('creator', params, { db: makeDb(other) } as never)).rejects.toBe(other);
+  });
+});
+
+describe('createDataLake enforces the per-user lake cap', () => {
+  const params = { name: 'Sales', slug: 'sales', fileTagPrefix: 'sl:' } as Parameters<typeof createDataLake>[1];
+
+  it('checks the creator against the cap and inserts nothing when it refuses', async () => {
+    const refusal = new ForbiddenError('limit reached', { code: 'DATA_LAKE_LIMIT_REACHED' });
+    vi.mocked(assertLakeCountWithinCap).mockRejectedValueOnce(refusal);
+    const create = vi.fn();
+    const db = { dataLakes: { find: vi.fn(async () => []), create }, dataLakeAccessGrants: { upsertGrant: vi.fn() } };
+
+    await expect(createDataLake('creator', params, { db } as never)).rejects.toBe(refusal);
+    expect(assertLakeCountWithinCap).toHaveBeenCalledWith(db, 'creator', undefined);
+    expect(create).not.toHaveBeenCalled();
   });
 });

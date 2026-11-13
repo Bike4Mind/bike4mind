@@ -7,6 +7,8 @@ initializeSlackPackage();
  * Receives Jira webhook events and routes them to Slack channels based on subscriptions.
  *
  * URL format: POST /api/webhooks/jira/{routingToken}
+ * The token is in the path because the URL is registered with Jira; it is redacted from request
+ * logs (server/middlewares/requestLogUrl.ts).
  *
  * Security-critical processing order (sync):
  * 1. Extract routing token from URL

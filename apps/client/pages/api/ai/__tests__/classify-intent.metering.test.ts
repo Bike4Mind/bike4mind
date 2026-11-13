@@ -85,7 +85,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
   const real = await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>();
   return {

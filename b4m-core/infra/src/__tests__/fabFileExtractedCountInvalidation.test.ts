@@ -39,6 +39,8 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 
 /** First-write and backup paths: they upload bytes but invalidate nothing. */
 const NOT_A_REWRITE = new Set([
+  // First write of a new object; the key is hashed from user, tag, name and slot.
+  'apps/client/server/tutorials/sheet.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
@@ -59,7 +61,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/s3/notebookImportComplete.ts',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts',
   // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
   'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',

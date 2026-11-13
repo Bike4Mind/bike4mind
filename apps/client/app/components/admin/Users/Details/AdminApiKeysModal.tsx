@@ -1,32 +1,24 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
 import type { ApiKeyRateLimitResetResponse } from '@client/app/hooks/data/userApiKeys';
-import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { ApiKeyStatus, IUserApiKeyDocument } from '@bike4mind/common';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import { Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Modal,
-  ModalDialog,
-  Table,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
-import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  AdminDialog,
+  DataTable,
+  EmptyState,
+  RelativeTime,
+  type DataColumn,
+} from '@client/app/components/admin/shared';
+import { useUser } from '@client/app/contexts/UserContext';
+import { adminActionBlockedReason } from '../Profile/userProfileModel';
 import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-
-dayjs.extend(relativeTime);
 
 interface AdminApiKeysModalProps {
   open: boolean;
@@ -47,8 +39,9 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     refetchInterval: 15_000,
   });
   const resetMutation = useAdminResetApiKeyRateLimit();
-  const confirm = useConfirmation();
-  const [resettingKeyId, setResettingKeyId] = useState<string | null>(null);
+  const { currentUser } = useUser();
+  const resetBlocked = adminActionBlockedReason(currentUser, user, 'users:moderate');
+  const [resettingKey, setResettingKey] = useState<IUserApiKeyDocument | null>(null);
 
   const usageFor = (key: IUserApiKeyDocument) => data?.liveUsage[key.id] ?? { minute: 0, day: 0 };
 
@@ -99,114 +92,139 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     return clauses.length === 0 ? '' : ` - ${clauses.join('; ')}`;
   };
 
-  const handleReset = (key: IUserApiKeyDocument) => {
-    confirm({
-      title: 'Reset rate limit',
-      description: `Reset the minute and day rate-limit counters for "${key.name}"? The next request opens a fresh window.`,
-      type: 'danger',
-      onOk: () => {
-        setResettingKeyId(key.id);
-        resetMutation.mutate(key.id, {
-          // `lockout` absent entirely means a stale bundled client is talking to a server build
-          // that predates the field - a bare success toast, not "every counter unverified".
-          onSuccess: response =>
-            toast.success(
-              `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
-            ),
-          // Clear only our own row: a later reset on another row may already
-          // own the spinner when this settle lands.
-          onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),
-        });
-      },
-    });
+  const handleReset = async (reason: string) => {
+    if (!resettingKey || resetBlocked) return;
+    const key = resettingKey;
+    const response = await resetMutation.mutateAsync({ keyId: key.id, reason });
+    toast.success(
+      `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
+    );
+    setResettingKey(null);
   };
 
-  return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog size="lg" sx={{ width: '900px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
-        <Typography level="h4">API Keys for {user.username}</Typography>
+  const columns: DataColumn<IUserApiKeyDocument>[] = [
+    { id: 'name', label: 'Name', render: key => key.name, sortValue: key => key.name.toLowerCase() },
+    {
+      id: 'prefix',
+      label: 'Key prefix',
+      render: key => (
+        <Typography level="body-xs" fontFamily="monospace">
+          {key.keyPrefix}
+        </Typography>
+      ),
+    },
+    {
+      id: 'scopes',
+      label: 'Scopes',
+      render: key => (
+        <Typography
+          level="body-sm"
+          noWrap
+          title={key.scopes.join(', ')}
+          sx={{ maxWidth: '12rem' }}
+          data-testid={`admin-api-key-scopes-${key.id}`}
+        >
+          {key.scopes.length > 1 ? `${key.scopes.length} scopes` : (key.scopes[0] ?? '-')}
+        </Typography>
+      ),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      render: key => {
+        const chip = statusChip(key);
+        return (
+          <Tooltip title={revocationTooltip(key) ?? ''}>
+            <Chip variant="soft" color={chip.color} data-testid={`admin-api-key-status-${key.id}`}>
+              {chip.label}
+            </Chip>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      id: 'usage',
+      label: 'Rate limit',
+      render: key => {
+        const usage = usageFor(key);
+        const minuteReset = formatRateLimitReset(usage.minuteResetAt);
+        const dayReset = formatRateLimitReset(usage.dayResetAt);
+        return (
+          <Stack data-testid={`admin-api-key-usage-${key.id}`}>
+            <Typography level="body-xs" data-testid={`admin-api-key-usage-minute-${key.id}`}>
+              {usage.minute}/{key.rateLimit.requestsPerMinute} per min
+              {usage.minute > 0 && minuteReset ? ` \u00b7 resets in ${minuteReset}` : ''}
+            </Typography>
+            <Typography level="body-xs" data-testid={`admin-api-key-usage-day-${key.id}`}>
+              {usage.day}/{key.rateLimit.requestsPerDay} per day
+              {usage.day > 0 && dayReset ? ` \u00b7 resets in ${dayReset}` : ''}
+            </Typography>
+          </Stack>
+        );
+      },
+    },
+    {
+      id: 'lastUsed',
+      label: 'Last used',
+      render: key => (key.lastUsedAt ? <RelativeTime at={key.lastUsedAt} /> : 'Never'),
+      sortValue: key => (key.lastUsedAt ? new Date(key.lastUsedAt).getTime() : 0),
+    },
+    {
+      id: 'actions',
+      label: 'Actions',
+      render: key => (
+        <Tooltip title={resetBlocked ?? 'Reset rate limit'}>
+          <span>
+            <IconButton
+              size="sm"
+              variant="outlined"
+              aria-label={`Reset rate limit for ${key.name}`}
+              disabled={!!resetBlocked || resetMutation.isPending}
+              onClick={() => setResettingKey(key)}
+              data-testid={`admin-api-key-reset-rate-limit-btn-${key.id}`}
+            >
+              <RestartAltIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ];
 
-        {isLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-            <CircularProgress data-testid="admin-api-keys-loading" />
-          </Box>
-        ) : error ? (
-          <Alert color="danger" data-testid="admin-api-keys-error">
-            Failed to load API keys.
-            <Button size="sm" variant="outlined" color="danger" onClick={() => refetch()}>
-              Retry
-            </Button>
-          </Alert>
-        ) : !data || data.apiKeys.length === 0 ? (
-          <Alert color="neutral" startDecorator={<InfoOutlinedIcon />} data-testid="admin-api-keys-empty">
-            This user has no API keys.
-          </Alert>
-        ) : (
-          <Table stickyHeader hoverRow sx={{ '& thead th': tableHeaderSx }}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Key Prefix</th>
-                <th>Scopes</th>
-                <th>Status</th>
-                <th>Rate limit</th>
-                <th>Last Used</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.apiKeys.map(key => {
-                const usage = usageFor(key);
-                const chip = statusChip(key);
-                const minuteReset = formatRateLimitReset(usage.minuteResetAt);
-                const dayReset = formatRateLimitReset(usage.dayResetAt);
-                return (
-                  <tr key={key.id} data-testid={`admin-api-key-row-${key.id}`}>
-                    <td>{key.name}</td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                        {key.keyPrefix}
-                      </Typography>
-                    </td>
-                    <td>{key.scopes.join(', ')}</td>
-                    <td>
-                      <Tooltip title={revocationTooltip(key) ?? ''}>
-                        <Chip variant="soft" color={chip.color} data-testid={`admin-api-key-status-${key.id}`}>
-                          {chip.label}
-                        </Chip>
-                      </Tooltip>
-                    </td>
-                    <td data-testid={`admin-api-key-usage-${key.id}`}>
-                      <Typography level="body-xs" data-testid={`admin-api-key-usage-minute-${key.id}`}>
-                        {usage.minute}/{key.rateLimit.requestsPerMinute} per min
-                        {usage.minute > 0 && minuteReset ? ` · resets in ${minuteReset}` : ''}
-                      </Typography>
-                      <Typography level="body-xs" data-testid={`admin-api-key-usage-day-${key.id}`}>
-                        {usage.day}/{key.rateLimit.requestsPerDay} per day
-                        {usage.day > 0 && dayReset ? ` · resets in ${dayReset}` : ''}
-                      </Typography>
-                    </td>
-                    <td>{key.lastUsedAt ? dayjs(key.lastUsedAt).fromNow() : 'Never'}</td>
-                    <td>
-                      <Tooltip title="Reset rate limit">
-                        <IconButton
-                          size="sm"
-                          variant="outlined"
-                          onClick={() => handleReset(key)}
-                          loading={resetMutation.isPending && resettingKeyId === key.id}
-                          data-testid={`admin-api-key-reset-rate-limit-btn-${key.id}`}
-                        >
-                          <RestartAltIcon />
-                        </IconButton>
-                      </Tooltip>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        )}
-      </ModalDialog>
-    </Modal>
+  return (
+    <>
+      <AdminDialog
+        open={open && !resettingKey}
+        onClose={onClose}
+        title={`API keys for ${user.username}`}
+        width={960}
+        data-testid="admin-api-keys-dialog"
+      >
+        <DataTable
+          rows={data?.apiKeys ?? []}
+          columns={columns}
+          getRowId={key => key.id}
+          label="API key rate limits"
+          loading={isLoading}
+          error={error ? 'Failed to load API keys.' : undefined}
+          onRetry={() => void refetch()}
+          testId="admin-api-keys-table"
+          rowTestId={key => `admin-api-key-row-${key.id}`}
+          empty={<EmptyState title="This user has no API keys." action={null} />}
+        />
+      </AdminDialog>
+      <ActionDialog
+        open={open && resettingKey !== null}
+        onClose={() => setResettingKey(null)}
+        title="Reset rate limit"
+        description={`Reset the minute and day rate-limit counters for "${resettingKey?.name ?? ''}"? The next request opens a fresh window. This reset cannot be undone.`}
+        reasonPresets={ADMIN_REASON_PRESETS.rateLimitReset}
+        confirmLabel="Reset rate limit"
+        onConfirm={handleReset}
+        pending={resetMutation.isPending}
+        blockedReason={resetBlocked}
+        data-testid="admin-api-keys-reset-dialog"
+      />
+    </>
   );
 }

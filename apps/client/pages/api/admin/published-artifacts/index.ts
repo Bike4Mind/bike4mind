@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { PublishedArtifact } from '@bike4mind/database';
 
@@ -19,7 +19,7 @@ import { PublishedArtifact } from '@bike4mind/database';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: MODERATION_PAGE_READ }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request, res) => {
     const status = String(req.query.status ?? 'reported');
     const limit = Math.min(

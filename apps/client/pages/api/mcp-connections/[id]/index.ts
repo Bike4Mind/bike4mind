@@ -5,7 +5,7 @@ import {
   getUserConnection,
   updateUserConnection,
 } from '@server/mcpConnections/connectionService';
-import { assertCustomMcpEnabled } from '@server/mcpConnections/customMcpAccess';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { mcpConnectionPatchBodySchema, parseMcpConnectionBody } from '@server/validators/mcpConnectionValidators';
 
 const connectionId = (query: { id?: string | string[] }): string => (typeof query.id === 'string' ? query.id : '');

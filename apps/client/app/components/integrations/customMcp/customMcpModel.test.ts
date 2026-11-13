@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { IMcpConnectionPublic } from '@bike4mind/common';
 import {
+  composerConnections,
   connectionChip,
   connectionsFor,
   galleryConnectionState,
   initialToolDrafts,
-  isReadOnlyTool,
   needsSignIn,
   offeredToolCount,
   toReviewEntries,
@@ -30,17 +30,9 @@ const connection = (overrides: Partial<IMcpConnectionPublic> = {}): IMcpConnecti
     status: 'connected',
     auth: { kind: 'oauth' },
     tools: [],
+    enabled: true,
     ...overrides,
   }) as IMcpConnectionPublic;
-
-describe('isReadOnlyTool', () => {
-  it('trusts only readOnlyHint without destructiveHint; a missing hint is a write', () => {
-    expect(isReadOnlyTool(tool({ annotations: { readOnlyHint: true } }))).toBe(true);
-    expect(isReadOnlyTool(tool({ annotations: { readOnlyHint: true, destructiveHint: true } }))).toBe(false);
-    expect(isReadOnlyTool(tool({ annotations: {} }))).toBe(false);
-    expect(isReadOnlyTool(tool())).toBe(false);
-  });
-});
 
 describe('tool review drafts', () => {
   it('starts a tool pending review switched off, even when its stored flag says on', () => {
@@ -93,5 +85,19 @@ describe('connection state', () => {
       connected: false,
       needsReconnect: true,
     });
+  });
+});
+
+describe('composerConnections', () => {
+  it('keeps only connected, switched-on connectors with a reviewed tool on', () => {
+    const on = tool({ state: 'active', enabled: true });
+    const all = [
+      connection({ id: 'ok', tools: [on] }),
+      connection({ id: 'off', enabled: false, tools: [on] }),
+      connection({ id: 'signin', status: 'pending_auth', tools: [on] }),
+      connection({ id: 'unreviewed', tools: [tool({ enabled: true })] }),
+      connection({ id: 'none-on', tools: [tool({ state: 'active', enabled: false })] }),
+    ];
+    expect(composerConnections(all).map(c => c.id)).toEqual(['ok']);
   });
 });

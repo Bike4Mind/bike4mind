@@ -53,6 +53,8 @@ import {
   providerSummarizesReasoning,
   withholdsReasoning,
   type ICacheRepository,
+  type CompletionRunAttribution,
+  isOrgServiceAccountOf,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -111,6 +113,18 @@ export type CompletionCreditHolds = {
   reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
   refund(refund: () => Promise<void>): Promise<boolean>;
   settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+};
+
+/** How a completion's credit settlement ended, reported once through `onSettled`. */
+export type CompletionSettlement = {
+  /** The id the ledger row and usage event carry. */
+  requestId: string;
+  /** True only when the ledger row was written and its transaction committed. */
+  committed: boolean;
+  /** What the ledger recorded; can be below the computed cost when the balance capped it. 0 unless committed. */
+  creditsCharged: number;
+  /** The provider cost the credits were priced from (the terminal content event's `credits.usdCost`). */
+  usdCost?: number;
 };
 
 export interface CompletionParams {
@@ -217,6 +231,11 @@ export interface CompletionParams {
    */
   sessionId?: string;
   /**
+   * The run this completion belongs to, already verified by the caller as created by this user and
+   * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
+   */
+  run?: CompletionRunAttribution;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -241,6 +260,12 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /**
+   * Called once after settlement, before the function returns or rethrows an abort. Not called when
+   * the completion failed before settlement or credits were not enforced. A throw is logged and
+   * swallowed.
+   */
+  onSettled?: (settlement: CompletionSettlement) => void;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
   /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
@@ -557,6 +582,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // One id per request: the usage event and the credit transaction share it so the admin ledger can
   // point at the usage record.
   const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
+  // The caller's session id lives under run, not top-level: top-level UsageEvent.sessionId is an ownership-probe input.
+  const runLineage = params.run && { ...params.run, sessionId: params.sessionId };
   const completionStartTime = Date.now();
 
   if (!hasEffectiveConversationMessage(messages)) {
@@ -599,10 +626,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
     // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
     // so without this arm such a key would fail on its very first call, not merely after someone
-    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    // left. The org's own service account (an org-owned key's holder) is likewise never on the
+    // roster. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
-      if (!actor?.isAdmin) {
+      if (!actor?.isAdmin && !isOrgServiceAccountOf(actor, organization.id)) {
         logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
           userId,
           organizationId: organization.id,
@@ -828,6 +856,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
+    // No fallback loop here, so a refusal reaches the caller as finish_reason 'refusal'.
+    settleRefusal: true,
     tools: requestTools,
     ...(cacheStrategy ? { cacheStrategy } : {}),
     ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
@@ -1240,6 +1270,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1258,6 +1289,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1374,6 +1406,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         userId,
         ownerId: holderId,
         ownerType: holderType,
+        run: runLineage,
         feature: 'completion_api',
         provider: requestedModelInfo!.backend,
         model,
@@ -1464,11 +1497,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
             // the positional $inc in updateUserDetails cannot create the row it positions on, so without
             // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-            // pays the extra read/write when the row is actually absent.
+            // pays the extra read/write when the row is actually absent. The org's service account is
+            // not a member and gets no row (deductCreditsWithOrgSupport does the same), so the $inc
+            // below is a no-op for it.
             const member = organization!.userDetails?.find(u => u.id === userId);
             if (!member) {
               const actingUser = await db.users.findById(userId);
-              if (actingUser) {
+              if (actingUser && !isOrgServiceAccountOf(actingUser, holderId)) {
                 await db.organizations!.ensureUserDetails(holderId, {
                   id: userId,
                   email: actingUser.email ?? actingUser.username,
@@ -1519,6 +1554,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 reservedCredits,
                 creditDifference,
                 ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
+                ...(runLineage && { run: runLineage }),
               },
             },
             {
@@ -1562,6 +1598,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         error: error instanceof Error ? error.message : String(error),
       });
       // Don't throw - completion already happened, but ensure this is tracked
+    }
+  }
+
+  // Outside the settlement try, so a throwing callback cannot read as a failed ledger adjustment.
+  // Guarded so a throwing callback cannot skip the embed metering and per-key spend below.
+  if (enforceCredits && modelInfo) {
+    try {
+      params.onSettled?.({
+        requestId,
+        committed: settlementCommitted,
+        creditsCharged: settlementCommitted ? chargedCredits : 0,
+        usdCost: chargedUsdCost,
+      });
+    } catch (error) {
+      logger?.warn?.('[CLI_CREDITS] onSettled callback threw', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -80,6 +80,13 @@ describe('signupGrantBudgetRepository', () => {
     expect(row).toMatchObject({ alertedMissing: true, alerted50: false, alerted100: false });
   });
 
+  it('marks the drip-cap-default alert once, on its own flag', async () => {
+    expect(await repo.markAlerted(DAY, 'drip_cap_default')).toBe(true);
+    expect(await repo.markAlerted(DAY, 'drip_cap_default')).toBe(false);
+    const row = await SignupGrantBudgetDayModel.findById(DAY).lean();
+    expect(row).toMatchObject({ alertedDripCapDefault: true, alertedMissing: false });
+  });
+
   it('keeps pool counters for the same day apart', async () => {
     await repo.reserve(`signup:${DAY}`, 'tx-1', 20, 25);
     expect(await repo.reserve(`trickle:${DAY}`, 'tx-2', 20, 25)).toEqual({ spent: 20, fresh: true });

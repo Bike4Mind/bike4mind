@@ -10,12 +10,13 @@ vi.mock('@google/genai', () => ({
 }));
 
 import { GeminiImageService } from './GeminiImageService';
-import { ImageModerationBlockedError } from './imageGenerationErrors';
+import { ImageInputRejectedError, ImageModerationBlockedError } from './imageGenerationErrors';
+import { classifyImageProviderError } from '../imageProviders/shared';
 
-function makeService(generateContent: ReturnType<typeof vi.fn>) {
+function makeService(generateContent: ReturnType<typeof vi.fn>, generateImages?: ReturnType<typeof vi.fn>) {
   const svc = new GeminiImageService('test-key', new Logger());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (svc as any).genAI = { models: { generateContent } };
+  (svc as any).genAI = { models: { generateContent, generateImages } };
   return svc;
 }
 
@@ -196,5 +197,57 @@ describe('GeminiImageService - policy blocks', () => {
     });
 
     expect(result.type).toBe('clarification');
+  });
+});
+
+describe('GeminiImageService - SDK error classification', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const sdkError = (status: number, message = 'sdk failure') => Object.assign(new Error(message), { status });
+  const callers = {
+    generate: (svc: GeminiImageService) =>
+      svc.generate('a prompt', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE, n: 1 }),
+    edit: (svc: GeminiImageService) =>
+      svc.edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE }),
+  };
+
+  describe.each(Object.entries(callers))('%s', (_name, call) => {
+    it.each([
+      [400, false],
+      [429, true],
+    ])('keeps the SDK status %i so the failure classifies as retryable=%s', async (status, retryable) => {
+      const original = sdkError(status);
+      const failing = vi.fn().mockRejectedValue(original);
+      const svc = makeService(failing, failing);
+
+      const thrown = await call(svc).catch((e: unknown) => e);
+
+      expect((thrown as Error).cause).toBe(original);
+      expect(classifyImageProviderError(thrown)).toMatchObject({ status: 'failed', retryable });
+    });
+
+    it('keeps the cause when the message matches a friendly-message branch', async () => {
+      const original = sdkError(429, 'RATE_LIMIT: quota exceeded');
+      const failing = vi.fn().mockRejectedValue(original);
+      const svc = makeService(failing, failing);
+
+      const thrown = await call(svc).catch((e: unknown) => e);
+
+      expect((thrown as Error).cause).toBe(original);
+    });
+  });
+
+  it('reports a text-only generate reply as a rejected input, not an unknown error', async () => {
+    const svc = makeService(
+      vi.fn().mockResolvedValue({
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Would you like me to draw it?' }] } }],
+      }),
+      vi.fn().mockRejectedValue(new Error('generateImages is not supported for this model'))
+    );
+
+    const thrown = await callers.generate(svc).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageInputRejectedError);
+    expect(classifyImageProviderError(thrown)).toMatchObject({ status: 'failed', retryable: false });
   });
 });

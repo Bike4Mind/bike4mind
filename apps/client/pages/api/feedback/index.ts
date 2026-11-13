@@ -1,11 +1,18 @@
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackAiModel, FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
   FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_RESOLUTIONS,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
   FeedbackEvents,
   FeedbackStatus,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  parseFeedbackClientContext,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -27,6 +34,9 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { FEEDBACK_RECEIVED_WINDOWS, feedbackReceivedSince } from '@client/app/components/admin/Feedback/feedbackTrends';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
+import { feedbackAiVisible } from '@server/admin/ai/feedbackVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -64,6 +74,8 @@ export const FEEDBACK_LIST_FIELDS = [
   'content',
   'contentStored',
   'status',
+  'resolution',
+  'resolutionDuplicateId',
   'tags',
   'username',
   'userEmail',
@@ -72,6 +84,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'type',
   'subject',
   'helpContext',
+  'clientContext',
   'sessionId',
   'questId',
   'createdAt',
@@ -101,7 +114,12 @@ const ListFeedbackQuerySchema = z.object({
   // (rollups, deep links) should use.
   organization: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+  resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
   subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+  area: z.enum(FEEDBACK_AI_AREAS).optional(),
+  severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
+  type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
+  received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
@@ -110,7 +128,18 @@ const ListFeedbackQuerySchema = z.object({
   // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
   // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
   includeOrganizations: z.enum(['true', 'false']).optional(),
+  // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+  // report through the audit trail just to learn the organization names.
+  facetsOnly: z.enum(['true', 'false']).optional(),
 });
+
+/** Distinct, non-empty organization names, sorted for the filter menu. */
+async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
+  const names = await FeedbackModel.distinct('organization', readable);
+  return names
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
 function toArray<T>(value: T | T[] | undefined): T[] {
@@ -132,6 +161,9 @@ const CreateFeedbackRequestSchema = z.object({
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   contextQuestId: z.string().min(1).optional(),
+  // Left loose here on purpose: parseFeedbackClientContext validates and bounds it, and a malformed
+  // object must cost the report its context, not the report.
+  clientContext: z.unknown().optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -233,6 +265,16 @@ const handler = baseApi()
     // pass for every logged-in user).
     const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
 
+    if (query.facetsOnly === 'true') {
+      return res.json({
+        items: [],
+        total: 0,
+        page: query.page,
+        limit: query.limit,
+        organizations: await readOrganizationFacet(readable),
+      });
+    }
+
     const clauses: FilterQuery<unknown>[] = [readable];
 
     if (query.userId) clauses.push({ userId: query.userId });
@@ -240,12 +282,37 @@ const handler = baseApi()
     if (query.questId) clauses.push({ questId: query.questId });
     if (query.organizationId) clauses.push({ organizationId: query.organizationId });
     if (query.subject) clauses.push({ subject: query.subject });
+    if (query.area || query.severity) {
+      if (!req.user?.isAdmin || !(await feedbackAiVisible())) {
+        clauses.push({ _id: { $in: [] } });
+      } else {
+        const labelClauses = Object.entries({ area: query.area, severity: query.severity })
+          .filter(([, value]) => value)
+          .map(([key, value]) => ({
+            $or: [{ [`override.${key}`]: value }, { override: { $exists: false }, [`labels.${key}`]: value }],
+          }));
+        const matches = await FeedbackAiModel.find({ expiresAt: { $gt: new Date() }, $and: labelClauses })
+          .select('feedbackId')
+          .lean();
+        clauses.push({ _id: { $in: matches.map(row => row.feedbackId) } });
+      }
+    }
+    if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
 
     const organizations = toArray(query.organization);
     if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
 
     const statuses = toArray(query.status);
     if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
+
+    // Reports from the help modal and older ones carry no type and are shown as Feedback, so that
+    // filter also matches a missing type (`null` in `$in` matches an absent field).
+    const types = toArray(query.type);
+    if (types.length > 0) {
+      clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
+    }
+
+    if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
 
     if (query.search) {
       const pattern = new RegExp(escapeRegex(query.search), 'i');
@@ -279,8 +346,24 @@ const handler = baseApi()
       // selecting an organization would prune every other option out of the dropdown that
       // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
-      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
+      query.includeOrganizations === 'true' ? readOrganizationFacet(readable) : undefined,
     ]);
+
+    // An admin's read grant spans every reporter, so the page they are about to read is audited.
+    await recordFeedbackRead(
+      req,
+      items.map(item => ({ id: item.id, userId: item.userId })),
+      {
+        page: query.page,
+        limit: query.limit,
+        search: query.search,
+        userId: query.userId,
+        sessionId: query.sessionId,
+        questId: query.questId,
+        organizationId: query.organizationId,
+        subject: query.subject,
+      }
+    );
 
     return res.json({
       items: await hydrateFeedbackText(items.map(toRedactedFeedback)),
@@ -289,11 +372,7 @@ const handler = baseApi()
       limit: query.limit,
       // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
       // organizations have any feedback", which would empty the filter menu.
-      ...(organizationFacet && {
-        organizations: organizationFacet
-          .filter((name): name is string => typeof name === 'string' && name.length > 0)
-          .sort((a, b) => a.localeCompare(b)),
-      }),
+      ...(organizationFacet && { organizations: organizationFacet }),
     });
   })
   .post(async (req, res) => {
@@ -303,8 +382,20 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
-      newFeedbackData;
+    const {
+      userId,
+      content,
+      tags,
+      username,
+      userEmail,
+      promptMeta,
+      type,
+      questId,
+      sessionId,
+      contextQuestId,
+      clientContext: rawClientContext,
+    } = newFeedbackData;
+    const clientContext = parseFeedbackClientContext(rawClientContext, req.headers['user-agent']);
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -341,11 +432,13 @@ const handler = baseApi()
         : Promise.resolve(false),
     ]);
 
+    const autoClosed = isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags });
     const newFeedback = new FeedbackModel({
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
       tags,
-      status: FeedbackStatus.New,
+      status: autoClosed ? FeedbackStatus.Closed : FeedbackStatus.New,
+      ...(autoClosed && type === FeedbackType.THUMBS_UP ? { resolution: 'no_action_needed' } : {}),
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,
@@ -356,6 +449,7 @@ const handler = baseApi()
       contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
+      clientContext,
       contentStored,
     });
     await saveFeedbackOrRollbackText({ feedback: newFeedback, contentStored, logger: req.logger });

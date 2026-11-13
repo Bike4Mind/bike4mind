@@ -24,7 +24,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
 
       try {
-        const operations = await OperationsModelService.getOperationsModel();
+        const operations = await OperationsModelService.getOperationsModel({ endUserId: req.user.id });
         const { modelId, modelInfo } = operations;
         const llm = meterCompletionBackend(
           operations.llm,
@@ -39,7 +39,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
         });
 
         const generatedName = result.trim();
-        req.logger.info('Generated name from AI:', { generatedName, prompt: prompt.slice(0, 100) });
+        req.logger.info('Generated name from AI', { generatedNameLength: generatedName.length });
 
         const cleanName = generatedName
           ?.replace(/\.(txt|png|jpg|jpeg|gif|bmp|webp|pdf|doc|docx)$/i, '')
@@ -54,7 +54,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
           return res.status(200).json({ name: fallbackName });
         }
 
-        req.logger.info('Returning clean name:', { cleanName });
+        req.logger.info('Returning clean name', { cleanNameLength: cleanName.length });
         return res.status(200).json({ name: cleanName });
       } catch (modelError) {
         if (modelError instanceof UnprocessableEntityError) throw modelError;

@@ -131,6 +131,21 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', claudeCodeAllowedTools: [] }, { new: true });
   });
 
+  it('updates and clears the Claude Code model', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ claudeCodeModel: 'opus' }));
+    const set = makeReqRes('PUT', OWNER, { claudeCodeModel: ' haiku ' });
+    await handler(set.req, set.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', claudeCodeModel: 'haiku' }, { new: true });
+    const clear = makeReqRes('PUT', OWNER, { claudeCodeModel: '' });
+    await handler(clear.req, clear.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith({ id: 'skill-1', claudeCodeModel: '' }, { new: true });
+  });
+
+  it('rejects an unusable Claude Code model', async () => {
+    const { req, res } = makeReqRes('PUT', OWNER, { claudeCodeModel: 'a b' });
+    await expect(handler(req, res)).rejects.toBeInstanceOf(BadRequestError);
+  });
+
   it('rejects Claude Code tools that are not a string list', async () => {
     const { req, res } = makeReqRes('PUT', OWNER, { claudeCodeAllowedTools: 'Bash' });
     await expect(handler(req, res)).rejects.toBeInstanceOf(BadRequestError);

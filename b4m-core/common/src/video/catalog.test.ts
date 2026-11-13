@@ -249,3 +249,43 @@ it('gives every model a positive typical render time', () => {
     expect(VIDEO_MODEL_CATALOG[id].typicalRenderSeconds).toBeGreaterThan(0);
   }
 });
+
+describe('flux-3-video', () => {
+  const caps = VIDEO_MODEL_CATALOG['flux-3-video'];
+  const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
+    model: 'flux-3-video',
+    mode: 'text_to_video',
+    prompt: 'a lighthouse',
+    ...caps.defaults,
+    ...overrides,
+  });
+
+  it.each([
+    ['720p', 0.75],
+    ['1080p', 1.2],
+  ] as const)('prices a 5s %s full render at the published rate', (resolution, usd) => {
+    expect(estimateVideoCostUsd(caps, request({ resolution }))).toBeCloseTo(usd, 6);
+  });
+
+  it.each([2, 4, 4.5, 21])('rejects unsupported duration %s', durationSeconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_duration',
+    });
+  });
+
+  it.each([5, 10, 20])('accepts duration %s', durationSeconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds }), caps).ok).toBe(true);
+  });
+
+  it('rejects 480p', () => {
+    expect(validateAgainstCapabilities(request({ resolution: '480p' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_resolution',
+    });
+  });
+
+  it.each([false, true])('accepts audio=%s', audio => {
+    expect(validateAgainstCapabilities(request({ audio }), caps).ok).toBe(true);
+  });
+});

@@ -13,6 +13,7 @@ import {
   artifactRepository,
   fabFileRepository,
   mementoRepository,
+  mongoose,
   memoryLedgerRepository,
   memoryPrincipalKeyRepository,
   projectRepository,
@@ -35,7 +36,10 @@ import {
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { buildAccountDataExportReadyEmail } from '@server/utils/mailer/accountDataExportEmail';
+import { buildAccountDataExportReadyEmail } from '@workers/utils/mailer/accountDataExportEmail';
+import { Resource } from 'sst';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { accountArchiveAdapters, type AccountArchiveCollection } from './accountDataExportCollections';
 
 const { NotebookExportService } = notebookExportService;
 
@@ -396,6 +400,7 @@ async function writeMemories(archive: Archiver, userId: string) {
     }),
     'memories.json'
   );
+  return { mementos: legacy.length, beliefs: (profile?.beliefs ?? []).filter(b => !b.shredded).length };
 }
 
 interface ArtifactIndexEntry {
@@ -488,6 +493,7 @@ async function writeAgentsAndProjects(archive: Archiver, userId: string) {
     ),
     'projects.json'
   );
+  return { agents: agents.length, projects: projects.length };
 }
 
 const readme = (exportedAt: Date) => `Your account data export
@@ -513,9 +519,15 @@ artifacts/         One JSON file per artifact you own, with its latest content. 
                    of time before that artifact was written.
 agents.json        Agents you created.
 projects.json      Projects you own.
+collections/       Metadata-only rows for additional account-owned records. Each row contains
+                   only its id and timestamps; manifest.json lists its count and representation,
+                   and an "omitted" value of time_limit means the export ran out of time before
+                   that collection was written.
+manifest.json      Collection counts and paths, written after all archive entries.
 
-Deleted items, other data shared with you by others, and credentials (passwords, API keys, tokens,
-two-factor secrets and connected-app grants) are not included. The exception is notebooks, which also
+Deleted items, other data shared with you by others, and credential values (passwords, API keys, tokens,
+two-factor secrets and connected-app grants) are not included. Credential record identifiers and timestamps
+may appear in collections/. The exception is notebooks, which also
 include artifacts and files attached to them that others shared with you or made public, and messages
 and images that other participants added to a shared notebook.
 `;
@@ -546,9 +558,44 @@ async function buildArchive(
     const { planned, fileIdByPath } = await planFiles(names, userId);
     const notebooks = await writeNotebooks(archive, names, userId, fileIdByPath, budget, remainingMs, logger);
     const files = await writeFiles(archive, planned, storage, budget, remainingMs, logger);
-    await writeMemories(archive, userId);
+    const memories = await writeMemories(archive, userId);
     const artifacts = await writeArtifacts(archive, names, userId, remainingMs);
-    await writeAgentsAndProjects(archive, userId);
+    const { agents, projects } = await writeAgentsAndProjects(archive, userId);
+    const personalOrganizations = await mongoose
+      .model('Organization')
+      .find({ userId, personal: true }, { _id: 1 })
+      .lean();
+    const personalOrganizationIds = personalOrganizations.map(org => String(org._id));
+    const collections: AccountArchiveCollection[] = [];
+    for (const adapter of accountArchiveAdapters) {
+      if (remainingMs() < UPLOAD_RESERVE_MS) {
+        collections.push({ name: adapter.name, count: 0, representation: 'metadata', omitted: 'time_limit' });
+        continue;
+      }
+      const { records, count } = await adapter.collect(userId, personalOrganizationIds);
+      const entryPath = `collections/${adapter.name}.jsonl`;
+      await appendEntry(archive, records, entryPath);
+      collections.push({ name: adapter.name, path: entryPath, count: count(), representation: 'metadata' });
+    }
+    await appendEntry(
+      archive,
+      json({
+        exportedAt: new Date().toISOString(),
+        completeness: 'partial',
+        collections: [
+          { name: 'profile', path: 'profile.json', count: 1, representation: 'profile' },
+          { name: 'notebooks', path: 'notebooks/index.json', count: notebooks.count, omitted: notebooks.omitted },
+          { name: 'files', path: 'files/index.json', count: files.count, omitted: files.omitted },
+          { name: 'artifacts', path: 'artifacts/index.json', count: artifacts.count, omitted: artifacts.omitted },
+          { name: 'mementos', path: 'memories.json', count: memories.mementos },
+          { name: 'memoryBeliefs', path: 'memories.json', count: memories.beliefs },
+          { name: 'agents', path: 'agents.json', count: agents },
+          { name: 'projects', path: 'projects.json', count: projects },
+          ...collections,
+        ],
+      }),
+      'manifest.json'
+    );
     await archive.finalize();
     await closed;
     logger.info('Account data export built', {
@@ -698,6 +745,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       expiresAt: new Date(builtAt.getTime() + ACCOUNT_DATA_EXPORT_TTL_MS),
     });
     await EmailEvents.Send.publish({ to: claimed.email || user.email, subject: email.subject, body: email.body });
+    try {
+      await sendToClient(userId, Resource.websocket.managementEndpoint, {
+        action: 'account_data_export_ready',
+        exportJobId,
+      });
+    } catch (error) {
+      logger.warn('Account data export: websocket notification failed', { exportJobId, error });
+    }
   } finally {
     if (releaseLease) {
       await User.updateOne(

@@ -34,7 +34,10 @@ const USAGE_POLICY: SuspensionPolicy = { name: 'Usage Policy', slug: 'usage-poli
 type SuspensionReasonDefinition = {
   /** The admin dialog's option label. */
   adminLabel: string;
-  /** The user-facing reason, completing "Your account is suspended for ...". Lower-case, no trailing period. */
+  /**
+   * The user-facing reason, completing "This account is suspended for ...". Lower-case, no trailing period.
+   * A reason that names its policy itself is not followed by the "which our <policy> does not allow" clause.
+   */
   userReason: string;
   policy: SuspensionPolicy;
 };
@@ -62,7 +65,7 @@ export const SUSPENSION_REASONS: Record<SuspensionReasonCategory, SuspensionReas
   },
   terms_violation: {
     adminLabel: 'Other Terms of Service violation',
-    userReason: 'a violation of our Terms of Service',
+    userReason: 'violating our Terms of Service',
     policy: TERMS_OF_SERVICE,
   },
 };
@@ -97,9 +100,12 @@ function appealSentence({ email, url }: SuspensionAppealContact): string {
 export function buildSuspensionNotice(category: unknown, appeal: SuspensionAppealContact = {}): SuspensionNotice {
   const resolved = toSuspensionReasonCategory(category);
   const { userReason, policy } = SUSPENSION_REASONS[resolved];
+  const reason = userReason.includes(policy.name)
+    ? userReason
+    : `${userReason}, which our ${policy.name} does not allow`;
   return {
     category: resolved,
-    message: `This account is suspended for ${userReason}, which our ${policy.name} does not allow. ${appealSentence(appeal)}`,
+    message: `This account is suspended for ${reason}. ${appealSentence(appeal)}`,
     policy,
   };
 }
