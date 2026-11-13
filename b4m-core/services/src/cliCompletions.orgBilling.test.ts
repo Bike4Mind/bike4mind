@@ -266,6 +266,26 @@ describe('executeCompletion - org billing routing', () => {
     expect(personal.users.incrementCredits).toHaveBeenCalledWith('user1', -10);
   });
 
+  it('applies a governing org policy to a personally billed turn, and lets the billing org win', async () => {
+    const blocked = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const governed = buildDb();
+    const err = await executeCompletion({ ...baseParams, db: governed.db, governingOrgModelPolicy: blocked }).catch(
+      e => e
+    );
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(governed.users.incrementCredits).not.toHaveBeenCalled();
+
+    const allows = { allowedProviders: null, allowedModels: ['test-model'], allowedTools: null };
+    const billed = buildDb({ org: buildOrg({ modelPolicy: allows }) });
+    await executeCompletion({
+      ...baseParams,
+      db: billed.db,
+      billingOrganizationId: 'org1',
+      governingOrgModelPolicy: blocked,
+    });
+    expect(billed.organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+
   it('bills the org for a platform admin, who is on no org roster', async () => {
     // The mint route lets a platform admin create an org-billed key for a customer org, so a
     // roster-only gate would break that key on its very first call, not just after someone left.

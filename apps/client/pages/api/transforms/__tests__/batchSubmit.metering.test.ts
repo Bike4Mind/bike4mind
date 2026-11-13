@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   ceiling: vi.fn(),
   substitute: vi.fn(),
   catalogModels: [] as unknown[],
+  admissionArgs: vi.fn(),
 }));
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
@@ -46,11 +47,14 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: async () => ({
-    assert: async (id: string) => {
-      if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
+  createModelAdmission: async (...args: unknown[]) => {
+    m.admissionArgs(...args);
+    return {
+      assert: async (id: string) => {
+        if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
   completionCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
   resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   isCreditsEnforced: async () => m.enforced,
@@ -66,11 +70,11 @@ const item = (ref: string, model = 'claude-opus-4-6') => ({
   messages: [{ role: 'user', content: 'summarize' }],
 });
 
-async function submit(requests: unknown[]) {
+async function submit(requests: unknown[], apiKeyInfo: Record<string, unknown> = { keyId: 'k1' }) {
   const { req, res } = createMocks({ method: 'POST' });
   Object.assign(req, {
     user: { id: 'u1' },
-    apiKeyInfo: { keyId: 'k1' },
+    apiKeyInfo,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     body: { requests },
   });
@@ -133,6 +137,17 @@ describe('POST /api/transforms/batch metering', () => {
     await expect(submit([item('a')])).rejects.toMatchObject({ statusCode: 403 });
     expect(m.reserve).not.toHaveBeenCalled();
     expect(m.submitBatch).not.toHaveBeenCalled();
+  });
+
+  it("admits models under the org-billed key's organization policy, and no org for a personal key", async () => {
+    await submit([item('a')], { keyId: 'k1', billingOwnerType: 'Organization', organizationId: 'org1' });
+    expect(m.admissionArgs).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: 'org1',
+    });
+    await submit([item('a')]);
+    expect(m.admissionArgs).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: undefined,
+    });
   });
 
   it('reserves the summed per-item ceiling and persists the hold for the poll', async () => {

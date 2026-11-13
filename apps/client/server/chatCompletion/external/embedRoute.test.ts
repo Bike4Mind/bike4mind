@@ -1164,6 +1164,17 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(mockGetEffectiveLLMApiKeys.mock.calls[0][0]).toBe(END_USER.id);
   });
 
+  it("carries the embed org's model policy onto the personally billed turn", async () => {
+    const modelPolicy = { allowedModels: ['other-model'] };
+    mockOrgFindById.mockResolvedValue({ ...ORG, modelPolicy });
+    const res = await postIdentified(CHAT);
+    await res.text();
+
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.billingOrganizationId).toBeUndefined();
+    expect(params.governingOrgModelPolicy).toEqual(modelPolicy);
+  });
+
   it("refuses a broke identified user instead of falling back to the org's pool", async () => {
     mockAssertOwnerHasCredits.mockImplementation((owner: { id: string }) => {
       if (owner.id === END_USER.id) throw new MockInsufficientCreditsError('Host User has insufficient credits');

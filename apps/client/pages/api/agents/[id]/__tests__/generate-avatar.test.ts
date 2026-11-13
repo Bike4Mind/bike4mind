@@ -162,7 +162,8 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     expect(assertMediaModelAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'u1' }),
       'test-image-model',
-      true
+      true,
+      undefined
     );
     const operations = await h.getOperationsModel.mock.results[0].value;
     expect(operations.llm.complete).not.toHaveBeenCalled();
@@ -184,6 +185,12 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     );
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
     expect(vi.mocked(reserveRequestCredits).mock.calls[0][0].req).toBe(req);
+    expect(assertMediaModelAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      'test-image-model',
+      true,
+      'billing-org'
+    );
     expect(reserveRequestCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         req: expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),

@@ -130,6 +130,25 @@ describe('/api/organizations/[id]/model-policy', () => {
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
+  it('PUT over an unreadable stored row audits only the fields the new policy sets', async () => {
+    stored = { allowedProviders: [] };
+    await call('put', { allowedModels: ['gpt-4o'] });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'allowedModels', before: null, after: ['gpt-4o'] }] })
+    );
+  });
+
+  it('PUT replacing an unreadable stored row with no restriction still writes and audits', async () => {
+    stored = { allowedProviders: [] };
+    await call('put', {});
+    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org1' }, { unset: ['modelPolicy'] });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [] })
+    );
+  });
+
   it('PUT of an all-unrestricted policy removes the stored field', async () => {
     stored = { allowedTools: ['web_search'] };
     await call('put', {});

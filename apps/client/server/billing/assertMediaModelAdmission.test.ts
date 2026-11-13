@@ -1,16 +1,21 @@
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, PAID_PLAN_ENTITLEMENT_KEY } from '@bike4mind/common';
+import {
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  PAID_PLAN_ENTITLEMENT_KEY,
+} from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   user: vi.fn(),
   entitlements: vi.fn(),
   settings: vi.fn(),
+  org: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.user },
   adminSettingsRepository: { findOne: async () => null },
-  organizationRepository: {},
+  organizationRepository: { findById: mocks.org },
   usageEventRepository: {},
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -72,6 +77,17 @@ describe('media model admission', () => {
   it('allows the same media model with a paid plan', async () => {
     mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
     await expect(assertMediaModelAdmission('user-1', 'image-model')).resolves.toBeUndefined();
+  });
+
+  it('applies the billing organization model policy when an org id is given', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedModels: ['video-model'] } });
+    await expect(assertMediaModelAdmission('user-1', 'image-model', false, 'org-1')).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(mocks.org).toHaveBeenCalledWith('org-1');
+    await expect(assertMediaModelAdmission('user-1', 'video-model', false, 'org-1')).resolves.toBeUndefined();
+    await expect(assertMediaModelAdmission('user-1', 'image-model', false, null)).resolves.toBeUndefined();
   });
 
   it('fails closed with a retryable error if plan lookup fails', async () => {

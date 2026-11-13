@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TooManyRequestsError } from '@bike4mind/common';
+import { CreditHolderType, ORG_TOOL_NOT_ALLOWED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -92,6 +92,42 @@ describe('POST /api/v1/agent-executions - untrusted owner quotas', () => {
       expect.objectContaining({ model: 'allowlisted-model' }),
       req.logger
     );
+  });
+
+  it('resolves a model-less default under the org the run bills: the key org, else the body org', async () => {
+    mockResolveDefaultChatModel.mockResolvedValue({ model: 'admin-default' });
+    const named = request();
+    named.validated = { session_id: 's1', message: 'hi', organization_id: 'body-org' } as typeof named.validated;
+    await captured.handler!(named, response());
+    expect(mockResolveCallerDefaultModel).toHaveBeenLastCalledWith('admin-default', named.user, named.logger, {
+      organizationId: 'body-org',
+    });
+
+    const orgKey = request();
+    orgKey.apiKeyInfo = {
+      keyId: 'k1',
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'key-org',
+    } as typeof orgKey.apiKeyInfo;
+    orgKey.validated = { session_id: 's1', message: 'hi', organization_id: 'body-org' } as typeof orgKey.validated;
+    await captured.handler!(orgKey, response());
+    expect(mockResolveCallerDefaultModel).toHaveBeenLastCalledWith('admin-default', orgKey.user, orgKey.logger, {
+      organizationId: 'key-org',
+    });
+  });
+
+  it('maps an org tool refusal to 403 org_tool_not_allowed without accepting the run', async () => {
+    mockStartAgentExecution.mockResolvedValue({
+      ok: false,
+      reason: 'org_tool_not_allowed',
+      message: 'Tools not allowed by your organization: web_search',
+    });
+    const res = response();
+    await expect(captured.handler!(request(), res)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(res.status).not.toHaveBeenCalled();
   });
 
   it('propagates shared quota refusal without accepting the run', async () => {

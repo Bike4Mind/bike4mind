@@ -359,6 +359,26 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
     expect(names).toContain('dice_roll');
   });
 
+  it('keeps an org-disallowed built-in tool out of parentTools, MCP tools still pass', () => {
+    const tools = buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      {
+        enabledTools: ['dice_roll', 'current_datetime'],
+        mcpToolsByServer,
+        orgToolPolicy: { allowedProviders: null, allowedModels: null, allowedTools: ['dice_roll'] },
+      }
+    );
+
+    expect((tools ?? []).map(t => t.toolSchema.name)).toContain('current_datetime');
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('current_datetime');
+    expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search']));
+  });
+
   it('routes an agent-only MCP tool into parentTools for delegation, denylist still applied', () => {
     buildSharedTools(
       { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
