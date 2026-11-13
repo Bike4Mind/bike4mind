@@ -15,6 +15,7 @@ import { InitialsAvatar } from '../shared/InitialsAvatar';
 import { InlineBar } from '../shared/InlineBar';
 import { StatusChip } from '../shared/StatusChip';
 import { isNewSince } from './subscriptionsLastSeen';
+import { SubscriptionUsageObservation } from './SubscriptionUsageSummary';
 import { COMPED_DISPLAY, OWNER_ALERT_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscriptionStatusTone';
 
 const DAY_MS = 86_400_000;
@@ -261,6 +262,12 @@ export function subscriptionsColumns({
       numeric: true,
       width: '5.5rem',
       render: row => <Mrr row={row} />,
+    },
+    {
+      id: 'usage',
+      label: 'Billed-owner usage (28 days)',
+      width: '26rem',
+      render: row => <SubscriptionUsageObservation usage={row.usage} compact />,
     },
     {
       id: 'seats',

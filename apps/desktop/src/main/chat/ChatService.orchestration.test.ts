@@ -5,8 +5,9 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inheritancePolicy, type TaskContract } from '@shared/orchestration';
-import type { ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type { ChatAutomaticOrigin, ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
@@ -62,6 +63,7 @@ describe('role routing and task runtime compatibility', () => {
     });
     service = new ChatService({
       store,
+      queue: new MessageQueue(() => undefined),
       summaryChanged,
       access: { list: async () => [] } as unknown as AccessStore,
       models: { list: async () => ({ models }), cached: () => models } as unknown as ModelCatalog,
@@ -566,7 +568,72 @@ describe('role routing and task runtime compatibility', () => {
     ).rejects.toThrow(/settled/);
     expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'canceled' });
   });
-  it('refuses Continue after a cancellation while its catalog validation was waiting', async () => {
+  async function drain(ids: string[]) {
+    const ended = new Set<number>();
+    await vi.waitUntil(
+      () => {
+        streams.forEach((stream, index) => {
+          if (ended.has(index)) return;
+          ended.add(index);
+          finish(index);
+        });
+        return ids.every(id => !service.isSessionBusy(id));
+      },
+      { timeout: 5000, interval: 20 }
+    );
+  }
+  async function canceledChild() {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    const child = await spawn(parent, { contract });
+    if (!child) throw new Error('No child');
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await drain([parent.id, child.id]);
+    await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
+    await drain([parent.id, child.id]);
+    const canceled = await store.get(child.id);
+    if (canceled?.workerTask?.state.status !== 'canceled') throw new Error('Task was not canceled');
+    return { parent, child: canceled };
+  }
+  it('runs a user follow-up in a canceled worker session without reopening or reporting the task', async () => {
+    const { parent, child } = await canceledChild();
+    const parentMessages = (await store.get(parent.id))?.messages.length;
+    const calls = post.mock.calls.length;
+    expect(await service.send(child.id, 'Deploy a preview for this PR')).toMatchObject({ ok: true });
+    await waitStream(calls);
+    expect(wire(calls).model).toBe('worker');
+    expect(JSON.stringify(wire(calls).messages)).toContain('not a new attempt at that task');
+    expect(wire(calls).options?.tools?.map(entry => entry.toolSchema.name)).not.toContain('task_report');
+    finish(calls, 'Preview requested');
+    await idle(child.id);
+    const after = await store.get(child.id);
+    expect(after?.workerTask?.state).toMatchObject({
+      status: 'canceled',
+      reason: 'Closing out: the work is finished.',
+    });
+    expect(after?.workerTask?.attempts).toEqual(child.workerTask?.attempts);
+    expect(after?.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Preview requested' });
+    expect((await store.get(parent.id))?.messages.length).toBe(parentMessages);
+    expect(post.mock.calls.length).toBe(calls + 1);
+  });
+  it('lets the user Continue a stopped reply in a canceled worker session and keeps the task canceled', async () => {
+    const { child } = await canceledChild();
+    await store.appendMessage(child.id, {
+      id: 'resumable',
+      role: 'assistant',
+      content: 'Partial result',
+      stopReason: 'tool_turn_limit',
+      createdAt: new Date().toISOString(),
+    });
+    const calls = post.mock.calls.length;
+    expect(await service.continueReply(child.id)).toMatchObject({ ok: true });
+    await waitStream(calls);
+    finish(calls);
+    await idle(child.id);
+    expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+  });
+  it('keeps Continue working when the task is canceled while its catalog validation was waiting', async () => {
     const parent = await created();
     await policy();
     await service.setSessionOrchestrate(parent.id, true);
@@ -594,10 +661,8 @@ describe('role routing and task runtime compatibility', () => {
     const continuing = service.continueReply(child.id);
     await vi.waitUntil(() => listing.mock.calls.length === 1);
     await service.actOnTask(null, child.id, { kind: 'cancel', reason: 'User canceled during catalog validation' });
-    const calls = post.mock.calls.length;
     releaseCatalog?.({ models });
-    expect(await continuing).toMatchObject({ ok: false, error: expect.stringMatching(/canceled/) });
-    expect(post.mock.calls.length).toBe(calls);
+    expect(await continuing).toMatchObject({ ok: true });
     expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
   });
   const LOCAL = 'local:ollama:qwen3.8:27b';
@@ -677,5 +742,81 @@ describe('role routing and task runtime compatibility', () => {
     );
     expect((await store.get(child.id))?.model).toBe(LOCAL);
     expect((await service.setSessionModel(child.id, LOCAL))?.model).toBe(LOCAL);
+  });
+  it('refuses orchestrator restarts, relays and automatic wakes in a canceled worker session without saving them', async () => {
+    const { parent, child } = await canceledChild();
+    const stored = child.messages.length;
+    const calls = post.mock.calls.length;
+    await expect(
+      service.actOnTask(parent.id, child.id, { kind: 'revise', contract, instruction: 'Try again' })
+    ).rejects.toThrow(/cannot restart/);
+    const exit: ChatAutomaticOrigin = { kind: 'background-exit', processIds: ['p1'], summary: '[p1] exited 0' };
+    expect(await service.startAutomaticTurn(child.id, 'Your command exited', exit)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/canceled/),
+    });
+    await service.send(parent.id, 'Ask the worker for more');
+    await waitStream(calls);
+    tool(calls, 'session_send', { session_id: child.id, message: 'Keep going on the task' });
+    await vi.waitUntil(
+      () =>
+        events.some(
+          event => event.type === 'tool-end' && event.sessionId === parent.id && event.call.name === 'session_send'
+        ),
+      { timeout: 5000, interval: 5 }
+    );
+    const relay = events.find(
+      event => event.type === 'tool-end' && event.sessionId === parent.id && event.call.name === 'session_send'
+    );
+    expect(JSON.stringify(relay)).toContain('canceled task');
+    await waitStream(calls + 1);
+    finish(calls + 1);
+    await idle(parent.id);
+    const after = await store.get(child.id);
+    expect(after?.messages.length).toBe(stored);
+    expect(after?.workerTask?.state.status).toBe('canceled');
+    expect(post.mock.calls.every((_call, index) => index < calls || wire(index).model !== 'worker')).toBe(true);
+  });
+  it('lets a PR auto-fix prompt run in a canceled worker session like a user send', async () => {
+    const { parent, child } = await canceledChild();
+    const parentMessages = (await store.get(parent.id))?.messages.length;
+    const calls = post.mock.calls.length;
+    const autoFix: ChatAutomaticOrigin = {
+      kind: 'auto-fix',
+      prUrl: 'https://github.com/example-org/widgets/pull/611',
+      prNumber: 611,
+      summary: '1 failing check on #611',
+    };
+    expect(await service.startAutomaticTurn(child.id, 'Fix the failing check', autoFix)).toEqual({ ok: true });
+    await waitStream(calls);
+    finish(calls);
+    await idle(child.id);
+    expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+    expect((await store.get(parent.id))?.messages.length).toBe(parentMessages);
+  });
+  it('refuses an automatic turn canceled between its checks and the write, leaving nothing saved', async () => {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    const child = await spawn(parent, { contract });
+    if (!child) throw new Error('No child');
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    finish(post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker'));
+    await idle(child.id);
+    const stored = (await store.get(child.id))?.messages.length;
+    const append = store.appendMessageIf.bind(store);
+    vi.spyOn(store, 'appendMessageIf').mockImplementationOnce(async (id, message, admit) => {
+      await store.updateWorkerTask(id, task => ({
+        ...task,
+        state: { status: 'canceled', reason: 'Canceled meanwhile' },
+      }));
+      return append(id, message, admit);
+    });
+    const exit: ChatAutomaticOrigin = { kind: 'background-exit', processIds: ['p1'], summary: '[p1] exited 0' };
+    expect(await service.startAutomaticTurn(child.id, 'Your command exited', exit)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/canceled/),
+    });
+    expect((await store.get(child.id))?.messages.length).toBe(stored);
   });
 });

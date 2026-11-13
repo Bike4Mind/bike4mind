@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   ApiKeyScope,
+  ApiKeyStatus,
   CreditHolderType,
   Permission,
   isOrgServiceAccountOf,
@@ -145,6 +146,7 @@ const departureAdapters = {
     organizations: organizationRepository,
     users: userRepository,
     groups: groupRepository,
+    userApiKeys: userApiKeyRepository,
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
     ...lakeConfigAuditDb,
@@ -202,7 +204,13 @@ describe('org-owned API keys', () => {
     const afterRemoval = await authenticate(created.data.key, orgId);
     expect(afterRemoval.ok && afterRemoval.billing).toEqual({ kind: 'org', organizationId: orgId });
     const personalAfterRemoval = await authenticate(personal.key, orgId);
-    expect(personalAfterRemoval.ok && personalAfterRemoval.billing.kind).toBe('stale');
+    expect(personalAfterRemoval).toEqual({ ok: false, reason: expect.any(String) });
+    expect(await userApiKeyRepository.findById(personal.id)).toMatchObject({
+      status: ApiKeyStatus.DISABLED,
+      revokedBy: owner.id,
+      revokedReason: 'org-membership-ended',
+      revokedAt: expect.any(Date),
+    });
 
     await User.deleteOne({ _id: creator.id });
 
