@@ -74,6 +74,23 @@ describe('tutorial models against a real database', () => {
     expect(await owner.Draft.findOne({ moduleId: 'demo' }).lean()).toMatchObject({ steps: [], enabled: false });
   });
 
+  it('round-trips a core draft visibility, and loads a draft written without one', async () => {
+    const base = {
+      title: 'T',
+      sourceSessionId: 's',
+      finale: { title: 'f', body: 'b' },
+      steps: [],
+      capturedBy: 'a',
+      updatedBy: 'a',
+    };
+    await core.Draft.create({ ...base, moduleId: 'with-vis', visibility: { entitlement: 'meetings:pro' } });
+    await core.Draft.create({ ...base, moduleId: 'no-vis' });
+    expect(await core.Draft.findOne({ moduleId: 'with-vis' }).lean()).toMatchObject({
+      visibility: { entitlement: 'meetings:pro' },
+    });
+    expect((await core.Draft.findOne({ moduleId: 'no-vis' }).lean())?.visibility).toBeUndefined();
+  });
+
   it('keeps core and owner rows in separate collections', async () => {
     await core.Override.create({ moduleId: 'demo', revision: 5, contentSeq: 1, updatedBy: 'c', reason: 'r' });
     expect(await owner.Override.findOne({ moduleId: 'demo' }).lean()).toMatchObject({ revision: 1 });

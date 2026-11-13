@@ -1,3 +1,4 @@
+import type { CoreTutorialVisibility } from '@bike4mind/common';
 import { mongoose } from '@bike4mind/database';
 
 export const TUTORIAL_MODULE_STATUSES = ['in_progress', 'finished', 'left'] as const;
@@ -69,6 +70,8 @@ export interface ITutorialDraft {
   steps: unknown[];
   canvasNodeId?: string;
   finale: { title: string; body: string };
+  /** Who may run it. Core requires one; a row from an owner that never sets it loads without. */
+  visibility?: CoreTutorialVisibility;
   /** Moves on every content save, so a learner's running walk of the old content is told it changed. */
   revision: number;
   /** Moves on every write of content; approval names the sequence it approved. */
@@ -163,6 +166,7 @@ function buildModels({ prefix, modelPrefix }: TutorialModelNames): TutorialModel
       steps: { type: [mongoose.Schema.Types.Mixed], default: [] },
       canvasNodeId: { type: String },
       finale: { type: mongoose.Schema.Types.Mixed, required: true },
+      visibility: { type: mongoose.Schema.Types.Mixed },
       revision: { type: Number, required: true, default: 0, min: 0 },
       contentSeq: { type: Number, required: true, default: 0, min: 0 },
       approvedSeq: { type: Number, min: 0 },

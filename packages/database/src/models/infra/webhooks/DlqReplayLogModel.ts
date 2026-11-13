@@ -82,6 +82,25 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     });
   }
 
+  /** countAttempts for many messages in one query; a message with no counted attempt maps to 0. */
+  async countAttemptsByMessage(messageIds: readonly string[]): Promise<Map<string, number>> {
+    const counts = new Map(messageIds.map(messageId => [messageId, 0]));
+    if (!messageIds.length) return counts;
+    const rows = await this.model.aggregate<{ _id: string; attempts: number }>([
+      // Must match countAttempts: the same statuses count and discards never do.
+      {
+        $match: {
+          messageId: { $in: [...messageIds] },
+          status: { $in: ['success', 'failed'] },
+          operation: { $ne: 'discard' },
+        },
+      },
+      { $group: { _id: '$messageId', attempts: { $sum: 1 } } },
+    ]);
+    for (const row of rows) counts.set(row._id, row.attempts);
+    return counts;
+  }
+
   /**
    * Log a replay operation.
    */

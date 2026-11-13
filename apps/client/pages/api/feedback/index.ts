@@ -1,10 +1,12 @@
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackAiModel, FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
   FEEDBACK_LIST_MAX_LIMIT,
   FEEDBACK_RESOLUTIONS,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
   FeedbackEvents,
   FeedbackStatus,
   FeedbackType,
@@ -34,6 +36,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { FEEDBACK_RECEIVED_WINDOWS, feedbackReceivedSince } from '@client/app/components/admin/Feedback/feedbackTrends';
 import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
+import { feedbackAiVisible } from '@server/admin/ai/feedbackVisibility';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -114,6 +117,8 @@ const ListFeedbackQuerySchema = z
     status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
     resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
     subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+    area: z.enum(FEEDBACK_AI_AREAS).optional(),
+    severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
     type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
     received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
     // A custom created-date range, both ends inclusive. Instants rather than calendar days: the
@@ -289,6 +294,21 @@ const handler = baseApi()
     if (query.questId) clauses.push({ questId: query.questId });
     if (query.organizationId) clauses.push({ organizationId: query.organizationId });
     if (query.subject) clauses.push({ subject: query.subject });
+    if (query.area || query.severity) {
+      if (!req.user?.isAdmin || !(await feedbackAiVisible())) {
+        clauses.push({ _id: { $in: [] } });
+      } else {
+        const labelClauses = Object.entries({ area: query.area, severity: query.severity })
+          .filter(([, value]) => value)
+          .map(([key, value]) => ({
+            $or: [{ [`override.${key}`]: value }, { override: { $exists: false }, [`labels.${key}`]: value }],
+          }));
+        const matches = await FeedbackAiModel.find({ expiresAt: { $gt: new Date() }, $and: labelClauses })
+          .select('feedbackId')
+          .lean();
+        clauses.push({ _id: { $in: matches.map(row => row.feedbackId) } });
+      }
+    }
     if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
 
     const organizations = toArray(query.organization);

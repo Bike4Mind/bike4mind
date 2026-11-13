@@ -30,6 +30,14 @@ const MORE_FILTERS: {
   options: FilterChipOption[];
 }[] = [
   {
+    key: 'usageCohort',
+    label: 'Usage (28 days)',
+    options: [
+      { value: 'payingNoRecorded', label: 'Paying, no recorded usage' },
+      { value: 'cancelingRecent', label: 'Canceling, recent usage' },
+    ],
+  },
+  {
     key: 'ownerType',
     label: 'Owner',
     options: [

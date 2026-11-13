@@ -39,6 +39,11 @@ export enum ApiKeyScope {
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
+  /**
+   * Create and delete throwaway test-persona accounts (POST/DELETE /api/v1/personas). Offered only to
+   * admins and developer-tagged users, and re-checked against the key owner on every call.
+   */
+  PERSONAS_MINT = 'personas:mint',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
@@ -147,9 +152,9 @@ export enum ApiKeyScope {
   /**
    * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
    * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
-   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
-   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
-   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * a listing, and import one into your library. Not confined: `b4m skills push --publish` upserts the
+   * skill through `/api/skills`, which now requires skills:write, and a confined key would be refused
+   * there. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
    * is outward-facing (UserApiKeysTab.tsx).
    */
   SKILLS_WRITE = 'skills:write',
@@ -327,6 +332,11 @@ export interface IUserApiKeyMetadata {
   baseline?: IUserApiKeyBaseline;
 }
 
+/** True for a key minted by the federated AI-token exchange. The one definition of that marker. */
+export const isExchangeKeyMetadata = (
+  metadata: IUserApiKeyMetadata | undefined
+): metadata is IUserApiKeyMetadata & { createdFrom: 'oauth-exchange' } => metadata?.createdFrom === 'oauth-exchange';
+
 /**
  * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
  * A projection, never the stored document: no secret material and no minter location metadata.
@@ -375,6 +385,9 @@ export interface IUserApiKeyRateLimit {
   requestsPerMinute: number;
   requestsPerDay: number;
 }
+
+export const API_KEY_RATE_LIMIT_MAX_PER_MINUTE = 10_000;
+export const API_KEY_RATE_LIMIT_MAX_PER_DAY = 1_000_000;
 
 /**
  * Ceilings a key gets when minted without explicit ones. Lives here rather than
@@ -575,6 +588,15 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
+  /**
+   * Disables the user's not-yet-DISABLED keys that are billed to `organizationId`, stamping
+   * revokedAt/revokedBy/revokedReason. Personal keys are untouched. Resolves the revoked ids.
+   */
+  revokeLiveOrgBilledByUserId: (
+    userId: string,
+    organizationId: string,
+    stamp: { revokedBy: string; revokedReason: string }
+  ) => Promise<string[]>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   /**
    * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.

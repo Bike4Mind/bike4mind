@@ -56,7 +56,10 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-  User: { findById: h.findById },
+  User: {
+    findById: (...a: unknown[]) =>
+      Object.assign(Promise.resolve(h.findById(...a)), { select: () => ({ lean: async () => null }) }),
+  },
   userRepository: { findById: h.findById },
   authSessionRepository: { findBySid: h.findBySid },
 }));

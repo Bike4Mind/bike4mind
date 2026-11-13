@@ -41,6 +41,8 @@
     "db:create-user": "tsx server/scripts/createUser.ts",
     "db:seed-users": "tsx server/seed/seedUser.ts",
     "security:scan": "semgrep scan --config auto --exclude node_modules --exclude .next --exclude .sst",
+    "tutorials:apply": "tsx scripts/apply-tutorial-override.ts",
+    "tutorials:fields": "tsx scripts/tutorial-editable-fields.ts",
     "help:build-index": "tsx ../../packages/scripts/help/build-help-index.ts",
     "help:bundle-content": "tsx ../../packages/scripts/help/bundle-help-content.ts",
     "help:build": "pnpm help:build-index && pnpm help:bundle-content",

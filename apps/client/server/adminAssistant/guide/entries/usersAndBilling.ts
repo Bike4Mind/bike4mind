@@ -159,13 +159,15 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     id: 'credit-analytics-overview',
     title: 'Credit Analytics',
     summary:
-      'Credit Analytics groups the credit tools in tabs: User Credits, Model Pricing, Margins, Org Usage, API Usage, Ledger and Adjustments.',
+      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Model Pricing, Margins, Org Usage, API Usage, Ledger and Adjustments.',
     views: ['admin.credit_analytics'],
     settings: [],
     howTo: [
       'User Credits lists users with balance, last login and status; use "Search users" and "Sort by Credits", then "Adjust Credits" or "Credits" on a row.',
       'Org Usage and API Usage show credit consumption by organization and by API use.',
       'Ledger lists credit transactions; Adjustments lists manual credit changes newest first with actor, delta, resulting balance and reason.',
+      'Economy shows selected-period issuance, consumption, expiry, clawbacks, adjustments, refunds and transfers, with ownership/date filters, paginated transaction drill-downs and a JSON report export.',
+      'Economy separates recorded usage funding and current lot remainder estimates. Historical opening/closing, held balances, reconciliation and 7/30-day cohort consumption are unavailable without immutable records; coverage is shown rather than inventing zeros.',
     ],
     keywords: ['credits', 'billing', 'usage', 'balance', 'transactions', 'credit ledger', 'adjustments log'],
   },

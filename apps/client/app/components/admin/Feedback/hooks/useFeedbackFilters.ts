@@ -30,6 +30,9 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setValueImmediately: clearSearchTerm,
   } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
+  const { area, severity } = view;
+  const setArea: UseFeedbackFiltersReturn['setArea'] = value => updateView({ area: value, page: 1 });
+  const setSeverity: UseFeedbackFiltersReturn['setSeverity'] = value => updateView({ severity: value, page: 1 });
   const resolution = view.resolution;
   const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
     next =>
@@ -119,6 +122,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         createdFrom: DEFAULT_FEEDBACK_VIEW.createdFrom,
         createdTo: DEFAULT_FEEDBACK_VIEW.createdTo,
         comment: DEFAULT_FEEDBACK_VIEW.comment,
+        area: undefined,
+        severity: undefined,
         resolution: undefined,
         ...next,
         page: 1,
@@ -133,6 +138,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   );
 
   const filters: FeedbackFilters = {
+    area,
+    severity,
     searchTerm,
     statusFilters,
     selectedOrganizations,
@@ -149,6 +156,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
     return {
+      ...(area ? { area } : {}),
+      ...(severity ? { severity } : {}),
       // Omitted rather than sent empty: an empty array would be serialized as no filter anyway,
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
@@ -165,10 +174,12 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       sort: sortAscending ? 'asc' : 'desc',
     };
   }, [
+    area,
+    severity,
+    resolution,
     statusFilters,
     selectedOrganizations,
     subject,
-    resolution,
     types,
     received,
     createdFrom,
@@ -179,6 +190,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   ]);
 
   return {
+    setArea,
+    setSeverity,
     filters,
     setSearchTerm,
     setStatusFilters,

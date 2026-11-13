@@ -23,6 +23,8 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import {
   FEEDBACK_ID_PARAM,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
   FEEDBACK_RESOLUTIONS,
   FEEDBACK_RESOLUTION_LABELS,
   FeedbackStatus,
@@ -291,6 +293,8 @@ const FeedbackTab: React.FC = () => {
 
   const {
     filters,
+    setArea,
+    setSeverity,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
@@ -473,6 +477,8 @@ const FeedbackTab: React.FC = () => {
   };
 
   const hasFilters =
+    filters.area !== undefined ||
+    filters.severity !== undefined ||
     filters.searchTerm.trim() !== '' ||
     statusNarrowed ||
     filters.subject !== undefined ||
@@ -603,6 +609,20 @@ const FeedbackTab: React.FC = () => {
           value={filters.types}
           options={TYPE_FILTER_OPTIONS}
           onChange={picked => setTypes(FEEDBACK_TYPE_ORDER.filter(type => picked.includes(type)))}
+        />
+        <FilterChip
+          id="feedback-area"
+          label="Area"
+          value={filters.area}
+          options={FEEDBACK_AI_AREAS.map(value => ({ value, label: value }))}
+          onChange={value => setArea(FEEDBACK_AI_AREAS.find(area => area === value))}
+        />
+        <FilterChip
+          id="feedback-severity"
+          label="Severity"
+          value={filters.severity}
+          options={FEEDBACK_AI_SEVERITIES.map(value => ({ value, label: value }))}
+          onChange={value => setSeverity(FEEDBACK_AI_SEVERITIES.find(severity => severity === value))}
         />
         <FilterChip
           id="feedback-resolution"

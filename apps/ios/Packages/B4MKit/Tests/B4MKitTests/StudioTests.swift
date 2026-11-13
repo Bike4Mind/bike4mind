@@ -27,7 +27,10 @@ actor FakeStudioAPI: StudioAPI {
   func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
     if let generateFailure { throw generateFailure }
     generated.append(request)
-    return GenerationHandle(kind: request.kind, id: "gen-\(generated.count)", prompt: request.prompt, startedAt: Date())
+    return GenerationHandle(
+      kind: request.kind, id: "gen-\(generated.count)", prompt: request.prompt, startedAt: Date(),
+      modelID: request.modelID,
+      params: request.params)
   }
 
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
@@ -205,13 +208,14 @@ final class StudioClientTests: XCTestCase {
     let transport = FakeTransport { _ in (202, Data(#"{"id":"m1","state":"pending"}"#.utf8)) }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
-    _ = try await client.generate(GenerationRequest(kind: .music, prompt: "lofi", modelID: "m", instrumental: true))
-    _ = try await client.generate(GenerationRequest(kind: .video, prompt: "waves", modelID: "v", instrumental: true))
+    let instrumental = GenerationParams([.instrumental: .flag(true), .resolution: .text("720p")])
+    _ = try await client.generate(GenerationRequest(kind: .music, prompt: "lofi", modelID: "m", params: instrumental))
+    _ = try await client.generate(GenerationRequest(kind: .video, prompt: "waves", modelID: "v", params: instrumental))
 
     let requests = await transport.requests
     XCTAssertEqual(requests.map { $0.url?.path() }, ["/api/v1/music-generations", "/api/v1/video-generations"])
     XCTAssertEqual(Set(try body(requests[0]).keys), ["model", "prompt", "instrumental", "organization_id"])
-    XCTAssertEqual(Set(try body(requests[1]).keys), ["model", "prompt", "organization_id"])
+    XCTAssertEqual(Set(try body(requests[1]).keys), ["model", "prompt", "resolution", "organization_id"])
     XCTAssertTrue(try body(requests[0])["organization_id"] is NSNull)
   }
 
@@ -544,15 +548,16 @@ final class StudioCreateViewModelTests: XCTestCase {
     )
   }
 
-  func testSubmitStartsTrackingAndClearsThePrompt() async {
+  func testSubmitStartsTrackingAndClearsThePrompt() async throws {
     let api = FakeStudioAPI()
-    await api.setModels(.music, [GenerationModel(id: "m1", name: "M1"), GenerationModel(id: "m2", name: "M2")])
+    let m2 = GenerationModel(id: "m2", name: "M2", capabilities: .music(MusicCapabilities()))
+    await api.setModels(.music, [GenerationModel(id: "m1", name: "M1"), m2])
     let tracker = makeTracker(api)
     let model = StudioCreateViewModel(api: api, tracker: tracker)
     model.kind = .music
     await model.loadModels()
-    model.select(model: GenerationModel(id: "m2", name: "M2"))
-    model.instrumental = true
+    model.select(model: m2)
+    model.set(.flag(true), for: try XCTUnwrap(model.controls.first { $0.key == .instrumental }))
     model.prompt = "  rainy lofi  "
 
     let started = await model.submit()
@@ -561,7 +566,12 @@ final class StudioCreateViewModelTests: XCTestCase {
     XCTAssertEqual(model.prompt, "")
     let generated = await api.generated
     XCTAssertEqual(
-      generated, [GenerationRequest(kind: .music, prompt: "rainy lofi", modelID: "m2", instrumental: true)])
+      generated,
+      [
+        GenerationRequest(
+          kind: .music, prompt: "rainy lofi", modelID: "m2", params: GenerationParams([.instrumental: .flag(true)]))
+      ])
+    XCTAssertEqual(tracker.generations.first?.handle.modelID, "m2", "the handle keeps what it was made with")
     XCTAssertEqual(tracker.generations.map(\.handle.kind), [.music])
   }
 
