@@ -17,6 +17,7 @@ import {
 import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 
 interface RequestQuery {
   id: string;
@@ -60,6 +61,8 @@ const handler = adminApi({
       // Also the "before" side of the audit diff. Read outside the transaction, so a concurrent PUT
       // can leave `before` stale; acceptable for a last-writer-wins edit.
       const stored = await partnerSignupRuleRepository.findById(id);
+      // Rule tags are stamped at signup and outlive the rule.
+      if (data.tags) assertCanChangeManagedTags(req.user, stored?.tags, data.tags);
       // Only a changed package must be active: the edit form re-sends the current id, and a rule
       // linked to a since-deactivated package must stay editable.
       await assertGrantPackageExists(data.grantPackageId, {

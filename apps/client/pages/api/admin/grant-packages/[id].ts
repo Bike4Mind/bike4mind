@@ -10,6 +10,7 @@ import {
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 import { z } from 'zod';
 
 const handler = adminApi({
@@ -35,6 +36,7 @@ const handler = adminApi({
     // Not atomic with the write: two concurrent admin edits are each judged against the pre-edit package.
     const after = { ...stored, ...data };
     if ('totalCap' in data || 'dailyCap' in data) assertCapsConsistent(after);
+    if ('tags' in data) assertCanChangeManagedTags(req.user, stored.tags, data.tags);
     const reasonRequired = updateRequiresGrantReason(stored, after, await loadCreditGrantPolicy());
     const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 
