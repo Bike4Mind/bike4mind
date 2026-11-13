@@ -621,7 +621,7 @@ describe('edit modal scopes and federated trust', () => {
     );
   });
 
-  it('shows the toggle off for a stored opt-out and hides it for a non-federated client', async () => {
+  it('shows the toggle off for a stored opt-out', async () => {
     api.fetchOAuthClients.mockResolvedValue([{ ...federatedClient, unpaidAccountsAllowed: false }]);
     await openEdit();
     expect((screen.getByTestId('oauth-client-edit-unpaid-accounts-switch') as HTMLInputElement).checked).toBe(false);

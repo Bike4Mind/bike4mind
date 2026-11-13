@@ -343,6 +343,20 @@ describe('federated exchange keys', () => {
     expect(findByClientIds).toHaveBeenCalledTimes(2);
   });
 
+  it('keys the cache by client, so one client never answers for another', async () => {
+    const rows: Record<string, Record<string, unknown>> = {
+      'client-1': { clientId: 'client-1', unpaidAccountsAllowed: false },
+      'client-2': { clientId: 'client-2' },
+    };
+    findByClientIds.mockImplementation(async (ids: string[]) => new Map(ids.map(id => [id, rows[id]])));
+    const OTHER = { oauthExchangeClientId: 'client-2' };
+    expect(await gate.isApiKeyAccessAllowed(USER, OTHER)).toBe(true);
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(false);
+    expect(await gate.isApiKeyAccessAllowed(USER, OTHER)).toBe(true);
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(false);
+    expect(findByClientIds).toHaveBeenCalledTimes(2);
+  });
+
   it('still refuses under disabled and never consults the client', async () => {
     setMode('disabled');
     clientRow({ clientId: 'client-1' });
