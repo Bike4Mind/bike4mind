@@ -3,6 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
 import type { OrganizationRetentionPolicy } from './OrganizationRetention';
+import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 
 export interface IUserDetails {
   id: string;
@@ -83,6 +84,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+  sharingPolicy?: OrganizationSharingPolicy;
   mfaPolicy?: {
     required: boolean;
     graceEndsAt: Date | null;

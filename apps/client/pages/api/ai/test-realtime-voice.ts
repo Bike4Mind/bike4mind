@@ -10,7 +10,7 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 

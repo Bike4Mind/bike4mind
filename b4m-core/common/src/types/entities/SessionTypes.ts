@@ -719,6 +719,7 @@ export interface ISession {
   userId: string;
   /** Immutable ownership at creation; absent means personal or legacy, never inferred for deletion. */
   retentionOrganizationId?: string;
+  organizationId?: string;
   lastUpdated: Date;
   firstCreated: Date;
   language?: string;

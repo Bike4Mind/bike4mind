@@ -24,7 +24,7 @@ import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract }
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
-import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
+import { isChatModelUsable, resolveDefaultChatModel } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';

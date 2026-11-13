@@ -4,7 +4,7 @@ import type { ScheduledEvent } from 'aws-lambda';
 
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), run: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ connectDB: mocks.connect }));
-vi.mock('@server/analytics/analyticsRollup', () => ({ runNightlyRollup: mocks.run }));
+vi.mock('@bike4mind/server-utils/analytics/analyticsRollup', () => ({ runNightlyRollup: mocks.run }));
 vi.mock('sst', () => ({ Resource: { App: { name: 'test', stage: 'dev' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 

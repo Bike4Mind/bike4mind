@@ -1,0 +1,591 @@
+import defineAbilitiesFor, { Ability } from '../auth/ability';
+import { accessibleBy } from '@casl/mongoose';
+import {
+  agentRepository,
+  cacheRepository,
+  compareMongoIds,
+  favoriteRepository,
+  mongoose,
+  Session,
+  fabFileRepository,
+  projectRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { NotFoundError } from '../utils/errors';
+import { getFilesStorage } from '../utils/storage/index';
+import {
+  Permission,
+  ISessionDocument,
+  ISessionFavoriteItem,
+  ISession,
+  ISessionOrigin,
+  IUserDocument,
+  isSessionPinnableAttachment,
+  SessionListFilters,
+} from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { User, IUserObject } from '@bike4mind/database';
+import { MongoQuery } from '@casl/ability';
+import { Logger } from '@bike4mind/observability';
+import { Session as SessionModel, sessionListFilterQuery, sessionRepository } from '@bike4mind/database/auth';
+import { sessionService, projectService } from '@bike4mind/services';
+import {
+  notifySessionCreated,
+  logSessionCreatedEvent,
+  logProjectSessionAddedEvent,
+  recordNotebookAddedToProjectActivity,
+} from './sessionSideEffects';
+import { pinnableMessageFileIds } from './pinnableMessageFileIds';
+import { resolveRetentionOrganization } from '../organizations/retentionOwnership';
+
+/**
+ * Session lifecycle, querying, and basic persistence.
+ *
+ * Owns: create/get/update/delete + list/query operations. Delegates observable
+ * side effects (WebSocket notifications, analytics, activity logging) to
+ * `sessionSideEffects` via composition.
+ */
+
+export const generateNewSession = (userId: string, name: string): Omit<ISession, 'id'> => {
+  return {
+    name,
+    userId,
+    lastUpdated: new Date(),
+    firstCreated: new Date(),
+    knowledgeIds: [],
+  };
+};
+
+export const getDefaultSession = (userId: string): Omit<ISession, 'id'> => {
+  return generateNewSession(userId, 'New Notebook');
+};
+
+export interface GetOrCreateSessionParams {
+  /** Existing session ID (if provided, will fetch instead of create) */
+  sessionId?: string;
+  /** Session name for new sessions */
+  sessionName?: string;
+  /** Project ID if session should be associated with a project */
+  projectId?: string;
+  /** User object */
+  user: IUserDocument;
+  /** User's CASL ability for authorization */
+  ability?: Ability;
+  /** Logger instance */
+  logger: Logger;
+  /** Per-turn files; seeds knowledge on a new session. */
+  fabFileIds?: string[];
+  /**
+   * Internal: on an existing session, also persist the new notebook-scope fabFileIds to knowledgeIds
+   * (best-effort, never propagated to projects). Set only by callers that know the ids were newly
+   * attached (Slack uploads); never wire it from a request body - a browser sends its whole
+   * workbench, so a stale tab would re-add a file another tab removed.
+   */
+  persistFabFileIds?: boolean;
+  /**
+   * This message's own attachments. Unlike the workbench in fabFileIds, a message attachment is an
+   * explicit gesture, so its notebook-scope files are always pinned to knowledgeIds (new or existing
+   * session) and stay in context on later turns. See pinFilesToSessionKnowledge.
+   */
+  messageFileIds?: string[];
+  /** Message attachments the user scoped to this message only; never pinned. */
+  messageOnlyFileIds?: string[];
+  /**
+   * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
+   * `sessionService.createSession`, which drops ids the caller cannot access.
+   */
+  agentIds?: string[];
+  /** Stamped on a newly created session only (see resolveSessionOrigin); ignored for an existing one. */
+  origin?: ISessionOrigin;
+}
+
+export interface GetOrCreateSessionResult {
+  /** The session document (either fetched or newly created) */
+  session: ISessionDocument;
+  /** Session ID for convenience */
+  sessionId: string;
+  /** Whether a new session was created (true) or existing one fetched (false) */
+  wasCreated: boolean;
+  /** Array of async promises for logging and activities (caller should handle these) */
+  asyncPromises: Promise<unknown>[];
+}
+
+/**
+ * Gets an existing session or creates a new one with all associated logging and activities.
+ * This consolidates the session creation logic that was repeated across multiple API endpoints.
+ *
+ * @param params - Parameters for session creation/retrieval
+ * @returns Session document, creation flag, and async promises for logging
+ *
+ * @example
+ * ```ts
+ * const { session, sessionId, wasCreated, asyncPromises } = await getOrCreateSession({
+ *   sessionId: req.body.sessionId,
+ *   sessionName: req.body.sessionName,
+ *   projectId: req.body.projectId,
+ *   user: req.user,
+ *   ability: req.ability,
+ *   logger: req.logger,
+ * });
+ *
+ * // Handle async promises in background (non-blocking)
+ * Promise.all(asyncPromises).catch(err => logger.error('Background task failed:', err));
+ * ```
+ */
+/**
+ * Lake resolvers for a request-free caller (it has a user but no request), so the access check and
+ * the lake-tag derivation see lake-membership files - an ownership/share reader cannot follow the
+ * creator-identity widening an organization lake uses. See resolveRetrievalLakeScopeForUser.
+ * Imported at CALL time: the resolvers' graph reaches the entitlement and Mongoose layers, and it is
+ * only needed when files are actually attached.
+ */
+const lakeAdaptersFor = (user: IUserDocument, logger: Logger) => ({
+  resolveLakeAccess: async () =>
+    (await import('../dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
+  resolveAttachmentLakeAccess: async () =>
+    (await import('../dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, logger)(),
+});
+
+/**
+ * The notebook-scope subset of `ids`, lowercased and deduplicated, in input order. Images stay
+ * per-turn: a notebook image is re-sent as base64 every turn (see isSessionPinnableAttachment).
+ * findMetadataByIds includes soft-deleted rows; those must not come back as knowledge.
+ */
+const notebookScopedFileIds = async (ids: string[], logger: Logger, sessionId?: string): Promise<string[]> => {
+  const unique = [...new Set(ids.map(id => id.toLowerCase()))];
+  if (unique.length === 0) return [];
+  const { data, hasMore } = await fabFileRepository.findMetadataByIds(unique);
+  if (hasMore) logger.warn('fabFileIds exceed the metadata cap; persisting the first page', { sessionId });
+  const notebook = new Set(
+    data.filter(file => !file.deletedAt && isSessionPinnableAttachment(file.mimeType)).map(file => String(file.id))
+  );
+  return unique.filter(id => notebook.has(id));
+};
+
+/**
+ * Pins the notebook-scope files among `fileIds` to `session.knowledgeIds`, so a file sent on one
+ * turn stays in context on later ones. Add-only ($addToSet) and access-checked in
+ * sessionService.updateSession, which drops any file the user cannot read; never propagated to
+ * projects, since an automatic attach is not consent to share. Best-effort: on failure the
+ * session is returned unchanged and the current turn still carries the files itself.
+ * Returns the session as written, or the input session when nothing was added.
+ *
+ * There is no cap on pins. Inline token use stays bounded as the list grows: every turn splits one
+ * attachedFileTokenBudget evenly across the inlined files (buildDataSources), so another pin thins
+ * each file's share rather than adding tokens.
+ */
+export async function pinFilesToSessionKnowledge(
+  session: ISessionDocument,
+  fileIds: string[],
+  { user, logger }: { user: IUserDocument; logger: Logger }
+): Promise<ISessionDocument> {
+  const known = new Set((session.knowledgeIds ?? []).map(id => String(id).toLowerCase()));
+  const addedIds = fileIds.filter(id => !known.has(id.toLowerCase()));
+  if (addedIds.length === 0) return session;
+  try {
+    const notebookIds = await notebookScopedFileIds(addedIds, logger, session.id);
+    if (notebookIds.length === 0) return session;
+    return await sessionService.updateSession(
+      user,
+      // Add-only: `known` was read before the metadata lookup, so writing the full list back
+      // would undo a detach the user made in the meantime.
+      { id: session.id, knowledgeIds: notebookIds, knowledgeIdsMode: 'add', propagateToProjects: false },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          caches: cacheRepository,
+        },
+        logger,
+        ...lakeAdaptersFor(user, logger),
+        storage: getFilesStorage(),
+      }
+    );
+  } catch (error) {
+    logger.warn('Failed to write the session knowledge pin', { sessionId: session.id, error });
+    return session;
+  }
+}
+
+export async function getOrCreateSession(params: GetOrCreateSessionParams): Promise<GetOrCreateSessionResult> {
+  const {
+    sessionId: reqSessionId,
+    sessionName,
+    projectId,
+    user,
+    ability,
+    logger,
+    fabFileIds,
+    persistFabFileIds,
+    messageFileIds,
+    messageOnlyFileIds,
+    agentIds,
+    origin,
+  } = params;
+  const userId = user.id;
+
+  const asyncPromises: Promise<unknown>[] = [];
+  let session: ISessionDocument | null;
+  let wasCreated = false;
+
+  const lakeAdapters = lakeAdaptersFor(user, logger);
+  const messagePins = pinnableMessageFileIds(messageFileIds, messageOnlyFileIds);
+
+  if (reqSessionId) {
+    // Resolve an existing session through an access-scoped lookup, never a bare findById -
+    // otherwise any authenticated user could read/continue another user's session by id.
+    // The verb is `update`, not `read`: quests are appended to this session, and the retry path
+    // in ChatCompletionInvoke clears an existing quest's reply, so a read-only share must not
+    // reach it. With an ability, honor the Session write shape (owner + global-write + user/group
+    // shares - see ability.ts; Session has no org arm) exactly as the update path does; without
+    // one (e.g. the Slack path), fall back to owner-only.
+    // A miss (not found OR no access) falls through to the NotFoundError below - a 404 that
+    // does not distinguish the two, matching orgAccess's anti-enumeration behavior.
+    session = ability
+      ? await Session.findOne({
+          _id: reqSessionId,
+          ...accessibleBy(ability, Permission.update).ofType(SessionModel),
+        })
+      : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
+
+    // Persist the notebook-scope files this turn adds - otherwise a file rides this turn only (later
+    // turns read session.knowledgeIds). fabFileIds only when the caller vouches they are new.
+    if (session) {
+      session = await pinFilesToSessionKnowledge(
+        session,
+        [...(persistFabFileIds ? (fabFileIds ?? []) : []), ...messagePins],
+        { user, logger }
+      );
+    }
+  } else {
+    // Seeded at create rather than pinned after it, so the session.created push already carries
+    // them and the client's workbench hydrates with the file in place.
+    const seeded = new Set((fabFileIds ?? []).map(id => id.toLowerCase()));
+    const messageKnowledgeIds = (
+      await notebookScopedFileIds(messagePins, logger).catch(error => {
+        logger.warn('Failed to resolve the session knowledge pin for a new session', { error });
+        return [];
+      })
+    ).filter(id => !seeded.has(id));
+    const createdSession = await sessionService.createSession(
+      user,
+      {
+        name: sessionName ?? 'New Notebook',
+        // Every workbench file, images included, on purpose: the user started the notebook with them
+        // (matches createSessionForFile). Message attachments keep images per-turn, as on later sends.
+        knowledgeIds: [...(fabFileIds ?? []), ...messageKnowledgeIds],
+        agentIds: agentIds ?? [],
+        projectId,
+      },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
+        ...lakeAdapters,
+        resolveRetentionOrganization,
+      },
+      { origin }
+    );
+    // Bind into the outer `let session` and keep a narrowed const for the rest of the block -
+    // TS widens `let` back to `T | null` across each await below, but a const preserves narrowing.
+    session = createdSession;
+
+    wasCreated = true;
+
+    // Side effect: notify connected clients of the new session
+    await notifySessionCreated(createdSession, userId, logger);
+
+    // Side effect: analytics event for session creation
+    asyncPromises.push(logSessionCreatedEvent(userId, createdSession, ability));
+
+    // If created within a project, also log the ADD_SESSION event and activity
+    if (projectId) {
+      const project = await projectService.get(
+        userId,
+        { id: projectId },
+        {
+          db: {
+            projects: projectRepository,
+            users: userRepository,
+          },
+        }
+      );
+
+      asyncPromises.push(logProjectSessionAddedEvent(userId, projectId, project.name, createdSession.id, ability));
+      asyncPromises.push(recordNotebookAddedToProjectActivity(projectId, userId));
+    }
+
+    asyncPromises.push(userRepository.update({ id: userId, lastNotebookId: createdSession.id }));
+  }
+
+  if (!session) {
+    throw new NotFoundError('Session not found');
+  }
+
+  return {
+    session,
+    sessionId: session.id,
+    wasCreated,
+    asyncPromises,
+  };
+}
+
+export const updateSession = async (sessionData: Partial<ISession> & { id: string }, ability: Ability) => {
+  // Strip id and userId from $set - they're already in the filter via _id and accessibleBy().
+  // Spreading both into an upsert causes MongoDB error 54:
+  // "cannot infer query fields to set, path 'userId' is matched twice"
+  const { id: _id, userId: _userId, ...updateFields } = sessionData;
+  return await Session.findOneAndUpdate(
+    { _id: sessionData.id, ...accessibleBy(ability, Permission.update).ofType(SessionModel) },
+    { $set: { ...updateFields, lastUpdated: new Date() } },
+    { upsert: true, new: true }
+  );
+};
+
+export const getVisibleSessions = async (
+  ability: Ability,
+  search?: string,
+  // filters: Record<string, unknown>,
+  options?: {
+    pagination?: {
+      limit: number;
+      page: number;
+    };
+    orderBy?: {
+      name: string;
+      direction: 'asc' | 'desc';
+    };
+  }
+) => {
+  const {
+    pagination = { page: 1, limit: 10 },
+    orderBy = {
+      name: 'lastUpdated',
+      direction: 'desc',
+    },
+  } = options || {};
+
+  const q = {
+    ...accessibleBy(ability, Permission.read).ofType(SessionModel),
+  };
+
+  if (search) {
+    q['name'] = { $regex: escapeRegex(search), $options: 'si' };
+  }
+
+  const result = await Session.find(q)
+    .skip(pagination.limit * (pagination.page - 1))
+    .limit(pagination.limit + 1)
+    .sort({ [orderBy.name]: orderBy.direction });
+
+  const hasMore = result.length === pagination.limit + 1;
+  if (hasMore) result.pop();
+
+  return {
+    data: result,
+    hasMore,
+  };
+};
+
+export const getSessionsByUser = async (
+  user: IUserObject,
+  search?: string,
+  // filters: Record<string, unknown>,
+  options?: {
+    pagination?: {
+      limit: number;
+      page: number;
+    };
+    orderBy?: {
+      name: string;
+      direction: 'asc' | 'desc';
+    };
+  }
+) => {
+  const q: MongoQuery = {
+    userId: user.id,
+  };
+
+  if (search) {
+    q['name'] = { $regex: escapeRegex(search), $options: 'si' };
+  }
+
+  return paginatedSessions(q, options);
+};
+
+export const getFavoriteSessionByUser = async (userId: string): Promise<ISessionFavoriteItem[]> => {
+  const sessionFavorites = await favoriteRepository.find({ userId, documentType: 'sessions' });
+  const user = await userRepository.findById(userId);
+  // A favorited notebook's share can be revoked after it was favorited; the stored favorite row
+  // is just a pointer, so re-check current access rather than trusting it still holds.
+  const userAbility = defineAbilitiesFor(user ?? undefined);
+  const docs = await SessionModel.find(
+    {
+      $and: [
+        accessibleBy(userAbility, Permission.read).ofType(SessionModel),
+        { _id: { $in: sessionFavorites.map(favorite => favorite.documentId) } },
+        { $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] },
+      ],
+    },
+    { _id: 1, name: 1, lastUpdated: 1, surface: 1, deletedAt: 1, userId: 1, tags: 1, users: 1 }
+  ).lean();
+  // lean() strips the Mongoose `id` virtual - re-derive it from _id
+  return docs.map(doc => ({ ...doc, _id: String(doc._id), id: String(doc._id) })) as ISessionFavoriteItem[];
+};
+
+export const getSharedSessionsByUser = async (
+  user: IUserDocument,
+  search?: string,
+  options?: {
+    pagination?: {
+      limit: number;
+      page: number;
+    };
+    orderBy?: {
+      name: string;
+      direction: 'asc' | 'desc';
+    };
+    /** Same origin/image filters as the own list, applied server-side so pagination holds. */
+    filters?: SessionListFilters;
+  }
+): Promise<{
+  data: ISessionDocument[];
+  hasMore: boolean;
+}> => {
+  const sessions = await sessionRepository.shareable.findAllShared(user);
+  const q = Session.where({ _id: { $in: sessions.map(s => s.id) } });
+
+  if (search) {
+    q.where('name', { $regex: escapeRegex(search), $options: 'si' });
+  }
+  q.where(sessionListFilterQuery(options?.filters));
+
+  return paginatedSessions(q.getQuery(), options);
+};
+
+const paginatedSessions = async (
+  query: MongoQuery,
+  options?: {
+    pagination?: {
+      limit: number;
+      page: number;
+    };
+    orderBy?: {
+      name: string;
+      direction: 'asc' | 'desc';
+    };
+  }
+) => {
+  const {
+    pagination = { page: 1, limit: 10 },
+    orderBy = {
+      name: 'lastUpdated',
+      direction: 'desc',
+    },
+  } = options || {};
+  const result = await Session.find(query)
+    .skip(pagination.limit * (pagination.page - 1))
+    .limit(pagination.limit + 1)
+    .sort({ [orderBy.name]: orderBy.direction });
+
+  const hasMore = result.length === pagination.limit + 1;
+  if (hasMore) result.pop();
+  return {
+    data: result,
+    hasMore,
+  };
+};
+
+export const getSessionMetadata = async (userId: string): Promise<ISessionDocument[]> => {
+  return await Session.find({ userId }, 'id name lastUpdated');
+};
+
+export const getSessionById = async (sessionId: string): Promise<ISessionDocument | null> => {
+  return await Session.findById(sessionId);
+};
+
+export const createSession = async (
+  userId: string,
+  data: Partial<ISession>,
+  ability: Ability,
+  options?: {
+    /** If true, set the new session as the user's last notebook */
+    setLastNotebook?: boolean;
+    session?: mongoose.ClientSession;
+  }
+) => {
+  if (!ability.can(Permission.create, Session)) throw new Error('Cannot create session');
+
+  const session = options?.session ?? null;
+
+  const defaultData: Partial<ISession> = {
+    userId,
+    name: data.name || 'New Notebook',
+    knowledgeIds: data.knowledgeIds || [],
+    lastUpdated: new Date(),
+    firstCreated: new Date(),
+  };
+
+  const owner = await userRepository.findById(userId);
+  const finalData = {
+    ...defaultData,
+    ...data,
+    userId,
+    retentionOrganizationId: owner ? await resolveRetentionOrganization(owner) : undefined,
+  };
+  const notebook = new Session(finalData);
+  await notebook.save({ session });
+
+  if (options?.setLastNotebook) {
+    await User.updateOne({ _id: userId }, { lastNotebookId: notebook.id }).session(session);
+  }
+
+  return notebook;
+};
+
+/**
+ * Deletes a user session and ensures that the user always has at least one session.
+ * If the session to be deleted is the user's last notebook, it updates the user's
+ * `lastNotebookId` to the most recently updated session. If no other sessions exist,
+ * it creates a new session for the user, and sets it as the user's last notebook.
+ *
+ * @returns The ID of the new last notebook, or null if no new session was created
+ */
+export const deleteSession = async (
+  userId: string,
+  sessionId: mongoose.Types.ObjectId | string,
+  ability: Ability
+): Promise<string | null> => {
+  const userLastNotebookId = (await User.findById(userId, { lastNotebookId: 1 }))?.lastNotebookId ?? null;
+
+  // Check if the session to be deleted is the user's current active Notebook
+  const isActiveUserNotebook = userLastNotebookId ? compareMongoIds(userLastNotebookId, sessionId) : false;
+
+  let newLastNotebookId: string | null;
+
+  if (isActiveUserNotebook) {
+    const lastSession = await Session.findOne({ userId, _id: { $ne: sessionId } }).sort({ createdAt: -1 });
+    if (lastSession) {
+      Logger.log('ATTACHING NEW SESSION:', lastSession.id);
+      await User.findByIdAndUpdate(userId, { lastNotebookId: lastSession.id });
+      newLastNotebookId = lastSession.id;
+    } else {
+      const newSession = await createSession(userId, getDefaultSession(userId), ability, { setLastNotebook: true });
+      newLastNotebookId = newSession.id;
+    }
+  } else {
+    // Not the user's last notebook, so lastNotebookId is unchanged
+    newLastNotebookId = userLastNotebookId;
+  }
+
+  await Session.deleteOne({
+    _id: sessionId,
+    ...accessibleBy(ability, Permission.delete).ofType(SessionModel),
+  });
+
+  return newLastNotebookId;
+};

@@ -282,6 +282,22 @@ describe('BaseRepository', () => {
     });
   });
 
+  describe('findOne', () => {
+    const makeRepo = (findOneImpl: ReturnType<typeof vi.fn>) =>
+      new TestRepository({ findOne: findOneImpl } as unknown as mongoose.Model<TestDoc>);
+
+    it('resolves exactly null on a miss', async () => {
+      const findOne = vi.fn().mockResolvedValue(null);
+      await expect(makeRepo(findOne).findOne({ name: 'absent' })).resolves.toBeNull();
+      expect(findOne).toHaveBeenCalledWith({ name: 'absent' });
+    });
+
+    it('returns the plain object for a hit', async () => {
+      const findOne = vi.fn().mockResolvedValue({ toJSON: () => ({ name: 'x' }) });
+      await expect(makeRepo(findOne).findOne({ name: 'x' })).resolves.toMatchObject({ name: 'x' });
+    });
+  });
+
   // updateMany had the same `.session(this._txn)` bug as update.
   describe('findById', () => {
     const makeRepo = (findByIdImpl: ReturnType<typeof vi.fn>) =>

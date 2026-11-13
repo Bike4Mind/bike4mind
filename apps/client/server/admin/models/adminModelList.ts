@@ -19,7 +19,7 @@ import { loadFreeTierAllowedModels } from '@bike4mind/services/llm/modelAdmissio
 import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /**
  * Every model this server knows, with its status and reasons, for GET /api/admin/models and the bulk access

@@ -545,7 +545,44 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  */
 export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
+/**
+ * A key as the owner list (GET /api/user-api-keys) returns it, with its legacy status
+ * computed server-side by `getApiKeyLegacyStatus`.
+ */
+export type IUserApiKeyListItem = IUserApiKeyDocument & {
+  /** Rides the legacy window: routes that grandfather legacy keys admit it without their scopes. */
+  legacy: boolean;
+  /** When legacy access ends; `null` when the key is not legacy or no end date is set yet. */
+  legacyEndsAt: Date | null;
+};
+
+/** Filter for {@link IUserApiKeyRepository.findLegacyCandidatesPage}. */
+export type LegacyApiKeyCandidateQuery = {
+  /** Keys created before this; `null` matches any creation date (no legacy cutoff set yet). */
+  createdBefore: Date | null;
+  /** Keys last used at or after this. */
+  usedSince: Date;
+  /** Keys holding any of these scopes are left out (confined keys are never legacy). */
+  excludeScopes: readonly string[];
+  skip: number;
+  limit: number;
+};
+
+export type LegacyApiKeyCandidatePage = {
+  keys: IUserApiKeyDocument[];
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+};
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
+  /**
+   * Active, unexpired, non-exchange keys that may still ride the legacy window, most recently
+   * used first. A query primitive only: the legacy rule itself is `getApiKeyLegacyStatus` in
+   * server-utils, which callers apply to every row.
+   */
+  findLegacyCandidatesPage: (query: LegacyApiKeyCandidateQuery) => Promise<LegacyApiKeyCandidatePage>;
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;

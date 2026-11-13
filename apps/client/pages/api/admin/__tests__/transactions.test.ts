@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockVerifyOrgOwner = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: (...a: unknown[]) => mockVerifyOrgOwner(...a),
+  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgOwner(...a),
 }));
 
 vi.mock('@server/utils/resolveUserNames', () => ({

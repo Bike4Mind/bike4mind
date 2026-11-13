@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { getApiKeyLegacyStatus, LEGACY_API_KEY_WINDOW } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import {
@@ -139,8 +140,12 @@ const handler = baseApi()
       })
     );
 
+    const now = new Date();
     const payload = keys.map(key => {
-      const json = redactForNonMinter(serializeKey(key), key.userId === userId);
+      const json = {
+        ...redactForNonMinter(serializeKey(key), key.userId === userId),
+        ...getApiKeyLegacyStatus(key, now, LEGACY_API_KEY_WINDOW),
+      };
       return key.scopes.includes(ApiKeyScope.EMBED_CHAT)
         ? { ...json, ownerHasWhitelabel: ownerHasWhitelabel.get(ownerCacheKey(key)) ?? false }
         : json;

@@ -30,6 +30,7 @@ import {
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
+  organizationId: z.string().optional(),
   knowledgeIds: z.array(z.string()).optional(),
   artifactIds: z.array(z.string()).optional(),
   agentIds: z.array(z.string()).optional(),
@@ -196,6 +197,9 @@ export const createSession = async (
 
   const userSetFields = userSetSessionFields(rest, adapters.workspaceSessionSettings, options.userSetFields);
 
+  const parentProject = projectId ? await db.projects.shareable.findAccessibleById(user, projectId) : null;
+  const organizationId = parentProject?.organizationId ?? rest.organizationId;
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -206,6 +210,7 @@ export const createSession = async (
     lastUsedModel: rest.lastUsedModel ?? null,
 
     ...rest,
+    organizationId,
 
     // After ...rest so the derived value wins over the (absent) request value it stands in for.
     ...(retrievalTags?.length ? { retrievalTags } : {}),
