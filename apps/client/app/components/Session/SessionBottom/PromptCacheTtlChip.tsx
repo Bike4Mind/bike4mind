@@ -119,8 +119,10 @@ const PromptCacheTtlChip: FC<PromptCacheTtlChipProps> = ({ value, prices, onChan
                   tabIndex={-1}
                   readOnly
                   slotProps={{ input: { 'aria-hidden': true, tabIndex: -1 } }}
+                  // The row shrinks before it wraps; a squeezed radio draws its ring as an oval.
                   sx={{
                     '--Radio-size': '20px',
+                    flexShrink: 0,
                     '& .MuiRadio-icon': { width: '12px', height: '12px', borderRadius: '50%' },
                   }}
                 />
