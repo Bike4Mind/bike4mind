@@ -827,7 +827,8 @@ export const useCreateNewSession = (callbacks?: {
         workBenchFiles.map(file => file.id),
         workBenchAgents.map(agent => agent.id),
         projectIdParam,
-        model
+        model,
+        useUser.getState().currentUser?.organizationId ?? undefined
       );
 
       return newSession;

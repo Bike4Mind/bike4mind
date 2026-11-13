@@ -150,6 +150,7 @@ export enum AdminTab {
   Approvals = 76,
   Tutorials = 77,
   AiOperations = 78,
+  LegacyApiKeys = 79,
 }
 
 /**
@@ -293,6 +294,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },
+      { Icon: Key, tab: AdminTab.LegacyApiKeys, label: 'Legacy API keys', testid: 'admin-legacy-api-keys-btn' },
       { Icon: Lock, tab: AdminTab.SystemSecrets, label: 'System secrets' },
       { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation', badge: 'secretRotation' },
       {

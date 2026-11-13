@@ -75,7 +75,7 @@ export async function resolveApiKeyBillingOrg({
  * The organization a request bills, or null for personal credits. The v1 media create routes and
  * `/api/ai/llm` use it (under the media routes' name, resolveMediaBillingOrgId).
  *
- * An org-billed API key follows the key, like chat (sseRoute/wsRoute), reserveRequestCredits and the
+ * An org-billed API key follows the key, like chat (sseRoute), reserveRequestCredits and the
  * lake search's resolveBillingOrg: its org pays whether or not the body names one. A body
  * `organization_id` must then be that same org - anything else, `null` included, is a 403 rather than
  * a silent switch of payer. The key's org must still exist and still count the key's holder as a

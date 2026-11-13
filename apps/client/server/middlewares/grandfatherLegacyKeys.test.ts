@@ -24,6 +24,12 @@ const GRANDFATHERED_ROUTES = [
   'skills/[id]/index.ts',
   'skills/[id]/share.ts',
   'skills/index.ts',
+  'user-api-keys/[id]/index.ts',
+  'user-api-keys/[id]/rate-limit.ts',
+  'user-api-keys/[id]/revoke.ts',
+  'user-api-keys/[id]/rotate.ts',
+  'user-api-keys/billing-organizations.ts',
+  'user-api-keys/index.ts',
   'users/[id]/index.ts',
 ];
 

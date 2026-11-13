@@ -54,7 +54,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // Single shared gate (org-aware; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const datalakeTag = dataLake.datalakeTag;

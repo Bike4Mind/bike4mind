@@ -419,4 +419,12 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/files/createFabFile',
   ],
   [ApiKeyScope.SLACK_POST]: ['POST /api/v1/slack/messages'],
+  [ApiKeyScope.API_KEYS_MANAGE]: [
+    'GET|POST /api/user-api-keys',
+    'PATCH|DELETE /api/user-api-keys/:id',
+    'PATCH /api/user-api-keys/:id/rate-limit',
+    'POST /api/user-api-keys/:id/revoke',
+    'POST /api/user-api-keys/:id/rotate',
+    'GET /api/user-api-keys/billing-organizations',
+  ],
 };

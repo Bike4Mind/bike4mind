@@ -59,6 +59,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScope,
   ApiKeyScopeValue,
   getMeContract,
@@ -69,7 +70,10 @@ import {
   listAgentsContract,
   listDataLakesContract,
 } from '@bike4mind/common';
-import { type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import {
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -114,6 +118,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   'marketing-reports': 'Marketing Reports',
   optihashi: 'OptiHashi',
   me: 'Account',
+  'api-keys': 'API Keys',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -122,6 +127,7 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'Generate',
   chat: 'Chat',
   compute: 'Compute',
+  manage: 'Manage',
 };
 
 const humanize = (s: string) =>
@@ -180,8 +186,7 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
     presetScopes: {
       read: readScopes,
       readwrite: [...readScopes, ...writeScopes],
-      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
-      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+      full: scopeValues.filter(value => !EXPLICIT_ONLY_API_KEY_SCOPES.has(value)),
     },
   };
 };
@@ -2025,8 +2030,13 @@ export default function UserApiKeysTab() {
     return 'Active';
   };
 
+  // The server decides legacy status. The badge waits for an end date: while none is announced
+  // every older key is legacy, and a dateless badge on all of them would only alarm.
+  const legacyEndsAt = (key: IUserApiKeyListItem) => (key.legacy ? key.legacyEndsAt : null);
+
   const keys = data ?? [];
   const revokedCount = keys.filter(isRevoked).length;
+  const legacyKeyEndDates = keys.map(legacyEndsAt).filter(endsAt => endsAt !== null);
   const visibleKeys = showRevoked ? keys : keys.filter(key => !isRevoked(key));
 
   return (
@@ -2098,6 +2108,19 @@ export default function UserApiKeysTab() {
             </Alert>
           )}
 
+          {legacyKeyEndDates.length > 0 && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-legacy-alert">
+              <Typography level="body-sm">
+                {legacyKeyEndDates.length === 1
+                  ? 'One key in this list uses'
+                  : `${legacyKeyEndDates.length} keys in this list use`}{' '}
+                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that, endpoints
+                that now require scopes refuse a key that does not hold them. Create a new key with the scopes your
+                integration needs and switch to it; rotating a legacy key keeps it legacy.
+              </Typography>
+            </Alert>
+          )}
+
           {isLoading ? (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
               <CircularProgress />
@@ -2152,7 +2175,26 @@ export default function UserApiKeysTab() {
                   {visibleKeys.map(key => (
                     <tr key={key.id}>
                       <td>
-                        <Typography fontWeight="lg">{key.name}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography fontWeight="lg">{key.name}</Typography>
+                          {legacyEndsAt(key) && (
+                            <Tooltip
+                              title="This key was created before scopes were enforced. Before this date, create a new key with the scopes it needs; rotating keeps the key legacy."
+                              variant="soft"
+                              size="sm"
+                              sx={{ maxWidth: 320 }}
+                            >
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                data-testid={`api-key-legacy-badge-${key.id}`}
+                              >
+                                Legacy until {dayjs(legacyEndsAt(key)).format('MMM D, YYYY')}
+                              </Chip>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </td>
                       <td>
                         {key.organizationId ? (

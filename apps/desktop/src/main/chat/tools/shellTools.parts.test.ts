@@ -63,7 +63,7 @@ describe('shellApproval per part', () => {
     ]);
   });
 
-  it('asks about a part whose operand it cannot read in every mode, and only that part', async () => {
+  it('asks about only the unread part in both auto and full modes', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
     expect(prompt.byPart).toBe(true);
     expect(prompt.askInFull).toBe(true);
