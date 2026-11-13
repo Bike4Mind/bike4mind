@@ -114,9 +114,9 @@ export class SystemPromptHistoryRepository {
       {
         $set: {
           ...(updates.content !== undefined && { content: updates.content }),
-          ...(updates.name !== undefined && { name: updates.name }),
-          ...(updates.description !== undefined && { description: updates.description }),
-          ...(updates.category !== undefined && { category: updates.category }),
+          ...(updates.name && { name: updates.name }),
+          ...(updates.description && { description: updates.description }),
+          ...(updates.category && { category: updates.category }),
           ...(updates.tags !== undefined && { tags: updates.tags }),
           ...(updates.variables !== undefined && { variables: updates.variables }),
           ...(updates.changeReason !== undefined && { changeReason: updates.changeReason }),
