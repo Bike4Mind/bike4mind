@@ -1,5 +1,14 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { IProject, IProjectDocument, IProjectMethods, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IProject,
+  IProjectDocument,
+  IProjectMethods,
+  IProjectRepository,
+  IUserDocument,
+  HTTPError,
+  HttpStatus,
+  Permission,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -51,24 +60,29 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
 
   async setOwnedGroupReadAccess(projectId: string, ownerId: string, groupId: string, enabled: boolean) {
     if (!mongoose.isObjectIdOrHexString(projectId)) return false;
-    const groups = { $ifNull: ['$groups', []] };
-    const withoutGroup = {
-      $filter: { input: groups, as: 'group', cond: { $ne: ['$$group.groupId', { $literal: groupId }] } },
-    };
-    // Enabling keeps an existing entry for the group untouched so broader permissions are not downgraded.
-    const nextGroups = enabled
-      ? {
-          $cond: [
-            { $lt: [{ $size: withoutGroup }, { $size: groups }] },
-            groups,
-            { $concatArrays: [groups, { $literal: [{ groupId, permissions: ['read'] }] }] },
-          ],
-        }
-      : withoutGroup;
-    const result = await this.projectModel.updateOne({ _id: convertId(projectId), userId: ownerId, deletedAt: null }, [
-      { $set: { groups: nextGroups } },
-    ]);
-    return result.matchedCount === 1;
+    const scope = { _id: convertId(projectId), userId: ownerId, deletedAt: null };
+    type StoredGroup = NonNullable<IProjectDocument['groups']>[number];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const project = await this.projectModel
+        .findOne(scope)
+        .select('groups')
+        .lean<{ groups?: (StoredGroup | null)[] | null }>();
+      if (!project) return false;
+      const groups = project.groups ?? [];
+      const present = groups.some(group => group?.groupId === groupId);
+      if (Array.isArray(project.groups) && present === enabled) return true;
+      const nextGroups = enabled
+        ? [...groups, { groupId, permissions: [Permission.read] }]
+        : groups.filter(group => group?.groupId !== groupId);
+      // Literal on the left avoids Mongoose adding subdocument IDs to the snapshot comparison.
+      const snapshot =
+        project.groups === undefined
+          ? { groups: { $exists: false } }
+          : { $expr: { $eq: [{ $literal: project.groups }, '$groups'] } };
+      const result = await this.projectModel.updateOne({ ...scope, ...snapshot }, { $set: { groups: nextGroups } });
+      if (result.matchedCount === 1) return true;
+    }
+    throw new HTTPError(HttpStatus.Conflict, 'Project sharing changed. Please try again.');
   }
 
   async removeSession(sessionId: string) {

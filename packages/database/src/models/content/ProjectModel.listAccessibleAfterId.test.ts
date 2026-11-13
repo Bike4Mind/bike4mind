@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { Project, projectRepository } from './ProjectModel';
@@ -16,6 +16,10 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await Project.deleteMany({}, { hardDelete: true });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 const OWNER = 'user-owner';
@@ -87,6 +91,96 @@ describe('ProjectRepository.listAccessibleAfterId', () => {
     expect(shared?.groups).toHaveLength(1);
     expect(shared?.groups[0]).toEqual(expect.objectContaining({ groupId: GROUP, permissions: ['read', 'update'] }));
     expect(await projectRepository.shareable.findUpdateAccessById(member, project.id)).not.toBeNull();
+  });
+
+  it('uses only ordinary updates and scopes every write and idempotent read to the live owner', async () => {
+    const project = await makeProject('ordinary-group-updates');
+    const writes = vi.spyOn(Project, 'updateOne');
+    const reads = vi.spyOn(Project, 'findOne');
+    await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true);
+    await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true);
+    await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, false);
+    expect(writes.mock.calls.length).toBeGreaterThan(0);
+    for (const [filter, update] of writes.mock.calls) {
+      expect(filter).toMatchObject({ userId: OWNER, deletedAt: null });
+      expect(Array.isArray(update)).toBe(false);
+      expect(Object.keys(update ?? {}).every(key => ['$set', '$push', '$pull'].includes(key))).toBe(true);
+    }
+    for (const [filter] of reads.mock.calls) expect(filter).toMatchObject({ userId: OWNER, deletedAt: null });
+  });
+
+  it.each([
+    ['null', true],
+    ['null', false],
+    ['missing', true],
+    ['missing', false],
+  ] as const)('handles a %s legacy group array when enabled=%s', async (shape, enabled) => {
+    const project = await makeProject(`legacy-${shape}-${enabled}`);
+    await Project.collection.updateOne(
+      { _id: project._id },
+      shape === 'null' ? { $set: { groups: null } } : { $unset: { groups: 1 } }
+    );
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, enabled)).toBe(true);
+    expect((await projectRepository.findById(project.id))?.groups).toEqual(
+      enabled ? [expect.objectContaining({ groupId: GROUP, permissions: ['read'] })] : []
+    );
+  });
+
+  it('preserves an existing array containing a legacy null element and an unrelated grant', async () => {
+    const project = await makeProject('legacy-null-element');
+    const other = { groupId: 'other-group', permissions: ['read', 'update'] };
+    await Project.collection.updateOne({ _id: project._id }, { $set: { groups: [null, other] } });
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(true);
+    const stored = await Project.collection.findOne({ _id: project._id });
+    expect(stored?.groups).toEqual([
+      null,
+      expect.objectContaining(other),
+      expect.objectContaining({ groupId: GROUP, permissions: ['read'] }),
+    ]);
+  });
+
+  it('does not duplicate a group across concurrent enables', async () => {
+    const project = await makeProject('concurrent-group-enables');
+    expect(
+      await Promise.all([1, 2, 3].map(() => projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)))
+    ).toEqual([true, true, true]);
+    expect((await projectRepository.findById(project.id))?.groups).toHaveLength(1);
+  });
+
+  it('retains concurrent unrelated group grants with the snapshot comparison', async () => {
+    const project = await makeProject('concurrent-different-groups');
+    expect(
+      await Promise.all(
+        [GROUP, 'second-group'].map(groupId =>
+          projectRepository.setOwnedGroupReadAccess(project.id, OWNER, groupId, true)
+        )
+      )
+    ).toEqual([true, true]);
+    const groups = (await projectRepository.findById(project.id))?.groups ?? [];
+    expect(groups.map(group => group.groupId).sort()).toEqual([GROUP, 'second-group'].sort());
+  });
+
+  it('compares legacy grants without synthesizing missing subdocument IDs', async () => {
+    const project = await makeProject('legacy-no-subdocument-id');
+    const legacy = { groupId: 'other-group', permissions: ['read', 'update'] };
+    await Project.collection.updateOne({ _id: project._id }, { $set: { groups: [legacy] } });
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(true);
+    expect((await projectRepository.findById(project.id))?.groups).toEqual(
+      expect.arrayContaining([expect.objectContaining(legacy), expect.objectContaining({ groupId: GROUP })])
+    );
+  });
+
+  it('reports a retryable conflict instead of silently losing grants when the snapshot keeps changing', async () => {
+    const project = await makeProject('contended-groups');
+    const writes = vi
+      .spyOn(Project, 'updateOne')
+      .mockResolvedValue({ acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null });
+    await expect(projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(writes.mock.calls.length).toBeGreaterThan(0);
+    expect(writes.mock.calls.length).toBeLessThanOrEqual(3);
+    expect((await projectRepository.findById(project.id))?.groups).toEqual([]);
   });
 
   it('walks every accessible project once, in ascending _id order, across keyset pages', async () => {

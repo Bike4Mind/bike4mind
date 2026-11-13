@@ -33,6 +33,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const listOrganizationGroups = vi.hoisted(() => vi.fn());
 const createStandardGroup = vi.hoisted(() => vi.fn());
+const recordOrganizationAuditEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent }));
 const withTransaction = vi.hoisted(() => vi.fn(async (fn: () => Promise<unknown>) => fn()));
 vi.mock('@bike4mind/database', () => ({ withTransaction }));
 const repos = vi.hoisted(() => ({
@@ -116,6 +118,12 @@ describe('POST /api/organizations/[id]/groups', () => {
     expect(withTransaction).toHaveBeenCalled();
     expect(createStandardGroup).toHaveBeenCalledWith(user, { organizationId: 'org1', type: 'team' }, { db: repos });
     expect(res._getStatusCode()).toBe(200);
+    expect(recordOrganizationAuditEvent).toHaveBeenCalledWith({
+      organizationId: 'org1',
+      actorUserId: 'owner1',
+      action: 'policy.updated',
+      targetId: 'group-type:team',
+    });
   });
 
   it('rejects a body that tries to replace the staff grants', async () => {

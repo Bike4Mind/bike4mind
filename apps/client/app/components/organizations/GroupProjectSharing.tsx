@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Stack, Typography } from '@mui/joy';
+import { Alert, Button, Stack, Typography } from '@mui/joy';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchProjects } from '@client/app/hooks/data/projects';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -21,7 +21,12 @@ export function GroupProjectSharing({ organizationId, groupId }: { organizationI
 function ProjectPicker({ organizationId, groupId }: { organizationId: string; groupId: string }) {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
-  const projects = useSearchProjects('', {}, { by: 'updatedAt', direction: 'desc' });
+  const projects = useSearchProjects(
+    '',
+    {},
+    { by: 'updatedAt', direction: 'desc' },
+    { enabled: !!currentUser, propagateErrors: true }
+  );
   const mutation = useMutation({
     mutationFn: ({ projectId, enabled }: { projectId: string; enabled: boolean }) =>
       shareGroupProject(organizationId, groupId, projectId, enabled),
@@ -36,6 +41,25 @@ function ProjectPicker({ organizationId, groupId }: { organizationId: string; gr
   return (
     <Stack spacing={1}>
       <Typography level="body-sm">Share your projects with this group (read access).</Typography>
+      {projects.isPending && <Typography level="body-sm">Loading projects...</Typography>}
+      {projects.isError && (
+        <Alert color="warning" data-testid="org-group-projects-error">
+          <Stack spacing={0.5}>
+            <Typography level="body-sm">
+              {projects.data ? 'Could not refresh projects. Showing the last loaded list.' : 'Could not load projects.'}
+            </Typography>
+            <Button
+              size="sm"
+              variant="plain"
+              loading={projects.isFetching}
+              onClick={() => void projects.refetch()}
+              data-testid="org-group-projects-retry"
+            >
+              Retry
+            </Button>
+          </Stack>
+        </Alert>
+      )}
       {owned.map(project => {
         const shared = project.groups?.some(group => group.groupId === groupId) ?? false;
         return (
@@ -53,7 +77,7 @@ function ProjectPicker({ organizationId, groupId }: { organizationId: string; gr
           </Stack>
         );
       })}
-      {!projects.isPending && owned.length === 0 && (
+      {!projects.isPending && !projects.isError && owned.length === 0 && (
         <Typography level="body-sm">No owned projects on this page.</Typography>
       )}
       {projects.hasNextPage && (
