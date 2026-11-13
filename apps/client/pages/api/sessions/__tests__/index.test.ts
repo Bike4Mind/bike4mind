@@ -135,15 +135,21 @@ describe('/api/sessions API-key scopes', () => {
     vi.unstubAllEnvs();
   });
 
-  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
-  // pass here; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
-  it('lets a legacy notebooks:read key DELETE, as before scopes', async () => {
-    keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+  // DELETE required notebooks:write before the door existed, so it never grandfathers legacy keys.
+  it.each([
+    ['a notebooks:read key', [ApiKeyScope.READ_NOTEBOOKS]],
+    ['an unscoped key', []],
+  ] as const)('refuses DELETE for %s without deleting anything', async (_label, scopes) => {
+    keyWithScopes([...scopes]);
     const { req, res } = fire('DELETE');
     await handler(req, res);
 
-    expect(res._getStatusCode()).toBe(204);
-    expect(mockDeleteMany).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(403);
+    // The message pins which gate refused: CASL's ability check would answer a bare 'Forbidden'.
+    expect(JSON.stringify(res._getData())).toContain('notebooks:write is required');
+    expect(mockDeleteMany).not.toHaveBeenCalled();
+    expect(mockUnpublish).not.toHaveBeenCalled();
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
   });
 
   it('lets a notebooks:write key delete all notebooks', async () => {
@@ -180,16 +186,17 @@ describe('/api/sessions API-key scopes', () => {
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 
+  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
+  // get through the door; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
   it.each([
-    ['GET', 'an unscoped key', [], 200],
-    ['GET', 'a non-notebook key', [ApiKeyScope.ME_READ], 200],
-    ['DELETE', 'an unscoped key', [], 204],
-  ] as const)('admits %s for %s while it is legacy', async (method, _label, scopes, status) => {
+    ['an unscoped key', []],
+    ['a non-notebook key', [ApiKeyScope.ME_READ]],
+  ] as const)('admits GET for %s while it is legacy', async (_label, scopes) => {
     keyWithScopes([...scopes]);
-    const { req, res } = fire(method);
+    const { req, res } = fire('GET');
     await handler(req, res);
 
-    expect(res._getStatusCode()).toBe(status);
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it.each(['GET', 'DELETE'] as const)('refuses %s at the door for a confined key', async method => {

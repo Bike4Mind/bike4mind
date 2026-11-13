@@ -18,7 +18,8 @@ import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services
 import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
 // Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
-// Both admit legacy keys until the legacy window ends: the route was open to every key before.
+// The door admits legacy keys until the legacy window ends, since GET was open to every key before.
+// DELETE never grandfathers: it already required notebooks:write before the door existed.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
   grandfatherLegacyKeys: true,
@@ -69,8 +70,7 @@ const handler = baseApi({
       assertApiKeyScope(
         req,
         [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
-        'This API key is read-only for notebooks; notebooks:write is required',
-        { grandfatherLegacyKeys: true }
+        'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;
       if (!userId || !req.ability?.can(Permission.delete, SessionModel)) {
