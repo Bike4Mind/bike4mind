@@ -59,6 +59,7 @@ describe('every EventBridge subscription dead-letters its failures', () => {
         'spider-start',
         'stripe-customer-subscription-updated',
         'stripe-invoice-payment-succeeded',
+        'studio-job-completed',
         'telemetry-alert',
       ].sort()
     );

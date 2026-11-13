@@ -40,6 +40,24 @@ describe('FilterChip', () => {
     fireEvent.click(screen.getByTestId('admin-filter-clear-status-btn'));
     expect(screen.getByTestId('admin-filter-status')).toHaveTextContent(/^Status$/);
   });
+
+  it('reads an option chipLabel on the set chip while the menu keeps its label', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <FilterChip
+          id="when"
+          label="When"
+          value="custom"
+          options={[{ value: 'custom', label: 'Custom range', chipLabel: 'Nov 1 - Nov 8' }]}
+          onChange={() => {}}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('admin-filter-when')).toHaveTextContent('When: Nov 1 - Nov 8');
+
+    fireEvent.click(screen.getByTestId('admin-filter-when'));
+    expect(screen.getByTestId('admin-filter-when-custom')).toHaveTextContent(/^Custom range$/);
+  });
 });
 
 describe('ViewTabs', () => {

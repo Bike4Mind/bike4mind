@@ -52,6 +52,7 @@ vi.mock('../components/auth/MFAEnforcementWrapper', () => ({
 }));
 vi.mock('@client/app/components/EmailVerificationBanner', () => ({ default: () => null }));
 vi.mock('../components/CommandPalette', () => ({ default: () => null }));
+vi.mock('@client/app/components/Studio/completion/StudioJobCompletedListener', () => ({ default: () => null }));
 
 const mountBare = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
