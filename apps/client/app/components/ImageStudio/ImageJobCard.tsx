@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AspectRatio, Card, CardContent, Chip, CircularProgress, IconButton, Stack, Typography } from '@mui/joy';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import type { GenerationJobState } from '@bike4mind/common';
-import { useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
+import { isFabFileScanInFlight, useGetFabFile } from '@client/app/hooks/data/fabFileQueries';
 import type { StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import StudioTrailDialog from '@client/app/components/Studio/trail/StudioTrailDialog';
 import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
@@ -13,11 +13,43 @@ const LIVE_LABELS: Partial<Record<GenerationJobState, string>> = {
   storing: 'Saving',
 };
 
-// GET /api/files/:id signs the file, so the saved image renders straight from its record.
+/** How long (ms) a card waits on the moderation scan before it stops asking for the image. */
+export const IMAGE_SCAN_WAIT_MS = 30 * 1000;
+
+const PreviewMessage = ({ testId, children }: { testId: string; children: string }) => (
+  <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid={testId}>
+    {children}
+  </Typography>
+);
+
+// GET /api/files/:id signs the file once its moderation scan is clean, so the image renders straight from its record.
 const ImageJobPreview = ({ fileId, prompt }: { fileId: string; prompt: string }) => {
-  const file = useGetFabFile(fileId);
-  if (!file.data?.fileUrl) return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
-  return <img src={file.data.fileUrl} alt={prompt} loading="lazy" data-testid="image-job-image" />;
+  const [gaveUp, setGaveUp] = useState(false);
+  const file = useGetFabFile(fileId, { pollWhileScanning: !gaveUp });
+  const scanning = !!file.data && isFabFileScanInFlight(file.data);
+
+  useEffect(() => {
+    if (!scanning) return;
+    const timer = setTimeout(() => setGaveUp(true), IMAGE_SCAN_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [scanning]);
+
+  if (file.data?.fileUrl) {
+    return <img src={file.data.fileUrl} alt={prompt} loading="lazy" data-testid="image-job-image" />;
+  }
+  if (file.data?.moderationStatus === 'blocked') {
+    return (
+      <PreviewMessage testId="image-job-image-blocked">This image was blocked by content moderation.</PreviewMessage>
+    );
+  }
+  if ((!file.data && !file.isError) || (scanning && !gaveUp)) {
+    return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
+  }
+  return (
+    <PreviewMessage testId="image-job-image-unavailable">
+      The image could not be loaded. Reload the page to try again.
+    </PreviewMessage>
+  );
 };
 
 // A socket frame marks the row 'succeeded' before the gallery refetch brings its output.
