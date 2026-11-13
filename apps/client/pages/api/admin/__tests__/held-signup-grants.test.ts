@@ -30,11 +30,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({ signupGrantReleaseRepository: { listHeld } }));
+const advisories = vi.hoisted(() => vi.fn());
+vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: advisories }));
 import '@pages/api/admin/held-signup-grants';
 
 const run = async (query: Record<string, string>, isAdmin = true, user: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({ method: 'GET', query });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: {} });
+  Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: { warn: vi.fn() } });
   await Promise.resolve()
     .then(() => {
       for (const middleware of uses) middleware(req, res, () => undefined);
@@ -45,7 +47,10 @@ const run = async (query: Record<string, string>, isAdmin = true, user: Record<s
 };
 const row = (id: string) => ({ id, email: `${id}@example.test`, reason: 'budget_exhausted', createdAt: new Date(0) });
 
-beforeEach(() => listHeld.mockReset().mockResolvedValue([]));
+beforeEach(() => {
+  listHeld.mockReset().mockResolvedValue([]);
+  advisories.mockReset().mockResolvedValue(new Map());
+});
 
 describe('GET /api/admin/held-signup-grants', () => {
   it('requires the admin scope on a JWT-only route', () => {
@@ -77,5 +82,25 @@ describe('GET /api/admin/held-signup-grants', () => {
   it('returns no cursor on the last page', async () => {
     listHeld.mockResolvedValue([row('a'.repeat(24))]);
     expect((await run({}))._getJSONData().nextCursor).toBeNull();
+  });
+  it('attaches the advisory model verdict to the rows it names, and null elsewhere', async () => {
+    const [named, other] = ['a'.repeat(24), 'b'.repeat(24)];
+    listHeld.mockResolvedValue([row(named), row(other)]);
+    const advisory = { assessmentId: 'x1', detectionId: 'd1', result: 'abuse' };
+    advisories.mockResolvedValue(new Map([[named, advisory]]));
+
+    const body = (await run({}))._getJSONData();
+
+    expect(advisories).toHaveBeenCalledWith([named, other], expect.anything());
+    expect(body.data.map((r: { advisory: unknown }) => r.advisory)).toEqual([advisory, null]);
+  });
+  it('still lists the held grants when the advisory read fails', async () => {
+    listHeld.mockResolvedValue([row('a'.repeat(24))]);
+    advisories.mockRejectedValue(new Error('read failed'));
+
+    const res = await run({});
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData().data[0].advisory).toBeNull();
   });
 });

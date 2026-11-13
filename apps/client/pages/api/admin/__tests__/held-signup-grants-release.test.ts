@@ -50,6 +50,19 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   denySelfAdminAction: audit.deny,
   loadCreditGrantPolicy: vi.fn(),
   recordAdminActionFromRequest: audit.record,
+  parseAdminActionReason: (value: unknown) => {
+    if (typeof value !== 'string' || value.trim().length < 3)
+      throw Object.assign(new Error('A reason is required'), { statusCode: 400 });
+    return value.trim();
+  },
+}));
+const ai = vi.hoisted(() => ({ suggestion: vi.fn(), override: vi.fn() }));
+vi.mock('@server/admin/ai/audit', () => ({
+  withAiSuggestionId: (details: Record<string, unknown>, aiSuggestionId: string) => ({ ...details, aiSuggestionId }),
+}));
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({
+  userAssessmentSuggestion: ai.suggestion,
+  recordUserAssessmentOverride: ai.override,
 }));
 import '@pages/api/admin/held-signup-grants/release';
 
@@ -71,6 +84,80 @@ beforeEach(() => {
   preview.mockReset().mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   audit.record.mockReset();
   audit.deny.mockReset().mockRejectedValue(Object.assign(new Error('own account'), { statusCode: 403 }));
+  ai.suggestion.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+  ai.override.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+});
+
+const ASSESSMENT_ID = 'a'.repeat(24);
+const SUGGESTION_ID = 'c'.repeat(24);
+const REASON = 'Verified customer';
+
+describe('releasing from a confirm dialog', () => {
+  it('records the admin reason on each release audit entry', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'released', credits: 500 }] });
+
+    expect((await run({ userIds: [id(1)], reason: REASON })).statusCode).toBe(200);
+
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        reason: REASON,
+        details: { credits: 500, source: 'held_grant_release', batchId: 'b1' },
+      }),
+      expect.anything()
+    );
+    expect(ai.suggestion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed reason before paying', async () => {
+    expect((await run({ userIds: [id(1)], reason: '' })).statusCode).toBe(400);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('records releasing over an abuse assessment as an override, linked in the audit entry', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'released', credits: 500 }] });
+
+    const res = await run({
+      userIds: [id(1)],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID, overrideReason: 'Evidence misread' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ai.suggestion).toHaveBeenCalledWith('heldSignupGrant', id(1), ASSESSMENT_ID);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: { credits: 500, source: 'held_grant_release', batchId: 'b1', aiSuggestionId: SUGGESTION_ID },
+      }),
+      expect.anything()
+    );
+    expect(ai.override).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      {
+        overrideAction: { action: 'release' },
+        overrideReason: 'Evidence misread',
+        decidedBy: { userId: 'admin-1', name: 'Admin' },
+      }
+    );
+  });
+
+  it('records no override when nothing was released', async () => {
+    release.mockResolvedValue({ batchId: 'b1', results: [{ userId: id(1), outcome: 'skipped', credits: 0 }] });
+
+    await run({ userIds: [id(1)], reason: REASON, aiDecision: { assessmentId: ASSESSMENT_ID } });
+
+    expect(ai.override).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['without a reason', { userIds: [id(1)] }],
+    ['for a batch', { userIds: [id(1), id(2)], reason: REASON }],
+  ])('refuses an AI decision %s before paying', async (_label, body) => {
+    expect((await run({ ...body, aiDecision: { assessmentId: ASSESSMENT_ID } })).statusCode).toBe(400);
+    expect(release).not.toHaveBeenCalled();
+    expect(ai.suggestion).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/admin/held-signup-grants/release', () => {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SIGNUP_RISK_SIGNALS } from './settings';
 import { ABUSE_ASSESSMENT_JUDGMENTS } from './abuseAssessment';
 import { SHADOW_DETECTORS } from './shadowDetection';
+import { assessmentAiDecisionSchema } from './adminAi';
 
 /**
  * Pending accounts returned by one list request. The admin table sorts and pages the whole set
@@ -20,6 +21,8 @@ const ObjectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid us
  * approve or change reviewState. An abuse judgment wins over a newer non-abuse one.
  */
 export const signupRiskReviewAdvisorySchema = z.object({
+  /** The AbuseAssessment shown; an admin action taken from it names this id. */
+  assessmentId: z.string(),
   detectionId: z.string(),
   detector: z.enum(SHADOW_DETECTORS),
   result: z.enum(ABUSE_ASSESSMENT_JUDGMENTS),
@@ -90,6 +93,8 @@ export const signupRiskReviewDecisionSchema = z.object({
   action: z.enum(['approve', 'reopen']),
   userIds: z.array(ObjectIdStringSchema).min(1).max(MAX_SIGNUP_RISK_REVIEW_BATCH),
   reason: z.unknown(),
+  /** Approving one account over its abuse assessment: recorded as an override of that suggestion. */
+  aiDecision: assessmentAiDecisionSchema.optional(),
 });
 export type SignupRiskReviewDecision = z.infer<typeof signupRiskReviewDecisionSchema>;
 

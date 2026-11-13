@@ -6,10 +6,8 @@ import {
   MAX_SIGNUP_RISK_REVIEW_BATCH,
   SIGNUP_RISK_REVIEW_LIST_LIMIT,
   SIGNUP_RISK_SIGNALS,
-  type AbuseAssessmentJudgment,
   type SignupRiskSignal,
 } from '@bike4mind/common';
-import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   AdminPermissionAction,
   useMissingAdminPermission,
@@ -26,19 +24,24 @@ import {
   useUndoToast,
   type AdminSelection,
   type DataColumn,
+  type DataTableRowShortcut,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
-import { DETECTOR_LABELS } from './shadowDetectorLabels';
+import { SignupAdvisoryCell, advisoryTooltip } from './SignupAdvisoryCell';
 import {
   useSignupRiskReviewDecision,
   useSignupRiskReviews,
   type SignupRiskReviewRow,
 } from '@client/app/hooks/data/signupRiskReviews';
+import { useAcceptAssessmentSuggestion } from '@client/app/hooks/data/aiAssessmentSuggestions';
 import { getErrorMessage } from '@client/app/utils/error';
+import { toast } from 'sonner';
+
+export { advisoryTooltip };
 
 export const SIGNAL_LABELS: Record<SignupRiskSignal, string> = {
   riskyDomain: 'Risky domain',
@@ -69,43 +72,23 @@ const SignupTime: React.FC<{ iso: string; now: number }> = ({ iso, now }) => {
   );
 };
 
-// Only an abuse verdict is colored: a model's "legitimate" must not read as a reason to approve.
-const ADVISORY_DISPLAY: Record<AbuseAssessmentJudgment, { label: string; tone: AdminStatusTone }> = {
-  abuse: { label: 'Model: abuse', tone: 'bad' },
-  legitimate_automation: { label: 'Model: legit automation', tone: 'neutral' },
-  insufficient_evidence: { label: 'Model: unsure', tone: 'neutral' },
-};
+type RowDecisions = Partial<Record<DataTableRowShortcut, () => void>>;
 
-export function advisoryTooltip(advisory: NonNullable<SignupRiskReviewRow['advisory']>, now: number): string {
-  const confidence = advisory.confidence === null ? '' : `, ${Math.round(advisory.confidence * 100)}% confident`;
-  const otherCount = plural(advisory.otherVerdicts, 'other verdict');
-  let others = '';
-  if (advisory.result === 'abuse' && advisory.newerVerdicts > 0) {
-    others = ` This abuse verdict is shown over ${plural(advisory.newerVerdicts, 'newer verdict')}; ${otherCount} on this account.`;
-  } else if (advisory.otherVerdicts > 0) {
-    others = ` ${otherCount} on this account.`;
-  }
-  return `Advisory model verdict on a detection (${DETECTOR_LABELS[advisory.detector]})${confidence}, ${relativeTime(
-    new Date(advisory.assessedAt),
-    now
-  )}.${others} It never approves or blocks an account.`;
-}
-
-const Advisory: React.FC<{ row: SignupRiskReviewRow; now: number }> = ({ row, now }) => {
-  const advisory = row.advisory;
-  if (!advisory) return null;
-  return (
-    <Tooltip title={advisoryTooltip(advisory, now)}>
-      <span tabIndex={0} data-testid={`signup-risk-advisory-${row.userId}`}>
-        <StatusChip tone={ADVISORY_DISPLAY[advisory.result].tone} label={ADVISORY_DISPLAY[advisory.result].label} />
-      </span>
-    </Tooltip>
-  );
-};
-
-const Signals: React.FC<{ row: SignupRiskReviewRow; now: number }> = ({ row, now }) => (
+const Signals: React.FC<{ row: SignupRiskReviewRow; now: number; decisions: RowDecisions }> = ({
+  row,
+  now,
+  decisions,
+}) => (
   <Stack direction="row" flexWrap="wrap" gap={0.5}>
-    <Advisory row={row} now={now} />
+    <SignupAdvisoryCell
+      userId={row.userId}
+      advisory={row.advisory}
+      now={now}
+      testIdPrefix="signup-risk"
+      abuseProposal="Likely abuse: keep in review"
+      onAccept={decisions.a}
+      onOverride={decisions.o}
+    />
     {row.grantHeld && (
       <Tooltip title="The signup grant policy held this account's signup credits. Approving pays them.">
         <span tabIndex={0} data-testid={`signup-risk-grant-held-${row.userId}`}>
@@ -146,6 +129,7 @@ const ApprovalPreview: React.FC<{ rows: SignupRiskReviewRow[] }> = ({ rows }) =>
 export const SignupRiskReviewTab: React.FC = () => {
   const reviews = useSignupRiskReviews();
   const decision = useSignupRiskReviewDecision();
+  const acceptSuggestion = useAcceptAssessmentSuggestion();
   const showUndo = useUndoToast();
   const openProfile = useOpenUserProfile();
   const [view, updateView] = useAdminListUrlState(SIGNUP_RISK_REVIEW_SEARCH_KEYS);
@@ -153,6 +137,8 @@ export const SignupRiskReviewTab: React.FC = () => {
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
   const [approving, setApproving] = useState<SignupRiskReviewRow[] | null>(null);
+  // Set when the approve dialog was opened by overriding the model's abuse verdict on that one row.
+  const [overriddenAssessmentId, setOverriddenAssessmentId] = useState<string | null>(null);
   const [suspending, setSuspending] = useState<string[] | null>(null);
   const [failedCount, setFailedCount] = useState(0);
   const [now] = useState(() => Date.now());
@@ -185,12 +171,24 @@ export const SignupRiskReviewTab: React.FC = () => {
     selection.mode === 'allMatching' ? visibleRows : visibleRows.filter(row => selection.ids.includes(row.userId));
   const clearSelection = () => setSelection({ mode: 'explicit', ids: [] });
 
+  const closeApproval = () => {
+    setApproving(null);
+    setOverriddenAssessmentId(null);
+  };
+
   const approve = (targets: SignupRiskReviewRow[], reason: string) =>
     decision.mutate(
-      { action: 'approve', userIds: targets.map(row => row.userId), reason },
+      {
+        action: 'approve',
+        userIds: targets.map(row => row.userId),
+        reason,
+        ...(overriddenAssessmentId && targets.length === 1
+          ? { aiDecision: { assessmentId: overriddenAssessmentId } }
+          : {}),
+      },
       {
         onSuccess: result => {
-          setApproving(null);
+          closeApproval();
           clearSelection();
           const approved = result.updatedUserIds;
           setFailedCount(result.failedUserIds.length);
@@ -209,6 +207,35 @@ export const SignupRiskReviewTab: React.FC = () => {
         },
       }
     );
+
+  // Approving pays out a withheld signup grant, so it needs credits:adjust beside users:moderate.
+  const approveMissing = useMissingAdminPermission('credits:adjust');
+  const moderateMissing = useMissingAdminPermission('users:moderate');
+
+  const acceptAssessment = (row: SignupRiskReviewRow) => {
+    if (row.advisory?.result !== 'abuse') return;
+    acceptSuggestion.mutate(
+      { surface: 'signupRiskReview', userId: row.userId, assessmentId: row.advisory.assessmentId },
+      {
+        onSuccess: () => toast.success(`Accepted the abuse assessment for ${row.email ?? row.username ?? row.userId}`),
+        onError: error => toast.error(getErrorMessage(error)),
+      }
+    );
+  };
+  const overrideAssessment = (row: SignupRiskReviewRow) => {
+    if (row.advisory?.result !== 'abuse') return;
+    decision.reset();
+    setOverriddenAssessmentId(row.advisory.assessmentId);
+    setApproving([row]);
+  };
+  // Only an abuse verdict can be accepted or overridden; accepting records agreement and changes no account.
+  const decisions = (row: SignupRiskReviewRow): RowDecisions =>
+    row.advisory?.result === 'abuse' && !moderateMissing
+      ? {
+          a: () => acceptAssessment(row),
+          ...(approveMissing ? {} : { o: () => overrideAssessment(row) }),
+        }
+      : {};
 
   const columns: readonly DataColumn<SignupRiskReviewRow>[] = [
     {
@@ -264,7 +291,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       numeric: true,
       width: '8.5rem',
     },
-    { id: 'signals', label: 'Signals', render: row => <Signals row={row} now={now} /> },
+    { id: 'signals', label: 'Signals', render: row => <Signals row={row} now={now} decisions={decisions(row)} /> },
     {
       id: 'createdAt',
       label: 'Signed up',
@@ -290,8 +317,6 @@ export const SignupRiskReviewTab: React.FC = () => {
     },
   ];
 
-  // Approving pays out a withheld signup grant, so it needs credits:adjust beside users:moderate.
-  const approveMissing = useMissingAdminPermission('credits:adjust');
   const rowActions = (row: SignupRiskReviewRow) => (
     <AdminPermissionAction requirement="users:moderate">
       {missing => (
@@ -313,11 +338,31 @@ export const SignupRiskReviewTab: React.FC = () => {
               data-testid={`signup-risk-approve-${row.userId}`}
               onClick={() => {
                 decision.reset();
+                setOverriddenAssessmentId(null);
                 setApproving([row]);
               }}
             >
               Approve account
             </MenuItem>
+            {row.advisory?.result === 'abuse' && (
+              <MenuItem
+                data-testid={`signup-risk-accept-assessment-${row.userId}`}
+                disabled={acceptSuggestion.isPending}
+                onClick={() => acceptAssessment(row)}
+              >
+                Accept AI assessment
+              </MenuItem>
+            )}
+            {row.advisory?.result === 'abuse' && (
+              <MenuItem
+                disabled={!!approveMissing}
+                title={approveMissing ?? undefined}
+                data-testid={`signup-risk-override-assessment-${row.userId}`}
+                onClick={() => overrideAssessment(row)}
+              >
+                Override: approve account
+              </MenuItem>
+            )}
             <MenuItem
               color="danger"
               data-testid={`signup-risk-suspend-${row.userId}`}
@@ -389,6 +434,7 @@ export const SignupRiskReviewTab: React.FC = () => {
         onRetry={() => void reviews.refetch()}
         onRowActivate={row => void openProfile(row.userId)}
         rowActions={rowActions}
+        rowShortcuts={decisions}
         // The fixed-width columns plus room for account, domain and signals; narrower screens scroll sideways.
         minWidth="72rem"
         selection={selection}
@@ -432,6 +478,7 @@ export const SignupRiskReviewTab: React.FC = () => {
               disabled={missing || selectedRows.length === 0}
               onClick={() => {
                 decision.reset();
+                setOverriddenAssessmentId(null);
                 setApproving(selectedRows);
               }}
             >
@@ -462,7 +509,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       <ActionDialog
         open={approving !== null}
         onClose={() => {
-          if (!decision.isPending) setApproving(null);
+          if (!decision.isPending) closeApproval();
         }}
         title={approving && approving.length > 1 ? `Approve ${plural(approving.length, 'account')}` : 'Approve account'}
         description="This lifts the signup review hold on AI access and removes them from this queue. Separate admin restrictions still apply. Later rescores keep the approval. Undo restores the review hold and is offered for 30 seconds."

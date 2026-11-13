@@ -11,6 +11,7 @@ import {
   signupRiskReviewDecisionResultSchema,
   signupRiskReviewDecisionSchema,
   signupRiskReviewListSchema,
+  type AdminAiSuggestionItem,
   type SignupRiskAutoApprovalItem,
   type SignupRiskReviewAdvisory,
   type SignupRiskReviewItem,
@@ -32,6 +33,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
 import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
+import { withAiSuggestionId } from '@server/admin/ai/audit';
+import { recordUserAssessmentOverride, userAssessmentSuggestion } from '@server/admin/ai/assessmentSuggestion';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -159,6 +162,14 @@ const handler = adminApi({
       // Approving pays out any signup grant the policy withheld.
       if (parsed.data.action === 'approve') requireAdminPermission(req, 'credits:adjust');
       const userIds = [...new Set(parsed.data.userIds)];
+      const aiDecision = parsed.data.aiDecision;
+      if (aiDecision && (parsed.data.action !== 'approve' || userIds.length !== 1)) {
+        throw new BadRequestError('An AI suggestion decision applies to approving one account');
+      }
+      // Validated before anything moves: an assessment that does not name the account is a 400.
+      const aiSuggestion = aiDecision
+        ? await userAssessmentSuggestion('signupRiskReview', userIds[0], aiDecision.assessmentId)
+        : null;
 
       const self = userIds.find(userId => isSelfOrImpersonator(req.user, userId));
       if (self) {
@@ -209,10 +220,13 @@ const handler = adminApi({
               summary: transition.summary,
               reason,
               changes: [{ field: 'riskScore.reviewState', before: transition.from, after: transition.to }],
+              ...(aiSuggestion ? { details: withAiSuggestionId({}, aiSuggestion.id) } : {}),
             });
             return true;
           });
           (moved ? updatedUserIds : skippedUserIds).push(userId);
+          if (moved && aiSuggestion)
+            await recordApprovalOverride(req, aiSuggestion, aiDecision?.overrideReason ?? reason);
           if (moved && paid) grantReleasedUserIds.push(userId);
         } catch (error) {
           req.logger.error('Signup risk review decision failed for user', { userId, error });
@@ -227,6 +241,23 @@ const handler = adminApi({
       });
     })
   );
+
+/** The approval already committed, so a failed suggestion write is logged rather than failing it. */
+async function recordApprovalOverride(
+  req: Parameters<typeof recordAdminActionFromRequest>[0],
+  suggestion: AdminAiSuggestionItem,
+  overrideReason: string
+): Promise<void> {
+  try {
+    await recordUserAssessmentOverride(suggestion, {
+      overrideAction: { action: 'approve' },
+      overrideReason,
+      decidedBy: { userId: req.user.impersonatedBy ?? req.user.id, name: req.user.username || 'Admin' },
+    });
+  } catch (error) {
+    req.logger.error('AI suggestion override failed for signup risk approval', { suggestionId: suggestion.id, error });
+  }
+}
 
 export const config = { api: { externalResolver: true } };
 export default handler;

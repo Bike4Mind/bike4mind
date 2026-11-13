@@ -61,6 +61,7 @@ import {
   useAdminListUrlState,
   type AdminReasonDraft,
   type AdminSelection,
+  type AiOverrideReason,
   type AiSuggestionData,
   type DataColumn,
   type DataTableGroup,
@@ -979,6 +980,16 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     initialVerdict ? { rowId: row.id, value: initialVerdict } : null
   );
   const [reasonSeed, setReasonSeed] = useState(initialReason);
+  // Set when the grade comes from the assessment (accept, override or a row shortcut for either), so the
+  // request names the assessment and the server records the decision.
+  const [aiOriginChoice, setAiOriginChoice] = useState<RowChoice<{ overrideReason?: AiOverrideReason }>>(
+    initialVerdict || initialOverriding ? { rowId: row.id, value: {} } : null
+  );
+  const [latestAssessmentChoice, setLatestAssessmentChoice] = useState<RowChoice<string | null>>(null);
+  const onLatestAssessment = useCallback(
+    (assessmentId: string | null) => setLatestAssessmentChoice({ rowId: row.id, value: assessmentId }),
+    [row.id]
+  );
   // Bumped to re-seed the reason after an in-dialog Accept.
   const [formKey, setFormKey] = useState(0);
   const [skipRelatedChoice, setSkipRelatedChoice] = useState<RowChoice<boolean>>(null);
@@ -1021,7 +1032,22 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     setConflictChoice(null);
     setFailureChoice(null);
     if (!applyRelated) {
-      const result = await single.mutateAsync({ id: row.id, expectedRevision: row.revision, verdict, reason });
+      const aiOrigin = forRow(aiOriginChoice);
+      const assessmentId = forRow(latestAssessmentChoice);
+      const result = await single.mutateAsync({
+        id: row.id,
+        expectedRevision: row.revision,
+        verdict,
+        reason,
+        ...(aiOrigin && assessmentId
+          ? {
+              aiDecision: {
+                assessmentId,
+                ...(aiOrigin.overrideReason ? { overrideReason: aiOrigin.overrideReason } : {}),
+              },
+            }
+          : {}),
+      });
       if (result.status === 'conflict') {
         onRowChange(result.item);
         setConflictChoice({ rowId: row.id, value: result.message ?? CONFLICT_FALLBACK_MESSAGE });
@@ -1187,11 +1213,15 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           enabled
           onAccept={proposed => {
             pickVerdict(proposed);
+            setAiOriginChoice({ rowId: row.id, value: {} });
             setReasonSeed(ACCEPTED_AI_REASON);
             setFormKey(key => key + 1);
           }}
-          // The why-wrong pick is not recorded until suggestion decisions are stored.
-          onOverride={() => setVerdictChoice(null)}
+          onOverride={overrideReason => {
+            setVerdictChoice(null);
+            setAiOriginChoice({ rowId: row.id, value: overrideReason ? { overrideReason } : {} });
+          }}
+          onLatestAssessment={onLatestAssessment}
           initialOverriding={initialOverriding}
         />
       )}

@@ -359,7 +359,7 @@ An AI proposal is shown with `AiSuggestion` (`shared/AiSuggestion.tsx`), beside 
 
 ### Recording decisions
 
-`onDecision` fires from the component only for Dismiss, and for Undo once `onUndo` resolves (a rejected revert is not reported). Accept and override are the host's to report: call `onDecision` with `accepted` or `overridden` after the host's own write lands, not when the button is clicked, because the admin can still cancel the dialog. Decisions are not stored yet; until the shared suggestion store exists, `onDecision` is a typed seam with no persistence behind it, and a dismissed suggestion returns on reload. Shadow detections does not wire `onDecision` yet.
+`onDecision` fires from the component only for Dismiss, and for Undo once `onUndo` resolves (a rejected revert is not reported). Accept and override are the host's to report: call `onDecision` with `accepted` or `overridden` after the host's own write lands, not when the button is clicked, because the admin can still cancel the dialog. The decision itself is stored server side, by the audited endpoint the admin's action goes through, on an `AdminAiSuggestion` row (Feedback triage; the abuse assessment on Detections, Risk review and Held signup grants via `apps/client/server/admin/ai/assessmentSuggestion.ts`). Dismiss is not stored yet, so a dismissed suggestion returns on reload.
 
 ### Copy
 

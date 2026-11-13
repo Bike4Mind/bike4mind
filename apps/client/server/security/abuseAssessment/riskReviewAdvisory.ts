@@ -34,6 +34,7 @@ export async function findRiskReviewAdvisories(
     // Stored rows outlive enum changes; one that no longer fits the response schema is dropped here
     // rather than failing validation of the whole queue response.
     const parsed = signupRiskReviewAdvisorySchema.safeParse({
+      assessmentId: assessment.id,
       detectionId: detection.id,
       detector: detection.detector,
       result: assessment.result,
