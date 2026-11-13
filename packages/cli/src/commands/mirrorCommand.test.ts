@@ -2,10 +2,15 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { notebookExportService } from '@bike4mind/services';
+import {
+  decodeMirrorCursor,
+  encodeMirrorCursor,
+  sealMirrorEntries,
+  type MirrorPage,
+} from '@bike4mind/services/notebookMirror';
 import { runMirrorOnce } from './mirrorCommand';
 
-const { sealMirrorEntries, encodeMirrorCursor, decodeMirrorCursor } = notebookExportService;
+type Notebook = MirrorPage['entries'][number]['notebook'];
 
 const notebook = (id: string, day: number) =>
   ({
@@ -20,10 +25,10 @@ const notebook = (id: string, day: number) =>
     artifacts: [],
     tools: [],
     agents: [],
-  }) as notebookExportService.ExportedNotebook;
+  }) as Notebook;
 
 /** A feed over fixed notebooks, two per page, resuming from whatever cursor it is handed. */
-const feedOf = (all: notebookExportService.ExportedNotebook[]) => async (token: string | undefined) => {
+const feedOf = (all: Notebook[]) => async (token: string | undefined) => {
   const from = decodeMirrorCursor(token);
   const rest = token ? all.filter(n => Date.parse(n.lastUpdated) > from.at) : all;
   const { entries, next } = sealMirrorEntries(from, rest.slice(0, 2));

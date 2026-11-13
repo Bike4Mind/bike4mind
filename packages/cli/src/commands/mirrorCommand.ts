@@ -8,16 +8,19 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { notebookExportService } from '@bike4mind/services';
+import {
+  applyMirrorPage,
+  decodeMirrorCursor,
+  encodeMirrorCursor,
+  mirrorStateToBundle,
+  MIRROR_GENESIS_CURSOR,
+  type MirrorCursor,
+  type MirrorPage,
+  type MirrorState,
+} from '@bike4mind/services/notebookMirror';
 import { ApiClient } from '../auth/ApiClient.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { requireApiUrl } from '../utils/apiUrl.js';
-
-const { applyMirrorPage, decodeMirrorCursor, mirrorStateToBundle, MIRROR_GENESIS_CURSOR, encodeMirrorCursor } =
-  notebookExportService;
-type MirrorPage = notebookExportService.MirrorPage;
-type MirrorCursor = notebookExportService.MirrorCursor;
-type MirrorState = notebookExportService.MirrorState;
 
 const STATE_FILE = '.mirror-state.json';
 
