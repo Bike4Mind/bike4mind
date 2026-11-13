@@ -238,6 +238,36 @@ describe('system prompt admin audit', () => {
     expect(JSON.stringify(input)).not.toContain('secret body text');
   });
 
+  it('create-version rejects over-long content or description with a 400 and writes nothing', async () => {
+    const body = { name: 'P', description: 'desc', category: 'c', tags: [], variables: [] };
+    const tooLong = await call(createVersion, 'POST', { ...body, content: 'x'.repeat(50001) });
+    expect(tooLong._getStatusCode()).toBe(400);
+    const descTooLong = await call(createVersion, 'POST', { ...body, content: 'ok', description: 'd'.repeat(2001) });
+    expect(descTooLong._getStatusCode()).toBe(400);
+    expect(h.repo.createNewVersion).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('save-version rejects over-long content with a 400 and writes nothing', async () => {
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'x'.repeat(50001) });
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.repo.saveToVersion).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('save-version rejects an over-long description with a 400 and writes nothing', async () => {
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'ok', description: 'd'.repeat(2001) });
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.repo.saveToVersion).not.toHaveBeenCalled();
+  });
+
+  it('save-version accepts content at exactly 50,000 characters', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
+    h.repo.saveToVersion.mockResolvedValue({ ok: true });
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'x'.repeat(50000) });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
   it('switch-version records version_switched with the active-version diff', async () => {
     h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 2, version: 3 });
     h.repo.switchVersion.mockResolvedValue({ ok: true });
