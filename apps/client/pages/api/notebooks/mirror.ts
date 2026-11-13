@@ -40,7 +40,7 @@ const MIRROR_OPTIONS: ExportOptions = {
  * hash-chained so the caller can verify what it applied. The caller owns the state and the
  * destination, so nothing about the destination is stored here.
  */
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, message: 'User not authenticated' });
