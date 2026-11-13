@@ -710,7 +710,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return this.questMasterPlanModel.findOneAndUpdate(
       { _id: planId, ...writableBy(userId) },
       { $set: { handoff } },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -725,7 +725,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           },
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -743,7 +743,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           'blockers.$.resolution': resolution,
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -758,7 +758,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           },
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 

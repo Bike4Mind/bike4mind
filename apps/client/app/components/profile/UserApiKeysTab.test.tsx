@@ -187,6 +187,34 @@ describe('UserApiKeysTab - revoked keys', () => {
   });
 });
 
+describe('UserApiKeysTab - legacy keys', () => {
+  const endsAt = '2027-04-01T00:00:00.000Z';
+  const legacyKey = { ...activeKey, legacy: true, legacyEndsAt: endsAt };
+  const newerKey = { ...activeKey, id: 'key-3', name: 'Scoped key', legacy: false, legacyEndsAt: null };
+
+  beforeEach(() => {
+    h.keys = [];
+  });
+
+  it('badges a legacy key with its end date and explains how to replace it, but not a newer key', () => {
+    h.keys = [legacyKey, newerKey];
+    renderTab();
+
+    expect(screen.getByTestId('api-key-legacy-badge-key-1')).toHaveTextContent('Legacy until Apr 1, 2027');
+    expect(screen.queryByTestId('api-key-legacy-badge-key-3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/Create a new key with the scopes/);
+    expect(screen.getByTestId('api-keys-legacy-alert')).toHaveTextContent(/rotating a legacy key keeps it legacy/);
+  });
+
+  it('shows no badge while no end date is set, so every older key is not flagged without a date', () => {
+    h.keys = [{ ...legacyKey, legacyEndsAt: null }];
+    renderTab();
+
+    expect(screen.queryByTestId('api-key-legacy-badge-key-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-legacy-alert')).not.toBeInTheDocument();
+  });
+});
+
 describe('keyTestPath', () => {
   it('prefers /api/v1/me, falls back to a read the key holds, and gives up on write-only keys', () => {
     expect(keyTestPath([ApiKeyScope.ME_READ, ApiKeyScope.READ_FILES])).toBe('/api/v1/me');
@@ -762,5 +790,50 @@ describe('UserApiKeysTab - personas:mint', () => {
     fireEvent.click(chip.querySelector('button') ?? chip);
     fireEvent.click(screen.getByTestId('api-key-create-btn'));
     expect(minted()).toContain(ApiKeyScope.PERSONAS_MINT);
+  });
+});
+
+describe('UserApiKeysTab - api-keys:manage', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+
+  const openModal = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Key manager' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it.each([
+    ['Read-only (default)', undefined],
+    ['Read & write', 'readwrite'],
+  ] as const)('leaves api-keys:manage out of %s', (_label, preset) => {
+    openModal(preset);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('leaves api-keys:manage out of Full access', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-api-keys:manage')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    // A spend scope proves the Full access click took effect.
+    expect(minted()).toContain(ApiKeyScope.AI_GENERATE);
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('grants api-keys:manage when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-api-keys:manage');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.API_KEYS_MANAGE);
   });
 });

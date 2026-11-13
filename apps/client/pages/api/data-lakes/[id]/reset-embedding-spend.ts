@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, dataLakeSpendNotificationRepository, withTransaction } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';

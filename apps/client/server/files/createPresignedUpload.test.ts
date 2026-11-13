@@ -51,7 +51,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'u1' })),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeTagWriteScope: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ assertDataLakeTagWriteScope: vi.fn() }));
 vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 

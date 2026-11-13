@@ -4,7 +4,7 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
 }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 import { ImageModels } from '@bike4mind/common';

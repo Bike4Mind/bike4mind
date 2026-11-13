@@ -14,7 +14,7 @@ import {
   loadAbuseAssessmentSettings,
   replayAbuseAssessments,
   summarizeDetection,
-} from '@server/security/abuseAssessment/abuseAssessment';
+} from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
 

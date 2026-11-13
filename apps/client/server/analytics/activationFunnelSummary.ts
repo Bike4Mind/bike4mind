@@ -6,10 +6,15 @@ import {
 import type { ActivationFunnel, ActivationFunnelStep } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverviewQuery } from '@client/app/utils/analyticsOverview';
 import { GatewayTimeoutError } from '@bike4mind/common';
-import { classifyFunnelCohort, COHORT_MAX_TIME_MS, paidWindowOpen, type FunnelMember } from './activationFunnel';
+import {
+  classifyFunnelCohort,
+  COHORT_MAX_TIME_MS,
+  paidWindowOpen,
+  type FunnelMember,
+} from '@bike4mind/server-utils/analytics/activationFunnel';
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
-import { shiftDay } from './analyticsRollup';
-import { signupVerdictUserIds } from './realSignup';
+import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
+import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
 
 // ms. The whole request, kept well inside the 60s API Lambda so a slow funnel fails with a handled 504.
 const FUNNEL_BUDGET_MS = 40_000;

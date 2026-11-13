@@ -2,6 +2,7 @@ import {
   appFilesBucket,
   fabFileBucket,
   generatedImagesBucket,
+  historyImportBucket,
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
@@ -785,6 +786,60 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Account Erasure Queue
+// Admin data subject erasure: runs the account purge at once instead of waiting for the daily sweep.
+const accountErasureQueueDLQ = new sst.aws.Queue('accountErasureQueueDLQ', {});
+const accountErasureQueue = new sst.aws.Queue('accountErasureQueue', {
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: accountErasureQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const accountErasureQueueSubscription = accountErasureQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/accountErasure.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      eventBus,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      historyImportBucket,
+      publishedArtifactsBucket,
+      routerDistributionId,
+    ],
+    permissions: [
+      {
+        actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+        resources: [
+          fabFileBucket.arn,
+          $interpolate`${fabFileBucket.arn}/*`,
+          generatedImagesBucket.arn,
+          $interpolate`${generatedImagesBucket.arn}/*`,
+          appFilesBucket.arn,
+          $interpolate`${appFilesBucket.arn}/*`,
+          historyImportBucket.arn,
+          $interpolate`${historyImportBucket.arn}/*`,
+          publishedArtifactsBucket.arn,
+          $interpolate`${publishedArtifactsBucket.arn}/*`,
+        ],
+      },
+      {
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+      },
+    ],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Account Data Export Queue
 // "Download all my data": builds a zip of the user's data under the fabFileBucket exports/ prefix
 // (expired by its lifecycle rule). Self-serve exports email a link to the app download page; admin
@@ -1204,7 +1259,7 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
-// and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
+// and the engine lease (packages/server-utils/src/generationJobs/wiring.ts LEASE_MS) must stay ordered:
 // timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
 // overlapped by another worker. That ordering holds because Lambda enforces the timeout; the self-host
 // runner (apps/workers/src/selfhost/main.ts) has no hard kill, so there it relies on provider and storage
@@ -1799,6 +1854,7 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
@@ -1839,6 +1895,7 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -1881,6 +1938,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,

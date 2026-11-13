@@ -51,6 +51,8 @@ const mockForceResetMFA = vi.fn();
 const mockCanDisable = vi.fn(() => true);
 vi.mock('@bike4mind/services', () => ({
   mfaService: {
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
     disableMFA: (...a: any[]) => mockDisableMFA(...a),
     forceResetMFA: (...a: any[]) => mockForceResetMFA(...a),
     userCanDisableMFA: () => mockCanDisable(),
