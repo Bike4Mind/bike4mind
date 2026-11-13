@@ -38,7 +38,7 @@ describe('CreditAnalyticsTab', () => {
     );
     for (const [id, label] of Object.entries({
       users: 'User credits',
-      pricing: 'Model pricing',
+      economy: 'Economy',
       margins: 'Margins',
       'org-usage': 'Org usage',
       'api-usage': 'API usage',
