@@ -285,15 +285,17 @@ export default function PartnerSignupRulesTab() {
         description="Grant entitlements, credits, a plan or an org to verified signups on a partner domain."
         actions={addButton('partner-rule-add-btn')}
       />
-      <AdminSearchInput
-        label="Search by domain or label"
-        value={searchInput}
-        onChange={value => {
-          setSearchInput(value);
-          setPage(1);
-        }}
-        data-testid="partner-rule-search-input"
-      />
+      <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+        <AdminSearchInput
+          label="Search by domain or label"
+          value={searchInput}
+          onChange={value => {
+            setSearchInput(value);
+            setPage(1);
+          }}
+          data-testid="partner-rule-search-input"
+        />
+      </Stack>
       <DataTable
         rows={data?.data ?? []}
         columns={columns}
