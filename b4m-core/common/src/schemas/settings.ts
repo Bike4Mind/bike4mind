@@ -774,6 +774,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   // OLDEST CLIENT BUILD SERVED PER X-Client-Name (api-contract/clientVersion.ts)
   'minimumClientVersions',
+  // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
+  'androidAppCertFingerprints',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -1445,6 +1447,12 @@ function makeBooleanSetting({
       .prefault(config.defaultValue ?? false),
   };
 }
+
+// A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
+const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const AndroidCertFingerprintsSchema = z
+  .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
+  .max(10);
 
 function makeObjectSetting<T>(
   config: {
@@ -3143,9 +3151,13 @@ export const API_SERVICE_GROUPS = {
   API_CLIENTS: {
     id: 'apiClientsService',
     name: 'API Clients',
-    description: 'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served',
+    description:
+      'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served, and the native apps they trust',
     icon: 'Widgets',
-    settings: [{ key: 'minimumClientVersions', order: 1 }],
+    settings: [
+      { key: 'minimumClientVersions', order: 1 },
+      { key: 'androidAppCertFingerprints', order: 2 },
+    ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
@@ -4168,6 +4180,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.API_CLIENTS.id,
     order: 1,
     schema: MinimumClientVersionsSchema,
+  }),
+  // Read by apps/client/pages/api/well-known/assetlinks.ts.
+  androidAppCertFingerprints: makeObjectSetting<string[]>({
+    key: 'androidAppCertFingerprints',
+    name: 'Android App Signing Certificates',
+    defaultValue: [],
+    description:
+      'JSON array of SHA-256 signing-certificate fingerprints for the Android app (package com.bike4mind.app), as uppercase colon-separated hex exactly as the Play Console shows them, e.g. ["AB:CD:...:EF"]. Served in /.well-known/assetlinks.json so Android verifies the app\'s https sign-in redirect as an App Link. Empty means no app is verified and release sign-in cannot complete. Public by design, not a secret.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.API_CLIENTS.id,
+    order: 2,
+    schema: AndroidCertFingerprintsSchema,
   }),
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
