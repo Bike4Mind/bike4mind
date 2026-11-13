@@ -2,6 +2,7 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { OrgModelPolicy } from '../../schemas/orgModelPolicy';
 
 export interface IUserDetails {
   id: string;
@@ -82,6 +83,12 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+
+  /**
+   * Allowlist of providers, models and built-in tools for this org's members (OrgModelPolicySchema).
+   * Absent or null is unrestricted; read it through readOrgModelPolicy, which fails closed on a bad row.
+   */
+  modelPolicy?: OrgModelPolicy | null;
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
