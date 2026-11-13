@@ -1758,7 +1758,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
