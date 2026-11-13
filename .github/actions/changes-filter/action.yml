@@ -48,6 +48,7 @@ inputs:
       :(exclude,glob)docs/**
       :(exclude,glob)agents/**
       :(exclude,glob)apps/ios/**
+      :(exclude,glob)apps/android/**
       :(exclude,glob)**/*.md
       :(exclude,glob)**/*.mdx
       :(exclude)LICENSE
