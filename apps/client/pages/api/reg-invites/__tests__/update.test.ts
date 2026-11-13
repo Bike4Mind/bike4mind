@@ -5,6 +5,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   formatRegInvites: vi.fn(),
+  find: vi.fn(),
   logEvent: vi.fn(),
   audit: vi.fn(),
 }));
@@ -28,11 +29,15 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/database', () => ({
-  registrationInviteRepository: { formatRegInvites: h.formatRegInvites },
+  registrationInviteRepository: { formatRegInvites: h.formatRegInvites, find: h.find },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+// Keep parseAdminActionReason real so the 400 is the production one.
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest: h.audit,
+}));
 
 await import('../update');
 
@@ -52,6 +57,7 @@ describe('POST /api/reg-invites/update - admin audit', () => {
     h.formatRegInvites.mockResolvedValue([{ id: 'inv-1', status: 'used' }]);
     h.logEvent.mockResolvedValue(undefined);
     h.audit.mockResolvedValue(null);
+    h.find.mockResolvedValue([]);
   });
 
   it('records a strict .updated entry after the update', async () => {
@@ -173,4 +179,51 @@ describe('POST /api/reg-invites/update - editable fields', () => {
       expect(h.audit).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('POST /api/reg-invites/update - widening a package-linked code', () => {
+  const stored = { unlimitedUse: false, expiresAt: new Date('2030-01-31T23:59:59.999Z'), grantPackageId: 'p1' };
+  const call = async (fields: Record<string, unknown>) => {
+    const { req, res } = createMocks({ method: 'POST' });
+    Object.assign(req, { body: { ids: [ID1], ...fields }, user: { id: 'admin-1', isAdmin: true }, ability: {} });
+    try {
+      await h.handler!(req, res);
+    } catch (error) {
+      return { error, req };
+    }
+    return { error: null, req };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.find.mockResolvedValue([stored]);
+    h.formatRegInvites.mockResolvedValue([{ id: 'inv-1' }]);
+    h.logEvent.mockResolvedValue(undefined);
+    h.audit.mockResolvedValue(null);
+  });
+
+  it.each([
+    ['unlimited use', { unlimitedUse: true }],
+    ['a later expiry', { expiresAt: '2031-01-31T23:59:59.999Z' }],
+    ['a cleared expiry', { expiresAt: null }],
+  ])('refuses %s without a reason and writes nothing', async (_label, fields) => {
+    const { error } = await call(fields);
+    expect(error).toHaveProperty('statusCode', 400);
+    expect(h.formatRegInvites).not.toHaveBeenCalled();
+  });
+
+  it('records the reason when one is given', async () => {
+    const { error } = await call({ unlimitedUse: true, reason: 'Partner launch extension' });
+    expect(error).toBeNull();
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: 'Partner launch extension' })
+    );
+  });
+
+  it('needs no reason to shorten the expiry or for a code with no package', async () => {
+    expect((await call({ expiresAt: '2029-01-31T23:59:59.999Z' })).error).toBeNull();
+    h.find.mockResolvedValue([]);
+    expect((await call({ unlimitedUse: true })).error).toBeNull();
+  });
 });

@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { grantPackageRepository, registrationInviteRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
 const GRANT_PACKAGE_LINKS_LIMIT = 50;
 
@@ -13,6 +13,8 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(
   asyncHandler(async (req, res) => {
+    // Codes are redeemable secrets, so this matches the full-admin posture of the code list (referService/list.ts).
+    if (!req.user?.isAdmin) throw new ForbiddenError('Permission denied');
     const { id } = req.query as { id?: unknown };
     if (typeof id !== 'string' || !/^[a-f0-9]{24}$/i.test(id)) throw new BadRequestError('Invalid package id');
 

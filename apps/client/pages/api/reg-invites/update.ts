@@ -6,7 +6,7 @@ import { RegInviteEvents } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const MAX_AUDITED_IDS = 100;
 
@@ -23,11 +23,32 @@ const UpdateRegisterInviteSchema = z
     'Nothing to update'
   );
 
+type StoredInvite = Pick<IRegInviteDocument, 'unlimitedUse' | 'expiresAt'>;
+
+/** Unlimited use, or a later or removed expiry, lets a package-linked code hand out more of its package. */
+const widensRedemption = (stored: StoredInvite, updates: { unlimitedUse?: boolean; expiresAt?: Date | null }) =>
+  (updates.unlimitedUse === true && !stored.unlimitedUse) ||
+  (updates.expiresAt !== undefined &&
+    stored.expiresAt != null &&
+    (updates.expiresAt === null || updates.expiresAt.getTime() > new Date(stored.expiresAt).getTime()));
+
 const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<unknown, unknown, unknown>(async (req, res) => {
     const user = req.user;
 
     const { ids, ...updates } = parseOrBadRequest(UpdateRegisterInviteSchema, req.body);
+
+    // Same rule as a package edit that widens a grant: the admin states why.
+    const packageLinked =
+      updates.unlimitedUse === true || updates.expiresAt !== undefined
+        ? ((await registrationInviteRepository.find({
+            _id: { $in: ids },
+            grantPackageId: { $nin: [null, ''] },
+          })) as StoredInvite[])
+        : [];
+    const reason = packageLinked.some(stored => widensRedemption(stored, updates))
+      ? parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason)
+      : undefined;
 
     const updatedInvites = await withTransaction(async () => {
       const invites = await registrationInviteRepository.formatRegInvites(updates as Partial<IRegInviteDocument>, ids);
@@ -39,6 +60,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
             ? { kind: 'settings', id: invites[0].id, displayName: 'registration invite' }
             : { kind: 'settings', id: 'registration_invites', displayName: `${invites.length} registration invites` },
         summary: `updated ${invites.length} registration invite${invites.length === 1 ? '' : 's'}`,
+        reason,
         details: {
           requested: ids.length,
           ids: ids.slice(0, MAX_AUDITED_IDS),

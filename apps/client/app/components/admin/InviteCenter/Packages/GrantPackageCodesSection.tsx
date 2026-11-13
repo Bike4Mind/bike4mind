@@ -25,7 +25,17 @@ import {
 } from '@client/app/utils/grantPackageAPICalls';
 import { createRegInvites, updateRegInvite } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
-import { DataTable, type DataColumn } from '@client/app/components/admin/shared';
+import { useUser } from '@client/app/contexts/UserContext';
+import {
+  ADMIN_REASON_PRESETS,
+  DataTable,
+  EMPTY_ADMIN_REASON,
+  ReasonPicker,
+  composeAdminReason,
+  isAdminReasonComplete,
+  type AdminReasonDraft,
+  type DataColumn,
+} from '@client/app/components/admin/shared';
 
 export type QueuedCode = { key: number; unlimitedUse: boolean };
 
@@ -46,7 +56,13 @@ const isCodeActive = (invite: IRegInviteDocument, now = new Date()) =>
 const usesLabel = (invite: IRegInviteDocument) =>
   invite.unlimitedUse ? `${invite.usageHistory?.length ?? 0} (unlimited)` : invite.used ? 'Used' : 'Unused';
 
-type CodeEdit = { id: string; code: string; unlimitedUse: boolean; expiresOn: string };
+type CodeEdit = {
+  id: string;
+  code: string;
+  unlimitedUse: boolean;
+  expiresOn: string;
+  stored: Pick<IRegInviteDocument, 'unlimitedUse' | 'expiresAt'>;
+};
 
 const dayOf = (date: Date | string | null | undefined) => (date ? new Date(date).toISOString().slice(0, 10) : '');
 
@@ -72,7 +88,23 @@ const CODE_COLUMNS: readonly DataColumn<IRegInviteDocument>[] = [
   },
 ];
 
-export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props) {
+export function GrantPackageCodesSection(props: Props) {
+  const { currentUser } = useUser();
+  // Listing and creating codes are full-admin only on the server (links.ts, generateReferralCodes).
+  if (!currentUser?.isAdmin) {
+    return (
+      <Stack gap={1} data-testid="grant-package-codes-section">
+        <Typography level="title-sm">Invite codes</Typography>
+        <Typography level="body-sm" data-testid="grant-package-codes-admin-only">
+          Only full admins can view and add invite codes for a package.
+        </Typography>
+      </Stack>
+    );
+  }
+  return <CodesManager {...props} />;
+}
+
+function CodesManager({ pkg, queued, onQueuedChange }: Props) {
   const queryClient = useQueryClient();
   const [unlimitedUse, setUnlimitedUse] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,13 +118,26 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
   const [editing, setEditing] = useState<CodeEdit | null>(null);
   const editExpiresAt = editing ? expiresAtFromDay(editing.expiresOn) : null;
   const editInvalid = editExpiresAt !== null && Number.isNaN(editExpiresAt.getTime());
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  // Mirrors widensRedemption in pages/api/reg-invites/update.ts, which refuses these without a reason.
+  const editWidens =
+    editing !== null &&
+    !editInvalid &&
+    ((editing.unlimitedUse && !editing.stored.unlimitedUse) ||
+      (editing.stored.expiresAt != null &&
+        (editExpiresAt === null || editExpiresAt.getTime() > new Date(editing.stored.expiresAt).getTime())));
 
   const save = useMutation({
     mutationFn: (edit: CodeEdit) =>
-      updateRegInvite(edit.id, { unlimitedUse: edit.unlimitedUse, expiresAt: expiresAtFromDay(edit.expiresOn) }),
+      updateRegInvite(edit.id, {
+        unlimitedUse: edit.unlimitedUse,
+        expiresAt: expiresAtFromDay(edit.expiresOn),
+        ...(editWidens ? { reason: composeAdminReason(reason) } : {}),
+      }),
     onSuccess: () => {
       setError(null);
       setEditing(null);
+      setReason(EMPTY_ADMIN_REASON);
       void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
     onError: (err: unknown) => setError(getErrorMessage(err)),
@@ -113,6 +158,7 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
               code: invite.code,
               unlimitedUse: invite.unlimitedUse === true,
               expiresOn: dayOf(invite.expiresAt),
+              stored: { unlimitedUse: invite.unlimitedUse, expiresAt: invite.expiresAt },
             })
           }
           disabled={save.isPending}
@@ -209,12 +255,20 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
           <FormHelperText>
             Redeemable through the end of this day (UTC). Leave empty and the code never expires.
           </FormHelperText>
+          {editWidens && (
+            <ReasonPicker
+              presets={ADMIN_REASON_PRESETS.grantPackage}
+              value={reason}
+              onChange={setReason}
+              data-testid="grant-package-code-edit-reason"
+            />
+          )}
           <Stack direction="row" gap={1}>
             <Button
               size="sm"
               onClick={() => save.mutate(editing)}
               loading={save.isPending}
-              disabled={editInvalid}
+              disabled={editInvalid || (editWidens && !isAdminReasonComplete(reason))}
               data-testid="grant-package-code-edit-save-btn"
             >
               Save code
@@ -223,7 +277,10 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={() => setEditing(null)}
+              onClick={() => {
+                setEditing(null);
+                setReason(EMPTY_ADMIN_REASON);
+              }}
               disabled={save.isPending}
               data-testid="grant-package-code-edit-cancel-btn"
             >

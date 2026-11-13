@@ -11,7 +11,10 @@ export const updateRegInvites = async (invite: Partial<IRegInviteDocument & { id
   return response.data;
 };
 
-export const updateRegInvite = async (id: string, fields: { unlimitedUse?: boolean; expiresAt?: Date | null }) => {
+export const updateRegInvite = async (
+  id: string,
+  fields: { unlimitedUse?: boolean; expiresAt?: Date | null; reason?: string }
+) => {
   const response = await api.post<IRegInviteDocument[]>(`/api/reg-invites/update`, { ids: [id], ...fields });
   return response.data;
 };

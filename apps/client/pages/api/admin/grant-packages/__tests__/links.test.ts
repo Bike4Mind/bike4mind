@@ -71,6 +71,12 @@ describe('GET /api/admin/grant-packages/[id]/links', () => {
     expect(invites.listByGrantPackage).not.toHaveBeenCalled();
   });
 
+  it('rejects a support:read delegate with 403, since the codes are redeemable', async () => {
+    const delegate = { isAdmin: false, id: 'd1', adminPermissions: ['support:read', 'settings:manage'] };
+    expect((await get({ id: PKG }, delegate)).statusCode).toBe(403);
+    expect(invites.listByGrantPackage).not.toHaveBeenCalled();
+  });
+
   it('returns 404 for an unknown package', async () => {
     packages.findById.mockResolvedValue(null);
     expect((await get({ id: PKG })).statusCode).toBe(404);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -25,6 +25,8 @@ vi.mock('@client/app/utils/regInviteAPICalls', () => ({
   updateRegInvite: api.updateRegInvite,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const user = vi.hoisted(() => ({ current: { id: 'admin-1', isAdmin: true } as { id: string; isAdmin: boolean } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const policy = { singleGrantCredits: 50_000, dailyTotalCredits: 200_000 };
@@ -171,12 +173,15 @@ describe('GrantPackageFormModal inline code edit', () => {
 
     fireEvent.click(screen.getByTestId('grant-package-code-edit-unlimited-switch'));
     type('grant-package-code-edit-expires-input', '2031-06-15');
+    expect(screen.getByTestId('grant-package-code-edit-save-btn')).toBeDisabled();
+    type('grant-package-code-edit-reason', 'Extending the partner pilot for another year');
     fireEvent.click(screen.getByTestId('grant-package-code-edit-save-btn'));
 
     await waitFor(() =>
       expect(api.updateRegInvite).toHaveBeenCalledWith('i1', {
         unlimitedUse: true,
         expiresAt: new Date('2031-06-15T23:59:59.999Z'),
+        reason: 'Extending the partner pilot for another year',
       })
     );
     await waitFor(() => expect(screen.queryByTestId('grant-package-code-edit')).not.toBeInTheDocument());
@@ -189,9 +194,28 @@ describe('GrantPackageFormModal inline code edit', () => {
     renderModal(pkg);
     fireEvent.click(await screen.findByTestId('grant-package-code-edit-btn-ALPHA'));
     type('grant-package-code-edit-expires-input', '');
+    type('grant-package-code-edit-reason', 'Partner asked for an open-ended code');
     fireEvent.click(screen.getByTestId('grant-package-code-edit-save-btn'));
     await waitFor(() =>
-      expect(api.updateRegInvite).toHaveBeenCalledWith('i1', { unlimitedUse: false, expiresAt: null })
+      expect(api.updateRegInvite).toHaveBeenCalledWith('i1', {
+        unlimitedUse: false,
+        expiresAt: null,
+        reason: 'Partner asked for an open-ended code',
+      })
+    );
+  });
+
+  it('asks for no reason when the edit shortens the expiry', async () => {
+    renderModal(pkg);
+    fireEvent.click(await screen.findByTestId('grant-package-code-edit-btn-ALPHA'));
+    type('grant-package-code-edit-expires-input', '2029-12-31');
+    expect(screen.queryByTestId('grant-package-code-edit-reason')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('grant-package-code-edit-save-btn'));
+    await waitFor(() =>
+      expect(api.updateRegInvite).toHaveBeenCalledWith('i1', {
+        unlimitedUse: false,
+        expiresAt: new Date('2029-12-31T23:59:59.999Z'),
+      })
     );
   });
 
@@ -210,5 +234,62 @@ describe('GrantPackageFormModal inline code edit', () => {
     fireEvent.click(screen.getByTestId('grant-package-code-edit-cancel-btn'));
     expect(screen.queryByTestId('grant-package-code-edit')).not.toBeInTheDocument();
     expect(api.updateRegInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe('GrantPackageFormModal expiry on edit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.fetchGrantPackageLinks.mockResolvedValue(links());
+    api.updateGrantPackage.mockResolvedValue(pkg);
+  });
+
+  it('leaves a mid-day expiry untouched when only the name changes', async () => {
+    renderModal({ ...pkg, expiresAt: '2030-03-10T12:00:00.000Z' } as unknown as IGrantPackageDocument);
+    type('grant-package-name-input', 'Renamed');
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+    await waitFor(() => expect(api.updateGrantPackage).toHaveBeenCalled());
+    const body = api.updateGrantPackage.mock.calls[0][1];
+    expect(body.name).toBe('Renamed');
+    expect(body).not.toHaveProperty('expiresAt');
+  });
+
+  it('keeps a package that expired earlier today expired after an edit', async () => {
+    const expiresAt = new Date(Date.now() - 60_000).toISOString();
+    renderModal({ ...pkg, expiresAt } as unknown as IGrantPackageDocument);
+    type('grant-package-name-input', 'Renamed');
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+    await waitFor(() => expect(api.updateGrantPackage).toHaveBeenCalled());
+    expect(api.updateGrantPackage.mock.calls[0][1]).not.toHaveProperty('expiresAt');
+  });
+
+  it('sends the end of a newly picked day', async () => {
+    renderModal({ ...pkg, expiresAt: '2030-03-10T12:00:00.000Z' } as unknown as IGrantPackageDocument);
+    type('grant-package-expires-input', '2030-04-01');
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+    await waitFor(() =>
+      expect(api.updateGrantPackage).toHaveBeenCalledWith(
+        'p1',
+        expect.objectContaining({ expiresAt: new Date('2030-04-01T23:59:59.999Z') })
+      )
+    );
+  });
+});
+
+describe('GrantPackageFormModal codes for a delegated admin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    user.current = { id: 'delegate-1', isAdmin: false };
+    api.fetchGrantPackageLinks.mockResolvedValue(links());
+  });
+  afterEach(() => {
+    user.current = { id: 'admin-1', isAdmin: true };
+  });
+
+  it('explains codes are admin-only and offers no code controls or code fetch', async () => {
+    renderModal(pkg);
+    expect(screen.getByTestId('grant-package-codes-admin-only')).toBeInTheDocument();
+    expect(screen.queryByTestId('grant-package-add-code-btn')).not.toBeInTheDocument();
+    expect(api.fetchGrantPackageLinks).not.toHaveBeenCalled();
   });
 });
