@@ -85,8 +85,9 @@ describe('GET /api/admin/api-keys/legacy', () => {
     findUsers.mockResolvedValue([{ id: OWNER, email: 'owner@example.com', name: 'Owner' }]);
   });
 
-  it('declares the admin scope on the route itself', () => {
-    expect(mockRefs.config?.requiredScopes).toEqual(['admin:*']);
+  it('accepts session auth only, never an API key', () => {
+    expect(mockRefs.config?.auth).toBe('jwtOnly');
+    expect(mockRefs.config).not.toHaveProperty('requiredScopes');
   });
 
   it('refuses a non-admin before querying keys', async () => {

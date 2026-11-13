@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import mongoose from 'mongoose';
-import { ApiKeyScope, CONFINED_API_KEY_SCOPES, IAdminLegacyApiKeyRow, IAdminLegacyApiKeys } from '@bike4mind/common';
+import { CONFINED_API_KEY_SCOPES, IAdminLegacyApiKeyRow, IAdminLegacyApiKeys } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -25,7 +25,7 @@ const QuerySchema = z.object({
  * see who still has to move to a scoped key before LEGACY_API_KEY_WINDOW.endsAt. The legacy rule
  * is `getApiKeyLegacyStatus`; the repository query only narrows the candidates.
  */
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } }).get(
   asyncHandler<{}, unknown, unknown, { page?: string; limit?: string; days?: string }>(async (req, res) => {
     const { page, limit, days } = QuerySchema.parse({
       page: req.query.page,
