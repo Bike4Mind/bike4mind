@@ -34,7 +34,7 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';

@@ -61,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn() },
   lakeAccessEventRepository: { record: h.record },
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
   adminBypassLakeIds: h.adminBypassLakeIds,
 }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));

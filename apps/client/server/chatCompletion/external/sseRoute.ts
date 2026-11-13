@@ -53,8 +53,8 @@ import {
   completionRunRepository,
 } from '@bike4mind/database';
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
-import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
-import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';

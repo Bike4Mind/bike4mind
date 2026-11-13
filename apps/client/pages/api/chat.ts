@@ -23,7 +23,7 @@ import {
   getSharedTokenizer,
   isChatModelUsable,
   resolveDefaultChatModel,
-} from '@server/utils/chatCompletionDefaults';
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -58,11 +58,11 @@ import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premi
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';

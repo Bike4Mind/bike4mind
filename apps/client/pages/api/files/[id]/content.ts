@@ -6,14 +6,14 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { baseApi } from '@server/middlewares/baseApi';
-import { fileContentKey } from '@server/files/browserFileSigner';
+import { fileContentKey } from '@bike4mind/server-utils/files/browserFileSigner';
 
 // Seconds. The redirect must go stale before the S3 link it points at does.
 const REDIRECT_SAFETY_MARGIN_SECONDS = 60;
 const MAX_REDIRECT_CACHE_SECONDS = 1800;
 
 /**
- * The stable browser URL fabFileService's generateSignedUrl hands out (apps/client/server/files/browserFileSigner.ts).
+ * The stable browser URL fabFileService's generateSignedUrl hands out (packages/server-utils/src/files/browserFileSigner.ts).
  * The sig is the capability, so there is no session auth; it 302s to an S3 link signed now, and the
  * redirect is cacheable so repeat loads of the same URL never reach this route.
  */

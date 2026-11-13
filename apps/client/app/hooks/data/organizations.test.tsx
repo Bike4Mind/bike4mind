@@ -8,10 +8,13 @@ import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from './fabFileKeys';
 import { dataLakeKeys } from './dataLakeKeys';
 import {
+  removedMembersMessage,
+  useDeleteOrganization,
   useGetOrganization,
   useOrganizationInviteLinks,
   useGetUserOrganizations,
   useMemberOffboardingInventory,
+  useOrganizationInvites,
   useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
@@ -210,6 +213,183 @@ describe('manager and ownership mutations', () => {
     expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
+  });
+});
+
+describe('member removal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('keeps the single-removal messages', () => {
+    expect(removedMembersMessage([undefined])).toBe('Member removed successfully');
+    expect(removedMembersMessage([0])).toBe('Member removed successfully');
+    expect(removedMembersMessage([1])).toBe(
+      'Member removed. 1 share on personal data lakes was kept; the lake owners are being notified.'
+    );
+    expect(removedMembersMessage([null])).toBe(
+      'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
+    );
+  });
+
+  it('sums a bulk removal into one message', () => {
+    expect(removedMembersMessage([0, undefined])).toBe('2 members removed');
+    expect(removedMembersMessage([2, 1, null])).toBe(
+      '3 members removed. 3 shares on personal data lakes were kept; the lake owners are being notified. ' +
+        'Personal data lake shares could not be checked for 1 of them, so those lake owners were not notified.'
+    );
+  });
+
+  it('toasts each removal unless asked to stay quiet', async () => {
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+    const { result } = renderWithClient(useRemoveMemberFromOrganization);
+
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1' })).resolves.toBe(0);
+    expect(del).toHaveBeenCalledWith('/api/organizations/org1/members/u1', undefined);
+    expect(toast.success).toHaveBeenCalledWith('Member removed successfully');
+
+    vi.mocked(toast.success).mockClear();
+    await result.current.mutateAsync({ organizationId: 'org1', userId: 'u2', quiet: true });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed removal unless asked to stay quiet', async () => {
+    del.mockRejectedValue(new Error('boom'));
+    const { result } = renderWithClient(useRemoveMemberFromOrganization);
+
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1' })).rejects.toThrow('boom');
+    expect(toast.error).toHaveBeenCalledWith('Failed to remove member: boom');
+
+    vi.mocked(toast.error).mockClear();
+    await expect(result.current.mutateAsync({ organizationId: 'org1', userId: 'u1', quiet: true })).rejects.toThrow(
+      'boom'
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('useDeleteOrganization', () => {
+  const get = api.get as unknown as Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: {} });
+    get.mockResolvedValue({ data: [] });
+  });
+
+  it('does not refetch org-scoped queries of the deleted org while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(() => ({ invites: useOrganizationInvites('org1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.invites.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('Team deleted successfully');
+  });
+
+  it('does not refetch the deleted org detail either while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValue({ data: { id: 'org1' } });
+    const view = renderHook(() => ({ org: useGetOrganization('org1'), remove: useDeleteOrganization() }), { wrapper });
+    await waitFor(() => expect(view.result.current.org.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an in-flight fetch of the deleted org detail', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    let fetchSignal: AbortSignal | undefined;
+    const pending = queryClient
+      .fetchQuery({
+        queryKey: ['organizations', 'org1'],
+        queryFn: ({ signal }) => {
+          fetchSignal = signal;
+          return new Promise(() => undefined);
+        },
+      })
+      .catch(() => undefined);
+    await waitFor(() => expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('fetching'));
+    const view = renderHook(() => useDeleteOrganization(), { wrapper });
+
+    await act(async () => {
+      await view.result.current.mutateAsync('org1');
+    });
+    await pending;
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('idle');
+  });
+
+  it('drops the deleted org from the cached org list before any refetch lands', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({
+      data: {
+        data: [
+          { id: 'org1', name: 'One' },
+          { id: 'org2', name: 'Two' },
+        ],
+        hasMore: false,
+        total: 2,
+      },
+    });
+    get.mockImplementation(() => new Promise(() => undefined));
+    const view = renderHook(() => ({ list: useGetUserOrganizations('u1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.list.isSuccess).toBe(true));
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    expect(queryClient.getQueryData<{ id: string }[]>(['organizations', 'user', 'u1'])?.map(o => o.id)).toEqual([
+      'org2',
+    ]);
+  });
+
+  it('still refetches other organization queries', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(useDeleteOrganization, { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync('org1');
+    });
+
+    const { predicate } = invalidateSpy.mock.calls[0][0] as { predicate: (q: { queryKey: unknown[] }) => boolean };
+    expect(predicate({ queryKey: ['organizations'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org2', 'invites'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org1', 'invites'] })).toBe(false);
   });
 });
 

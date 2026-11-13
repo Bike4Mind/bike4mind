@@ -90,6 +90,7 @@ jobs:
         env:
           DESKTOP_VERSION: ${{ steps.version.outputs.version }}
           SIGNING: ${{ vars.DESKTOP_MAC_SIGNING }}
+          SELFSIGNED_BETA: ${{ vars.DESKTOP_MAC_SELFSIGNED_BETA }}
           ADHOC_BETA: ${{ vars.DESKTOP_MAC_ADHOC_BETA }}
         run: python3 apps/desktop/scripts/mac_release_policy.py
       - uses: actions/upload-artifact@v6
@@ -161,6 +162,11 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
           node apps/desktop/scripts/smoke-differential.cjs
+      # Every mode and event: it signs a test-identity build with throwaway certificates, so it needs no secrets.
+      - name: Check a self-signed macOS build updates itself
+        if: matrix.platform == 'mac'
+        timeout-minutes: 20
+        run: node apps/desktop/scripts/smoke-mac-update.mjs
       - name: Package installers
         if: matrix.platform != 'mac' || needs.version.outputs.mac-mode == 'adhoc'
         working-directory: apps/desktop
@@ -219,6 +225,60 @@ jobs:
           grep -q '^Authority=Developer ID Application:' signing.txt
           xcrun stapler validate "$app_dir/Bike4Mind.app"
           xcrun stapler validate "release/Bike4Mind-$DESKTOP_VERSION-$ARCH.dmg"
+      # One stable certificate gives every build the same designated requirement, which is what lets
+      # Squirrel.Mac accept the next build. The keychain is a file codesign is pointed at directly:
+      # it is never added to the search list and nothing is marked trusted.
+      - name: Sign macOS installers with the self-signed certificate
+        if: matrix.platform == 'mac' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.version.outputs.mac-mode == 'selfsigned'
+        working-directory: apps/desktop
+        env:
+          ARCH: ${{ matrix.arch }}
+          SELFSIGNED_P12: ${{ secrets.DESKTOP_MAC_SELFSIGNED_P12 }}
+          SELFSIGNED_P12_PASSWORD: ${{ secrets.DESKTOP_MAC_SELFSIGNED_P12_PASSWORD }}
+          SELFSIGNED_CERT_SHA1: ${{ vars.DESKTOP_MAC_SELFSIGNED_CERT_SHA1 }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          for key in SELFSIGNED_P12 SELFSIGNED_P12_PASSWORD SELFSIGNED_CERT_SHA1; do
+            if [ -z "${!key}" ]; then echo "Missing self-signed signing configuration: $key"; exit 1; fi
+          done
+          sha1=$(tr 'A-F' 'a-f' <<< "$SELFSIGNED_CERT_SHA1")
+          if ! [[ "$sha1" =~ ^[0-9a-f]{40}$ ]]; then echo 'DESKTOP_MAC_SELFSIGNED_CERT_SHA1 must be a 40-character SHA-1'; exit 1; fi
+          keychain="$RUNNER_TEMP/desktop-selfsigned.keychain-db"
+          p12="$RUNNER_TEMP/desktop-selfsigned.p12"
+          password=$(openssl rand -hex 32)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          (umask 077 && base64 --decode <<< "$SELFSIGNED_P12" > "$p12")
+          security import "$p12" -k "$keychain" -f pkcs12 -P "$SELFSIGNED_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign on the release runner resolves an identity only through the user search list.
+          previous=()
+          while IFS= read -r line; do previous+=("$line"); done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.*)"$/\1/')
+          printf '%s\n' "${previous[@]}" > "$RUNNER_TEMP/desktop-selfsigned.search-list"
+          security list-keychains -d user -s "$keychain" "${previous[@]}"
+          pnpm build
+          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
+          node scripts/sign-update-manifests.mjs check-build out
+          B4M_MAC_SIGN_KEYCHAIN="$keychain" B4M_MAC_SIGN_IDENTITY="$sha1" pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.mac.sign=./scripts/sign-mac-selfsigned.cjs -c.forceCodeSigning=true -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+          app_dir=release/mac
+          if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
+          requirement=$(codesign -d -r- "$app_dir/Bike4Mind.app")
+          expected="designated => identifier \"com.bike4mind.desktop\" and certificate leaf = H\"$sha1\""
+          if [ "$requirement" != "$expected" ]; then echo "Unexpected designated requirement: $requirement"; exit 1; fi
+          node scripts/check-mac-signature.mjs "$app_dir/Bike4Mind.app" com.bike4mind.desktop "$sha1"
+      - name: Remove the self-signed signing keychain
+        if: always() && matrix.platform == 'mac' && needs.version.outputs.mac-mode == 'selfsigned'
+        run: |
+          list="$RUNNER_TEMP/desktop-selfsigned.search-list"
+          if [ -f "$list" ]; then
+            previous=()
+            while IFS= read -r line; do if [ -n "$line" ]; then previous+=("$line"); fi; done < "$list"
+            security list-keychains -d user -s "${previous[@]}"
+          fi
+          security delete-keychain "$RUNNER_TEMP/desktop-selfsigned.keychain-db" 2> /dev/null || true
+          rm -f "$RUNNER_TEMP/desktop-selfsigned.keychain-db" "$RUNNER_TEMP/desktop-selfsigned.p12" "$list"
       - name: Compare Linux builder metadata with embedded blockmap
         if: matrix.platform == 'linux'
         env:
@@ -238,6 +298,7 @@ jobs:
         timeout-minutes: 3
         env:
           EXPECT_UPDATES_DISABLED: ${{ needs.version.outputs.mac-mode == 'adhoc' }}
+          EXPECT_UPDATES_ENABLED: ${{ needs.version.outputs.mac-mode == 'selfsigned' }}
         run: |
           install_dir=$(mktemp -d)
           mount_dir="$install_dir/mount"
@@ -418,6 +479,7 @@ jobs:
         env:
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
           SIGNING: ${{ vars.DESKTOP_MAC_SIGNING }}
+          SELFSIGNED_BETA: ${{ vars.DESKTOP_MAC_SELFSIGNED_BETA }}
           ADHOC_BETA: ${{ vars.DESKTOP_MAC_ADHOC_BETA }}
           GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
           EXPECTED_MAC_MODE: ${{ needs.version.outputs.mac-mode }}
@@ -453,6 +515,8 @@ jobs:
           printf '\nSource: https://github.com/%s/commit/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes/desktop-release-notes.md
           if [ "$MAC_RELEASE_MODE" = adhoc ]; then
             printf '\nmacOS beta: ad-hoc signed, not Developer ID signed or notarized. The install command above avoids the Gatekeeper prompt; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are disabled in this build; rerun the install command to update. Linux updates are unchanged.\n' >> notes/desktop-release-notes.md
+          elif [ "$MAC_RELEASE_MODE" = selfsigned ]; then
+            printf '\nmacOS beta: signed with a self-signed certificate, not Developer ID signed or notarized. The install command above is the way to install it; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are enabled from this build onward; an earlier ad-hoc build needs the install command once to reach it.\n' >> notes/desktop-release-notes.md
           else
             printf '\nmacOS Developer ID signing and notarization enabled.\n' >> notes/desktop-release-notes.md
           fi

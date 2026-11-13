@@ -83,6 +83,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
 
   /** Pool budget and balance alerting for the org's owner and opted-in managers (OrgAlertTypes.ts). */
   budgetAlerts?: IOrgBudgetAlerts | null;

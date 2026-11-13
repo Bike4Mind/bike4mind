@@ -150,6 +150,11 @@ export function useGetOrganization(orgId: string | null | undefined) {
       return response.data;
     },
     enabled: !!orgId,
+    retry: (count, error) => {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      return status !== 400 && status !== 403 && status !== 404 && count < 2;
+    },
+    refetchOnMount: 'always',
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 }
@@ -217,10 +222,28 @@ export function useDeleteOrganization() {
       await api.delete(`/api/organizations/${orgId}`);
       return orgId;
     },
-    onSuccess: orgId => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      queryClient.removeQueries({ queryKey: ['organizations', orgId] });
-      toast.success('Organization deleted successfully');
+    onSuccess: async orgId => {
+      // Org-scoped queries (detail, invites) 401 or 404 once the org is gone, and a 401 is read as an
+      // expired session. Two things can still fire them: the settings page, which stays mounted until the caller
+      // navigates, and the Teams list, whose cards mount per cached org. So the org leaves every cached list
+      // synchronously, before the caller navigates, and its own queries are neither refetched nor removed
+      // (removing a mounted query makes it refetch); they garbage-collect after the page unmounts.
+      await queryClient.cancelQueries({ queryKey: ['organizations', orgId] });
+      updateAllQueryData(
+        queryClient,
+        'organizations',
+        'delete',
+        { id: orgId },
+        {
+          keysAllowedToCreate: [],
+          synchronous: true,
+        }
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ['organizations'],
+        predicate: query => query.queryKey[1] !== orgId,
+      });
+      toast.success('Team deleted successfully');
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error));
@@ -308,9 +331,32 @@ export function useGetUserOrganizations(
   });
 }
 
-function keptSharesMessage(kept: number): string {
-  const isSingle = kept === 1;
-  return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
+/**
+ * Success text for one or more removals, given each response's `personalLakeSharesKept`. Notification
+ * is best-effort and already attempted server-side (the route awaits it ahead of res.json), so this
+ * never claims delivery. `null` means the post-departure read failed, so no owner was notified; an
+ * ABSENT field is an API response from before the count existed, which keeps the plain message.
+ */
+export function removedMembersMessage(kept: readonly (number | null | undefined)[]): string {
+  const single = kept.length === 1;
+  const shares = kept.reduce<number>((sum, k) => sum + (k ?? 0), 0);
+  const unchecked = kept.filter(k => k === null).length;
+  if (!shares && !unchecked) return single ? 'Member removed successfully' : `${kept.length} members removed`;
+  const parts = [single ? 'Member removed.' : `${kept.length} members removed.`];
+  if (shares) {
+    const one = shares === 1;
+    parts.push(
+      `${shares} share${one ? '' : 's'} on personal data lakes ${one ? 'was' : 'were'} kept; the lake owners are being notified.`
+    );
+  }
+  if (unchecked) {
+    parts.push(
+      single
+        ? 'Personal data lake shares could not be checked, so the lake owners were not notified.'
+        : `Personal data lake shares could not be checked for ${unchecked} of them, so those lake owners were not notified.`
+    );
+  }
+  return parts.join(' ');
 }
 
 export interface OffboardingInventoryEntry {
@@ -334,6 +380,8 @@ const memberOffboardingKey = (organizationId: string, userId: string) =>
 const removeMemberKey = ['organizations', 'remove-member'] as const;
 
 interface RemoveMemberVariables {
+  /** Bulk callers show one summary rather than a toast for each member. */
+  quiet?: boolean;
   organizationId: string;
   userId: string;
   /** Member who takes over the departing member's org content; omitted keeps it with them. */
@@ -409,22 +457,13 @@ export function useRemoveMemberFromOrganization() {
         }
       }
 
-      // Notification is best-effort and already attempted server-side before this response arrives
-      // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
-      // that it was kept and owners are being told. `null` means the post-departure read itself
-      // failed, so no owner was notified either; an ABSENT field is an API response from before the
-      // count existed, which must keep the plain message.
-      toast.success(
-        kept === null
-          ? 'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
-          : kept
-            ? keptSharesMessage(kept)
-            : 'Member removed successfully'
-      );
+      if (!variables.quiet) toast.success(removedMembersMessage([kept]));
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
       console.error('Failed to remove member:', error);
-      toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (!variables.quiet) {
+        toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     },
   });
 }

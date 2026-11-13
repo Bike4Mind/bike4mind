@@ -14,7 +14,7 @@ import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '../app/constants/apiKeyScopes';
  * docs/architecture/api-key-scope-rollout.md.
  *
  * Scoped deliberately to the `baseApi`/`apiKeyAuth` gate. The other scope check -
- * `verifyApiKey` (server/cli/auth.ts), which backs Lambda-transport contract routes
+ * `verifyApiKey` (packages/server-utils/src/cli/auth.ts), which backs Lambda-transport contract routes
  * (resolveContractAuth), the cc-bridge, and embed keys - has no staging path and
  * needs none: every gate it runs is either bound to a credential minted with that exact scope or belongs to
  * an endpoint that shipped with its scope from day one, so there is no
@@ -230,7 +230,7 @@ export type ScopeCheckOptions = {
  * In-handler counterpart of `baseApi`'s `requiredScopes` gate, for a route whose methods
  * need different scopes (the gate is per route, not per method). Honors
  * API_KEY_SCOPE_STAGING, so a grandfathered key rides the same grace window it would at
- * the route gate. Family wrappers: ../files/fileScopes.ts, and in apps/client server/dataLakes/dataLakeScopes.ts,
+ * the route gate. Family wrappers: ../files/fileScopes.ts, ../dataLakes/dataLakeScopes.ts, and in apps/client
  * server/projects/projectScopes.ts, server/agents/agentScopes.ts.
  *
  * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran for them

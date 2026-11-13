@@ -117,7 +117,7 @@ write does not imply read) declare the read-or-write gate (`FILES_READ_OR_WRITE_
 or a write-only key is refused at the door before its write assert runs. Assert at the top
 of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
-(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
+(`packages/server-utils/src/dataLakes/dataLakeScopes.ts`) for data lakes,
 `assertFilesReadScope` / `assertFilesWriteScope` (`packages/server-utils/src/files/fileScopes.ts`)
 for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
 (`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
@@ -249,7 +249,7 @@ Unset (the default) means every declared gate enforces. Enforcement is the defau
 state; staging is the temporary one.
 
 Staging applies to the `baseApi` gate only. The other scope check - `verifyApiKey`
-(`apps/client/server/cli/auth.ts`), behind public contract routes, the cc-bridge, and
+(`packages/server-utils/src/cli/auth.ts`), behind public contract routes, the cc-bridge, and
 embed keys - always enforces. It needs no staging: every gate it runs is bound to a
 credential minted with that exact scope, or to an endpoint that shipped with its scope
 from the start, so nothing there was ever grandfathered. A contract route declaring a

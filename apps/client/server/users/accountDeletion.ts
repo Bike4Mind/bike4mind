@@ -27,11 +27,14 @@ import {
   readUserIntegrationGrants,
   revokeIntegrationGrants,
   type UserIntegrationGrants,
-} from '@server/services/purgeDeletedUserData';
+} from '@bike4mind/server-utils/services/purgeDeletedUserData';
 import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { classifyOwnedOrganizations, type OwnedOrganization } from './ownedOrganizations';
-import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } from './accountDeletionEmail';
+import { classifyOwnedOrganizations, type OwnedOrganization } from '@bike4mind/server-utils/users/ownedOrganizations';
+import {
+  sendAccountDeletionCancelledEmail,
+  sendAccountDeletionScheduledEmail,
+} from '@bike4mind/server-utils/users/accountDeletionEmail';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -40,6 +43,14 @@ type DeletionRequest = Request<unknown, unknown, unknown, unknown, Record<string
 /** The owned organizations other people belong to; each must be transferred first. Sole-owner ones do not block. */
 export async function findOwnedOrganizations(userId: string): Promise<OwnedOrganization[]> {
   return (await classifyOwnedOrganizations(userId)).shared;
+}
+
+/** What the delete-account dialog needs: orgs that block the request, and orgs the purge will delete. */
+export async function findAccountDeletionOrganizations(
+  userId: string
+): Promise<{ ownedOrganizations: OwnedOrganization[]; soleOwnedOrganizations: OwnedOrganization[] }> {
+  const { shared, solo } = await classifyOwnedOrganizations(userId);
+  return { ownedOrganizations: shared, soleOwnedOrganizations: solo };
 }
 
 export type AccountDeletionLockdown = {

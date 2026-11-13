@@ -39,7 +39,9 @@ vi.mock('@bike4mind/database', () => ({
     updateOne: h.updateOne,
   },
 }));
-vi.mock('@server/users/completeAccountDeletion', () => ({ completeAccountDeletion: h.completeAccountDeletion }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
 
 import handler from '../expire-account-deletion';
 

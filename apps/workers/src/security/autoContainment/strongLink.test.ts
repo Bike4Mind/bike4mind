@@ -3,8 +3,10 @@ import type { UserSignupLinkFacts } from '@bike4mind/database';
 
 vi.mock('@bike4mind/database', () => ({ cacheRepository: {}, shadowDetectionRepository: {}, userRepository: {} }));
 vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
-vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
-vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({ linkedAccountGroupEvidence: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence', () => ({
+  linkedAccountGroupEvidence: vi.fn(),
+}));
 vi.mock('./executor', () => ({
   applyAutoContainment: vi.fn(),
   liveAutoContainmentDeps: vi.fn(),
