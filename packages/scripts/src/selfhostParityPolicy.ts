@@ -58,7 +58,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/organizationRetention.ts:organizationRetention',
-    '1f2ee32c678dd7299e779844d893a69f1325a7c425caf3647756cbf2bf9a5a11',
+    '8309494cdfde511fb6f0a7e821f886fcf8c6afbb306eee51fe0de649898c3145',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:organizationRetention',
