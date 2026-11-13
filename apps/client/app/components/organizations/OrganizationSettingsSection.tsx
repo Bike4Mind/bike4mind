@@ -1,6 +1,6 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, orgAclRowConfersMembership, Permission, WithId } from '@bike4mind/common';
 import { useTransferOrganizationOwnership, useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -8,6 +8,7 @@ import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
 import DeleteOrganizationDialog from './DeleteOrganizationDialog';
 import OrganizationGeneralSection from './OrganizationGeneralSection';
+import { OrganizationSharingSettings } from './OrganizationSharingSettings';
 import { canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
@@ -29,6 +30,15 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
   // Settings tab is open to them); a personal org has no successor.
   const canTransferOwnership = canDeleteOrg && !organization.personal;
+  const canEditProfile =
+    !!currentUser &&
+    (currentUser.isAdmin === true ||
+      currentUser.id === organization.userId ||
+      organization.users.some(
+        row =>
+          row.userId === currentUser.id &&
+          row.permissions.some(permission => permission === Permission.update || permission === Permission.share)
+      ));
   const [transferOpen, setTransferOpen] = useState(false);
   const transferOwnership = useTransferOrganizationOwnership();
   const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
@@ -73,6 +83,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   };
 
   const handleSaveSystemPrompt = async () => {
+    if (!canEditProfile || updateOrganization.isPending) return;
     await updateOrganization.mutateAsync({
       orgId: organization.id,
       data: { systemPrompt },
@@ -93,7 +104,8 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
 
   return (
     <Stack spacing={3} className="organization-settings-container">
-      <OrganizationGeneralSection organization={organization} />
+      <OrganizationGeneralSection organization={organization} canEditProfile={canEditProfile} />
+      <OrganizationSharingSettings organization={organization} />
 
       {/* Team System Prompt */}
       <Card variant="outlined">
@@ -101,10 +113,11 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
           Team System Prompt
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
-          <FormControl>
+          <FormControl disabled={!canEditProfile || updateOrganization.isPending}>
             <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
+              disabled={!canEditProfile || updateOrganization.isPending}
               onChange={e => handleSystemPromptChange(e.target.value)}
               placeholder="Enter custom context that will be included in all AI conversations for team members. For example: 'Our company specializes in lunar space elevators, not Earth-based ones. Always focus on lunar applications when discussing space elevator technology.'"
               minRows={4}
@@ -133,7 +146,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
               color="primary"
               onClick={handleSaveSystemPrompt}
               loading={updateOrganization.isPending}
-              disabled={!hasChanges}
+              disabled={!canEditProfile || !hasChanges || updateOrganization.isPending}
               data-testid="organization-settings-system-prompt-save-btn"
             >
               Save System Prompt

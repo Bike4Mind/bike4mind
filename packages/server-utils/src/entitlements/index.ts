@@ -29,6 +29,7 @@ import {
 } from '../lib/entitlements/registry';
 import type { EntitlementKey } from '../lib/entitlements/types';
 import {
+  getActiveSubscriptionsForOrganization,
   getActiveSubscriptionsForUser,
   getRequestActiveSubscriptions,
   type ActiveSubscriptionsRequest,
@@ -140,6 +141,16 @@ export async function getUserEntitlements(
   // An admin comps it with an `admin_grant` subscription row.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
   return paidStanding.holdsPaidStanding ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
+}
+
+/**
+ * The entitlement keys an organization's own principal holds: those its active plan confers, with no
+ * tags, email or bypass. The mint-time twin of `getRequestEntitlements` for an org service account
+ * (getRequestActiveSubscriptions resolves that account's rows from its org), so a product scope the
+ * org key picker offers is the one its routes later admit.
+ */
+export async function getOrganizationEntitlements(organizationId: string): Promise<EntitlementKey[]> {
+  return getUserEntitlements({ id: organizationId }, await getActiveSubscriptionsForOrganization(organizationId));
 }
 
 /**

@@ -8,6 +8,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
@@ -410,7 +411,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ).catch(() => null);
     return {
       auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };

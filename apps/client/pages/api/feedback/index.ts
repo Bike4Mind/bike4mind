@@ -1,4 +1,4 @@
-import { FeedbackAiModel, FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
@@ -26,7 +26,7 @@ import type {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -34,9 +34,9 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { FEEDBACK_RECEIVED_WINDOWS, feedbackReceivedSince } from '@client/app/components/admin/Feedback/feedbackTrends';
+import { FEEDBACK_RECEIVED_WINDOWS } from '@client/app/components/admin/Feedback/feedbackTrends';
 import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
-import { feedbackAiVisible } from '@server/admin/ai/feedbackVisibility';
+import { buildFeedbackListFilter } from '@server/utils/feedbackListFilter';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -102,36 +102,48 @@ export const FEEDBACK_LIST_FIELDS = [
  * page, defeating the four `{ key, createdAt }` indexes this endpoint exists to use. The status
  * *filter* below covers the triage need the grouping was standing in for.
  */
-const ListFeedbackQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).prefault(1),
-  limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
-  userId: z.string().min(1).optional(),
-  sessionId: z.string().min(1).optional(),
-  questId: z.string().min(1).optional(),
-  organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
-  // Legacy free-text org label. The admin dropdown builds its options out of the documents
-  // themselves, so it still selects on this; `organizationId` is the key programmatic callers
-  // (rollups, deep links) should use.
-  organization: z.union([z.string(), z.array(z.string())]).optional(),
-  status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
-  resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
-  subject: z.enum(FEEDBACK_SUBJECTS).optional(),
-  area: z.enum(FEEDBACK_AI_AREAS).optional(),
-  severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
-  type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
-  received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
-  // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
-  search: z.string().min(1).max(200).optional(),
-  sort: z.enum(['asc', 'desc']).prefault('desc'),
-  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
-  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
-  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
-  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
-  includeOrganizations: z.enum(['true', 'false']).optional(),
-  // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
-  // report through the audit trail just to learn the organization names.
-  facetsOnly: z.enum(['true', 'false']).optional(),
-});
+const ListFeedbackQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).prefault(1),
+    limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
+    userId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    questId: z.string().min(1).optional(),
+    organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
+    // Legacy free-text org label. The admin dropdown builds its options out of the documents
+    // themselves, so it still selects on this; `organizationId` is the key programmatic callers
+    // (rollups, deep links) should use.
+    organization: z.union([z.string(), z.array(z.string())]).optional(),
+    status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+    resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
+    subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+    area: z.enum(FEEDBACK_AI_AREAS).optional(),
+    severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
+    type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
+    received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
+    // A custom created-date range, both ends inclusive. Instants rather than calendar days: the
+    // admin picks days in their own time zone, so the client resolves them to instants.
+    createdFrom: z.iso.datetime().optional(),
+    createdTo: z.iso.datetime().optional(),
+    // Whether the report was submitted with text, which `contentStored` records permanently (the
+    // text itself expires). An explicit enum for the same reason as includeOrganizations below.
+    hasComment: z.enum(['true', 'false']).optional(),
+    // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
+    search: z.string().min(1).max(200).optional(),
+    sort: z.enum(['asc', 'desc']).prefault('desc'),
+    // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+    // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+    // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+    // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+    includeOrganizations: z.enum(['true', 'false']).optional(),
+    // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+    // report through the audit trail just to learn the organization names.
+    facetsOnly: z.enum(['true', 'false']).optional(),
+  })
+  .refine(query => !query.createdFrom || !query.createdTo || new Date(query.createdFrom) <= new Date(query.createdTo), {
+    error: 'createdFrom must not be after createdTo',
+    path: ['createdFrom'],
+  });
 
 /** Distinct, non-empty organization names, sorted for the filter menu. */
 async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
@@ -139,12 +151,6 @@ async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<st
   return names
     .filter((name): name is string => typeof name === 'string' && name.length > 0)
     .sort((a, b) => a.localeCompare(b));
-}
-
-/** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
-function toArray<T>(value: T | T[] | undefined): T[] {
-  if (value === undefined) return [];
-  return Array.isArray(value) ? value : [value];
 }
 
 const CreateFeedbackRequestSchema = z.object({
@@ -275,65 +281,11 @@ const handler = baseApi()
       });
     }
 
-    const clauses: FilterQuery<unknown>[] = [readable];
-
-    if (query.userId) clauses.push({ userId: query.userId });
-    if (query.sessionId) clauses.push({ sessionId: query.sessionId });
-    if (query.questId) clauses.push({ questId: query.questId });
-    if (query.organizationId) clauses.push({ organizationId: query.organizationId });
-    if (query.subject) clauses.push({ subject: query.subject });
-    if (query.area || query.severity) {
-      if (!req.user?.isAdmin || !(await feedbackAiVisible())) {
-        clauses.push({ _id: { $in: [] } });
-      } else {
-        const labelClauses = Object.entries({ area: query.area, severity: query.severity })
-          .filter(([, value]) => value)
-          .map(([key, value]) => ({
-            $or: [{ [`override.${key}`]: value }, { override: { $exists: false }, [`labels.${key}`]: value }],
-          }));
-        const matches = await FeedbackAiModel.find({ expiresAt: { $gt: new Date() }, $and: labelClauses })
-          .select('feedbackId')
-          .lean();
-        clauses.push({ _id: { $in: matches.map(row => row.feedbackId) } });
-      }
-    }
-    if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
-
-    const organizations = toArray(query.organization);
-    if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
-
-    const statuses = toArray(query.status);
-    if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
-
-    // Reports from the help modal and older ones carry no type and are shown as Feedback, so that
-    // filter also matches a missing type (`null` in `$in` matches an absent field).
-    const types = toArray(query.type);
-    if (types.length > 0) {
-      clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
-    }
-
-    if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
-
-    if (query.search) {
-      const pattern = new RegExp(escapeRegex(query.search), 'i');
-
-      // `content` lives on the TTL'd FeedbackText sibling rather than on the report, so a text
-      // search has to resolve ids over there first and cannot be expressed as one filter. The
-      // regex is unindexed, but this is an admin triage surface and the path it replaces shipped
-      // the entire collection to the browser to search it client-side. Projecting only _id keeps
-      // the intermediate small; FeedbackText is itself bounded by the 90-day content TTL.
-      const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();
-
-      const searchClauses: FilterQuery<unknown>[] = [{ username: pattern }, { userEmail: pattern }];
-      if (matchingText.length > 0) {
-        searchClauses.push({ _id: { $in: matchingText.map(text => text._id) } });
-      }
-      clauses.push({ $or: searchClauses });
-    }
-
-    // $and rather than a merged object literal: the CASL scope carries its own $or arm and a
-    // spread would silently drop one side of it. Same reason as pages/api/files/index.ts.
-    const filter = { $and: clauses };
+    const filter = await buildFeedbackListFilter(
+      { ...query, hasComment: query.hasComment === undefined ? undefined : query.hasComment === 'true' },
+      readable,
+      req.user?.isAdmin === true
+    );
 
     const [items, total, organizationFacet] = await Promise.all([
       FeedbackModel.find(filter)

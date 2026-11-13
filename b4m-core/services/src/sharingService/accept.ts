@@ -30,6 +30,7 @@ import {
 import { z } from 'zod';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
+import { assertContentInvitePolicy } from './organizationPolicy';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -203,6 +204,7 @@ export const acceptInvite = async (
     case InviteType.Session: {
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
+      await assertContentInvitePolicy(session, [user], db.organization, isLinkOnlyInvite(invite));
       const granted = permissionsInviterCanStillGrant(session, invite, invitePermissions, inviter);
 
       // A session's knowledgeIds can point at files the inviter neither owns nor holds
@@ -248,6 +250,7 @@ export const acceptInvite = async (
       if (!fabfile) {
         throw new NotFoundError('Fabfile not found');
       }
+      await assertContentInvitePolicy(fabfile, [user], db.organization, isLinkOnlyInvite(invite));
 
       const granted = permissionsInviterCanStillGrant(fabfile, invite, invitePermissions, inviter);
       await db.fabFiles.shareable.updateUserShares(fabfile.id, { add: [{ userId, permissions: granted }] });
@@ -403,6 +406,7 @@ const acceptProject = async (
   }
 
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
+  await assertContentInvitePolicy(project, [user], db.organization);
 
   await db.projects.shareable.updateUserShares(project.id, { add: [{ userId: user.id, permissions }] });
 

@@ -40,12 +40,16 @@ const compressLogo = (file: File): Promise<File | Blob> =>
 
 /**
  * Team name, description, logo and billing contact. The fields follow their server gates:
- * - name and description: anyone who reaches Settings (organizationService.update, update access);
+ * - name and description: `canEditProfile`, the Settings section's mirror of organizationService.update's
+ *   update access. Settings also opens to managers without it (for sharing), so they see these read-only;
  * - logo: owner, manager or platform admin (upload-logo.ts, verifyOrgAccess);
  * - billing contact: owner or platform admin. update.ts ignores it from a manager, and
  *   toSafeOrganization strips it from everyone else, so nobody else could see what they edit.
  */
-const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
+const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocument>; canEditProfile: boolean }> = ({
+  organization,
+  canEditProfile,
+}) => {
   const { currentUser } = useUser();
   const updateOrganization = useUpdateOrganization();
   const uploadLogo = useUploadOrganizationLogo();
@@ -88,7 +92,7 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
   const blocked = !!nameError || (changes.billingContact !== undefined && !!billingContactError);
 
   const handleSave = async () => {
-    if (!hasChanges || blocked) return;
+    if (!canEditProfile || !hasChanges || blocked) return;
     try {
       await updateOrganization.mutateAsync({ orgId: organization.id, data: changes });
       handleReset();
@@ -173,20 +177,22 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
           )}
         </Stack>
 
-        <FormControl error={!!nameError}>
+        <FormControl error={!!nameError} disabled={!canEditProfile}>
           <FormLabel>Team name</FormLabel>
           <Input
             value={name}
+            disabled={!canEditProfile}
             onChange={e => setName(e.target.value)}
             slotProps={{ input: { maxLength: MAX_TEAM_NAME_LENGTH, 'data-testid': 'organization-general-name-input' } }}
           />
           {nameError && <FormHelperText>{nameError}</FormHelperText>}
         </FormControl>
 
-        <FormControl>
+        <FormControl disabled={!canEditProfile}>
           <FormLabel>Description</FormLabel>
           <Textarea
             value={description}
+            disabled={!canEditProfile}
             onChange={e => setDescription(e.target.value)}
             minRows={2}
             maxRows={6}
@@ -219,27 +225,33 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
           </FormControl>
         )}
 
-        <Stack direction="row" spacing={1}>
-          <Button
-            onClick={handleSave}
-            loading={updateOrganization.isPending}
-            disabled={!hasChanges || blocked}
-            data-testid="organization-general-save-btn"
-          >
-            Save changes
-          </Button>
-          {hasChanges && (
+        {!canEditProfile ? (
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="organization-general-read-only-note">
+            Only the owner or someone with edit access can change the team name and description.
+          </Typography>
+        ) : (
+          <Stack direction="row" spacing={1}>
             <Button
-              variant="plain"
-              color="neutral"
-              onClick={handleReset}
-              disabled={updateOrganization.isPending}
-              data-testid="organization-general-reset-btn"
+              onClick={handleSave}
+              loading={updateOrganization.isPending}
+              disabled={!hasChanges || blocked}
+              data-testid="organization-general-save-btn"
             >
-              Discard
+              Save changes
             </Button>
-          )}
-        </Stack>
+            {hasChanges && (
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={handleReset}
+                disabled={updateOrganization.isPending}
+                data-testid="organization-general-reset-btn"
+              >
+                Discard
+              </Button>
+            )}
+          </Stack>
+        )}
       </Stack>
     </Card>
   );

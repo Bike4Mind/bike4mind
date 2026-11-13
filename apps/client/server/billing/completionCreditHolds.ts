@@ -9,7 +9,7 @@ import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/bil
 import { creditService } from '@bike4mind/services';
 import type { CompletionCreditHolds } from '@bike4mind/services/cliCompletions';
 import type { Logger } from '@bike4mind/observability';
-import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
+import { observeCreditHold, recordSettlementAfterSweep } from '@bike4mind/server-utils/billing/creditHoldTelemetry';
 
 // Completion holds become eligible for recovery after one hour, including requests still running.
 export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;

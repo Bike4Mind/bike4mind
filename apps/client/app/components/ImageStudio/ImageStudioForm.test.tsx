@@ -58,8 +58,16 @@ const renderForm = (overrides: Partial<Parameters<typeof ImageStudioForm>[0]> = 
 
 const typePrompt = (value: string) =>
   fireEvent.change(screen.getByTestId('image-form-prompt-input'), { target: { value } });
-const card = (model: ImageModels) => screen.getByTestId(`image-form-model-card-${model}`);
-const pickCard = (model: ImageModels) => fireEvent.click(screen.getByTestId(`image-form-model-card-${model}-radio`));
+// Opens the model panel on every model (the shortlist hides the rest), then finds one model's option.
+const modelOption = (suffix: string) => {
+  if (!screen.queryByTestId('image-form-model-panel'))
+    fireEvent.click(screen.getByTestId('image-form-model-change-btn'));
+  const showAll = screen.queryByTestId('image-form-model-show-all-btn');
+  if (showAll?.textContent?.startsWith('Show all')) fireEvent.click(showAll);
+  return screen.getByTestId(`image-form-model-option-${suffix}`);
+};
+const card = (model: ImageModels) => modelOption(model);
+const pickCard = (model: ImageModels) => fireEvent.click(modelOption(`${model}-radio`));
 const submitButton = () => screen.getByTestId('image-form-submit-btn');
 
 describe('ImageStudioForm', () => {
@@ -67,9 +75,7 @@ describe('ImageStudioForm', () => {
     renderForm();
     expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveAttribute('data-selected', 'true');
     expect(card(ImageModels.GPT_IMAGE_1_5)).toHaveTextContent('OpenAI');
-    expect(screen.getByTestId(`image-form-model-card-${ImageModels.GPT_IMAGE_1_5}-cost`)).toHaveTextContent(
-      /credits per image/
-    );
+    expect(modelOption(`${ImageModels.GPT_IMAGE_1_5}-cost`)).toHaveTextContent(/credits per image/);
     expect(submitButton()).toBeDisabled();
   });
 
@@ -87,21 +93,15 @@ describe('ImageStudioForm', () => {
 
   it('makes edit-only and not-yet-wired models unpickable, with the reason on the card', () => {
     renderForm();
-    expect(screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_KONTEXT_PRO}-radio`)).toBeDisabled();
-    expect(
-      screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_KONTEXT_PRO}-reason`)
-    ).not.toBeEmptyDOMElement();
-    expect(screen.getByTestId(`image-form-model-card-${ImageModels.FLUX_PRO_ULTRA}-reason`)).toHaveTextContent(
-      'Temporarily unavailable'
-    );
+    expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-radio`)).toBeDisabled();
+    expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-reason`)).not.toBeEmptyDOMElement();
+    expect(modelOption(`${ImageModels.FLUX_PRO_ULTRA}-reason`)).toHaveTextContent('Temporarily unavailable');
   });
 
   it('sends a chosen quality, and greys the models that cannot honour them', () => {
     const { onSubmit } = renderForm();
     fireEvent.click(screen.getByTestId('image-form-quality-high-btn'));
-    expect(
-      screen.getByTestId(`image-form-model-card-${ImageModels.GEMINI_3_1_FLASH_IMAGE}-reason`)
-    ).toBeInTheDocument();
+    expect(modelOption(`${ImageModels.GEMINI_3_1_FLASH_IMAGE}-reason`)).toBeInTheDocument();
     typePrompt('tall poster');
     fireEvent.click(submitButton());
     expect(onSubmit).toHaveBeenCalledWith({

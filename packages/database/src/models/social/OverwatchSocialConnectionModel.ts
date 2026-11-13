@@ -135,36 +135,6 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     return result?.toJSON() ?? null;
   }
 
-  /** Upserts a connection; on E11000 duplicate key, retries once as an update. */
-  async upsertConnection(
-    productId: string,
-    platform: string,
-    data: Partial<IOverwatchSocialConnectionDocument>
-  ): Promise<IOverwatchSocialConnectionDocument & IMongoDocument> {
-    try {
-      const result = await this.model.findOneAndUpdate(
-        { productId, platform },
-        { $set: { ...data, productId, platform } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      return result!.toJSON();
-    } catch (err: unknown) {
-      const mongoErr = err as { code?: number };
-      if (mongoErr.code === 11000) {
-        // Race: document was inserted by another Lambda - retry as plain update.
-        // Mirror primary path: override productId/platform so caller-supplied data can't corrupt partition keys.
-        const result = await this.model.findOneAndUpdate(
-          { productId, platform },
-          { $set: { ...data, productId, platform } },
-          { new: true }
-        );
-        if (!result) throw new Error('upsertConnection: document disappeared after E11000');
-        return result.toJSON();
-      }
-      throw err;
-    }
-  }
-
   async setStatus(id: string, status: SocialConnectionStatus, lastError?: string): Promise<void> {
     const update: Record<string, unknown> = { status };
     // Use dot notation to avoid replacing the entire metadata object (would destroy

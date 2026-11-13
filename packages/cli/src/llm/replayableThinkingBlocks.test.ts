@@ -1,27 +1,12 @@
 import type { IMessage } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import type { ApiClient } from '../auth/ApiClient';
-import type { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
 import { ServerLlmBackend } from './ServerLlmBackend';
-import { WebSocketLlmBackend } from './WebSocketLlmBackend';
 
 // pushToolMessages never touches the network; the base URL only satisfies the SDK constructor.
 const apiClient = { baseURL: 'http://localhost:3000', fetch } as unknown as ApiClient;
 
-const backends = [
-  ['ServerLlmBackend', () => new ServerLlmBackend({ apiClient, model: 'kimi-k3' })],
-  [
-    'WebSocketLlmBackend',
-    () =>
-      new WebSocketLlmBackend({
-        wsManager: {} as unknown as WebSocketConnectionManager,
-        apiClient,
-        model: 'kimi-k3',
-        tokenGetter: async () => 'token',
-        wsCompletionUrl: '/ws-completions',
-      }),
-  ],
-] as const;
+const backends = [['ServerLlmBackend', () => new ServerLlmBackend({ apiClient, model: 'kimi-k3' })]] as const;
 
 const tool = { id: 't1', name: 'search', parameters: '{"q":"a"}' };
 

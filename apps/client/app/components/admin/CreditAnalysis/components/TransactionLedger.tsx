@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Autocomplete, Button, Chip, Stack, Tooltip } from '@mui/joy';
+import { Autocomplete, Button, Chip, IconButton, Stack, Tooltip } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import {
@@ -207,15 +207,15 @@ export const TransactionLedger: React.FC<{ organizationId?: string }> = ({ organ
           rowActions={row =>
             row.sessionId ? (
               <Tooltip title="Session usage detail">
-                <Button
+                <IconButton
                   size="sm"
                   variant="plain"
+                  aria-label="Session usage detail"
                   data-testid="ledger-drilldown-btn"
                   onClick={() => setDetailSessionId(row.sessionId!)}
-                  startDecorator={<QueryStatsIcon fontSize="small" />}
                 >
-                  Session
-                </Button>
+                  <QueryStatsIcon />
+                </IconButton>
               </Tooltip>
             ) : null
           }

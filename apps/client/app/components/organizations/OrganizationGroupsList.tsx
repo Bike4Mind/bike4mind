@@ -1,6 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import {
   Autocomplete,
+  Button,
   Card,
   Chip,
   ChipDelete,
@@ -15,18 +16,27 @@ import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import { getGroupType, IOrganizationDocument, isKnownGroupType, IUserDocument, WithId } from '@bike4mind/common';
+import {
+  GROUP_TYPE_CATALOG,
+  getGroupType,
+  IOrganizationDocument,
+  isKnownGroupType,
+  IUserDocument,
+  WithId,
+} from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import {
   assignGroupMember,
+  createStandardGroup,
   fetchOrganizationGroups,
   GroupWithMembers,
   renameOrganizationGroup,
   unassignGroupMember,
 } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
+import { GroupProjectSharing } from './GroupProjectSharing';
 
 interface OrganizationGroupsListProps {
   organization: WithId<IOrganizationDocument>;
@@ -48,7 +58,7 @@ interface OrganizationGroupsListProps {
  */
 export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   organization,
-  emptyStateMessage = 'No group types have been granted to this team yet. Contact your Bike4Mind administrator to enable them.',
+  emptyStateMessage = 'Create a standard group to organize members and share projects. Special group types require platform staff approval.',
 }) => {
   const queryClient = useQueryClient();
   const orgId = organization.id;
@@ -107,6 +117,16 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
     onError: error => toast.error(getErrorMessage(error)),
   });
 
+  const createMutation = useMutation({
+    mutationFn: (type: string) => createStandardGroup(orgId, type),
+    onSuccess: () => {
+      invalidateGroups();
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast.success('Group created');
+    },
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+
   const assignMutation = useMutation({
     mutationFn: ({ groupId, userId }: { groupId: string; userId: string }) => assignGroupMember(orgId, groupId, userId),
     onSuccess: () => {
@@ -149,6 +169,17 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
       <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
         Groups
       </Typography>
+      {GROUP_TYPE_CATALOG.filter(type => type.selfServe && !groups.some(group => group.type === type.key)).map(type => (
+        <Button
+          key={type.key}
+          variant="soft"
+          loading={createMutation.isPending}
+          data-testid={`org-groups-create-${type.key}`}
+          onClick={() => createMutation.mutate(type.key)}
+        >
+          Create {type.label.toLowerCase()} group
+        </Button>
+      ))}
       {groupsQuery.isPending ? (
         <Typography level="body-sm" color="neutral" data-testid="org-groups-loading">
           Loading groups...
@@ -351,6 +382,7 @@ const GroupCard: FC<{
             data-testid={`org-group-assign-input-${group.type}`}
           />
         </FormControl>
+        <GroupProjectSharing organizationId={group.organizationId} groupId={group.id} />
       </Stack>
     </Card>
   );

@@ -12,6 +12,7 @@ const unassignGroupMember = vi.fn();
 const assignGroupMember = vi.fn();
 const renameOrganizationGroup = vi.fn();
 const toastSuccess = vi.hoisted(() => vi.fn());
+const createStandardGroup = vi.fn();
 
 vi.mock('@client/app/utils/groupsAPICalls', () => ({
   fetchOrganizationGroups: (...args: unknown[]) => fetchOrganizationGroups(...args),
@@ -19,7 +20,10 @@ vi.mock('@client/app/utils/groupsAPICalls', () => ({
   unassignGroupMember: (...args: unknown[]) => unassignGroupMember(...args),
   renameOrganizationGroup: (...args: unknown[]) => renameOrganizationGroup(...args),
   setOrganizationAdmins: vi.fn(),
+  createStandardGroup: (...args: unknown[]) => createStandardGroup(...args),
 }));
+
+vi.mock('./GroupProjectSharing', () => ({ GroupProjectSharing: () => null }));
 
 // `owner1` mirrors the real hook, which appends organization.userId to the member list even though
 // the owner is never a users[] row. Without it here the picker filter would be a no-op in tests.
@@ -81,6 +85,7 @@ describe('OrganizationGroups', () => {
     assignGroupMember.mockReset().mockResolvedValue(undefined);
     renameOrganizationGroup.mockReset().mockResolvedValue(undefined);
     toastSuccess.mockReset();
+    createStandardGroup.mockReset().mockResolvedValue(undefined);
   });
 
   it('renders group instances and resolves member ids to names', async () => {
@@ -97,6 +102,13 @@ describe('OrganizationGroups', () => {
   it('shows an empty state when no groups are provisioned', async () => {
     renderGroups(org, false);
     await waitFor(() => expect(screen.getByTestId('org-groups-empty')).toBeInTheDocument());
+  });
+
+  it('offers standard group creation with no staff grants and hides special type creation', async () => {
+    renderGroups(org, false);
+    fireEvent.click(await screen.findByTestId('org-groups-create-team'));
+    await waitFor(() => expect(createStandardGroup).toHaveBeenCalledWith('org1', 'team'));
+    expect(screen.queryByTestId('org-groups-create-sales')).not.toBeInTheDocument();
   });
 
   it('hides the admins editor when the viewer may not set admins', async () => {
