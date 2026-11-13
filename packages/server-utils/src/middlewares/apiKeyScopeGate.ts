@@ -1,4 +1,11 @@
-import { ApiKeyScope, ApiKeyScopeValue, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyScopeValue,
+  ApiKeyStatus,
+  CONFINED_API_KEY_SCOPES,
+  isExchangeKeyMetadata,
+  type IUserApiKeyMetadata,
+} from '@bike4mind/common';
 import { ForbiddenError } from '../utils/errors';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '../app/constants/apiKeyScopes';
 
@@ -77,6 +84,14 @@ export type LegacyApiKeyWindow = {
  */
 export const LEGACY_API_KEY_WINDOW: Readonly<LegacyApiKeyWindow> = Object.freeze({ cutoff: null, endsAt: null });
 
+/** Whether any key can still be legacy at `now`: false from `endsAt` on. */
+export function isLegacyWindowOpen(
+  now: Date = new Date(),
+  window: Readonly<LegacyApiKeyWindow> = LEGACY_API_KEY_WINDOW
+): boolean {
+  return !window.endsAt || now < window.endsAt;
+}
+
 /**
  * Whether a key created at `createdAt` is legacy at `now`. Rotation keeps a key's id and
  * creation date, so a rotated key keeps its status: rotation never changes scopes, and
@@ -88,9 +103,43 @@ export function isLegacyApiKey(
   now: Date = new Date(),
   window: Readonly<LegacyApiKeyWindow> = LEGACY_API_KEY_WINDOW
 ): boolean {
-  if (window.endsAt && now >= window.endsAt) return false;
+  if (!isLegacyWindowOpen(now, window)) return false;
   if (!window.cutoff) return true;
   return !!createdAt && createdAt < window.cutoff;
+}
+
+export type ApiKeyLegacyStatus = {
+  /** The key would be grandfathered on a route that opts in with `grandfatherLegacyKeys`. */
+  legacy: boolean;
+  /** When legacy access ends; `null` for a non-legacy key or while the cutoff or end date is unset. */
+  legacyEndsAt: Date | null;
+};
+
+/**
+ * A key's legacy status as owners and admins see it. Mirrors the gate: a confined or
+ * exchange key is never grandfathered (see {@link decideScopeGate}), and a revoked or
+ * expired key never reaches it, so neither is reported as legacy whatever its creation date.
+ */
+export function getApiKeyLegacyStatus(
+  key: {
+    status: ApiKeyStatus;
+    expiresAt?: Date | null;
+    createdAt?: Date;
+    scopes?: readonly ApiKeyScopeValue[];
+    metadata?: IUserApiKeyMetadata;
+  },
+  now: Date = new Date(),
+  window: Readonly<LegacyApiKeyWindow> = LEGACY_API_KEY_WINDOW
+): ApiKeyLegacyStatus {
+  const usable = key.status === ApiKeyStatus.ACTIVE && !(key.expiresAt && new Date(key.expiresAt) <= now);
+  const legacy =
+    usable &&
+    !isExchangeKeyMetadata(key.metadata) &&
+    !isConfinedKey(key.scopes) &&
+    isLegacyApiKey(key.createdAt, now, window);
+  // With no cutoff every key is legacy, so a new key would be too: an end date there would tell
+  // owners to replace a key with one that is just as legacy.
+  return { legacy, legacyEndsAt: legacy && window.cutoff ? window.endsAt : null };
 }
 
 export type ScopeGateDecision =

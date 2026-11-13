@@ -39,6 +39,19 @@ export const fetchOrganizationGroups = async (organizationId: string): Promise<G
   return response.data.groups;
 };
 
+export const createStandardGroup = async (organizationId: string, type: string): Promise<void> => {
+  await api.post(`/api/organizations/${organizationId}/groups`, { type });
+};
+
+export const shareGroupProject = async (
+  organizationId: string,
+  groupId: string,
+  projectId: string,
+  enabled: boolean
+): Promise<void> => {
+  await api.put(`/api/organizations/${organizationId}/groups/${groupId}/projects`, { projectId, enabled });
+};
+
 // PATCH /api/organizations/:id/groups/:groupId - rename a group instance.
 export const renameOrganizationGroup = async (
   organizationId: string,

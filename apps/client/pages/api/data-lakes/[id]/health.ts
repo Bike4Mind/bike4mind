@@ -46,7 +46,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const health = await dataLakeService.computeLakeHealth(lake, {
