@@ -557,6 +557,32 @@ describe('createModelAdmission', () => {
     expect(await system.admits('off')).toBe(false);
   });
 
+  describe('organization model policy', () => {
+    const catalog = [
+      { id: 'gpt', backend: 'openai' } as ModelInfo,
+      { id: 'claude', backend: 'anthropic' } as ModelInfo,
+    ];
+    const policy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+
+    it('refuses a model the given org does not allow, and admits it with no org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const scoped = await createModelAdmission(user(), catalog, false, { organizationId: 'org1' });
+      await expect(scoped.assert('gpt')).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.assert('claude')).resolves.toBeUndefined();
+      await expect((await createModelAdmission(user(), catalog)).assert('gpt')).resolves.toBeUndefined();
+    });
+
+    it('does not apply the org policy to a platform-chosen model', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const system = await createModelAdmission(user(), catalog, true, { organizationId: 'org1' });
+      await expect(system.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
+  });
+
   describe('free-tier gate', () => {
     const gatedModel = { ...model, id: 'premium-model', type: 'text' } as ModelInfo;
 

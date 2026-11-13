@@ -19,10 +19,12 @@ import {
   reasoningChannelOf,
   type IMessage,
   type ModelInfo,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
 import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
+import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
@@ -616,7 +618,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
-      const serverTools = await buildEmbedServerTools({
+      const builtServerTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
         modelId: embedModelId,
@@ -629,6 +631,14 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         logger,
         getAbortSignal: () => abortController.signal,
       });
+      // The embed key bills its organization, so that org's tool policy governs the turn.
+      const orgFiltered = builtServerTools
+        ? applyOrgToolPolicy(builtServerTools, readOrgModelPolicy(org?.modelPolicy))
+        : undefined;
+      if (orgFiltered && orgFiltered.stripped.length > 0) {
+        logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: orgFiltered.stripped });
+      }
+      const serverTools = orgFiltered && orgFiltered.tools.length > 0 ? orgFiltered.tools : undefined;
 
       // --- All gates passed: open the SSE stream ---
       res.setHeader('Content-Type', 'text/event-stream');

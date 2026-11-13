@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { ChatCompletionInvokeParamsSchema, type IUserDocument } from '@bike4mind/common';
+import {
+  ChatCompletionInvokeParamsSchema,
+  type IUserDocument,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+} from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
 import { QuestStartBodySchema } from './questStartBody';
 import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } from '@bike4mind/llm-adapters';
@@ -531,6 +535,49 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
 
     expect((invoke as any).questStartParams).not.toBeNull();
+  });
+
+  it("refuses a model outside the request organization's model policy, and runs it with no organization", async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: ['some-other-model'], allowedTools: null },
+    });
+
+    const refused = makeInvoke();
+    await refused.invoke({
+      body: { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect(mockDb.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(Reflect.get(refused, 'questStartParams')).toBeNull();
+    expectErrorWithoutPin(`"${SUCCESSOR_ID}" is not allowed by your organization`);
+
+    const personal = makeInvoke();
+    await personal.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+    expect(Reflect.get(personal, 'questStartParams')).not.toBeNull();
+  });
+
+  it("refuses an API-key caller naming a built-in tool outside the organization's policy, and strips it silently for a session", async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: null, allowedTools: ['dice_roll'] },
+    });
+    const body = { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1', tools: ['dice_roll', 'image_generation'] };
+
+    const refused = makeInvoke();
+    const refusal = refused.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1' });
+    await expect(refusal).rejects.toMatchObject({
+      message: 'Tools not allowed by your organization: image_generation',
+      additionalInfo: { errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+
+    const session = makeInvoke();
+    await session.invoke({ body, userId: OWNER_ID, authOrigin: 'session' });
+    expect(Reflect.get(session, 'questStartParams')).not.toBeNull();
   });
 
   const pinnedModels = () =>

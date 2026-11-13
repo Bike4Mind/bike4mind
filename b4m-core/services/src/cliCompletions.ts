@@ -55,6 +55,7 @@ import {
   type ICacheRepository,
   type CompletionRunAttribution,
   isOrgServiceAccountOf,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -693,6 +694,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     models,
     enforceCredits: Boolean(enforceCredits),
     freeTierAllowedModels,
+    orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
   }).assert(model);
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {

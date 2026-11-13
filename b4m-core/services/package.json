@@ -300,6 +300,16 @@
         "default": "./dist/llm/shadowTier.cjs"
       }
     },
+    "./llm/orgToolPolicy": {
+      "import": {
+        "types": "./dist/llm/orgToolPolicy.d.mts",
+        "default": "./dist/llm/orgToolPolicy.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/orgToolPolicy.d.cts",
+        "default": "./dist/llm/orgToolPolicy.cjs"
+      }
+    },
     "./llm/refineText": {
       "import": {
         "types": "./dist/llm/refineText.d.mts",

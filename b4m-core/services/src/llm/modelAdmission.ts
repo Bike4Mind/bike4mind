@@ -1,8 +1,11 @@
 import {
   getTextModelCreditsPer1M,
   hasDeveloperUserTag,
+  isModelAllowedByOrgPolicy,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   PAID_PLAN_ENTITLEMENT_KEY,
+  type ReadOrgModelPolicy,
   ServiceUnavailableError,
   type IAdminSettingsRepository,
   type LLMModelConfig,
@@ -32,6 +35,11 @@ export type ModelAdmissionInput = {
    * a model outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
    */
   freeTierAllowedModels?: FreeTierAllowedModels;
+  /**
+   * The caller's organization policy (readOrgModelPolicy of IOrganization.modelPolicy); undefined or null is
+   * unrestricted. Admins are held to it too: it is the org's compliance choice, not a platform gate.
+   */
+  orgModelPolicy?: ReadOrgModelPolicy;
 };
 
 export type ModelAdmission = {
@@ -82,6 +90,12 @@ export function isModelRequiresSubscriptionError(error: unknown): error is Forbi
   return error.additionalInfo?.errorCode === MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE;
 }
 
+/** Whether an admission error is the organization model-policy refusal. */
+export function isOrgModelNotAllowedError(error: unknown): error is ForbiddenError {
+  if (!(error instanceof ForbiddenError)) return false;
+  return error.additionalInfo?.errorCode === ORG_MODEL_NOT_ALLOWED_ERROR_CODE;
+}
+
 /** Admins and developer-tagged users are never held to the free-tier allowlist. */
 export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmin' | 'tags'>): boolean {
   return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);
@@ -119,6 +133,7 @@ export function createModelAdmission({
   models,
   enforceCredits,
   freeTierAllowedModels,
+  orgModelPolicy,
 }: ModelAdmissionInput): ModelAdmission {
   const isAdmin = user.isAdmin || false;
   let entitlementKeys: Promise<string[]> | undefined;
@@ -147,6 +162,12 @@ export function createModelAdmission({
       return new BadRequestError(
         `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
       );
+    }
+    // Without a catalog entry the backend is unknown, so a provider allowlist refuses the model.
+    if (orgModelPolicy && !isModelAllowedByOrgPolicy(orgModelPolicy, { id: modelId, backend: model?.backend })) {
+      return new ForbiddenError(`Model "${modelId}" is not allowed by your organization`, {
+        errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      });
     }
     const config = configs.find(c => c.id === modelId);
     if (config) {

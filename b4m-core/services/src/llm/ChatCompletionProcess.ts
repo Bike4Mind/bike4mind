@@ -77,6 +77,7 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import {
@@ -199,6 +200,7 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import { applyOrgToolPolicy } from './orgToolPolicy';
 import {
   TurnCreditLimiter,
   accumulatedRoundsUsd,
@@ -2890,6 +2892,7 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -3894,6 +3897,15 @@ export class ChatCompletionProcess {
       if (deniedTools && allTools) {
         const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
+      }
+      if (allTools) {
+        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        if (orgFiltered.stripped.length > 0) {
+          logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
+            tools: orgFiltered.stripped,
+          });
+          allTools = orgFiltered.tools;
+        }
       }
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget

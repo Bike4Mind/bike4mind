@@ -3,7 +3,9 @@ import {
   ChatModels,
   ModelBackend,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   PAID_PLAN_ENTITLEMENT_KEY,
+  type OrgModelPolicy,
   ServiceUnavailableError,
   type LLMModelConfig,
   type ModelInfo,
@@ -13,6 +15,7 @@ import { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission,
   isFreeTierModel,
+  isOrgModelNotAllowedError,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
@@ -429,5 +432,87 @@ describe('loadFreeTierAllowedModels', () => {
   it('propagates a settings read failure instead of opening the gate', async () => {
     getSettingsMap.mockRejectedValueOnce(new Error('db down'));
     await expect(loadFreeTierAllowedModels(adminSettings)).rejects.toThrow('db down');
+  });
+});
+
+describe('organization model policy', () => {
+  const openai = { ...priced, id: 'gpt', backend: ModelBackend.OpenAI } as ModelInfo;
+  const anthropic = { ...priced, id: 'claude', backend: ModelBackend.Anthropic } as ModelInfo;
+  const catalog = [openai, anthropic];
+  const policy = (p: Partial<OrgModelPolicy>): OrgModelPolicy => ({
+    allowedProviders: null,
+    allowedModels: null,
+    allowedTools: null,
+    ...p,
+  });
+
+  it('refuses a model from a provider outside allowedProviders with org_model_not_allowed', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      models: catalog,
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.Anthropic] }),
+    });
+    const err = await admission.assert('gpt').catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(isOrgModelNotAllowedError(err)).toBe(true);
+    await expect(admission.assert('claude')).resolves.toBeUndefined();
+  });
+
+  it('refuses a model outside allowedModels', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      models: catalog,
+      orgModelPolicy: policy({ allowedModels: ['claude'] }),
+    });
+    expect(isOrgModelNotAllowedError(await admission.assert('gpt').catch(e => e))).toBe(true);
+    await expect(admission.assert('claude')).resolves.toBeUndefined();
+  });
+
+  it('refuses a model with no catalog entry once a provider list is set', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      models: catalog,
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.OpenAI] }),
+    });
+    expect(isOrgModelNotAllowedError(await admission.assert('unknown-model').catch(e => e))).toBe(true);
+  });
+
+  it('admits() is false so a fallback chain moves on to an allowed model', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      models: catalog,
+      orgModelPolicy: policy({ allowedModels: ['claude'] }),
+    });
+    await expect(admission.admits('gpt')).resolves.toBe(false);
+    await expect(admission.admits('claude')).resolves.toBe(true);
+  });
+
+  it('holds admins to the policy', async () => {
+    const admission = createModelAdmission({
+      user: { isAdmin: true },
+      configs: [],
+      models: catalog,
+      orgModelPolicy: policy({ allowedModels: ['claude'] }),
+    });
+    expect(isOrgModelNotAllowedError(await admission.assert('gpt').catch(e => e))).toBe(true);
+  });
+
+  it('refuses every model for an invalid stored policy and admits all for null', async () => {
+    const invalid = createModelAdmission({ user: {}, configs: [], models: catalog, orgModelPolicy: 'invalid' });
+    expect(isOrgModelNotAllowedError(await invalid.assert('claude').catch(e => e))).toBe(true);
+    const open = createModelAdmission({ user: {}, configs: [], models: catalog, orgModelPolicy: null });
+    await expect(open.assert('gpt')).resolves.toBeUndefined();
+  });
+
+  it('does not classify other refusals as the org policy refusal', async () => {
+    const err = await createModelAdmission({ user: { tags: [] }, configs: [gated], getEntitlements: async () => [] })
+      .assert('priced')
+      .catch(e => e);
+    expect(isOrgModelNotAllowedError(err)).toBe(false);
   });
 });

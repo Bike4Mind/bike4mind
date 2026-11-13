@@ -11,6 +11,7 @@ import {
   getTurnsCost,
   insufficientCreditsError,
   isShadowTier,
+  readOrgModelPolicy,
   type IMessage,
   type IUserDocument,
   type ModelInfo,
@@ -75,16 +76,19 @@ export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] 
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
  * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
  * picker access rules and the free-tier gate for a model the platform chose (the operations model, a fixed default).
+ * `organizationId` applies that org's model policy; a system model skips it, since the org did not pick it.
  */
 export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
-  systemModel = false
+  systemModel = false,
+  opts: { organizationId?: string | null } = {}
 ): Promise<ModelAdmission> {
-  const [configs, enforceCredits, freeTierAllowedModels] = await Promise.all([
+  const [configs, enforceCredits, freeTierAllowedModels, org] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
     systemModel ? undefined : loadFreeTierAllowedModels(adminSettingsRepository),
+    systemModel || !opts.organizationId ? null : organizationRepository.findById(opts.organizationId),
   ]);
   const admission = createSharedModelAdmission({
     user,
@@ -93,6 +97,7 @@ export async function createModelAdmission(
     models,
     enforceCredits,
     freeTierAllowedModels,
+    orgModelPolicy: readOrgModelPolicy(org?.modelPolicy),
   });
   return {
     admits: modelId => admission.admits(modelId),
@@ -329,7 +334,10 @@ export function createRequestCompletionMeter(
   opts: CompletionMeterOptions = {}
 ): CompletionMeter {
   return async (modelInfo, messages, maxTokens, models, turns = 1, tools = []) => {
-    await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
+    const organizationId = opts.systemModel ? null : resolveRequestBillingOrgId(req, opts.organizationId);
+    await (
+      await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel, { organizationId })
+    ).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
