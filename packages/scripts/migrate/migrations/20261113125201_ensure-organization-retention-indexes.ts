@@ -8,7 +8,7 @@ import {
 import type { MigrationFile } from './index';
 
 const migration: MigrationFile = {
-  id: 20260921239986,
+  id: 20261113125201,
   name: 'ensure organization retention indexes',
   up: async () => {
     await Session.collection.createIndex({ retentionOrganizationId: 1, deletedAt: 1, _id: 1 });
