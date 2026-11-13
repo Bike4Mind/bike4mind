@@ -3,7 +3,8 @@
  * person administer this part of the team?". Server gates (`verifyOrgPermission`,
  * packages/server-utils/src/utils/orgAccess.ts), the organization services and the client's tab and
  * control gates (apps/client/app/routes/organizations/orgTabAccess.ts) all ask `hasOrgPermission`;
- * none of them should compare against `userId`, `adminUserIds` or `billingManagerUserIds` directly.
+ * the lists are read directly only by verifyOrgAdminRead (orgAccess.ts), canRevokeOrgMember
+ * (organization.ts) and the CASL manager rule (packages/server-utils/src/auth/ability.ts).
  *
  * Storage, one list per assignable role:
  * - Owner: `org.userId`, the billing owner. Changed only by the ownership transfer.
