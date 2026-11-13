@@ -94,7 +94,10 @@ describe('loadSecretKey', () => {
   it('fails when the item cannot be created', () => {
     const keychain = fakeKeychain({ addStatus: 1 });
 
-    expect(loadSecretKey(ITEM, keychain.run, { create: true })).toEqual({ state: 'missing' });
+    expect(loadSecretKey(ITEM, keychain.run, { create: true })).toEqual({
+      state: 'failed',
+      reason: 'security add exited with 1',
+    });
   });
 
   it('rejects a stored value that is not exactly 32 bytes of base64 and leaves it in place', () => {
@@ -109,7 +112,10 @@ describe('loadSecretKey', () => {
     for (const name of ['Odd "name"', 'back\\slash', 'line\nbreak', '']) {
       const keychain = fakeKeychain();
 
-      expect(loadSecretKey(secretKeyItem(name), keychain.run, { create: true }).state).toBe('missing');
+      expect(loadSecretKey(secretKeyItem(name), keychain.run, { create: true })).toEqual({
+        state: 'failed',
+        reason: 'the app name cannot be passed to security',
+      });
       expect(keychain.calls.some(call => call.args[0] === '-i')).toBe(false);
     }
   });

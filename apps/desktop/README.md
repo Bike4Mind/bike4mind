@@ -873,6 +873,9 @@ token.
   update does not ask for the keychain password again. Its first launch re-saves every secret
   `safeStorage` stored (auth, MCP, model servers, Hugging Face), and either build type still
   reads the other's format.
+  The trade-off: the item trusts `/usr/bin/security` rather than the app, so any process running
+  as the same user can read the key without a prompt. Developer ID builds keep `safeStorage`,
+  whose item only the app itself reads silently.
 - **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
   the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
   sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading

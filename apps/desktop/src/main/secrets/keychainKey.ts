@@ -29,8 +29,9 @@ export function loadSecretKey(item: KeychainItem, run: ProcessRunner, { create }
   const found = readSecretKey(item, run);
   if (found.state !== 'missing' || !create) return found;
   // No -U: if another instance created the item first, this add fails and both use its key.
-  addSecretKey(item, randomBytes(KEY_BYTES), run);
-  return readSecretKey(item, run);
+  const addFailure = addSecretKey(item, randomBytes(KEY_BYTES), run);
+  const created = readSecretKey(item, run);
+  return created.state === 'missing' && addFailure ? { state: 'failed', reason: addFailure } : created;
 }
 
 function readSecretKey(item: KeychainItem, run: ProcessRunner): SecretKeyLoad {
@@ -47,15 +48,19 @@ function readSecretKey(item: KeychainItem, run: ProcessRunner): SecretKeyLoad {
   return { state: 'found', key };
 }
 
-/** `security -i` reads the command from stdin, which keeps the key out of every process's arguments. */
-function addSecretKey(item: KeychainItem, key: Buffer, run: ProcessRunner): void {
+/**
+ * `security -i` reads the command from stdin, which keeps the key out of every process's arguments.
+ * Returns why the add failed, or null when it succeeded.
+ */
+function addSecretKey(item: KeychainItem, key: Buffer, run: ProcessRunner): string | null {
   const account = quoted(item.account);
   const service = quoted(item.service);
-  if (!account || !service) return;
-  run(SECURITY, ['-i'], {
+  if (!account || !service) return 'the app name cannot be passed to security';
+  const result = run(SECURITY, ['-i'], {
     input: `add-generic-password -a ${account} -s ${service} -w ${key.toString('base64')}\n`,
     timeoutMs: KEYCHAIN_TIMEOUT_MS,
   });
+  return result.status === 0 ? null : `security add exited with ${result.status ?? 'no status'}`;
 }
 
 /** Printable ASCII without `"` or `\`, so the quoted name reaches the tool exactly as written. */
