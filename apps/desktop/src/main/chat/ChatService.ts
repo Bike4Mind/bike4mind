@@ -8389,6 +8389,9 @@ const MODEL_GUIDANCE: readonly string[] = [
   'batch as the save) to fix any build error it reports. Check it',
   'with model_screenshot from several angles before saying it is done. Each good build also writes',
   '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+  'A turn may carry a point-and-edit note: the user clicked those parts in the pane, so "this" means',
+  'them. Change only their code, starting from the lines the note lists, and leave every other part',
+  'as it is; then model_view in a later batch and model_screenshot to confirm the change.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [
