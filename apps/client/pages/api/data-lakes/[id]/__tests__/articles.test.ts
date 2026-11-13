@@ -9,6 +9,7 @@ const LAKE = {
 };
 
 const h = vi.hoisted(() => ({
+  adminSettings: {},
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
   registryMembershipScope: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('@bike4mind/services', async () => ({
   fabFilesService: { search: h.search },
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: h.adminSettings,
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -98,6 +99,16 @@ beforeEach(() => {
 });
 
 describe('GET /api/data-lakes/:id/articles lake scoping', () => {
+  it('wires admin settings into the read gate so reader grants are honored', async () => {
+    const { res } = makeRes();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
+  });
+
   it('scopes the browse with the shared membership predicate, anchored to the lake creator', async () => {
     const { res } = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);

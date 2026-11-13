@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * winning over the lake defaults. Without a lake, the resolver path must not run at all.
  */
 const h = vi.hoisted(() => ({
+  adminSettings: {},
   createSession: vi.fn(),
   assertLakeAccess: vi.fn(),
   toAccessContext: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 vi.mock('@server/middlewares/baseApi', () => ({ methodNotAllowedHandler: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  adminSettingsRepository: h.adminSettings,
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -100,7 +102,11 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
 
     await run(post({ name: 'New Notebook', dataLakeId: 'acme' }), res);
 
-    expect(h.assertLakeAccess).toHaveBeenCalledWith('acme', expect.anything(), expect.anything());
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      'acme',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
     expect(paramsOf()).toMatchObject({
       name: 'New Notebook',
       forceKnowledgeRetrieval: true,
