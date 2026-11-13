@@ -26,8 +26,8 @@ import {
   estimateImageCredits,
   UnsupportedImageModelError,
 } from '@bike4mind/services/imageCost';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
 interface GenerateFeaturedImageRequest {
   imagePrompt: string;

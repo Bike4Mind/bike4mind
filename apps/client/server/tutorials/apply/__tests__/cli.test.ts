@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MODULE_BUNDLE_FORMAT, OVERRIDE_BUNDLE_FORMAT } from '@bike4mind/common';
-import { CORE_DRAFT_PROFILE, coreDraftCore } from '../../coreDraftProfile';
+import { CORE_DRAFT_PROFILE, coreDraftCore } from '@bike4mind/server-utils/tutorials/coreDraftProfile';
 import { runApplyCli } from '../cli';
 import { coreLayout } from '../coreLayout';
 import { fixtureLayout } from './fixtureLayout';

@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { User } from '@bike4mind/database';
 import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
-import { completeAccountDeletion } from '@server/users/completeAccountDeletion';
+import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
 import { Request } from 'express';
 
 interface ExpireAccountDeletionBody {

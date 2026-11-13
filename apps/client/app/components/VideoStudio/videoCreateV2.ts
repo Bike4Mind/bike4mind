@@ -3,15 +3,7 @@
  * is reported here with its why-not reason (videoFailureReason, the same text the server refuses with) and the value
  * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
  */
-import {
-  VIDEO_MODEL_STRENGTHS,
-  VIDEO_PROVIDER_LABELS,
-  VIDEO_PROVIDER_IDS,
-  VideoModelIdSchema,
-  videoFailureReason,
-  type VideoModel,
-  type VideoProviderId,
-} from '@bike4mind/common';
+import { videoFailureReason, type VideoModel } from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
 import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
 import { MODE_LABELS, estimateCredits, initialFormFor, snapDuration, type VideoFormState } from './videoForm';
@@ -79,14 +71,6 @@ export function videoFieldProblems(model: VideoModel, form: VideoFormState): Vid
   return problems;
 }
 
-const isVideoProvider = (provider: string): provider is VideoProviderId =>
-  (VIDEO_PROVIDER_IDS as readonly string[]).includes(provider);
-
-const strengthOf = (modelId: string): string => {
-  const parsed = VideoModelIdSchema.safeParse(modelId);
-  return parsed.success ? VIDEO_MODEL_STRENGTHS[parsed.data] : '';
-};
-
 /** A card per video model, each priced at its own defaults and greyed with the first value it does not take. */
 export const videoModelCards = (models: readonly VideoModel[], form: VideoFormState): StudioModelCard[] =>
   models.map(model => {
@@ -94,8 +78,8 @@ export const videoModelCards = (models: readonly VideoModel[], form: VideoFormSt
     return {
       id: model.id,
       name: model.display_name,
-      provider: isVideoProvider(model.provider) ? VIDEO_PROVIDER_LABELS[model.provider] : model.provider,
-      strength: strengthOf(model.id),
+      provider: model.provider_label ?? model.provider,
+      strength: model.blurb ?? '',
       creditsPerOutput: estimateCredits(initialFormFor(model)),
       outputNoun: 'clip',
       modes: model.modes.map(mode => MODE_LABELS[mode]),

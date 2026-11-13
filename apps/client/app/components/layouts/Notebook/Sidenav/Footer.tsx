@@ -4,6 +4,7 @@ import { useIsPWA } from '@client/app/hooks/useIsPWA';
 import { isLocalhost } from '@client/app/utils/isLocalhost';
 import { Box } from '@mui/joy';
 import ProfileMenu from './ProfileMenu';
+import TeamSwitcher from '@client/app/components/organizations/TeamSwitcher';
 
 const SidenavFooter = () => {
   const isPWA = useIsPWA();
@@ -27,6 +28,8 @@ const SidenavFooter = () => {
       )}
 
       <DesktopAppPromoButton />
+
+      <TeamSwitcher />
 
       {/* Account + account menu */}
       <ProfileMenu />

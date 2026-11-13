@@ -1,5 +1,5 @@
 import { FabFile, mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
+import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';

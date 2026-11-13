@@ -17,11 +17,11 @@ import {
   type AdminUsersBulkAction,
   type AdminUsersBulkExecuteRequest,
 } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
-import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
-import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
-import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
-import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
-import { cohortHashOf, type BulkUser } from './resolve';
+import { usersBulkExecuteDeps, usersBulkUndoDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { executeAdminUsersBulk, type ExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { SUBSCRIPTION_CANCEL_GRACE_MS } from '@bike4mind/server-utils/admin/usersBulk/ports';
+import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/undo';
+import { cohortHashOf, type BulkUser } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
 import { approveApproval } from '@server/admin/approvals/service';
 

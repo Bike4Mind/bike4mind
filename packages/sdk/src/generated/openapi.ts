@@ -329,7 +329,7 @@ export interface paths {
     };
     /**
      * List models
-     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Sorted by `id` ascending. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
+     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured, plus a `blurb` and `provider_label` to show on a model card. To pick the cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Sorted by `id` ascending. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
      */
     get: operations['listModels'];
     put?: never;
@@ -3549,6 +3549,8 @@ export interface components {
      *             "type": "text",
      *             "backend": "anthropic",
      *             "description": null,
+     *             "blurb": null,
+     *             "provider_label": null,
      *             "context_window": 1000000,
      *             "max_output_tokens": 128000,
      *             "supports_streaming": true,
@@ -3636,6 +3638,10 @@ export interface components {
             | 'aws'
             | 'local-image';
           description: string | null;
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+          blurb: string | null;
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+          provider_label: string | null;
           /** @description Input context, in tokens. */
           context_window: number;
           max_output_tokens: number;
@@ -3793,6 +3799,8 @@ export interface components {
      *           "type": "text",
      *           "backend": "anthropic",
      *           "description": null,
+     *           "blurb": null,
+     *           "provider_label": null,
      *           "context_window": 1000000,
      *           "max_output_tokens": 128000,
      *           "supports_streaming": true,
@@ -3826,6 +3834,8 @@ export interface components {
      *           "type": "image",
      *           "backend": "openai",
      *           "description": null,
+     *           "blurb": "Reliable prompt following with legible text in the image.",
+     *           "provider_label": "OpenAI",
      *           "context_window": 0,
      *           "max_output_tokens": 0,
      *           "supports_streaming": false,
@@ -3896,6 +3906,10 @@ export interface components {
           | 'aws'
           | 'local-image';
         description: string | null;
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+        blurb: string | null;
+        /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+        provider_label: string | null;
         /** @description Input context, in tokens. */
         context_window: number;
         max_output_tokens: number;
@@ -6287,6 +6301,10 @@ export interface components {
         object: 'video_model';
         display_name: string;
         provider: string;
+        /** @description The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers. */
+        provider_label?: string;
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers. */
+        blurb?: string;
         modes: ('text_to_video' | 'image_to_video')[];
         /** @description The inputs[] roles this model accepts and the most of each one request may carry. Roles today: first_frame, last_frame, reference, style; ignore any you do not know. */
         input_roles?: {
@@ -6719,6 +6737,10 @@ export interface components {
         object: 'music_model';
         display_name: string;
         provider: string;
+        /** @description The provider as shown to people (`Google`, `ElevenLabs`), where `provider` is the id. Display text. Always sent by current servers. */
+        provider_label?: string;
+        /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers. */
+        blurb?: string;
         /**
          * @description `never`: instrumental only.
          * @enum {string}

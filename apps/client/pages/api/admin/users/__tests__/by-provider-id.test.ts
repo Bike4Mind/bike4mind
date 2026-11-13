@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindOne = vi.fn();
 vi.mock('@bike4mind/database', () => ({

@@ -9,7 +9,9 @@ const h = vi.hoisted(() => ({
   analyzeBatchTaxonomy: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
 }));
-vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({ analyzeBatchTaxonomy: h.analyzeBatchTaxonomy }));
+vi.mock('@bike4mind/server-utils/dataLakes/analyzeBatchTaxonomy', () => ({
+  analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
 }));

@@ -56,7 +56,7 @@ vi.mock('@bike4mind/services', async () => ({
     loadMembershipRepairPlan: h.loadMembershipRepairPlan,
   },
 }));
-vi.mock('@server/dataLakes', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: h.record },
   adminSettingsRepository: {
