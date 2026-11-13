@@ -112,7 +112,10 @@ describe('DELETE /api/organizations/[id] with org-owned API keys', () => {
     const personal = await userApiKeyService.createUserApiKey(
       member.id,
       { name: 'Personal', scopes: [ApiKeyScope.AI_CHAT], metadata: { createdFrom: 'dashboard' } },
-      { db: { userApiKeys: userApiKeyRepository, agents: { findById: async () => null } } }
+      {
+        db: { userApiKeys: userApiKeyRepository, agents: { findById: async () => null } },
+        trust: { status: 'trusted' },
+      }
     );
     expect((await validate(created.key)).isValid).toBe(true);
     const serviceAccountId = (await userApiKeyRepository.findById(created.apiKey.id))!.userId;
@@ -139,7 +142,7 @@ describe('DELETE /api/organizations/[id] with org-owned API keys', () => {
   it('refuses to mint into the retired service account if the org is restored', async () => {
     const { owner, orgId } = await seedOrgWithKey();
     await call(orgHandler, 'DELETE', owner.id, { id: orgId });
-    await Organization.updateOne({ _id: orgId }, { $set: { deletedAt: null } });
+    await Organization.updateOne({ _id: orgId }, { $set: { deletedAt: null } }, { includeDeleted: true });
 
     await expect(
       call(orgKeysHandler, 'POST', owner.id, { id: orgId }, { name: 'Again', scopes: [ApiKeyScope.AI_CHAT] })

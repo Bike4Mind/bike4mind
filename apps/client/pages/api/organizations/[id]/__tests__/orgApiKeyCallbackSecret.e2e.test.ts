@@ -109,7 +109,10 @@ async function seedOrgWithKey() {
   Object.assign(req, { user: await User.findById(owner.id), logger });
   await (listHandler as unknown as Route).routes.POST!(req, res);
   const keyId = (res._getJSONData() as IOrgApiKeySecretResponse).apiKey.id;
-  return { owner, manager, member, orgId, keyId };
+  // Minting the key already stores a secret and audits the create; tests compare against both.
+  const seededSecret = (await userApiKeyRepository.findCallbackSigningSecret(keyId))!.secret;
+  recordAdminActionFromRequest.mockClear();
+  return { owner, manager, member, orgId, keyId, seededSecret };
 }
 
 describe('POST /api/organizations/[id]/api-keys/[keyId]/callback-secret', () => {
@@ -119,10 +122,11 @@ describe('POST /api/organizations/[id]/api-keys/[keyId]/callback-secret', () => 
   });
 
   it('hands the owner and a manager the plaintext once; the stored secret is the latest one', async () => {
-    const { owner, manager, orgId, keyId } = await seedOrgWithKey();
+    const { owner, manager, orgId, keyId, seededSecret } = await seedOrgWithKey();
 
     const first = await call<SecretResponse>(secretHandler, owner.id, { id: orgId, keyId });
     expect(first.statusCode).toBe(200);
+    expect(first.data.callbackSigningSecret).not.toBe(seededSecret);
     expect(first.headers['cache-control']).toBe('no-store');
     expect(first.data).toMatchObject({ id: keyId, name: 'Webhook service' });
     expect(first.data.callbackSigningSecret).toMatch(/^whsec_/);
@@ -149,7 +153,7 @@ describe('POST /api/organizations/[id]/api-keys/[keyId]/callback-secret', () => 
   });
 
   it("refuses a plain member and another org's admin, without minting", async () => {
-    const { member, orgId, keyId } = await seedOrgWithKey();
+    const { member, orgId, keyId, seededSecret } = await seedOrgWithKey();
     const other = await seedOrgWithKey();
 
     expect((await call(secretHandler, member.id, { id: orgId, keyId })).statusCode).toBe(404);
@@ -157,25 +161,25 @@ describe('POST /api/organizations/[id]/api-keys/[keyId]/callback-secret', () => 
     // Naming this org's key under the org the caller does administer does not reach it either.
     expect((await call(secretHandler, other.owner.id, { id: other.orgId, keyId })).statusCode).toBe(404);
 
-    expect(await userApiKeyRepository.findCallbackSigningSecret(keyId)).toBeNull();
+    expect((await userApiKeyRepository.findCallbackSigningSecret(keyId))?.secret).toBe(seededSecret);
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('refuses a revoked key', async () => {
-    const { owner, orgId, keyId } = await seedOrgWithKey();
+    const { owner, orgId, keyId, seededSecret } = await seedOrgWithKey();
     expect((await call(revokeHandler, owner.id, { id: orgId, keyId })).statusCode).toBe(200);
     recordAdminActionFromRequest.mockClear();
 
     expect((await call(secretHandler, owner.id, { id: orgId, keyId })).statusCode).toBe(400);
-    expect(await userApiKeyRepository.findCallbackSigningSecret(keyId)).toBeNull();
+    expect((await userApiKeyRepository.findCallbackSigningSecret(keyId))?.secret).toBe(seededSecret);
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('commits no secret when the audit row cannot be written', async () => {
-    const { owner, orgId, keyId } = await seedOrgWithKey();
+    const { owner, orgId, keyId, seededSecret } = await seedOrgWithKey();
     recordAdminActionFromRequest.mockRejectedValueOnce(new Error('audit down'));
 
     await expect(call(secretHandler, owner.id, { id: orgId, keyId })).rejects.toThrow('audit down');
-    expect(await userApiKeyRepository.findCallbackSigningSecret(keyId)).toBeNull();
+    expect((await userApiKeyRepository.findCallbackSigningSecret(keyId))?.secret).toBe(seededSecret);
   });
 });
