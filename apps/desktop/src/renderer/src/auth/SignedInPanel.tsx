@@ -10,11 +10,19 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
+import { updateAttention } from '@shared/update';
 import { BillingIcon, ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
-import { useSettingsAttention } from '../chat/settingsAttention';
+import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
+
+/** What a click on the update chip does, or undefined in a state with no next step to take. */
+export function updateNextStep(update: AppUpdateController): (() => void) | undefined {
+  if (update.state.status === 'available') return update.download;
+  if (update.state.status === 'ready') return () => void update.install(false);
+  return undefined;
+}
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -38,12 +46,24 @@ function initials(name: string): string {
  * The environment LABEL stays even though the picker that sets it moved to Settings: it is a
  * readout, and which deployment a reply came from is worth a line under the name whether or not
  * anyone is about to change it.
+ *
+ * A waiting update is reported here too, by the chip beside the name: Settings has no nav row,
+ * so this strip is the one place that is always on screen. `update` is shared with the update
+ * card, which is where a restart the chip asks for is confirmed.
  */
-export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
+export function SignedInPanel({
+  state,
+  status,
+  update,
+}: {
+  state: AuthState;
+  status?: ReactNode;
+  update: AppUpdateController;
+}) {
   const [open, setOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const navigate = useNavigate();
-  const settingsAttention = useSettingsAttention();
+  const settingsAttention = updateAttention(update.state);
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
@@ -101,9 +121,15 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
         </Stack>
         {/* Primary, not danger: an update waiting is not a fault. Hidden while the menu is
             open, because the Settings row it points at is then two rows below and the chip
-            would be saying the same thing twice. */}
+            would be saying the same thing twice. A click takes the next step itself. */}
         {settingsAttention && !open && (
-          <Chip size="sm" variant="soft" color="primary" data-testid="account-attention-chip">
+          <Chip
+            size="sm"
+            variant="soft"
+            color="primary"
+            onClick={updateNextStep(update)}
+            data-testid="account-attention-chip"
+          >
             {settingsAttention}
           </Chip>
         )}

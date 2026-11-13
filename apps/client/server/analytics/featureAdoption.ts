@@ -14,7 +14,7 @@ import {
   type FeatureAdoption,
   type FeatureAdoptionQuery,
 } from '@client/app/utils/featureAdoption';
-import { formatDay, shiftDay } from './analyticsRollup';
+import { formatDay, shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 const DEADLINE_MS = 15_000;
 export const ADOPTION_GROUP_LIMIT = 5000;

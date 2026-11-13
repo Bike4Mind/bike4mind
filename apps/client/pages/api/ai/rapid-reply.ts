@@ -14,7 +14,7 @@ import { ChatModels, NotFoundError, isTerminalCreditRefusal } from '@bike4mind/c
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const rapidReplyMessageSchema = z.string().transform(m => m.slice(0, RAPID_REPLY_MAX_MESSAGE_CHARS));
 

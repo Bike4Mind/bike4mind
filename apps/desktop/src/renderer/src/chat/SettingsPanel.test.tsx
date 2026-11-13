@@ -52,7 +52,7 @@ describe('the Settings screen', () => {
     expect(groups).toHaveLength(5);
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
-      ['appearance', 'orchestrator-sound', 'nested-sessions'],
+      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
       ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
       ['local-context', 'token-rate', 'curated-list'],
       ['local-history', 'local-data-export'],

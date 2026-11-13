@@ -9,7 +9,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockExport = vi.fn();
-vi.mock('@server/admin/usersList/listAdminUsers', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersList/listAdminUsers', () => ({
   exportAdminUsers: (...args: unknown[]) => mockExport(...args),
 }));
 

@@ -87,6 +87,77 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn("B4M_UPDATE_FEED_URL='' pnpm build", job('build'))
         self.assertIn('EXPECTED_MAC_MODE: ${{ needs.version.outputs.mac-mode }}', job('publish'))
 
+    def test_self_signed_mode_is_selected_and_rechecked_like_the_others(self):
+        for name in ('version', 'publish'):
+            self.assertIn('SELFSIGNED_BETA: ${{ vars.DESKTOP_MAC_SELFSIGNED_BETA }}', job(name))
+        smoke = job('build').split('- name: Install and launch packaged macOS DMG', 1)[1].split('- name:', 1)[0]
+        self.assertIn("EXPECT_UPDATES_DISABLED: ${{ needs.version.outputs.mac-mode == 'adhoc' }}", smoke)
+        self.assertIn("EXPECT_UPDATES_ENABLED: ${{ needs.version.outputs.mac-mode == 'selfsigned' }}", smoke)
+        notes = job('publish')
+        branch = notes.split('elif [ "$MAC_RELEASE_MODE" = selfsigned ]; then', 1)[1].split('\n          else\n', 1)[0]
+        self.assertIn('self-signed certificate, not Developer ID signed or notarized', branch)
+        self.assertIn('in-app updates are enabled from this build onward', branch)
+        self.assertIn("'## macOS: in-app updates'", branch)
+        self.assertIn('Run the install command above once more', branch)
+        # The note quotes what an older build shows, so the two must not drift apart.
+        sentence = 'This build does not check for updates.'
+        self.assertIn(f'"{sentence}"', branch)
+        self.assertIn(sentence, (ROOT / 'apps/desktop/src/renderer/src/chat/UpdateSettings.tsx').read_text())
+
+    def test_self_signed_signing_is_main_only_and_keeps_the_keychain_private(self):
+        build = job('build')
+        step = build.split('- name: Sign macOS installers with the self-signed certificate', 1)[1].split('- name:', 1)[0]
+        self.assertIn("if: matrix.platform == 'mac' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
+                      " && needs.version.outputs.mac-mode == 'selfsigned'", step)
+        self.assertIn('-c.mac.identity=- -c.mac.sign=./scripts/sign-mac-selfsigned.cjs', step)
+        self.assertIn('keychain="$RUNNER_TEMP/desktop-selfsigned.keychain-db"', step)
+        self.assertIn('node scripts/check-mac-signature.mjs "$app_dir/Bike4Mind.app" com.bike4mind.desktop "$sha1"', step)
+        self.assertNotIn("B4M_UPDATE_FEED_URL=''", step)
+        for secret in ('DESKTOP_MAC_SELFSIGNED_P12', 'DESKTOP_MAC_SELFSIGNED_P12_PASSWORD'):
+            self.assertEqual(WORKFLOW.count(f'secrets.{secret} }}}}'), 1)
+            self.assertIn(f'secrets.{secret} }}}}', step)
+        cleanup = build.split('- name: Remove the self-signed signing keychain', 1)[1].split('- name:', 1)[0]
+        self.assertIn("if: always() && matrix.platform == 'mac' && needs.version.outputs.mac-mode == 'selfsigned'", cleanup)
+        self.assertIn('security delete-keychain "$RUNNER_TEMP/desktop-selfsigned.keychain-db"', cleanup)
+        # The keychain joins the user search list for the step only; cleanup puts the saved list back first.
+        self.assertLess(step.index('> "$RUNNER_TEMP/desktop-selfsigned.search-list"'),
+                        step.index('security list-keychains -d user -s "$keychain" "${previous[@]}"'))
+        self.assertLess(cleanup.index('security list-keychains -d user -s "${previous[@]}"'),
+                        cleanup.index('security delete-keychain'))
+        self.assertEqual(WORKFLOW.count('list-keychains'), 3)
+        for command in ('default-keychain', 'login.keychain', 'add-trusted-cert', 'trust-settings'):
+            self.assertNotIn(command, WORKFLOW)
+
+    def test_self_signed_requirement_check_accepts_only_the_pinned_leaf(self):
+        build = job('build')
+        start = build.index('requirement=$(codesign -d -r-')
+        end = build.index('fi\n', build.index('if [ "$requirement" != "$expected" ]')) + 3
+        check = textwrap.dedent(build[build.rindex('\n', 0, start) + 1:end])
+        sha1 = 'ab' * 20
+        pinned = f'designated => identifier "com.bike4mind.desktop" and certificate leaf = H"{sha1}"'
+        cases = [(pinned, True), (pinned.replace(sha1, 'cd' * 20), False), (f'designated => cdhash H"{"ef" * 20}"', False),
+                 (pinned.replace('com.bike4mind.desktop', 'com.example.other'), False), (f'{pinned} or anchor apple', False),
+                 ('', False)]
+        for requirement, passes in cases:
+            with self.subTest(requirement=requirement), tempfile.TemporaryDirectory() as directory:
+                fake = Path(directory) / 'codesign'
+                fake.write_text(f'#!/bin/sh\nprintf "%s\\n" {shlex.quote(requirement)}\n')
+                fake.chmod(0o755)
+                env = {**os.environ, 'PATH': f'{directory}{os.pathsep}{os.environ["PATH"]}',
+                       'app_dir': 'release/mac-arm64', 'sha1': sha1}
+                result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', check],
+                                        env=env, capture_output=True)
+                self.assertEqual(result.returncode == 0, passes)
+
+    def test_mac_update_check_runs_in_every_mode_without_secrets(self):
+        build = job('build')
+        step = build.split('- name: Check a self-signed macOS build updates itself', 1)[1].split('- name:', 1)[0]
+        self.assertIn("if: matrix.platform == 'mac'\n", step)
+        self.assertIn('run: node apps/desktop/scripts/smoke-mac-update.mjs', step)
+        self.assertNotIn('secrets.', step)
+        self.assertNotIn('mac-mode', step)
+        self.assertLess(build.index('smoke-mac-update.mjs'), build.index('- name: Package installers'))
+
     def test_embedded_blockmap_checks_run_after_linux_packaging(self):
         build = job('build')
         self.assertIn('node apps/desktop/scripts/smoke-differential.cjs', build)
@@ -158,7 +229,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}', build)
         self.assertIn('CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}', build)
         check = 'pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"'
-        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
+        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers',
+                     '- name: Sign macOS installers with the self-signed certificate'):
             body = build.split(step, 1)[1].split('- name:', 1)[0]
             with self.subTest(step=step):
                 self.assertLess(body.rindex('pnpm build'), body.index(check))
@@ -168,7 +240,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
         build = job('build')
         self.assertIn('B4M_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}', build)
         check = 'node scripts/sign-update-manifests.mjs check-build out'
-        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
+        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers',
+                     '- name: Sign macOS installers with the self-signed certificate'):
             body = build.split(step, 1)[1].split('- name:', 1)[0]
             with self.subTest(step=step):
                 self.assertLess(body.rindex('pnpm build'), body.index(check))

@@ -1,0 +1,543 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock state via vi.hoisted so it is initialized before the hoisted vi.mock factories run.
+const {
+  sideEffects,
+  createSessionService,
+  updateSessionService,
+  projectGet,
+  SessionModelMock,
+  sessionSave,
+  UserMock,
+  userRepoUpdate,
+  sessionRepoFindById,
+  sessionRepoFindByIdAndUserId,
+  accessibleBySpy,
+  favoriteRepoFind,
+  userRepoFindById,
+  defineAbilitiesForSpy,
+  createAttachmentLakeAccessSpy,
+  fabFileFindMetadataByIds,
+} = vi.hoisted(() => {
+  const sessionSave = vi.fn().mockResolvedValue(undefined);
+  // any: a Mongoose model mock that is both newable (regular function so it works with
+  // `new`) and carries static query methods.
+  const SessionModelMock: any = vi.fn(function (this: Record<string, unknown>, data: Record<string, unknown>) {
+    Object.assign(this, data, { id: 'new-session-id', save: sessionSave });
+  });
+  SessionModelMock.findOne = vi.fn();
+  SessionModelMock.find = vi.fn();
+  SessionModelMock.findById = vi.fn();
+  SessionModelMock.findOneAndUpdate = vi.fn();
+  SessionModelMock.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+
+  const UserMock = {
+    findById: vi.fn(),
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    updateOne: vi.fn().mockReturnValue({ session: vi.fn().mockResolvedValue(undefined) }),
+  };
+
+  return {
+    sideEffects: {
+      notifySessionCreated: vi.fn().mockResolvedValue(undefined),
+      logSessionCreatedEvent: vi.fn().mockReturnValue(Promise.resolve()),
+      logProjectSessionAddedEvent: vi.fn().mockReturnValue(Promise.resolve()),
+      recordNotebookAddedToProjectActivity: vi.fn().mockReturnValue(Promise.resolve()),
+    },
+    createSessionService: vi.fn(),
+    updateSessionService: vi.fn(),
+    projectGet: vi.fn(),
+    SessionModelMock,
+    sessionSave,
+    UserMock,
+    userRepoUpdate: vi.fn().mockResolvedValue(undefined),
+    sessionRepoFindById: vi.fn(),
+    sessionRepoFindByIdAndUserId: vi.fn(),
+    accessibleBySpy: vi.fn(() => ({ ofType: () => ({}) })),
+    favoriteRepoFind: vi.fn(),
+    userRepoFindById: vi.fn(),
+    defineAbilitiesForSpy: vi.fn(),
+    createAttachmentLakeAccessSpy: vi.fn(),
+    fabFileFindMetadataByIds: vi.fn(),
+  };
+});
+
+// ---- Side-effect boundary: spy on composition, not real implementations ----
+vi.mock('./sessionSideEffects', () => sideEffects);
+
+vi.mock('@bike4mind/services', () => ({
+  sessionService: { createSession: createSessionService, updateSession: updateSessionService },
+  projectService: { get: projectGet },
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  Session: SessionModelMock,
+  User: UserMock,
+  mongoose: { Types: { ObjectId: class {} } },
+  compareMongoIds: (a: unknown, b: unknown) => String(a) === String(b),
+  favoriteRepository: { find: favoriteRepoFind },
+  fabFileRepository: { findMetadataByIds: fabFileFindMetadataByIds },
+  projectRepository: {},
+  agentRepository: {},
+  cacheRepository: {},
+  userRepository: { update: userRepoUpdate, findById: userRepoFindById },
+}));
+
+vi.mock('../auth/ability', () => ({
+  default: defineAbilitiesForSpy,
+}));
+
+vi.mock('@bike4mind/database/auth', () => ({
+  // find is shared with SessionModelMock so tests can drive both bindings from one mock.
+  Session: { modelName: 'Session', find: SessionModelMock.find },
+  sessionRepository: {
+    findById: sessionRepoFindById,
+    findByIdAndUserId: sessionRepoFindByIdAndUserId,
+    shareable: { findAllShared: vi.fn() },
+  },
+}));
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  isSessionPinnableAttachment: (await importOriginal<typeof import('@bike4mind/common')>()).isSessionPinnableAttachment,
+  Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
+  // ../utils/errors re-exports NotFoundError from here, so it must be provided.
+  NotFoundError: class NotFoundError extends Error {},
+}));
+
+vi.mock('@bike4mind/observability', () => ({
+  Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('../dataLakes/attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
+}));
+
+vi.mock('../utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
+
+vi.mock('@casl/mongoose', () => ({
+  accessibleBy: accessibleBySpy,
+}));
+
+import { getOrCreateSession, createSession, getFavoriteSessionByUser } from './sessionCrud';
+import {
+  notifySessionCreated,
+  logSessionCreatedEvent,
+  logProjectSessionAddedEvent,
+  recordNotebookAddedToProjectActivity,
+} from './sessionSideEffects';
+import type { IUserDocument } from '@bike4mind/common';
+import type { Ability } from '../auth/ability';
+import type { Logger } from '@bike4mind/observability';
+
+// Typed casts keep the intended types visible (and catch drift) without a real Mongoose doc.
+const mockAbility = (canResult: boolean): Ability =>
+  ({ can: vi.fn().mockReturnValue(canResult) }) as unknown as Ability;
+
+const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+const user = { id: 'user-1' } as unknown as IUserDocument;
+const allowAbility = mockAbility(true);
+
+describe('sessionCrud', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Ids starting with 'img' resolve to images, 'gone' to no file, anything else to a pdf.
+    fabFileFindMetadataByIds.mockImplementation(async (ids: string[]) => ({
+      data: ids
+        .filter(id => !id.startsWith('gone'))
+        .map(id => ({ id, mimeType: id.startsWith('img') ? 'image/png' : 'application/pdf' })),
+      hasMore: false,
+    }));
+  });
+
+  describe('getOrCreateSession', () => {
+    it('fetches an accessible existing session via an access-scoped lookup (owner/share/org)', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
+
+      const result = await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      expect(result.wasCreated).toBe(false);
+      expect(result.sessionId).toBe('existing');
+      // access-scoped: filtered by _id AND accessibleBy(), never a bare findById
+      expect(SessionModelMock.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: 'existing' }));
+      expect(sessionRepoFindById).not.toHaveBeenCalled();
+      expect(notifySessionCreated).not.toHaveBeenCalled();
+      expect(logSessionCreatedEvent).not.toHaveBeenCalled();
+    });
+
+    it('scopes the lookup with the update verb, so a read-only share cannot continue the session', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
+
+      await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      // Quests are appended to this session and the retry path clears an existing quest's reply,
+      // so `read` here would let a read-only share mutate the owner's notebook.
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'update');
+      expect(accessibleBySpy).not.toHaveBeenCalledWith(allowAbility, 'read');
+    });
+
+    it('throws NotFoundError when the caller has no access to the requested session (foreign session)', async () => {
+      // accessibleBy() filters the doc out -> findOne resolves null (same 404 as truly missing,
+      // so a caller cannot distinguish "not yours" from "does not exist")
+      SessionModelMock.findOne.mockResolvedValueOnce(null);
+      await expect(
+        getOrCreateSession({ sessionId: 'someone-elses', user, ability: allowAbility, logger })
+      ).rejects.toThrow('Session not found');
+    });
+
+    it('falls back to an owner-only lookup when no ability is supplied (e.g. the Slack path)', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+
+      const result = await getOrCreateSession({ sessionId: 'owned', user, logger });
+
+      expect(result.sessionId).toBe('owned');
+      expect(sessionRepoFindByIdAndUserId).toHaveBeenCalledWith('owned', 'user-1');
+      expect(sessionRepoFindById).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundError when the owner-only fallback finds nothing', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce(null);
+      await expect(getOrCreateSession({ sessionId: 'not-owned', user, logger })).rejects.toThrow('Session not found');
+    });
+
+    it('creates a session, notifies clients, and defers analytics + last-notebook update', async () => {
+      const created = { id: 'sess-new', name: 'New Notebook' };
+      createSessionService.mockResolvedValueOnce(created);
+
+      const result = await getOrCreateSession({ sessionName: 'New Notebook', user, ability: allowAbility, logger });
+
+      expect(result.wasCreated).toBe(true);
+      expect(result.sessionId).toBe('sess-new');
+      // WebSocket notification is awaited (composition, not inlined here)
+      expect(notifySessionCreated).toHaveBeenCalledWith(created, 'user-1', logger);
+      // analytics + last-notebook update are deferred via asyncPromises
+      expect(logSessionCreatedEvent).toHaveBeenCalledWith('user-1', created, allowAbility);
+      expect(userRepoUpdate).toHaveBeenCalledWith({ id: 'user-1', lastNotebookId: 'sess-new' });
+      // no project -> project side effects untouched
+      expect(logProjectSessionAddedEvent).not.toHaveBeenCalled();
+      expect(recordNotebookAddedToProjectActivity).not.toHaveBeenCalled();
+      // asyncPromises holds the deferred work (analytics + user update)
+      expect(result.asyncPromises.length).toBeGreaterThanOrEqual(2);
+      await Promise.all(result.asyncPromises);
+    });
+
+    it('forwards the origin to createSession as an option, not a parameter', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger, origin: { channel: 'api', apiKeyId: 'key-1' } });
+
+      const [, params, , options] = createSessionService.mock.calls.at(-1)!;
+      expect(options).toEqual({ origin: { channel: 'api', apiKeyId: 'key-1' } });
+      expect(params).not.toHaveProperty('origin');
+    });
+
+    it('does not create (or stamp) when an existing session is resolved', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+      await getOrCreateSession({ sessionId: 'owned', user, logger, origin: { channel: 'api' } });
+      expect(createSessionService).not.toHaveBeenCalled();
+    });
+
+    it('forwards agentIds to createSession as a create parameter', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger, agentIds: ['a1', 'a2'] });
+
+      const [, params] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ agentIds: ['a1', 'a2'] }));
+    });
+
+    it('defaults agentIds to [] so a session with no selected agents is unchanged', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger });
+
+      const [, params] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ agentIds: [] }));
+    });
+
+    it('ignores agentIds when an existing session is resolved (no create, no attach)', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+
+      const result = await getOrCreateSession({ sessionId: 'owned', user, logger, agentIds: ['a1'] });
+
+      expect(result.wasCreated).toBe(false);
+      expect(createSessionService).not.toHaveBeenCalled();
+    });
+
+    it('persists only the new fabFileIds onto an existing session, add-only and without project propagation', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      const updated = { id: 'existing', knowledgeIds: ['a', 'b'] };
+      updateSessionService.mockResolvedValueOnce(updated);
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['a', 'b'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(updateSessionService).toHaveBeenCalledTimes(1);
+      const [calledUser, params] = updateSessionService.mock.calls[0];
+      expect(calledUser).toBe(user);
+      // Only the delta, add-only: a full list built from this read would undo a detach landing before the write.
+      expect(params).toEqual({
+        id: 'existing',
+        knowledgeIds: ['b'],
+        knowledgeIdsMode: 'add',
+        propagateToProjects: false,
+      });
+      expect(result.session).toBe(updated);
+    });
+
+    it('does not write when fabFileIds adds nothing or is omitted', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['a'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('persists new fabFileIds on the owner-only (no ability) path too', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned' });
+      updateSessionService.mockResolvedValueOnce({ id: 'owned', knowledgeIds: ['f1'] });
+
+      await getOrCreateSession({ sessionId: 'owned', fabFileIds: ['f1'], persistFabFileIds: true, user, logger });
+
+      expect(updateSessionService).toHaveBeenCalledWith(
+        user,
+        { id: 'owned', knowledgeIds: ['f1'], knowledgeIdsMode: 'add', propagateToProjects: false },
+        expect.objectContaining({
+          resolveLakeAccess: expect.any(Function),
+          resolveAttachmentLakeAccess: expect.any(Function),
+        })
+      );
+    });
+
+    it('keeps images per-turn and stores a repeated id once', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['b', 'img-1', 'b'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['b', 'img-1']);
+      expect(updateSessionService.mock.calls[0][1]).toEqual({
+        id: 'existing',
+        knowledgeIds: ['b'],
+        knowledgeIdsMode: 'add',
+        propagateToProjects: false,
+      });
+    });
+
+    it('does not write when the new ids are only images or unknown files', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['img-1', 'gone-1'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(updateSessionService).not.toHaveBeenCalled();
+      expect(result.session).toBe(existing);
+    });
+
+    it('keeps the resolved session when the persist fails, so the turn still runs', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+      updateSessionService.mockRejectedValueOnce(new Error('Session not found'));
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(result.session).toBe(existing);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('still creates the session when the message attachment lookup fails', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+      fabFileFindMetadataByIds.mockRejectedValueOnce(new Error('db'));
+
+      const result = await getOrCreateSession({ messageFileIds: ['doc'], user, logger });
+
+      expect(result.wasCreated).toBe(true);
+      expect(createSessionService.mock.calls[0][1].knowledgeIds).toEqual([]);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('does not persist fabFileIds without the flag (a stale tab must not re-add a removed file)', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: [] });
+
+      await getOrCreateSession({ sessionId: 'existing', fabFileIds: ['doc-x'], user, ability: allowAbility, logger });
+
+      expect(fabFileFindMetadataByIds).not.toHaveBeenCalled();
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('keeps the resolved session when the metadata lookup fails', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+      fabFileFindMetadataByIds.mockRejectedValueOnce(new Error('db'));
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(result.session).toBe(existing);
+      expect(updateSessionService).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 'existing' }));
+    });
+
+    it('keeps request order, skips soft-deleted files, and stores a mixed-case duplicate once', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['ab'] });
+      // The repository returns rows in its own order and includes soft-deleted ones.
+      fabFileFindMetadataByIds.mockResolvedValueOnce({
+        data: [
+          { id: 'aa', mimeType: 'application/pdf' },
+          { id: 'del', mimeType: 'application/pdf', deletedAt: new Date() },
+          { id: 'bb', mimeType: 'application/pdf' },
+        ],
+        hasMore: false,
+      });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['BB', 'bb', 'AB', 'del', 'aa'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(fabFileFindMetadataByIds).toHaveBeenCalledWith(['bb', 'del', 'aa']);
+      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['bb', 'aa']);
+    });
+
+    it('warns when the new ids exceed the metadata cap', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: [] });
+      fabFileFindMetadataByIds.mockResolvedValueOnce({
+        data: [{ id: 'f1', mimeType: 'application/pdf' }],
+        hasMore: true,
+      });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing' });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1', 'f2'],
+        persistFabFileIds: true,
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 'existing' }));
+      expect(updateSessionService.mock.calls[0][1].knowledgeIds).toEqual(['f1']);
+    });
+
+    it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {
+      const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+      createAttachmentLakeAccessSpy.mockReturnValueOnce(async () => lakeAccess);
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      const result = await getOrCreateSession({ fabFileIds: ['f1'], user, ability: allowAbility, logger });
+      await Promise.all(result.asyncPromises);
+
+      const [, params, adapters] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ knowledgeIds: ['f1'] }));
+      await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
+      expect(createAttachmentLakeAccessSpy).toHaveBeenCalledWith(user, logger);
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('also logs project add + activity when created within a project', async () => {
+      const created = { id: 'sess-new', name: 'New Notebook' };
+      createSessionService.mockResolvedValueOnce(created);
+      projectGet.mockResolvedValueOnce({ name: 'My Project' });
+
+      const result = await getOrCreateSession({ projectId: 'proj-1', user, ability: allowAbility, logger });
+
+      expect(projectGet).toHaveBeenCalled();
+      expect(logProjectSessionAddedEvent).toHaveBeenCalledWith(
+        'user-1',
+        'proj-1',
+        'My Project',
+        'sess-new',
+        allowAbility
+      );
+      expect(recordNotebookAddedToProjectActivity).toHaveBeenCalledWith('proj-1', 'user-1');
+      await Promise.all(result.asyncPromises);
+    });
+  });
+
+  describe('createSession', () => {
+    it('throws when the ability denies session creation', async () => {
+      const denyAbility = mockAbility(false);
+      await expect(createSession('user-1', { name: 'X' }, denyAbility)).rejects.toThrow('Cannot create session');
+      expect(SessionModelMock).not.toHaveBeenCalled();
+    });
+
+    it('persists a new notebook and does not touch lastNotebook by default', async () => {
+      const notebook = await createSession('user-1', { name: 'My NB' }, allowAbility);
+      expect(SessionModelMock).toHaveBeenCalledTimes(1);
+      expect(sessionSave).toHaveBeenCalledTimes(1);
+      expect(notebook.id).toBe('new-session-id');
+      expect(UserMock.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('sets the user lastNotebookId when setLastNotebook is requested', async () => {
+      await createSession('user-1', { name: 'My NB' }, allowAbility, { setLastNotebook: true });
+      expect(UserMock.updateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { lastNotebookId: 'new-session-id' });
+    });
+  });
+
+  describe('getFavoriteSessionByUser', () => {
+    beforeEach(() => {
+      favoriteRepoFind.mockResolvedValue([{ documentId: 'fav-session-1' }]);
+      userRepoFindById.mockResolvedValue({ id: 'user-1' });
+      defineAbilitiesForSpy.mockReturnValue(allowAbility);
+      SessionModelMock.find.mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    });
+
+    it('re-checks the callers current access instead of trusting the stored favorite row', async () => {
+      await getFavoriteSessionByUser('user-1');
+
+      expect(userRepoFindById).toHaveBeenCalledWith('user-1');
+      expect(defineAbilitiesForSpy).toHaveBeenCalledWith({ id: 'user-1' });
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'read');
+
+      const query = SessionModelMock.find.mock.calls[0][0];
+      expect(query.$and).toEqual(expect.arrayContaining([{}, { _id: { $in: ['fav-session-1'] } }]));
+    });
+  });
+});

@@ -13,9 +13,9 @@ import {
   type ReleaseWindow,
 } from '@server/admin/creditGrants/gate';
 import { selfIdsOf } from './actor';
-import { usersBulkResolveDeps } from './adapters';
-import { AUDIT_ACTION, confirmedCohort } from './execute';
-import { creditDeltaFor, type ResolveDeps } from './resolve';
+import { usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { AUDIT_ACTION, confirmedCohort } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { creditDeltaFor, type ResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 
 const GATED_TYPES: ReadonlySet<AdminUsersBulkAction['type']> = new Set(['suspend', 'contain', 'adjustCredits']);
 const GATED_AUDIT_ACTIONS = [...GATED_TYPES].map(type => AUDIT_ACTION[type]);
