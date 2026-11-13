@@ -86,4 +86,24 @@ describe('loop ticket tools', () => {
     expect(updateTicket(store, loop, ticket, { stage: 'doing' }, 'owner').runCount).toBe(0);
     expect(updateTicket(store, loop, store.ticket(ticket.id)!, { title: 'b' }, 'run').runCount).toBe(0);
   });
+
+  it('starts the run count over when the owner reopens a blocked ticket, not when a run edits it', () => {
+    const { store, loop } = setup();
+    const ticket = store.putTicket({ ...createTicket(store, loop, { title: 'a' }, 'owner'), runCount: 3 });
+    const blocked = updateTicket(store, loop, ticket, { status: 'blocked', reason: 'stuck' }, 'run');
+    expect(blocked.runCount).toBe(3);
+    expect(updateTicket(store, loop, blocked, { status: 'open' }, 'owner')).toMatchObject({
+      status: 'open',
+      runCount: 0,
+    });
+  });
+
+  it('ignores a priority clear from a run', () => {
+    const { store, loop } = setup();
+    const ticket = createTicket(store, loop, { title: 'a', priority: 'p1' }, 'owner');
+    expect(updateTicket(store, loop, ticket, { priority: null }, 'run')).toMatchObject({
+      priority: 'p1',
+      prioritySetBy: 'owner',
+    });
+  });
 });

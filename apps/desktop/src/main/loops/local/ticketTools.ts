@@ -174,7 +174,7 @@ export function updateTicket(
     ...(deps && { dependencies: deps }),
     ...(params.priority === null && by === 'owner'
       ? priorityPatch(null, 'owner')
-      : params.priority !== undefined && priorityPatch(priority(params.priority)!, by === 'owner' ? 'owner' : 'agent')),
+      : params.priority != null && priorityPatch(priority(params.priority)!, by === 'owner' ? 'owner' : 'agent')),
     ...((params.stage !== undefined || params.status !== undefined || params.blockedOn != null) &&
       ticketMovePatch(
         loop,
@@ -189,8 +189,9 @@ export function updateTicket(
       )),
   };
   assertBlockedOnSatisfiable(store, deps ?? existing.dependencies, patch.blockedOn);
-  // The owner moving a ticket starts its run count over, as on the server.
-  const moved = by === 'owner' && patch.stage !== undefined && patch.stage !== existing.stage;
+  // The owner moving a ticket (stage, status or blocker) starts its run count over, as on the server.
+  const moved =
+    by === 'owner' && (params.stage !== undefined || params.status !== undefined || params.blockedOn != null);
   return store.putTicket(applyTicketPatch(existing, { ...patch, ...(moved && { runCount: 0 }) }));
 }
 
