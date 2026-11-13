@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/common';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import {
   User,
   adminAuditLogRepository,

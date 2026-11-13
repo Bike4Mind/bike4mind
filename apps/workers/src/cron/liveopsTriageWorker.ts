@@ -23,8 +23,11 @@ import {
   ILiveopsTriageDryRunResult,
 } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createLiveopsTriageService, sanitizeErrorMessage } from '@server/services/liveopsTriageService';
-import { createIssueTracker } from '@server/services/issueTrackers';
+import {
+  createLiveopsTriageService,
+  sanitizeErrorMessage,
+} from '@bike4mind/server-utils/services/liveopsTriageService';
+import { createIssueTracker } from '@bike4mind/server-utils/services/issueTrackers/index';
 import { resolveSlackBotToken } from '@bike4mind/server-utils/services/liveopsConnectionResolver';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';

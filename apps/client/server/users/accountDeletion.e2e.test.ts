@@ -38,14 +38,14 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
   purgeUserPublishedArtifacts: h.purgeArtifacts,
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: h.withdrawListings }));
-vi.mock('@server/services/purgeDeletedUserData', async () => {
+vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async () => {
   const { User: UserModel } = await import('@bike4mind/database');
   return {
     readUserIntegrationGrants: (id: string) => UserModel.findById(id, 'googleDrive atlassianConnect').lean(),
     revokeIntegrationGrants: h.revokeGrants,
   };
 });
-vi.mock('./accountDeletionEmail', () => ({
+vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
   sendAccountDeletionScheduledEmail: h.sendEmail,
   sendAccountDeletionCancelledEmail: h.sendCancelledEmail,
 }));

@@ -37,7 +37,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatu
 // No-op rate limiter: the daily-cap policy itself isn't this test's concern.
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => false }));
-vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/analyzeBatchTaxonomy', () => ({
   analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
   claimBatchForAnalysis: h.claimBatchForAnalysis,
 }));
@@ -72,7 +72,9 @@ vi.mock('@bike4mind/services', () => ({
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
 // stub it to the caller identity, same shape the route previously built inline.
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertRequestCanAfford: h.assertRequestCanAfford }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  assertRequestCanAfford: h.assertRequestCanAfford,
+}));
 
 import handler from '../reanalyze-taxonomy';
 

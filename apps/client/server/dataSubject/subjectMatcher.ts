@@ -1,5 +1,5 @@
 import { FabFile, mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
+import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { findUnclassifiedModels } from './registry';
 import { valuesAt } from './documentPaths';
@@ -214,10 +214,7 @@ const WALK_TIER: Partial<Record<DataHolder['kind'], number>> = { subject: 0, hol
  * The models a walk visits by tier (the subject's own record, holders, then `viaParent` children),
  * within a tier by `sizeOf` then name, with every `viaParent` child after its parent. Throws on a cycle.
  */
-export function orderParentsFirst(
-  registry: DataHolderRegistry,
-  sizeOf: (model: string) => number = () => 0
-): string[] {
+export function orderParentsFirst(registry: DataHolderRegistry, sizeOf: (model: string) => number = () => 0): string[] {
   const ordered: string[] = [];
   const visiting = new Set<string>();
   const visit = (model: string) => {

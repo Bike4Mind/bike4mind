@@ -1,13 +1,17 @@
 /**
  * Hard-deletes the accounts whose self-serve deletion grace period has passed, oldest first, through
- * completeAccountDeletion (apps/client/server/users/completeAccountDeletion.ts).
+ * completeAccountDeletion (packages/server-utils/src/users/completeAccountDeletion.ts).
  * Schedule: daily (infra/cron.ts accountDeletionSweep). Self-host twin: apps/workers/src/selfhost/accountDeletionSweep.ts.
  */
 import { connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { completeAccountDeletion, type AccountDeletionSkipReason } from '@server/users/completeAccountDeletion';
+import {
+  completeAccountDeletion,
+  type AccountDeletionSkipReason,
+} from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
 
 const sweepLogger = new Logger({ metadata: { service: 'accountDeletionSweep' } });
 
@@ -34,7 +38,7 @@ export async function runAccountDeletionSweep(
   const counts: AccountDeletionSweepResult = { deleted: 0, not_due: 0, not_found: 0, busy: 0, failed: 0 };
   for (const userId of await userRepository.findDeletionDueUserIds(now, batchSize)) {
     try {
-      const outcome = await completeAccountDeletion(userId, { logger, now });
+      const outcome = await completeAccountDeletion(userId, { logger, now, erasureRegistry });
       counts[outcome.deleted ? 'deleted' : outcome.reason]++;
     } catch (error) {
       counts.failed++;

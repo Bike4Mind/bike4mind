@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
 
-const h = vi.hoisted(() => ({ completeAccountDeletion: vi.fn() }));
+const h = vi.hoisted(() => ({ completeAccountDeletion: vi.fn(), erasureRegistry: { scope: vi.fn(), audit: vi.fn() } }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
-vi.mock('@server/users/completeAccountDeletion', () => ({ completeAccountDeletion: h.completeAccountDeletion }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
+vi.mock('@server/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
 
 import { dispatch } from './accountErasure';
 
@@ -26,7 +29,7 @@ describe('accountErasure dispatch', () => {
   it('runs the purge for the user in the payload', async () => {
     h.completeAccountDeletion.mockResolvedValue({ deleted: true });
     await run(JSON.stringify({ userId: 'user-1' }));
-    expect(h.completeAccountDeletion).toHaveBeenCalledWith('user-1', { logger });
+    expect(h.completeAccountDeletion).toHaveBeenCalledWith('user-1', { logger, erasureRegistry: h.erasureRegistry });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('deleted'));
   });
 

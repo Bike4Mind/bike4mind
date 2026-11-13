@@ -4,13 +4,17 @@ const h = vi.hoisted(() => ({
   connectDB: vi.fn(),
   findDeletionDueUserIds: vi.fn(),
   completeAccountDeletion: vi.fn(),
+  erasureRegistry: { scope: vi.fn(), audit: vi.fn() },
 }));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
   userRepository: { findDeletionDueUserIds: h.findDeletionDueUserIds },
 }));
-vi.mock('@server/users/completeAccountDeletion', () => ({ completeAccountDeletion: h.completeAccountDeletion }));
+vi.mock('@server/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 
@@ -32,7 +36,11 @@ describe('runAccountDeletionSweep', () => {
 
     expect(h.findDeletionDueUserIds).toHaveBeenCalledWith(NOW, 200);
     expect(h.completeAccountDeletion.mock.calls.map(([id]) => id)).toEqual(['u1', 'u2', 'u3']);
-    expect(h.completeAccountDeletion).toHaveBeenCalledWith('u1', { logger, now: NOW });
+    expect(h.completeAccountDeletion).toHaveBeenCalledWith('u1', {
+      logger,
+      now: NOW,
+      erasureRegistry: h.erasureRegistry,
+    });
     expect(result).toEqual({ deleted: 3, not_due: 0, not_found: 0, busy: 0, failed: 0 });
   });
 

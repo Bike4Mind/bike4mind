@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { completeAccountDeletion } from '@server/users/completeAccountDeletion';
+import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
 
 const AccountErasurePayload = z.object({ userId: z.string().min(1) });
 
@@ -27,7 +28,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
 
     const { userId } = payload.data;
     logger.updateMetadata({ userId });
-    const outcome = await completeAccountDeletion(userId, { logger });
+    const outcome = await completeAccountDeletion(userId, { logger, erasureRegistry });
     if (!outcome.deleted && outcome.reason === 'busy') {
       // A live purge or data export holds the account; SQS redelivers after the visibility timeout.
       throw new Error(`Account erasure of user ${userId} deferred: the account is busy`);
