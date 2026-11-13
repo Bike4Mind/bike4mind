@@ -285,7 +285,7 @@ if (isMonitoredStage) {
     tags: { Application: 'LLMSpend', Severity: 'Medium' },
   });
 
-  // Emitted by signupAlarms.ts (default region) and waf.ts (us-east-1, production with WAF only).
+  // Emitted by signupAlarms.ts (default region, incl. SignupLimitFailOpen) and waf.ts (us-east-1, production with WAF only).
   const signupNamespace = `${$app.name}/${$app.stage}/Signup`;
 
   const dashboardBody = $util
@@ -466,6 +466,21 @@ if (isMonitoredStage) {
               region: 'us-east-1',
               period: 300,
               yAxis: { left: { min: 0, label: 'Requests' } },
+            },
+          },
+          {
+            type: 'metric',
+            x: 0,
+            y: 33,
+            width: 12,
+            height: 6,
+            properties: {
+              title: 'Signup network caps skipped (failed open) per 5 min',
+              metrics: [[signupNamespace, 'SignupLimitFailOpen', { stat: 'Sum', label: 'Cap checks failed open' }]],
+              view: 'timeSeries',
+              region,
+              period: 300,
+              yAxis: { left: { min: 0, label: 'Count' } },
             },
           },
         ],
