@@ -114,6 +114,20 @@ export class TeamsPage extends BasePage {
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
   }
 
+  /**
+   * Revoke access opens the offboarding dialog (OffboardMemberDialog), not the plain confirmation
+   * modal. Its Remove button stays disabled until the member's content inventory has loaded; the
+   * default disposition keeps their content, so no transfer target is needed.
+   */
+  async confirmOffboard() {
+    const dialog = this.page.getByTestId('offboard-dialog');
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    const confirmBtn = dialog.getByTestId('offboard-dialog-confirm-btn');
+    await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+    await confirmBtn.click();
+    await expect(dialog).toBeHidden({ timeout: TIMEOUTS.ACTION });
+  }
+
   /** Add Member -> search -> pick the user by name -> Add. The pick sends an invite, not a membership. */
   async inviteMember(searchTerm: string, name: string) {
     await this.page.getByTestId('organization-members-add-btn').click();

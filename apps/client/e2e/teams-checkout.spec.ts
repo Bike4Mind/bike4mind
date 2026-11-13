@@ -40,18 +40,35 @@ const isSubscribeResponse = (r: Response): boolean =>
 
 /**
  * Where Stripe's hosted page keeps its payment form. It moved into an iframe on 2026-11-13, so the
- * pay button and the card fields are looked up in whichever document holds the button: the page
- * itself or one of its frames. Resolves once the button exists anywhere, within ACTION.
+ * pay button and the card fields are looked up in whichever document holds the button: the main
+ * frame or a child frame. Stripe's frames come and go while the page boots, so a frame that detaches
+ * mid-look is skipped rather than failing the look. Gives up after ACTION with every frame's URL and
+ * accessibility tree in the error, which is the only way to see inside a cross-origin frame from CI.
  */
-async function paymentForm(page: Page): Promise<Page | Frame> {
-  const holder = async (): Promise<Page | Frame | undefined> => {
-    for (const scope of [page, ...page.frames()]) {
-      if (await scope.getByTestId('hosted-payment-submit-button').count()) return scope;
+async function paymentForm(page: Page): Promise<Frame> {
+  const button = (frame: Frame) => frame.getByTestId('hosted-payment-submit-button');
+  const deadline = Date.now() + TIMEOUTS.ACTION;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      if (
+        await button(frame)
+          .count()
+          .catch(() => 0)
+      )
+        return frame;
     }
-    return undefined;
-  };
-  await expect.poll(async () => (await holder()) !== undefined, { timeout: TIMEOUTS.ACTION }).toBe(true);
-  return (await holder())!;
+    await page.waitForTimeout(500);
+  }
+  const dump = await Promise.all(
+    page.frames().map(async frame => {
+      const tree = await frame
+        .locator('body')
+        .ariaSnapshot()
+        .catch(() => '(unreadable)');
+      return `${frame.url()}\n${tree.slice(0, 4000)}`;
+    })
+  );
+  throw new Error(`No hosted-payment-submit-button in any of ${page.frames().length} frames:\n${dump.join('\n---\n')}`);
 }
 
 /** "Total Price: $150/month" -> 150 */
