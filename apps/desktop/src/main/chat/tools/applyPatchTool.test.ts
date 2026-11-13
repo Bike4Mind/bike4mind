@@ -400,6 +400,23 @@ describe('apply_patch', () => {
       expect(several?.detail).toContain('D b.ts (+0 -3)');
     });
 
+    // "Allow in this chat" on a patch to one file in place covers later changes to that file only.
+    it('files the chat allowance under the file for an in-place change, and nothing wider', async () => {
+      const ask = (...body: string[]) => applyPatch.approval?.({ patchText: wrap(...body) }, context);
+      const first = await ask('*** Update File: a.ts', '@@', '-one', '+1');
+      const second = await ask('*** Update File: a.ts', '@@', '-three', '+3');
+      const other = await ask('*** Update File: b.ts', '@@', '-red', '+r');
+
+      expect(first?.chatKey).toBeDefined();
+      expect(second?.key).not.toBe(first?.key);
+      expect(second?.chatKey).toBe(first?.chatKey);
+      expect(other?.chatKey).not.toBe(first?.chatKey);
+
+      expect((await ask('*** Delete File: a.ts'))?.chatKey).toBeUndefined();
+      expect((await ask('*** Update File: a.ts', '*** Move to: c.ts', '@@', '-one', '+1'))?.chatKey).toBeUndefined();
+      expect((await ask('*** Update File: a.ts', '@@', '-one', '+1', '*** Update File: b.ts', '@@', '-red', '+r'))?.chatKey).toBeUndefined();
+    });
+
     it('fails at approval time, before the user is asked, when a hunk does not locate', async () => {
       await expect(
         applyPatch.approval?.({ patchText: wrap('*** Update File: a.ts', '@@', '-nope', '+x') }, context)

@@ -211,6 +211,78 @@ describe('ChatService write gate', () => {
       await expect(readFile(target, 'utf8')).resolves.toBe('alpha\nsomeone else got here\ngamma\n');
     });
   });
+  // Each edit carries different text, so "Allow in this chat" has to stand for the file, not for
+  // the one change it was given on.
+  describe('"Allow in this chat" on a file change', () => {
+    async function settled(count: number): Promise<void> {
+      await vi.waitUntil(() => post.mock.calls.length === count, { timeout: 5000, interval: 10 });
+    }
+
+    it('covers later, different changes to the same file in this conversation', async () => {
+      await startTurn('change the file a few times');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+
+      streams[1].write(toolTurn('c2', 'file_edit', { path: target, oldText: 'gamma', newText: 'GAMMA' }));
+      streams[1].write(frame('[DONE]'));
+      await settled(3);
+      streams[2].write(
+        toolTurn('c3', 'file_edit', {
+          path: target,
+          edits: [
+            { oldText: 'alpha', newText: 'ALPHA' },
+            { oldText: 'GAMMA', newText: 'Gamma' },
+          ],
+        })
+      );
+      streams[2].write(frame('[DONE]'));
+      await settled(4);
+      streams[3].write(toolTurn('c4', 'file_write', { path: target, content: 'rewritten\n' }));
+      streams[3].write(frame('[DONE]'));
+      await settled(5);
+
+      expect(toolEvents('awaiting-approval')).toHaveLength(1);
+      await expect(readFile(target, 'utf8')).resolves.toBe('rewritten\n');
+    });
+
+    it('still asks before changing a different file', async () => {
+      const other = join(root, 'other.md');
+      await writeFile(other, 'one\n', 'utf8');
+      await startTurn('change two files');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+
+      streams[1].write(toolTurn('c2', 'file_edit', { path: other, oldText: 'one', newText: 'ONE' }));
+      streams[1].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+      await expect(readFile(other, 'utf8')).resolves.toBe('one\n');
+    });
+
+    it('is not carried into another conversation', async () => {
+      await startTurn('fix the second line');
+      streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
+      streams[0].write(frame('[DONE]'));
+      approvals.resolve((await pendingApproval()).approvalId as string, { decision: 'always' });
+      await settled(2);
+      streams[1].write(frame('Done.'));
+      streams[1].write(frame('[DONE]'));
+
+      const { id } = await service.createSession();
+      await service.setApprovalMode(id, 'ask');
+      await service.send(id, 'and the third');
+      await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+      streams[2].write(toolTurn('c2', 'file_edit', { path: target, oldText: 'gamma', newText: 'GAMMA' }));
+      streams[2].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+    });
+  });
+
   describe('editing tools by model', () => {
     const declared = (request: number): string[] =>
       post.mock.calls[request][1].options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name);

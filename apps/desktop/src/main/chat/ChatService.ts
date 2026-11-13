@@ -7068,6 +7068,8 @@ export class ChatService {
     };
     if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
 
+    // What an "Allow in this chat" is filed, looked up and revoked under.
+    const allowanceKey = prompt.chatKey ?? prompt.key;
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -7101,7 +7103,7 @@ export class ChatService {
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
-        prompt.key,
+        allowanceKey,
         runnable.map(option => option.id)
       );
       // Over a tainted reply only an answer given knowing about the taint, or one for a tool
@@ -7201,7 +7203,7 @@ export class ChatService {
     const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
-      prompt.key,
+      allowanceKey,
       signal,
       approvalId => {
         requestedAt = new Date().toISOString();
@@ -7324,9 +7326,9 @@ export class ChatService {
       await this.deps.capabilities
         .grant({
           subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
-          capability: capabilityFor(call.name, prompt.key),
-          scope: capabilityScope(call.name, prompt.key),
-          approvalKey: prompt.key,
+          capability: capabilityFor(call.name, allowanceKey),
+          scope: capabilityScope(call.name, allowanceKey),
+          approvalKey: allowanceKey,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
