@@ -13,6 +13,7 @@ import {
   RESEARCH_RUN_TRIGGERS,
   researchConfigEnvelopeResponseSchema,
   researchConfigListResponseSchema,
+  withResearchFeedStatus,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
@@ -50,7 +51,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
     ]);
     return respond(res, researchConfigListResponseSchema, {
-      data: configs,
+      data: configs.map(withResearchFeedStatus),
       pendingProposals: pendingByLake[lake.id] ?? 0,
     });
   })
@@ -74,7 +75,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return created;
     });
-    return respond(res, researchConfigEnvelopeResponseSchema, { data: config }, 201);
+    return respond(res, researchConfigEnvelopeResponseSchema, { data: withResearchFeedStatus(config) }, 201);
   });
 
 export const config = {

@@ -413,6 +413,11 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
 
 export type IDataLakeResearchConfigDocument = IDataLakeResearchConfig & IMongoDocument;
 
+/** A config as the research config routes return it: the cursor is replaced by its status. */
+export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocument, 'feedCursor'> & {
+  feedStatus?: ResearchFeedStatus | null;
+};
+
 /**
  * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
  * `autoAdmitted` and `autoAdmitSkipped` are not buckets: they are sub-counts of `proposed`.
@@ -570,6 +575,11 @@ export interface IDataLakeResearchConfigRepository extends IBaseRepository<IData
   ): Promise<IDataLakeResearchConfigDocument | null>;
   /** Stamp the start of a run. Separate from updateConfig so it needs no actor and no levers. */
   recordRunStarted(id: string, at: Date): Promise<void>;
+  /**
+   * Write a feed run's cursor back. The filter carries `feedUrl` so a cursor from a run of a feed the
+   * config has since left is dropped. Returns whether a config matched.
+   */
+  recordFeedCursor(id: string, feedUrl: string, cursor: ResearchFeedCursor): Promise<boolean>;
   /**
    * Atomically claim up to `limit` configs whose `nextRunAt <= now`, pushing each one's `nextRunAt`
    * out to `leaseUntil` so an overlapping scheduler tick cannot claim it again. Returns the configs

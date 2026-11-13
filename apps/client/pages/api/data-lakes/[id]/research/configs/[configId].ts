@@ -3,7 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLa
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { withTransaction, dataLakeResearchConfigRepository, dataLakeRepository } from '@bike4mind/database';
-import { researchConfigEnvelopeResponseSchema } from '@bike4mind/common';
+import { researchConfigEnvelopeResponseSchema, withResearchFeedStatus } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
@@ -45,7 +45,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return result;
     });
-    return respond(res, researchConfigEnvelopeResponseSchema, { data: updated });
+    return respond(res, researchConfigEnvelopeResponseSchema, { data: withResearchFeedStatus(updated) });
   })
   .delete(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };

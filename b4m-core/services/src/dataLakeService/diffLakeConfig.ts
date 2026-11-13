@@ -261,6 +261,29 @@ export function researchTrustedSitesChange(
 }
 
 /**
+ * A research config's source changing between web search and a feed, or to a different feed. The
+ * feed is named by origin and path only: the query string of a private feed can carry a token.
+ */
+export function researchSourceChange(
+  configName: string,
+  source: 'search' | 'feed',
+  feedUrl: string | null
+): ILakeConfigLiteralChange {
+  const label = source === 'feed' ? `feed ${feedUrl ? feedLabel(feedUrl) : ''}`.trim() : 'web search';
+  return literalChange('researchConfig', undefined, `source: ${label}: ${configName}`);
+}
+
+/** `origin + path` of a feed address, never its query string or credentials. */
+export function feedLabel(feedUrl: string): string {
+  try {
+    const { origin, pathname } = new URL(feedUrl);
+    return `${origin}${pathname}`;
+  } catch {
+    return '(invalid address)';
+  }
+}
+
+/**
  * A research run reaching a lifecycle point (started, then completed or failed), as a change entry
  * - same pattern again. Encodes the run's own QUERY, not the config's name: the background
  * executor that records the outcome half (`recordResearchRunOutcome`, called from

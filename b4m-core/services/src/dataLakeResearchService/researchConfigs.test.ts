@@ -6,6 +6,7 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
+  RESEARCH_FEED_URL_MAX_CHARS,
   RESEARCH_MAX_RESULTS_DEFAULT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
 } from '@bike4mind/common';
@@ -733,6 +734,118 @@ describe('research config auto-admit', () => {
     const { run, record } = update(stored({ autoAdmitTrusted: true }), { maxAutoAdmits: 7 });
     await run();
     expect(record).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('research config feed source', () => {
+  const FEED = 'https://example.com/feeds/papers.xml?token=secret';
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+  const create = (input: Record<string, unknown>) => {
+    const made = makeAdapters();
+    return {
+      ...made,
+      run: () => createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', ...input }, made.adapters),
+    };
+  };
+
+  it('stores a feed config with its topic and address, and defaults a search config to search', async () => {
+    const feed = create({ source: 'feed', feedUrl: `  ${FEED}  ` });
+    await feed.run();
+    expect(feed.repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'feed', feedUrl: FEED, query: 'q' });
+
+    const search = create({});
+    await search.run();
+    expect(search.repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'search', feedUrl: null });
+  });
+
+  it('nulls a stray feed address on a search config', async () => {
+    const { run, repo } = create({ source: 'search', feedUrl: FEED });
+    await run();
+    expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ source: 'search', feedUrl: null });
+  });
+
+  it.each([
+    ['no address', { source: 'feed' }, /needs a feed address/],
+    ['a blank address', { source: 'feed', feedUrl: '   ' }, /needs a feed address/],
+    ['a null address', { source: 'feed', feedUrl: null }, /needs a feed address/],
+    ['an ftp address', { source: 'feed', feedUrl: 'ftp://example.com/feed.xml' }, /http:\/\/ or https:\/\//],
+    ['a relative address', { source: 'feed', feedUrl: '/feed.xml' }, /not a valid web address/],
+    ['credentials', { source: 'feed', feedUrl: 'https://user:pass@example.com/feed.xml' }, /username or password/],
+    ['a username only', { source: 'feed', feedUrl: 'https://user@example.com/feed.xml' }, /username or password/],
+    [
+      'an address over the cap',
+      { source: 'feed', feedUrl: `https://example.com/${'a'.repeat(RESEARCH_FEED_URL_MAX_CHARS)}` },
+      /longer than/,
+    ],
+  ])('refuses %s on create with a 400 naming the problem', async (_label, input, message) => {
+    const { run, repo } = create(input);
+    await expect(run()).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(message) });
+    expect(repo.createConfig).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch to feed with no address, and a stored feed whose address is edited to a bad one', async () => {
+    const toFeed = update(storedConfig(), { source: 'feed' });
+    await expect(toFeed.run()).rejects.toThrow(/needs a feed address/);
+    expect(toFeed.repo.updateConfig).not.toHaveBeenCalled();
+
+    const bad = update(storedConfig({ source: 'feed', feedUrl: FEED }), { feedUrl: 'ftp://example.com/x' });
+    await expect(bad.run()).rejects.toThrow(/http/);
+  });
+
+  it('keeps the query and nulls the address when a feed config is toggled back to search', async () => {
+    const { run, repo } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { source: 'search' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2]).toMatchObject({
+      source: 'search',
+      feedUrl: null,
+      query: 'coastal erosion',
+    });
+  });
+
+  it('never sends the stored cursor back through the lever write', async () => {
+    const cursor = { fingerprint: 'fp', newestPublishedAt: null, seenKeys: ['k'], retries: [] };
+    const { run, repo } = update(storedConfig({ source: 'feed', feedUrl: FEED, feedCursor: cursor }), { query: 'new' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2]).not.toHaveProperty('feedCursor');
+  });
+
+  it('records the source change with origin and path only, never the query string', async () => {
+    const { run, record } = update(storedConfig(), { source: 'feed', feedUrl: FEED });
+    await run();
+    const entry = record.mock.calls[0][0].changes[1];
+    expect(entry).toMatchObject({ after: 'source: feed https://example.com/feeds/papers.xml: Weekly sweep' });
+    expect(JSON.stringify(record.mock.calls[0][0].changes)).not.toContain('secret');
+  });
+
+  it('records a switch back to web search and a change of feed address', async () => {
+    const back = update(storedConfig({ source: 'feed', feedUrl: FEED }), { source: 'search' });
+    await back.run();
+    expect(back.record.mock.calls[0][0].changes[1]).toMatchObject({ after: 'source: web search: Weekly sweep' });
+
+    const moved = update(storedConfig({ source: 'feed', feedUrl: FEED }), { feedUrl: 'https://example.com/other.xml' });
+    await moved.run();
+    expect(moved.record.mock.calls[0][0].changes[1]).toMatchObject({
+      after: 'source: feed https://example.com/other.xml: Weekly sweep',
+    });
+  });
+
+  it('records nothing on a no-op resubmit of a feed config', async () => {
+    const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), {
+      source: 'feed',
+      feedUrl: FEED,
+      query: 'coastal erosion',
+    });
+    await run();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('adds no source entry when only another lever changes on a feed config', async () => {
+    const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { minRelevance: 0.9 });
+    await run();
+    expect(record.mock.calls[0][0].changes).toHaveLength(1);
   });
 });
 

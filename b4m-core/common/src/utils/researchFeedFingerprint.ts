@@ -1,4 +1,8 @@
-import type { ResearchRunLevers } from '../types/entities/DataLakeResearchTypes';
+import type {
+  ResearchFeedCursor,
+  ResearchFeedStatus,
+  ResearchRunLevers,
+} from '../types/entities/DataLakeResearchTypes';
 
 export type ResearchFeedFingerprintLevers = Pick<
   ResearchRunLevers,
@@ -41,4 +45,26 @@ export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): 
     sortedUnique(levers.blockedDomains),
   ]);
   return cyrb53(canonical, 0) + cyrb53(canonical, 1);
+};
+
+/** The config response's view of its cursor: when it last advanced and whether it still applies. Null with no cursor. */
+export const researchFeedStatus = (
+  config: ResearchFeedFingerprintLevers & { feedCursor?: ResearchFeedCursor | null }
+): ResearchFeedStatus | null => {
+  const cursor = config.feedCursor;
+  if (!cursor) return null;
+  return {
+    newestPublishedAt: cursor.newestPublishedAt ?? null,
+    current: cursor.fingerprint === researchFeedFingerprint(config),
+  };
+};
+
+/** A config as the API returns it: the cursor itself stays on the server, its status goes out in its place. */
+export const withResearchFeedStatus = <
+  T extends ResearchFeedFingerprintLevers & { feedCursor?: ResearchFeedCursor | null },
+>(
+  config: T
+): Omit<T, 'feedCursor'> & { feedStatus: ResearchFeedStatus | null } => {
+  const { feedCursor: _cursor, ...rest } = config;
+  return { ...rest, feedStatus: researchFeedStatus(config) };
 };

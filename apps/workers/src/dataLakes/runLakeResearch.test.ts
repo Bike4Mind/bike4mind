@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals } from '@bike4mind/common';
+import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   claimForExecution: vi.fn(),
@@ -22,6 +23,8 @@ const h = vi.hoisted(() => ({
   resolveEffectiveOwnerIds: vi.fn(),
   findIdsWithAdminRights: vi.fn(),
   findConfig: vi.fn(),
+  recordFeedCursor: vi.fn(),
+  ssrfSafeDownload: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -30,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {},
-  dataLakeResearchConfigRepository: { findByIdInLake: h.findConfig },
+  dataLakeResearchConfigRepository: { findByIdInLake: h.findConfig, recordFeedCursor: h.recordFeedCursor },
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
   creditTransactionRepository: {},
@@ -63,6 +66,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
       // Real: the live source rules are what these tests exercise.
       normalizeResearchLevers: real.normalizeResearchLevers,
       matchSource: real.matchSource,
+      FeedUnavailableError: real.FeedUnavailableError,
+      parseFeed: real.parseFeed,
       trustedEntryForUrl: real.trustedEntryForUrl,
     },
     recordOperationalUsage: h.recordOperationalUsage,
@@ -77,7 +82,10 @@ vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableMo
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes
 // every caller there, and mocking the wrong module leaves the REAL fetcher in place - which fails
 // closed to null and reads as a broken extraction contract rather than a broken mock.
-vi.mock('@bike4mind/fab-pipeline', () => ({ fetchAndParseURL: h.fetchAndParseURL }));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  fetchAndParseURL: h.fetchAndParseURL,
+  ssrfSafeDownload: h.ssrfSafeDownload,
+}));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsByNames: vi.fn(),
@@ -149,6 +157,7 @@ beforeEach(() => {
   h.findIdsWithAdminRights.mockResolvedValue(['org-7']);
   h.findConfig.mockResolvedValue(liveConfig());
   h.autoApprove.mockResolvedValue({ outcome: 'admitted' });
+  h.recordFeedCursor.mockResolvedValue(true);
 });
 
 describe('runLakeResearch', () => {
@@ -545,7 +554,8 @@ describe('runLakeResearch', () => {
     expect(h.executeResearchRun).toHaveBeenCalledWith(
       expect.objectContaining({ maxProposals: 2 }),
       'run-1',
-      expect.anything()
+      expect.anything(),
+      null
     );
   });
 
@@ -1098,6 +1108,216 @@ describe('runLakeResearch', () => {
         'run-1',
         expect.objectContaining({ totals: expect.objectContaining({ autoAdmitted: 1 }) })
       );
+    });
+  });
+  describe('a feed run', () => {
+    const FEED_URL = 'https://example.com/feed.xml';
+    const feedLevers = (overrides: Record<string, unknown> = {}) =>
+      levers({
+        source: 'feed',
+        feedUrl: FEED_URL,
+        model: 'gpt-4.1-mini',
+        trustedDomains: [],
+        reviewDomains: [],
+        unlistedSources: 'review',
+        ...overrides,
+      });
+    const cursorFor = (run: Record<string, unknown>): ResearchFeedCursor => ({
+      fingerprint: researchFeedFingerprint(run as Parameters<typeof researchFeedFingerprint>[0]),
+      newestPublishedAt: new Date('2026-11-01T00:00:00Z'),
+      seenKeys: ['example.com/a'],
+      retries: [],
+    });
+    const RSS = `<?xml version="1.0"?><rss version="2.0"><channel><item><title>T</title><link>https://example.com/a</link></item></channel></rss>`;
+    const download = (body: string) => ({
+      data: Buffer.from(body),
+      contentType: 'application/rss+xml',
+      finalUrl: FEED_URL,
+    });
+    const readFeedPort = () => h.executeResearchRun.mock.calls[0][2].readFeed as (url: string) => Promise<unknown[]>;
+
+    beforeEach(() => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: feedLevers() }));
+      h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), feedCursor: null }));
+    });
+
+    it('skips the web-search provider check', async () => {
+      h.resolveWebSearchProviders.mockResolvedValue([null, null]);
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.resolveWebSearchProviders).not.toHaveBeenCalled();
+      expect(h.executeResearchRun).toHaveBeenCalled();
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('still checks the provider for a search run', async () => {
+      h.claimForExecution.mockResolvedValue(claimedRun());
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.resolveWebSearchProviders).toHaveBeenCalled();
+    });
+
+    it('downloads with the size cap and a 10s budget, then parses against the final url', async () => {
+      h.ssrfSafeDownload.mockResolvedValue(download(RSS));
+      await runLakeResearch('run-1', logger);
+
+      const items = await readFeedPort()(FEED_URL);
+
+      expect(h.ssrfSafeDownload).toHaveBeenCalledWith(FEED_URL, {
+        maxBytes: RESEARCH_FEED_MAX_BYTES,
+        timeoutMs: 10_000,
+      });
+      expect(items).toEqual([expect.objectContaining({ url: 'https://example.com/a', title: 'T' })]);
+    });
+
+    it('passes the stored cursor to the executor', async () => {
+      const cursor = cursorFor(feedLevers());
+      h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), feedCursor: cursor }));
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.executeResearchRun).toHaveBeenCalledWith(expect.anything(), 'run-1', expect.anything(), cursor);
+    });
+
+    describe('an unreadable feed settles failed with a reason and is not rethrown', () => {
+      const expectFailedWith = async (reason: RegExp) => {
+        const feedError = await readFeedPort()(FEED_URL).then(
+          () => null,
+          (error: Error) => error
+        );
+        expect(feedError?.message).toMatch(reason);
+        return feedError;
+      };
+
+      it.each([
+        [
+          'an over-cap body',
+          new Error(`maxContentLength size of ${RESEARCH_FEED_MAX_BYTES} exceeded`),
+          /larger than 10 MB/,
+        ],
+        ['a download error', new Error('getaddrinfo ENOTFOUND internal.host'), /could not be downloaded/],
+      ])('maps %s', async (_label, cause, reason) => {
+        h.ssrfSafeDownload.mockRejectedValue(cause);
+        await runLakeResearch('run-1', logger);
+        const feedError = await expectFailedWith(reason);
+        expect(feedError?.message).not.toMatch(/internal\.host/);
+      });
+
+      it('maps a body that is not a feed', async () => {
+        h.ssrfSafeDownload.mockResolvedValue(download('<html><body>hello</body></html>'));
+        await runLakeResearch('run-1', logger);
+        await expectFailedWith(/not an RSS or Atom feed/);
+      });
+
+      it('settles the run failed with the executor reason, spends nothing and writes no cursor', async () => {
+        const { FeedUnavailableError } = (await import('@bike4mind/services')).dataLakeResearchService;
+        h.executeResearchRun.mockRejectedValue(new FeedUnavailableError('This feed is larger than 10 MB'));
+
+        await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+
+        expect(h.settleRun).toHaveBeenCalledTimes(1);
+        expect(h.settleRun).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({ status: 'failed', error: 'This feed is larger than 10 MB', spentMicroUsd: 0 })
+        );
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+        expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+          expect.anything(),
+          'coastal erosion',
+          'failed',
+          'run-1',
+          expect.anything()
+        );
+      });
+
+      it('still rethrows any other error', async () => {
+        h.executeResearchRun.mockRejectedValue(new Error('boom'));
+
+        await expect(runLakeResearch('run-1', logger)).rejects.toThrow('boom');
+      });
+    });
+
+    describe('writing the cursor back', () => {
+      const completedWith = (cursor: ResearchFeedCursor, extra: Record<string, unknown> = {}) =>
+        h.executeResearchRun.mockResolvedValue({
+          totals: { ...emptyResearchRunTotals(), searchHits: 2, proposed: 1 },
+          spentMicroUsd: 800,
+          stopReason: 'exhausted',
+          judgeStepFailed: false,
+          feedCursor: cursor,
+          feedBacklog: 4,
+          ...extra,
+        });
+
+      it('writes it with the config id and feed url after a completed run, and stores the backlog', async () => {
+        const cursor = cursorFor(feedLevers());
+        completedWith(cursor);
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).toHaveBeenCalledWith('config-1', FEED_URL, cursor);
+        expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ feedBacklog: 4 }));
+      });
+
+      it('writes it after the run is settled', async () => {
+        completedWith(cursorFor(feedLevers()));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.settleRun.mock.invocationCallOrder[0]).toBeLessThan(h.recordFeedCursor.mock.invocationCallOrder[0]);
+      });
+
+      it('does not write it on a failed run', async () => {
+        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['topic', { query: 'something else' }],
+        ['feed address', { feedUrl: 'https://example.com/other.xml' }],
+        ['threshold', { minRelevance: 0.9 }],
+        ['trusted site list', { trustedDomains: ['example.com'] }],
+      ])('does not write it when the %s changed mid-run', async (_label, change) => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), ...change, feedCursor: null }));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('does not write it when the config was deleted mid-run', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(null);
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('logs a failed write without failing the run', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.recordFeedCursor.mockRejectedValue(new Error('write conflict'));
+
+        await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+
+        expect(h.settleRun).toHaveBeenCalledTimes(1);
+        expect(h.recordResearchRunOutcome).toHaveBeenCalled();
+      });
+
+      it('writes nothing for a search run', async () => {
+        h.claimForExecution.mockResolvedValue(claimedRun());
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
     });
   });
 });
