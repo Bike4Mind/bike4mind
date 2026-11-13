@@ -21,7 +21,6 @@ const componentsByFile = {
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
-  'ModelLogsTab.tsx': ['Card'],
   'ModelMetrics/components/MetricsInfoModal.tsx': ['Modal'],
   'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
   'ModelMetrics/components/SpendTab.tsx': ['Table'],

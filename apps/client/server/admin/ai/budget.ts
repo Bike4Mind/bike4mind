@@ -3,16 +3,16 @@ import { cacheRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { hasReportedUsage, type CompletionMeter } from '@bike4mind/services/billing/completionMeter';
 import { resolvePlatformDecisionProviderKey } from '@bike4mind/server-utils/decisions/providers';
-import { completionCeilingUsd, completionUsd } from '@server/billing/meterPlatformCompletion';
-import type { DecisionAccounting } from '@server/decisions/executeDecision';
-import { toMicroUsd } from '@server/decisions/platformDecision';
+import { completionCeilingUsd, completionUsd } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import type { DecisionAccounting } from '@bike4mind/server-utils/decisions/executeDecision';
+import { toMicroUsd } from '@bike4mind/server-utils/decisions/platformDecision';
 import { AdminAiSkip } from './adminAiSkip';
 
 /**
  * Platform spend for admin AI: a global cap per UTC calendar month shared by every feature, plus a
  * per-feature call cap and USD budget per fixed 24h window. Each call reserves its worst-case cost
  * first and settles to the actual cost after. A zero cap or budget refuses every call, free models
- * included (same rule as platformDecisionAccounting in server/decisions/platformDecision.ts).
+ * included (same rule as platformDecisionAccounting in packages/server-utils/src/decisions/platformDecision.ts).
  *
  * Never run inside withTransaction: Mongoose queries there join the transaction, so a refused claim
  * would abort it. Every cache write below opts out of an ambient session explicitly.

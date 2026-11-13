@@ -10,7 +10,9 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
   userRepository: { findDeletionDueUserIds: h.findDeletionDueUserIds },
 }));
-vi.mock('@server/users/completeAccountDeletion', () => ({ completeAccountDeletion: h.completeAccountDeletion }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 

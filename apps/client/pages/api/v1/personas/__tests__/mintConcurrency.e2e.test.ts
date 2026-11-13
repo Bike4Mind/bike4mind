@@ -44,7 +44,7 @@ vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>()),
   isProduction: () => false,
 }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {

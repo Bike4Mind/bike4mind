@@ -14,15 +14,15 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/adminApi', async () => {
-  const { makeChain } = await import('./chain');
+  const { makeChain } = await import('@bike4mind/server-utils/tutorials/__tests__/chain');
   return { adminApi: (config?: unknown) => makeChain(config) };
 });
-vi.mock('@server/tutorials/registry', () => ({
+vi.mock('@bike4mind/server-utils/tutorials/registry', () => ({
   CORE_TUTORIALS: [{ id: 'shipped', title: 'Shipped', visibility: { public: true }, enabled: true }],
   resolveCoreTutorial: (id: string) => (id === 'shipped' ? { id } : null),
 }));
-vi.mock('@server/tutorials/content', () => ({ CORE_TUTORIAL_CONTENT: [] }));
-vi.mock('@server/tutorials/models', async importOriginal => {
+vi.mock('@bike4mind/server-utils/tutorials/content', () => ({ CORE_TUTORIAL_CONTENT: [] }));
+vi.mock('@bike4mind/server-utils/tutorials/models', async importOriginal => {
   const matches = (row: Record<string, unknown>, filter: Record<string, unknown>) =>
     Object.entries(filter).every(([k, v]) => row[k] === v);
   const lean = <T>(value: T) => ({ lean: async () => value, sort: () => ({ lean: async () => value }) });

@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const generateSmartNameSchema = z.object({

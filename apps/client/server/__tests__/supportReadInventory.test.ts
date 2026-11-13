@@ -17,6 +17,7 @@ const SUPPORT_READ_WRITES = new Map<string, string>([
   ['admin/approvals/[id]/approve.ts', 'the service also requires the approval own permission, and step-up'],
   ['admin/approvals/[id]/reject.ts', 'the service also requires the approval own permission, or the requester'],
   ['admin/audit-log/reviews.ts', 'assertCanReview requires a full admin for POST and DELETE'],
+  ['admin/users/signup-verdicts.ts', 'read-only: POST only so a full page of user ids fits in the body'],
 ]);
 
 const API_DIR = path.join(__dirname, '..', '..', 'pages', 'api');

@@ -14,8 +14,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { getCreateImageJobsDeps } from '@server/generationJobs/wiring';
-import { imageJobRefusalBody, toStudioImageJob } from '@server/generationJobs/studioImageJobResponse';
+import { getCreateImageJobsDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { imageJobRefusalBody, toStudioImageJob } from '@bike4mind/server-utils/generationJobs/studioImageJobResponse';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 
 const BodySchema = z.strictObject({
