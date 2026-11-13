@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload:
 vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
   recordRejectedUploadBatch: recordRejectedBatchMock,
 }));
-vi.mock('@server/s3/moderationScan', () => ({
+vi.mock('@bike4mind/server-utils/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
 }));

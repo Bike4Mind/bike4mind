@@ -27,11 +27,14 @@ import {
   readUserIntegrationGrants,
   revokeIntegrationGrants,
   type UserIntegrationGrants,
-} from '@server/services/purgeDeletedUserData';
+} from '@bike4mind/server-utils/services/purgeDeletedUserData';
 import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { classifyOwnedOrganizations, type OwnedOrganization } from './ownedOrganizations';
-import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } from './accountDeletionEmail';
+import { classifyOwnedOrganizations, type OwnedOrganization } from '@bike4mind/server-utils/users/ownedOrganizations';
+import {
+  sendAccountDeletionCancelledEmail,
+  sendAccountDeletionScheduledEmail,
+} from '@bike4mind/server-utils/users/accountDeletionEmail';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

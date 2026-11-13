@@ -4,6 +4,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
+  adminSettingsRepository,
   agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
@@ -182,7 +183,9 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         // Merges a static lake's admin-set groundingMode override in, so resolveLakeSessionDefaults
         // below (which reads `lake.groundingMode` off this return value) actually sees it.
         fallbackLakeSettings: fallbackLakeSettingsRepository,
+        settings: adminSettingsRepository,
       },
+      logger: req.logger,
     });
     const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
     createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
@@ -210,7 +213,10 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+        (await import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
       workspaceSessionSettings: premiumWorkspaceSessionSettings,
     },
     { origin: resolveSessionOrigin(req) }

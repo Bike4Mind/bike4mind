@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { VIDEO_MODEL_STRENGTHS } from '@bike4mind/common';
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import { videoFieldProblems, videoModelCards } from './videoCreateV2';
 import { estimateCredits, initialFormFor, type VideoFormState } from './videoForm';
@@ -42,12 +41,17 @@ describe('videoModelCards', () => {
       id: rangeModel.id,
       name: 'Grok Imagine Video 1.5',
       provider: 'xAI',
-      strength: VIDEO_MODEL_STRENGTHS['grok-imagine-video-1.5'],
+      strength: 'Stylised clips with sound, from text or an image.',
       creditsPerOutput: estimateCredits(initialFormFor(rangeModel)),
       outputNoun: 'clip',
       unavailableReason: null,
       mismatchReason: null,
     });
     expect(cards[1]?.mismatchReason).toMatch(/you asked for 10s/);
+  });
+
+  it('falls back to the provider id and no strength when the server sends no card copy', () => {
+    const [card] = videoModelCards([optionalAudioModel], form());
+    expect(card).toMatchObject({ provider: 'test', strength: '' });
   });
 });

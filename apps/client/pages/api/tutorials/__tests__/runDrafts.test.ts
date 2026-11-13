@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import type { ITutorialModuleProgress } from '@server/tutorials/models';
+import type { ITutorialModuleProgress } from '@bike4mind/server-utils/tutorials/models';
 
 const state = vi.hoisted(() => ({
   switchOn: true,
@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', async () => {
-  const { makeChain } = await import('./chain');
+  const { makeChain } = await import('@bike4mind/server-utils/tutorials/__tests__/chain');
   return { baseApi: (config?: unknown) => makeChain(config) };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
@@ -27,16 +27,16 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   userHasEntitlement: async (user: { entitlements?: string[] }, key: string) => !!user.entitlements?.includes(key),
 }));
-vi.mock('@server/tutorials/registry', async () => {
-  const { FIXTURE_REGISTRY } = await import('@server/tutorials/__tests__/fixture');
+vi.mock('@bike4mind/server-utils/tutorials/registry', async () => {
+  const { FIXTURE_REGISTRY } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');
   const CORE_TUTORIALS = [FIXTURE_REGISTRY];
   return { CORE_TUTORIALS, resolveCoreTutorial: (id: string) => CORE_TUTORIALS.find(t => t.id === id) ?? null };
 });
-vi.mock('@server/tutorials/content', async () => {
-  const { FIXTURE_CONTENT } = await import('@server/tutorials/__tests__/fixture');
+vi.mock('@bike4mind/server-utils/tutorials/content', async () => {
+  const { FIXTURE_CONTENT } = await import('@bike4mind/server-utils/tutorials/__tests__/fixture');
   return { CORE_TUTORIAL_CONTENT: [FIXTURE_CONTENT] };
 });
-vi.mock('@server/tutorials/models', async importOriginal => ({
+vi.mock('@bike4mind/server-utils/tutorials/models', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   tutorialModels: () => ({
     Progress: {},
@@ -50,7 +50,7 @@ vi.mock('@server/tutorials/models', async importOriginal => ({
     },
   }),
 }));
-vi.mock('@server/tutorials/progressStore', () => ({
+vi.mock('@bike4mind/server-utils/tutorials/progressStore', () => ({
   progressStoreFor: () => ({
     read: async (u: string, m: string) => state.progress.get(u)?.[m],
     all: async (u: string) => ({ ...(state.progress.get(u) ?? {}) }),
@@ -74,7 +74,7 @@ vi.mock('@server/tutorials/progressStore', () => ({
     },
   }),
 }));
-vi.mock('@server/tutorials/coreDeps', () => ({
+vi.mock('@bike4mind/server-utils/tutorials/coreDeps', () => ({
   coreTutorialDepsFor: () => ({
     ensureSheet: async () => 'sheet-1',
     createSession: async () => {
@@ -96,7 +96,7 @@ vi.mock('@server/tutorials/coreDeps', () => ({
 }));
 
 import handler from '../run';
-import { CORE_DRAFT_PROFILE, coreDraftCore } from '@server/tutorials/coreDrafts';
+import { CORE_DRAFT_PROFILE, coreDraftCore } from '@bike4mind/server-utils/tutorials/coreDrafts';
 
 const KEY = 'draft:feature';
 const HOLDER = { id: 'u1', isAdmin: false, tags: [], entitlements: [KEY] };

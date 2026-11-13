@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>()),
   isProduction: () => h.production,
 }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.recordAdminAction }));
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: { updateOne: h.guard },
