@@ -159,12 +159,23 @@ export class GrantPackageRepository implements IGrantPackageRepository {
       }
     }
 
+    // Active and expiry are re-checked here so a deactivation or expiry edit racing the read above still refuses.
     const counted = await GrantPackage.updateOne(
-      { _id: packageId, active: true, $or: [{ totalCap: null }, { $expr: { $lt: ['$redeemedTotal', '$totalCap'] } }] },
+      {
+        _id: packageId,
+        active: true,
+        $and: [
+          { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] },
+          { $or: [{ totalCap: null }, { $expr: { $lt: ['$redeemedTotal', '$totalCap'] } }] },
+        ],
+      },
       { $inc: { redeemedTotal: 1 } }
     );
     if (counted.modifiedCount !== 1) {
       if (dayCounted) await GrantPackageDayCount.updateOne({ packageId, day }, { $inc: { count: -1 } });
+      const current = await GrantPackage.findById(packageId).lean();
+      if (!current || !current.active) return { outcome: 'refused', reason: 'inactive' };
+      if (isGrantPackageExpired(current, now)) return { outcome: 'refused', reason: 'expired' };
       await this.recordCapHit(packageId, now);
       return { outcome: 'refused', reason: 'total_cap' };
     }

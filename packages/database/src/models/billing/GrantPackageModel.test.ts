@@ -121,6 +121,21 @@ describe('GrantPackageRepository.reserveRedemption', () => {
     expect((await grantPackageRepository.reserveRedemption(later, 'a', now)).outcome).toBe('reserved');
   });
 
+  it('refuses when the package is expired at write time even if the earlier read saw it live', async () => {
+    const now = new Date('2026-06-01T12:00:00Z');
+    const id = await createPackage({ totalCap: 5, dailyCap: 5, expiresAt: new Date('2026-06-01T11:00:00Z') });
+    const stale = { ...(await reload(id)), expiresAt: null };
+    vi.spyOn(GrantPackage, 'findById').mockReturnValueOnce({ lean: async () => stale } as never);
+    expect(await grantPackageRepository.reserveRedemption(id, 'a', now)).toEqual({
+      outcome: 'refused',
+      reason: 'expired',
+    });
+    const pkg = await reload(id);
+    expect(pkg.redeemedTotal).toBe(0);
+    expect(pkg.capHits).toBe(0);
+    expect((await GrantPackageDayCount.findOne({ packageId: id }).lean())?.count).toBe(0);
+  });
+
   it('returns already for a repeat redemption by the same account without counting it twice', async () => {
     const id = await createPackage({ totalCap: 1 });
     expect((await grantPackageRepository.reserveRedemption(id, 'a')).outcome).toBe('reserved');
