@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({ getFeedbackByIdFromServer: mocks.getFeedbackByIdFromServer }));
 vi.mock('./FeedbackHistory', () => ({ default: () => <div data-testid="feedback-history-stub" /> }));
+vi.mock('./FeedbackSimilarReports', () => ({ default: () => <div data-testid="feedback-similar-stub" /> }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({
   openHelpPanel: mocks.openHelpPanel,
   useHelpPanel: <T,>(selector: (state: { open: boolean }) => T) => selector({ open: mocks.helpPanelOpen }),

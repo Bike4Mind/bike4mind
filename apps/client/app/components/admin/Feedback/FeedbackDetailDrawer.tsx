@@ -39,6 +39,7 @@ import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
 import FeedbackAiPanel from './FeedbackAiPanel';
+import FeedbackSimilarReports from './FeedbackSimilarReports';
 
 const STATUS_TONES: Record<FeedbackStatus, AdminStatusTone> = {
   [FeedbackStatus.New]: 'info',
@@ -318,6 +319,7 @@ const FeedbackDetailBody = ({
       )}
 
       <FeedbackAiPanel key={record._id} feedbackId={record._id} />
+      <FeedbackSimilarReports key={`similar-${record._id}`} feedbackId={record._id} />
 
       <SectionCard
         title="Reporter"
