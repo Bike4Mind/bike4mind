@@ -3,8 +3,7 @@
  * bundles). Pure string builder - NO imports beyond the inlined logo, NO JS -
  * so it's safe under the strict serve CSP (`script-src 'none'`) and passes
  * `validateBundle` (no external asset fetch). Used by `renderViewerPage` (serve
- * handler), `renderArtifactIndexHtml` (server artifact renderer - the permanent
- * home), and `buildArtifactIndexHtml` (client bundler, removed in #1492).
+ * handler) and `renderArtifactIndexHtml` (server artifact renderer).
  *
  * Dark-navy card, a brand wordmark (the inlined built-in SVG when the operator
  * opts in via NEXT_PUBLIC_SHARE_BUILTIN_LOGO, otherwise a text wordmark of the
@@ -35,10 +34,12 @@ export interface ShareFooterOptions {
   /**
    * When set, render a subtle "Report this page" link to the app-origin report
    * flow (/report/{publicId}). A plain anchor (no JS) so it stays valid under
-   * the strict serve CSP (`script-src 'none'`). Omitted for client-built bundle
-   * footers, where the publicId isn't known until finalize.
+   * the strict serve CSP (`script-src 'none'`). Omitted for footers baked into an
+   * artifact page at render time, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
+  /** Brand shown in the wordmark and CTA; defaults to getBrandName(). */
+  brandName?: string;
   /** Render only the report link (no brand card); used when the sign-up gate is the page's CTA. */
   hideCta?: boolean;
 }
@@ -73,10 +74,10 @@ function gateIconHtml(): string {
   return '';
 }
 
-function shareWordmarkHtml(): string {
+function shareWordmarkHtml(brandName: string): string {
   if (process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true') return B4M_HORIZONTAL_LOGO_SVG;
   return `<span style="display:block;font-size:20px;font-weight:800;color:#fff;letter-spacing:-.01em">${escapeAttr(
-    getBrandName()
+    brandName
   )}</span>`;
 }
 
@@ -95,7 +96,7 @@ function shareWordmarkHtml(): string {
  */
 export function buildSignupGateHtml(opts: SignupGateOptions = {}): { styles: string; html: string } {
   const signupHref = buildSignupHref(opts);
-  const brandName = escapeAttr(getBrandName());
+  const brandName = escapeAttr(opts.brandName ?? getBrandName());
 
   // All gate CSS lives here so the PAGE template injects it into the existing <style> block --
   // avoids a second <style> tag and keeps the page valid. Prefixed b4m-gate-* / b4m-* to
@@ -192,6 +193,8 @@ export interface SignupGateOptions {
    * served from the isolated usercontent origin, where a root-relative link would miss the app.
    */
   appOrigin?: string;
+  /** Brand shown in the gate copy; defaults to getBrandName(). */
+  brandName?: string;
 }
 
 /** The gate's signup URL: the app's /register, with a `redirectTo` when the artifact path is safe. */
@@ -380,6 +383,7 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
     : '';
 
   if (opts.hideCta) return report;
+  const brandName = opts.brandName ?? getBrandName();
 
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.
@@ -389,14 +393,14 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
             border:1px solid rgba(255,255,255,.14);border-radius:14px;text-decoration:none;
             background:${BRAND_NAVY};box-shadow:0 6px 24px rgba(0,0,0,.25)">
     <span style="flex:1;min-width:0">
-      ${shareWordmarkHtml()}
+      ${shareWordmarkHtml(brandName)}
       <span style="display:block;margin-top:7px;font-size:12.5px;color:#9fb3c8;line-height:1.4">
         <span style="color:${BRAND_LIME};font-weight:700">✓</span> Create &amp; share AI artifacts like this — in seconds.
       </span>
       ${sharedBy}
     </span>
     <span style="flex:0 0 auto;padding:9px 15px;border-radius:10px;font-weight:700;font-size:13px;white-space:nowrap;
-                 background:${BRAND_ORANGE};color:#fff">Try ${escapeAttr(getBrandName())} →</span>
+                 background:${BRAND_ORANGE};color:#fff">Try ${escapeAttr(brandName)} \u2192</span>
   </a>
 </div>${report}`;
 }

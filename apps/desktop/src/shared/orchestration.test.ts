@@ -150,10 +150,20 @@ describe('orchestration contracts and role routing', () => {
         { role: 'implementation', requestedModelId: 'sonnet' },
         local
       );
-      expect(() => validateWorkerModel(selection.effectiveModel, local, { localOnly: true })).toThrow(
-        /device-local work cannot use a hosted model/
+      expect(() => validateWorkerModel(selection.effectiveModel, local, { localOnly: 'local-work' })).toThrow(
+        /never moved to a hosted model automatically/
       );
     });
+  });
+  it('points a refused hosted spawn at the parent picker before any worker exists', () => {
+    const models = [
+      { id: 'worker', name: 'Hosted worker', supportsTools: true },
+      { id: 'local:qwen', name: 'Local worker', supportsTools: true },
+    ];
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-parent' })).toThrow(
+      'Worker model worker is blocked: a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.'
+    );
+    expect(() => validateWorkerModel('local:qwen', models, { localOnly: 'local-parent' })).not.toThrow();
   });
   it('validates a self-contained bounded contract and explicit empty sections', () => {
     expect(taskContractSchema.parse(contract)).toEqual(contract);
@@ -176,7 +186,17 @@ describe('orchestration contracts and role routing', () => {
       expect(() => validateWorkerModel('worker', models, { localOnly: false })).toThrow(/blocked/);
     }
     const models = [{ id: 'worker', name: 'Worker', supportsTools: true, supportsVision: false, contextWindow: 1000 }];
-    expect(() => validateWorkerModel('worker', models, { localOnly: true })).toThrow(/device-local/);
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'device' })).toThrow(
+      /only local models can run here\. Choose a local model, or sign in/
+    );
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-work' })).toThrow(
+      /never moved to a hosted model automatically\. To move it, pick a hosted model/
+    );
+    expect(() =>
+      validateWorkerModel('local:ollama:qwen', [{ id: 'local:ollama:qwen', name: 'Qwen', supportsTools: true }], {
+        localOnly: 'device',
+      })
+    ).not.toThrow();
     expect(() => validateWorkerModel('worker', models, { localOnly: false, vision: true })).toThrow(/images/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false, contextTokens: 2000 })).toThrow(/context/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false })).not.toThrow();
