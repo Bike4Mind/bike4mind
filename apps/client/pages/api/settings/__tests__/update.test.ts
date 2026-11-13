@@ -68,9 +68,10 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
   resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
 }));
 
-import handler, { FULL_ADMIN_SETTING_KEYS } from '../update';
+import handler from '../update';
 import {
   formatUsdPerCredit,
+  FULL_ADMIN_SETTING_KEYS,
   MIN_PRICE_PER_CREDIT_USD,
   SENSITIVE_SETTING_MASK,
   resolveSettingDefinition,
