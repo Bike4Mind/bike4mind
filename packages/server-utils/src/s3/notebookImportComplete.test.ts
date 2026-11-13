@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Logger } from '@bike4mind/observability';
 
 /**
  * Covers the duplicate-event guard in `dispatch`, which is the import worker's idempotency
@@ -27,7 +28,7 @@ const h = vi.hoisted(() => ({
   session: { id: 'txn-session' },
 }));
 
-vi.mock('@bike4mind/server-utils/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
+vi.mock('./utils', () => ({ withContext: (fn: unknown) => fn }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
     getMetadata = h.getMetadata;
@@ -83,18 +84,18 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 // dispatch-idempotency test stays isolated (the moderation path is not exercised here).
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
-vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
+vi.mock('./moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
+vi.mock('./moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
+vi.mock('./storageCharge', () => ({
   stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
   chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
-vi.mock('@bike4mind/server-utils/utils/importHistoryProgress', () => ({
+vi.mock('../utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
   markImportComplete: vi.fn(),
   markImportFailed: vi.fn(),
@@ -102,10 +103,11 @@ vi.mock('@bike4mind/server-utils/utils/importHistoryProgress', () => ({
 vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
-import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
-import { markImportComplete } from '@bike4mind/server-utils/utils/importHistoryProgress';
+import { moderateImportedKnowledgeFiles } from './moderateImportedKnowledgeFiles';
+import { markImportComplete } from '../utils/importHistoryProgress';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+const asLogger = logger as unknown as Logger;
 
 const event = {
   Records: [
@@ -217,7 +219,7 @@ describe('notebook import: uploaded knowledge objects track the transaction outc
 
     // Resolves rather than rejecting: a cleanup failure must not replace the error being unwound.
     await expect(
-      discardUploadedKnowledgeFiles(['knowledge/user-1/a', 'knowledge/user-1/b'], logger)
+      discardUploadedKnowledgeFiles(['knowledge/user-1/a', 'knowledge/user-1/b'], asLogger)
     ).resolves.toBeUndefined();
 
     // The second path is still attempted after the first delete threw.
