@@ -1,14 +1,14 @@
-// Writes server/tutorials/editableFields.json: per module, per step, the copy fields its steps.ts writes as a
+// Writes packages/server-utils/src/tutorials/editableFields.json: per module, per step, the copy fields its steps.ts writes as a
 // plain string literal. Run `pnpm --filter client tutorials:fields` after editing a module's steps.
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CORE_TUTORIAL_CONTENT } from '../server/tutorials/content';
+import { CORE_TUTORIAL_CONTENT } from '@bike4mind/server-utils/tutorials/content';
 import { CORE_MODULES_DIR } from '../server/tutorials/apply/coreLayout';
-import { renderEditableFields } from '../server/tutorials/editableFields';
+import { renderEditableFields } from '@bike4mind/server-utils/tutorials/editableFields';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-export const EDITABLE_FIELDS_PATH = join(REPO_ROOT, 'apps/client/server/tutorials/editableFields.json');
+export const EDITABLE_FIELDS_PATH = join(REPO_ROOT, 'packages/server-utils/src/tutorials/editableFields.json');
 
 export const renderCoreEditableFields = (root: string = REPO_ROOT) =>
   renderEditableFields(

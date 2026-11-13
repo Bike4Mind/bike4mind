@@ -10,7 +10,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/utils/parseMcpResult', () => ({ parseMcpResult: vi.fn(() => ({})) }));

@@ -48,7 +48,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAccess: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {
     getSettingsValue: async (name: string) => (name === 'EnableRapidReply' ? m.rapidReplyEnabled : undefined),
   },

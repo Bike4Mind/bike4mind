@@ -7167,10 +7167,21 @@ export class ChatService {
     }
 
     // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
-    const askedBecause =
-      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
-        .filter((reason): reason is string => !!reason)
-        .join(' ') || undefined;
+    const askedReasons = [
+      askedByRule,
+      tainted ? untrustedReason(tainted) : null,
+      stuck ? LOOP_ASK_REASON : null,
+    ].filter((reason): reason is string => !!reason);
+    const askedBecause = askedReasons.join(' ') || undefined;
+    // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
+    // 'ask' sets no `tainted`, yet a sending call over untrusted content still needs its reason here.
+    const untrusted = directories.untrusted;
+    const untrustedInAsk = !tainted && untrusted && taintedParts() ? untrustedReason(untrusted) : null;
+    const approvalReasons = [
+      ...(asked.prompt.reasons ?? []),
+      ...askedReasons,
+      ...(untrustedInAsk ? [untrustedInAsk] : []),
+    ];
     let requestedAt: string | undefined;
     // What answered this card when another card's "always" or a newly saved rule covered it.
     let coveredBy: ChatApprovalDecidedBy | undefined;
@@ -7203,11 +7214,13 @@ export class ChatService {
             status: 'awaiting-approval',
             approvalId,
             approvalDetail: asked.prompt.detail,
+            ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
+            ...(asked.prompt.askInFull || spendsCredits(call.name) ? { approvalInAppOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,

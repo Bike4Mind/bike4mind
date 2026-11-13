@@ -10,7 +10,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
 }));
-vi.mock('@server/generationJobs/wiring', () => ({ getVideoJobDeps: vi.fn(), getCreateVideoJobDeps: vi.fn() }));
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
+  getVideoJobDeps: vi.fn(),
+  getCreateVideoJobDeps: vi.fn(),
+}));
 vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
 
 const { buildAgentVideoToolConfig, limitVideoClipsPerRun } = await import('./agentExecutor.videoToolConfig');

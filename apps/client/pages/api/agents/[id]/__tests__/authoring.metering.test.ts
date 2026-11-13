@@ -44,7 +44,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   checkStorageLimit: async () => undefined,
 }));
 vi.mock('@server/agents/systemPromptRateLimit', () => ({ logSystemPromptGenerationFailure: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: (...args: unknown[]) => (h.requestMeter(...args), h.meter),
 }));
 

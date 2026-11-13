@@ -1,9 +1,9 @@
 /** GET /api/v1/music-models - the music models this caller can use right now. */
 import { listMusicModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getMusicJobDeps } from '@server/generationJobs/wiring';
+import { getMusicJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
-import { filterAdmittedMediaModels } from '@server/billing/assertMediaModelAdmission';
+import { filterAdmittedMediaModels } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listMusicModelsContract, {

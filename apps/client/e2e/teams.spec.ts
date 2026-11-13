@@ -161,6 +161,63 @@ test.describe('Teams', () => {
     await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used + 1);
   });
 
+  test('roster identities and headers stay readable across narrow and wide panels', async ({ teamsPage, page }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(invitee.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const header = page.getByTestId('organization-members-list-header');
+    const credits = header.getByTestId('organization-members-header-credits');
+    const active = header.getByTestId('organization-members-header-active');
+    for (const width of [768, 1024, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const user of [owner, member, manager, invitee]) {
+        const row = teamsPage.memberRow(user.userId);
+        const name = row.getByTestId('organization-user-card-name');
+        await expect(name).not.toHaveText('');
+        await expect
+          .poll(() =>
+            name.evaluate(
+              element =>
+                element.scrollWidth <= element.clientWidth + 1 &&
+                element.scrollHeight <= element.clientHeight + 1 &&
+                getComputedStyle(element).textOverflow !== 'ellipsis'
+            )
+          )
+          .toBe(true);
+        await expect.poll(() => row.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        const role = row.getByTestId(/^organization-user-card-(owner|manager|member)-chip$/);
+        await expect
+          .poll(() =>
+            role.evaluate(element => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return range.getBoundingClientRect().width <= element.getBoundingClientRect().width + 1;
+            })
+          )
+          .toBe(true);
+      }
+      const pending = teamsPage.memberRow(invitee.userId).getByTestId('organization-user-card-pending-chip');
+      await expect
+        .poll(() =>
+          pending.evaluate(element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return range.getBoundingClientRect().width <= element.getBoundingClientRect().width + 1;
+          })
+        )
+        .toBe(true);
+      if (width <= 1024) await expect(credits).toBeHidden();
+      if (width === 1920) await expect(credits).toBeVisible();
+      if (await credits.isVisible()) {
+        const creditBounds = await credits.boundingBox();
+        const activeBounds = await active.boundingBox();
+        expect(creditBounds).not.toBeNull();
+        expect(activeBounds).not.toBeNull();
+        if (!creditBounds || !activeBounds) throw new Error('Missing visible roster header bounds');
+        expect(creditBounds.x + creditBounds.width).toBeLessThanOrEqual(activeBounds.x + 1);
+      }
+    }
+  });
+
   test('cancelling a pending invite frees the seat', async ({ teamsPage, page }) => {
     await teamsPage.gotoTeam(mainTeamId, 'members');
     await expect(teamsPage.memberRow(invitee.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
@@ -174,7 +231,7 @@ test.describe('Teams', () => {
     await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used - 1);
   });
 
-  test('revoking an active member removes them from the roster', async ({ teamsPage, page, request }) => {
+  test('removing an active member takes them off the roster', async ({ teamsPage, page, request }) => {
     await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
 
     await teamsPage.gotoTeam(mainTeamId, 'members');
@@ -183,10 +240,48 @@ test.describe('Teams', () => {
     await expect(row).not.toContainText('Pending');
 
     await teamsPage.openMemberMenu(invitee.userId);
-    await page.getByTestId('organization-user-card-revoke-access').click();
+    await page.getByTestId('organization-user-card-remove-member').click();
     await teamsPage.confirmOffboard();
 
     await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('selected members are removed together from the bulk bar', async ({ teamsPage, page, request }) => {
+    await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
+
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    const row = teamsPage.memberRow(invitee.userId);
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    // Neither the owner nor your own row can be selected.
+    await expect(teamsPage.memberRow(owner.userId).getByTestId('organization-user-card-select')).toHaveCount(0);
+
+    await row.getByTestId('organization-user-card-select').check();
+    await expect(page.getByTestId('organization-members-bulk-bar')).toContainText('1 selected');
+    await page.getByTestId('organization-members-remove-selected-btn').click();
+    await expect(page.getByTestId('organization-members-bulk-remove-description')).toContainText(seededName(invitee));
+    await teamsPage.confirm();
+
+    await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('organization-members-bulk-bar')).toBeHidden();
+  });
+
+  test('role and status filters narrow the roster, and a miss offers Clear filters', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-role-filter').click();
+    await page.getByTestId('organization-members-role-option-owner').click();
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(member.userId)).toBeHidden();
+
+    // No owner is ever a pending invite.
+    await page.getByTestId('organization-members-status-filter').click();
+    await page.getByTestId('organization-members-status-option-pending').click();
+    await expect(page.getByTestId('organization-members-no-match')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-clear-filters-btn').click();
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible();
   });
 
   test('member search filters the roster and sort reverses it', async ({ page, teamsPage }) => {

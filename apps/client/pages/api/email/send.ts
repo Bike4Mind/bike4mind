@@ -1,11 +1,20 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
-import { sessionRepository, fabFileRepository } from '@bike4mind/database';
+import { sessionRepository, fabFileRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailSendRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { notebookCurationService } from '@bike4mind/services';
-import { Permission, isImageServeable } from '@bike4mind/common';
+import {
+  Permission,
+  isImageServeable,
+  organizationAllowsRecipient,
+  ForbiddenError,
+  HTTPError,
+  EXTERNAL_SHARING_BLOCKED,
+} from '@bike4mind/common';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
 import { reserveEmailSendBudget } from '@server/utils/emailSendLimits';
@@ -74,6 +83,9 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
       );
     }
   } catch (error) {
+    if (error instanceof HTTPError && error.statusCode === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
     req.logger.error('Failed to send email', { error, userId: req.user?.id });
     return res.status(500).json({
       success: false,
@@ -82,9 +94,33 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   }
 });
 
+async function assertEmailSharingPolicy(
+  content: ReadonlyArray<{ organizationId?: string }>,
+  emails: string[]
+): Promise<void> {
+  const organizationIds = [...new Set(content.flatMap(item => (item.organizationId ? [item.organizationId] : [])))];
+  if (!organizationIds.length) return;
+  const recipients = await Promise.all(
+    emails.map(async email => {
+      const user = await userRepository.findOne({
+        email: { $regex: `^${escapeRegex(email.trim().toLowerCase())}$`, $options: 'i' },
+      });
+      // Delivery goes to this validated address itself; it does not grant access to a claimed account email.
+      return { id: user?.id ?? '', email, emailVerified: true };
+    })
+  );
+  for (const organizationId of organizationIds) {
+    const organization = await organizationRepository.findById(organizationId);
+    if (!organization) throw new ForbiddenError('The content organization is unavailable.');
+    if (recipients.some(recipient => !organizationAllowsRecipient(organization, recipient))) {
+      throw new ForbiddenError(EXTERNAL_SHARING_BLOCKED);
+    }
+  }
+}
+
 async function handleFileEmail(
-  req: any,
-  res: any,
+  req: Request,
+  res: Response,
   fileIds: string[],
   recipients: string[],
   customMessage: string | undefined,
@@ -127,6 +163,11 @@ async function handleFileEmail(
       message: `You do not have permission to email file(s): ${unauthorizedFiles.join(', ')}`,
     });
   }
+
+  await assertEmailSharingPolicy(
+    files.filter(file => file !== null),
+    recipients
+  );
 
   // Prepare attachments for email
   const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
@@ -347,8 +388,8 @@ async function handleFileEmail(
 }
 
 async function handleNotebookEmail(
-  req: any,
-  res: any,
+  req: Request,
+  res: Response,
   sessionIds: string[],
   recipients: string[],
   format: 'markdown' | 'txt' | 'html',
@@ -395,6 +436,15 @@ async function handleNotebookEmail(
     });
   }
 
+  // Validate every selected notebook and its stored export before downloading any attachment.
+  const notebookFiles = await Promise.all(
+    sessions.map(session => fabFileRepository.findById(session!.curatedNotebookFileId!))
+  );
+  await assertEmailSharingPolicy(
+    [...sessions.filter(session => session !== null), ...notebookFiles.filter(file => file !== null)],
+    recipients
+  );
+
   // Prepare attachments for email
   const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
   const sessionNames: string[] = [];
@@ -412,7 +462,7 @@ async function handleNotebookEmail(
     sessionNames.push(session.name || 'Untitled Session');
 
     // Get FabFile
-    const fabFile = await fabFileRepository.findById(session.curatedNotebookFileId!);
+    const fabFile = notebookFiles[i];
     if (!fabFile || !fabFile.filePath) {
       req.logger.warn('Skipping session with missing file', { sessionId });
       continue;

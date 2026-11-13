@@ -24,6 +24,8 @@ export interface InPlaceWrites {
   links?: boolean;
   /** Whether it may write somewhere the scan cannot name. */
   unread?: boolean;
+  /** The only missing information is a ref changed by an earlier, otherwise readable Git command. */
+  refsMovedOnly?: true;
   /** The folder operand, as written, of a clone from another computer, whose tree the scan cannot list. */
   remote?: string;
 }
@@ -2396,12 +2398,13 @@ export async function inPlaceWrites(
   cwd: string,
   git: GitContext = { script: { staged: [], unknownIndex: false }, env: false }
 ): Promise<InPlaceWrites> {
-  const { files, trees, links, unread, remote } = await writesOf(tokens, node, cwd, git);
+  const { files, trees, links, unread, remote, refsMovedOnly } = await writesOf(tokens, node, cwd, git);
   return {
     files: files.filter(path => !hasGlob(path)),
     trees: [...trees, ...files.filter(hasGlob).map(treeOf)],
     ...(links ? { links } : {}),
     ...(unread ? { unread } : {}),
+    ...(refsMovedOnly ? { refsMovedOnly } : {}),
     ...(remote !== undefined ? { remote } : {}),
   };
 }
@@ -2447,7 +2450,21 @@ async function writesOf(
     if (git.unread) return { files: [], trees: [], unread: true };
     const script = context.script;
     const moved = git.moved || context.env || script.refsMoved === true;
+    // Check the same form without stale refs against an isolated script snapshot. An unread
+    // option, operand, index or repository must not acquire the routine-Git exception.
+    const baseline =
+      script.refsMoved === true && !git.moved && !context.env
+        ? await gitWrites(git, node, false, { ...script, staged: [...script.staged] })
+        : null;
     const { writes, restores } = await gitWrites(git, node, moved, script);
+    if (writes.unread && baseline && !baseline.writes.unread) {
+      // Stale refs may add destinations, but must not erase a protected path already visible.
+      writes.files = [...new Set([...writes.files, ...baseline.writes.files])];
+      writes.trees = [...new Set([...writes.trees, ...baseline.writes.trees])];
+      if (baseline.writes.links) writes.links = true;
+      if (baseline.writes.remote !== undefined) writes.remote = baseline.writes.remote;
+      writes.refsMovedOnly = true;
+    }
     script.refsMoved ||= movesRefs(git.sub, git.rest, restores);
     return writes;
   }

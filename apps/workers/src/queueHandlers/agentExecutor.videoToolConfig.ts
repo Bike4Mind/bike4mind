@@ -9,7 +9,7 @@
  */
 import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
 import type { Logger } from '@bike4mind/observability';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   limitJobsPerRun,

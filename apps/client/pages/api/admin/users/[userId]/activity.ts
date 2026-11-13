@@ -3,7 +3,7 @@ import { ApiKeyScope, MODERATION_PAGE_READ, type UserActivityPage } from '@bike4
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
 import { encodeAuditCursor, parseUserActivityQuery } from '@server/utils/adminAuditQuery';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { hasAdminHistory, listUserActivity } from '@server/utils/userActivity';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;

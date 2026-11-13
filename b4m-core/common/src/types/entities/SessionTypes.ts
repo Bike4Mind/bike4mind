@@ -717,6 +717,7 @@ export interface ISession {
   id: string;
   name: string;
   userId: string;
+  organizationId?: string;
   lastUpdated: Date;
   firstCreated: Date;
   language?: string;

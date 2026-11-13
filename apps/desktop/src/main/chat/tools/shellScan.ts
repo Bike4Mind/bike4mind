@@ -83,6 +83,8 @@ export interface ShellCommand {
   opaque?: string;
   /** This part has something the scan cannot follow; never set when the whole script is unread (`ShellScan.unreadScript`). */
   unread?: true;
+  /** This part is unread solely because an earlier readable Git command changed refs. */
+  refsMovedOnly?: true;
   /** Why this part can send data off this computer, and the repository it writes when its words pin one. */
   outbound?: { reason: string; target: RepositoryWrite | null };
   /** `.env` files this part names as an argument. */
@@ -8078,6 +8080,7 @@ export async function scanShell(
       for (const place of cloned) createdLinks.add(guardForm(place));
       // The window includes any substitution in its words: output the scan cannot read decides this part too.
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      if (inPlace.refsMovedOnly && unreadOperands === unreadBefore + 1 && !entry.opaque) entry.refsMovedOnly = true;
       if (unlisted !== null) Object.assign(entry, { coverable: false, words: original, gitUnlisted: unlisted });
       return entry;
     };
@@ -8761,6 +8764,7 @@ export async function scanShell(
       for (const entry of commands) {
         entry.coverable = false;
         delete entry.unread;
+        delete entry.refsMovedOnly;
       }
     }
     if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;

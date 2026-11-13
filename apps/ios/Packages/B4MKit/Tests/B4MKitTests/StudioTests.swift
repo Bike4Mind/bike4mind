@@ -322,7 +322,7 @@ final class StudioClientTests: XCTestCase {
     XCTAssertEqual(models.map(\.id), ["gpt-image-2", "flux-3-image"])
   }
 
-  func testVideoModelsNeedTextToVideo() async throws {
+  func testVideoModelsKeepTheirModesForTheViewModelToFilter() async throws {
     let transport = FakeTransport { _ in
       (
         200,
@@ -333,7 +333,12 @@ final class StudioClientTests: XCTestCase {
     }
     let client = StudioClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     let models = try await client.models(for: .video)
-    XCTAssertEqual(models.map(\.id), ["a"])
+    XCTAssertEqual(models.map(\.id), ["a", "b"])
+    XCTAssertEqual(
+      models.compactMap { model -> [String]? in
+        guard case .video(let capabilities)? = model.capabilities else { return nil }
+        return capabilities.modes
+      }, [["text_to_video"], ["image_to_video"]])
   }
 
   func testCreateSessionReadsTheID() async throws {
