@@ -173,9 +173,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Dashboard}>
             {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
           </TabPanel>
-          <TabPanel value={AdminTab.Users}>
-            {activeTab === AdminTab.Users && <UsersTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
             {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
           </TabPanel>
