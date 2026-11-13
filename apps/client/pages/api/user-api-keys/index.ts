@@ -95,7 +95,10 @@ function redactForNonMinter(json: IUserApiKey, isMinter: boolean): IUserApiKey {
   return { ...json, metadata: safeMetadata };
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(async (req, res) => {
     const userId = req.user?.id;
     assertNotOrgServiceAccount(req.user);

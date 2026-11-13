@@ -114,6 +114,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   'marketing-reports': 'Marketing Reports',
   optihashi: 'OptiHashi',
   me: 'Account',
+  'api-keys': 'API Keys',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -122,7 +123,13 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'Generate',
   chat: 'Chat',
   compute: 'Compute',
+  manage: 'Manage',
 };
+
+const EXPLICIT_ONLY_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set([
+  ApiKeyScope.PERSONAS_MINT,
+  ApiKeyScope.API_KEYS_MANAGE,
+]);
 
 const humanize = (s: string) =>
   s
@@ -180,8 +187,9 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
     presetScopes: {
       read: readScopes,
       readwrite: [...readScopes, ...writeScopes],
-      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
-      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+      // Minting personas creates accounts, and a key that manages keys can mint its own successors,
+      // so each is only granted by ticking it explicitly.
+      full: scopeValues.filter(value => !EXPLICIT_ONLY_SCOPES.has(value)),
     },
   };
 };

@@ -246,6 +246,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting. Confined: a slack:post key carries no other scope and reaches no other API route',
     endpoints: [],
   },
+  {
+    value: ApiKeyScope.API_KEYS_MANAGE,
+    label: 'API keys: Manage',
+    description:
+      'List, create, edit, rotate and revoke your own API keys, and raise a key rate limit. A key created or rotated with it can carry only the scopes this key already holds. Not part of any preset, Full access included',
+    endpoints: [],
+  },
 ];
 
 /**
@@ -469,10 +476,15 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
  * The scopes an org-owned key may carry (pages/api/organizations/[id]/api-keys, OrgApiKeysSection's
  * picker): the generic built-in scopes with no product or entitlement gate. Such a key is held by the
  * org's service account, which has no subscription or entitlements, so a gated or contributed scope
- * would be refused at use however it was minted.
+ * would be refused at use however it was minted. `api-keys:manage` is left out for the same reason:
+ * every `/api/user-api-keys/*` route refuses an org service account (assertNotOrgServiceAccount).
  */
 export const ORG_API_KEY_SCOPES: readonly ApiKeyScopeOption[] = GENERIC_MODAL_API_KEY_SCOPES.filter(
-  s => isBuiltInApiKeyScope(s.value) && !GATED_API_KEY_SCOPES[s.value] && !s.requiredEntitlement
+  s =>
+    isBuiltInApiKeyScope(s.value) &&
+    !GATED_API_KEY_SCOPES[s.value] &&
+    !s.requiredEntitlement &&
+    s.value !== ApiKeyScope.API_KEYS_MANAGE
 );
 
 export const isOrgApiKeyScope = (value: string): boolean => ORG_API_KEY_SCOPES.some(s => s.value === value);

@@ -764,3 +764,39 @@ describe('UserApiKeysTab - personas:mint', () => {
     expect(minted()).toContain(ApiKeyScope.PERSONAS_MINT);
   });
 });
+
+describe('UserApiKeysTab - api-keys:manage', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
+    h.createMutate.mockClear();
+  });
+
+  const openModal = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Key manager' },
+    });
+  };
+  const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+
+  it('leaves api-keys:manage out of every preset, Full access included', () => {
+    openModal('full');
+    expect(screen.getByTestId('api-key-scope-api-keys:manage')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    // A spend scope proves the Full access click took effect.
+    expect(minted()).toContain(ApiKeyScope.AI_GENERATE);
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('grants api-keys:manage when it is ticked explicitly', () => {
+    openModal();
+    const chip = screen.getByTestId('api-key-scope-api-keys:manage');
+    fireEvent.click(chip.querySelector('button') ?? chip);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+});
