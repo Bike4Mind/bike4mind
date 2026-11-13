@@ -122,6 +122,8 @@ jobs:
       DESKTOP_VERSION: ${{ needs.version.outputs.version }}
       B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
       B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}
+      # Baked into the app; once set, it only offers update manifests signed by the sign job's key.
+      B4M_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}
       B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}
       # The URL curated:publish serves the list at; curated:check-build fails a build that baked any other.
       CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}
@@ -179,6 +181,7 @@ jobs:
             pnpm build
           fi
           pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
+          node scripts/sign-update-manifests.mjs check-build out
           if [ "$PLATFORM" = mac ]; then
             for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
               if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in ad-hoc packaging: $key"; exit 1; fi
@@ -213,6 +216,7 @@ jobs:
           done
           pnpm build
           pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
+          node scripts/sign-update-manifests.mjs check-build out
           pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
           app_dir=release/mac
           if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
@@ -366,9 +370,47 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The signing key lives only in this job's environment. While DESKTOP_UPDATE_PUBLIC_KEYS is unset
+  # this job is skipped and publish releases the manifests without signatures.
+  sign:
+    if: vars.DESKTOP_UPDATE_PUBLIC_KEYS != '' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: desktop-update-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-checksums
+          path: manifests
+      - name: Sign update manifests
+        env:
+          DESKTOP_UPDATE_SIGNING_KEY: ${{ secrets.DESKTOP_UPDATE_SIGNING_KEY }}
+          DESKTOP_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}
+        run: node apps/desktop/scripts/sign-update-manifests.mjs sign manifests
+      - uses: actions/upload-artifact@v6
+        with:
+          name: update-manifest-signatures
+          path: manifests/*.yml.sig
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [version, validate]
+    # A skipped sign is accepted only while no update keys are configured; with keys, publish needs its signatures.
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.validate.result == 'success'
+      && (needs.sign.result == 'success' || (needs.sign.result == 'skipped' && vars.DESKTOP_UPDATE_PUBLIC_KEYS == '')) }}
+    needs: [version, validate, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -384,6 +426,21 @@ jobs:
         with:
           name: installer-checksums
           path: installers
+      - uses: actions/download-artifact@v7
+        if: vars.DESKTOP_UPDATE_PUBLIC_KEYS != ''
+        with:
+          name: update-manifest-signatures
+          path: installers
+      - uses: actions/setup-node@v6
+        if: vars.DESKTOP_UPDATE_PUBLIC_KEYS != ''
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify update manifest signatures
+        if: vars.DESKTOP_UPDATE_PUBLIC_KEYS != ''
+        env:
+          DESKTOP_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}
+        run: node apps/desktop/scripts/sign-update-manifests.mjs verify installers
       - uses: actions/download-artifact@v7
         with:
           name: release-notes

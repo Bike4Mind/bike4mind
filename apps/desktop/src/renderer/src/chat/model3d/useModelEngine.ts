@@ -22,6 +22,7 @@ import {
   summarizeParts,
 } from './modelScene';
 import { renderTurntable } from './turntable';
+import { partFacts, type ModelPartFacts } from '@shared/modelEdit';
 import { captureFromFreshBuild } from './useModelBackgroundBuilds';
 
 export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
@@ -40,6 +41,8 @@ export type ModelEngine = {
   /** The last good object; kept on an error so the pane can show it dimmed. */
   object: THREE.Group | null;
   summary: ModelSummary | null;
+  /** Names, source lines and bounds of the shown build's parts, for point-and-edit. Empty for loaded assets. */
+  parts: ModelPartFacts[];
   params: Record<string, ModelParam>;
   /** Param keys whose last slider value could not be written back to the file. */
   unsaved: string[];
@@ -76,6 +79,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const [error, setError] = useState<ModelEngine['error']>(null);
   const [object, setObject] = useState<THREE.Group | null>(null);
   const [summary, setSummary] = useState<ModelSummary | null>(null);
+  const [parts, setParts] = useState<ModelPartFacts[]>([]);
   const [params, setParams] = useState<Record<string, ModelParam>>({});
   const [unsaved, setUnsaved] = useState<string[]>([]);
   const [joints, setJoints] = useState<ModelJoint[]>([]);
@@ -89,6 +93,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     setError(null);
     setObject(null);
     setSummary(null);
+    setParts([]);
     setParams({});
     setUnsaved([]);
     setJoints([]);
@@ -181,6 +186,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       setClips([]);
       setObject(next);
       setSummary(nextSummary);
+      setParts(partFacts(outcome.parts));
       setParams(outcome.params);
       setStatus('ok');
       setError(null);
@@ -204,6 +210,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
       setError(null);
       setObject(null);
       setSummary(null);
+      setParts([]);
       setParams({});
       setJoints([]);
       setClips([]);
@@ -232,6 +239,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
         setClips(loaded.animations.map(clip => clip.name));
         setObject(loaded);
         setSummary(loadedSummary);
+        setParts([]);
         setParams({});
         setStatus('ok');
         setError(null);
@@ -344,6 +352,7 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     error,
     object,
     summary,
+    parts,
     params,
     unsaved,
     joints,

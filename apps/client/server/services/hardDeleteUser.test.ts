@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
+  deleteFeedbackAiForUser: vi.fn().mockResolvedValue(undefined),
   FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   userRepository: { findById: h.findUser, delete: h.deleteUser },
   erasureRecordRepository: { record: h.recordErasure },

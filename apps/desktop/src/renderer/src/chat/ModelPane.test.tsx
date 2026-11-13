@@ -7,13 +7,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MODEL_STATE } from '@shared/model3d';
 import type { ModelEngine } from './model3d/useModelEngine';
 import type { ModelViewportHandle } from './model3d/ModelViewport';
-import { MODEL_EXAMPLE_PROMPTS, ModelPane } from './ModelPane';
+import { MODEL_EXAMPLE_PROMPTS, ModelPane, type PartEditTurn } from './ModelPane';
 
 const handle = vi.hoisted(() => ({
   recordTurntable: vi.fn<ModelViewportHandle['recordTurntable']>(async () => new Uint8Array([1, 2, 3])),
   setView: vi.fn(),
   orbit: vi.fn(),
   zoom: vi.fn(),
+  partPoint: vi.fn(() => ({ x: 60, y: 50 })),
+}));
+
+const closeup = vi.hoisted(() => vi.fn(async () => new Uint8Array([9, 9])));
+// The close-up renders with WebGL, which jsdom lacks; its framing is the live app's to check.
+vi.mock('./model3d/modelScene', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelScene')>()),
+  renderPartCloseup: closeup,
 }));
 
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
@@ -23,6 +31,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     lighting,
     pose,
     picked,
+    editing,
     onPick,
     clip,
     exploded,
@@ -31,8 +40,9 @@ vi.mock('./model3d/ModelViewport', () => ({
     dimmed: boolean;
     lighting: string;
     pose: Record<string, number>;
-    picked: string | null;
-    onPick: (name: string | null) => void;
+    picked: readonly string[];
+    editing: readonly string[];
+    onPick: (pick: { name: string | null; additive: boolean; point: { x: number; y: number } }) => void;
     clip: string | null;
     exploded: boolean;
     handleRef?: { current: unknown };
@@ -44,12 +54,23 @@ vi.mock('./model3d/ModelViewport', () => ({
         data-dimmed={String(dimmed)}
         data-lighting={lighting}
         data-pose={JSON.stringify(pose)}
-        data-picked={picked ?? ''}
+        data-picked={picked.join(',')}
+        data-editing={editing.join(',')}
         data-clip={clip ?? ''}
         data-exploded={String(exploded)}
       >
-        <button data-testid="pick-lid" onClick={() => onPick('lid')} />
-        <button data-testid="pick-none" onClick={() => onPick(null)} />
+        <button
+          data-testid="pick-lid"
+          onClick={event => onPick({ name: 'lid', additive: event.shiftKey, point: { x: 40, y: 30 } })}
+        />
+        <button
+          data-testid="pick-body"
+          onClick={event => onPick({ name: 'body', additive: event.shiftKey, point: { x: 20, y: 30 } })}
+        />
+        <button
+          data-testid="pick-none"
+          onClick={() => onPick({ name: null, additive: false, point: { x: 0, y: 0 } })}
+        />
       </div>
     );
   },
@@ -82,6 +103,7 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     error: null,
     object: null,
     summary: null,
+    parts: [],
     params: {},
     unsaved: [],
     joints: [],
@@ -121,7 +143,12 @@ afterEach(() => {
 
 function render(
   model: ModelEngine,
-  props: { onClose?: () => void; onExamplePrompt?: (text: string) => void; onPickPart?: (text: string) => void } = {}
+  props: {
+    onClose?: () => void;
+    onExamplePrompt?: (text: string) => void;
+    onSendEdit?: (edit: PartEditTurn) => Promise<boolean>;
+    replying?: boolean;
+  } = {}
 ) {
   act(() =>
     root.render(
@@ -131,7 +158,8 @@ function render(
           dark={false}
           onClose={props.onClose ?? (() => {})}
           onExamplePrompt={props.onExamplePrompt ?? (() => {})}
-          onPickPart={props.onPickPart ?? (() => {})}
+          onSendEdit={props.onSendEdit ?? (async () => true)}
+          replying={props.replying}
         />
       </CssVarsProvider>
     )
@@ -249,22 +277,117 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
   });
 
-  it('highlights a clicked part and mentions it once in the draft', () => {
-    const onPickPart = vi.fn();
-    const twoParts = { ...BUILT, summary: { ...BUILT.summary!, parts: ['body', 'lid'] } };
-    render(engine(twoParts), { onPickPart });
-    expect(byTestId('model-pane-size')?.textContent).toContain('click a part to mention it');
+  const LANTERN_PARTS: ModelEngine['parts'] = [
+    { name: 'body', lines: [3], min: [0, 0, 0], max: [60, 40, 20] },
+    { name: 'lid', lines: [4], min: [0, 0, 20], max: [60, 40, 30] },
+  ];
+  const LANTERN = {
+    ...BUILT,
+    state: {
+      ...BUILT.state!,
+      source:
+        "export default function model({ m }) {\n  return [\n    { name: 'body', shape: a },\n    { name: 'lid', shape: b },\n  ];\n}",
+    },
+    summary: { ...BUILT.summary!, parts: ['body', 'lid'] },
+    parts: LANTERN_PARTS,
+  };
+
+  const typeInto = (input: HTMLInputElement, value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  const press = (target: HTMLElement, key: string) =>
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    });
+
+  it('opens an edit prompt on a clicked part and sends the change tied to it', async () => {
+    const onSendEdit = vi.fn(async (_edit: PartEditTurn) => true);
+    render(engine(LANTERN), { onSendEdit });
+    expect(byTestId('model-pane-size')?.textContent).toContain('click a part to edit it');
     act(() => byTestId('pick-lid')?.click());
-    expect(onPickPart).toHaveBeenCalledWith('the `lid` part ');
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
-    expect(byTestId('model-pane-size')?.textContent).toContain('- lid');
-    // Clicking it again clears the highlight without mentioning it twice; so does empty space.
+    expect(byTestId('model-pane-edit-parts')?.textContent).toBe('lid');
+    const input = byTestId('model-pane-edit-input') as HTMLInputElement;
+    expect(input.getAttribute('aria-label')).toBe('Describe a change to lid');
+    typeInto(input, 'make it brass');
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(onSendEdit).toHaveBeenCalledTimes(1);
+    const edit = onSendEdit.mock.calls[0][0];
+    expect(edit.text).toBe('make it brass');
+    expect(edit.closeup).toEqual({ name: 'model-edit-lid.png', bytes: new Uint8Array([9, 9]) });
+    expect(closeup).toHaveBeenCalledWith(LANTERN.object, ['lid'], false, {});
+    const note = edit.note(true);
+    expect(note).toContain('Parts: ["lid"]');
+    expect(note).toContain('in /project/chest.model.js');
+    expect(note).toContain('- lid: listed at line 4; built by lines 4; bounds x 0..60, y 0..40, z 20..30 mm');
+    expect(note).toContain('Close-up: model-edit-lid.png');
+    expect(edit.note(false)).not.toContain('Close-up');
+    // Sent: the prompt and the selection clear.
+    expect(byTestId('model-pane-edit-prompt')).toBeNull();
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
+  });
+
+  it('forgets a sent edit once its turn ends, so a later rebuild does not flash it', async () => {
+    render(engine(LANTERN));
     act(() => byTestId('pick-lid')?.click());
+    const input = byTestId('model-pane-edit-input') as HTMLInputElement;
+    typeInto(input, 'make it brass');
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const editing = () => byTestId('model-pane-viewport')?.dataset.editing;
+    // Not yet: the turn has not been seen open.
+    expect(editing()).toBe('lid');
+    render(engine(LANTERN), { replying: true });
+    expect(editing()).toBe('lid');
+    render(engine(LANTERN), { replying: false });
+    expect(editing()).toBe('');
+  });
+
+  it('adds parts with shift-click, and Escape or empty space clears without sending', () => {
+    const onSendEdit = vi.fn(async () => true);
+    render(engine(LANTERN), { onSendEdit });
+    act(() => byTestId('pick-lid')?.click());
+    act(() => byTestId('pick-body')?.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })));
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid,body');
+    expect(byTestId('model-pane-edit-parts')?.textContent).toBe('lid and body');
+    press(byTestId('model-pane-edit-input') as HTMLElement, 'Escape');
+    expect(byTestId('model-pane-edit-prompt')).toBeNull();
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
     act(() => byTestId('pick-lid')?.click());
     act(() => byTestId('pick-none')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
-    expect(onPickPart).toHaveBeenCalledTimes(2);
+    expect(onSendEdit).not.toHaveBeenCalled();
+  });
+
+  it('picks parts from the keyboard and opens the prompt with Enter', () => {
+    render(engine(LANTERN));
+    const stage = byTestId('model-pane-stage') as HTMLElement;
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('body');
+    press(stage, ']');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    expect(byTestId('model-pane-edit-prompt')).toBeNull();
+    press(stage, 'Enter');
+    expect(handle.partPoint).toHaveBeenCalledWith(['lid']);
+    expect(byTestId('model-pane-edit-prompt')).not.toBeNull();
+    expect(document.activeElement).toBe(byTestId('model-pane-edit-input'));
+  });
+
+  it('highlights a part of an opened GLB without offering an edit', () => {
+    render(
+      engine({
+        ...LANTERN,
+        state: { path: '/project/chest.glb', kind: 'glb', generation: 3, source: null, missing: false },
+      })
+    );
+    act(() => byTestId('pick-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    expect(byTestId('model-pane-edit-prompt')).toBeNull();
   });
 
   it('plays one animation of an opened GLB at a time', () => {

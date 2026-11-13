@@ -5,6 +5,8 @@ import {
   OAUTH_FEDERATED_SUBJECT_SOURCES,
   type OAuthClientType,
   type OAuthFederatedIdpConfig,
+  type IUserApiKeyRateLimit,
+  oauthClientRateLimitSchema,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Schema, model, Model } from 'mongoose';
@@ -78,6 +80,7 @@ export interface IOAuthClientDocument extends IMongoDocument {
   isActive: boolean;
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
+  rateLimit?: IUserApiKeyRateLimit;
   /**
    * The Overwatch product an account created to sign in to this client is credited to, with its
    * later payments (apps/client server/analytics/oauthSignupCredit.ts). Absent: no credit.
@@ -146,6 +149,23 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
       required: false,
     },
     overwatchProductId: { type: String, required: false },
+    rateLimit: {
+      type: new Schema<IUserApiKeyRateLimit>(
+        {
+          requestsPerMinute: { type: Number, required: true },
+          requestsPerDay: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+      validate: (value: IUserApiKeyRateLimit | null | undefined) =>
+        value === undefined ||
+        (value !== null &&
+          oauthClientRateLimitSchema.safeParse({
+            requestsPerMinute: value.requestsPerMinute,
+            requestsPerDay: value.requestsPerDay,
+          }).success),
+    },
   },
   {
     timestamps: true,

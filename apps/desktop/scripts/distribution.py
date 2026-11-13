@@ -115,6 +115,8 @@ def prune(folder):
     """Drop build outputs that the assembled checksum list does not publish."""
     folder = Path(folder)
     keep = {line.split('  ', 1)[1] for line in (folder / 'SHA256SUMS.txt').read_text().splitlines() if line}
+    # A published manifest keeps its detached signature from the sign job; see sign-update-manifests.mjs.
+    keep |= {name + '.sig' for name in keep if name.endswith('.yml')}
     for path in folder.iterdir():
         if path.name != 'SHA256SUMS.txt' and path.name not in keep:
             path.unlink()

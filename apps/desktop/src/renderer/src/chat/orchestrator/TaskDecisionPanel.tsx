@@ -85,6 +85,11 @@ export function TaskDecisionPanel({ agent }: { agent: AgentView }) {
             </Typography>
           ))}
           {'reason' in state && <Typography level="body-sm">{state.reason}</Typography>}
+          {state.status === 'canceled' && (
+            <Typography level="body-xs" data-testid="agent-task-closed-note">
+              This task is closed. You can still chat in this conversation; follow-ups do not reopen the task.
+            </Typography>
+          )}
           {'evidence' in state &&
             state.evidence.map((evidence, index) => (
               <Typography key={index} level="body-xs">

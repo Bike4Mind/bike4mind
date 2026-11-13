@@ -1,3 +1,4 @@
+import ast
 import os
 from pathlib import Path
 import re
@@ -5,6 +6,7 @@ import shlex
 import subprocess
 import tempfile
 import textwrap
+from types import SimpleNamespace
 import unittest
 
 import yaml
@@ -12,7 +14,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (ROOT / '.github/workflows/desktop-release.yml').read_text()
+JOBS = yaml.safe_load(WORKFLOW)['jobs']
 NEXT_JOB = re.compile(r'\n  [a-z][a-z-]*:\n')
+PUBLISH_EVENTS = "github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
 
 
 def job(name):
@@ -21,11 +25,44 @@ def job(name):
     return body[:following.start()] if following else body
 
 
+def evaluate(node, names):
+    if isinstance(node, ast.BoolOp):
+        values = [evaluate(value, names) for value in node.values]
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not evaluate(node.operand, names)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+        equal = evaluate(node.left, names) == evaluate(node.comparators[0], names)
+        return equal if isinstance(node.ops[0], ast.Eq) else not equal
+    if isinstance(node, ast.Attribute):
+        return getattr(evaluate(node.value, names), node.attr)
+    if isinstance(node, ast.Name):
+        return names[node.id]
+    if isinstance(node, ast.Constant):
+        return node.value
+    raise ValueError(f'Unsupported expression: {ast.dump(node)}')
+
+
+def condition(expression, *, keys='', sign='skipped', validate='success', event='push', cancelled=False):
+    """Evaluate a job `if:` for the given run; covers only the operators these conditions use."""
+    body = expression.strip()
+    if body.startswith('${{'):
+        body = body[3:-2]
+    body = body.replace('!cancelled()', 'not cancelled').replace('&&', ' and ').replace('||', ' or ')
+    names = {
+        'cancelled': cancelled,
+        'github': SimpleNamespace(ref='refs/heads/main', event_name=event),
+        'needs': SimpleNamespace(validate=SimpleNamespace(result=validate), sign=SimpleNamespace(result=sign)),
+        'vars': SimpleNamespace(DESKTOP_UPDATE_PUBLIC_KEYS=keys),
+    }
+    return evaluate(ast.parse(body.strip(), mode='eval').body, names)
+
+
 class ReleaseWorkflowTest(unittest.TestCase):
     def test_publisher_is_main_only_and_scoped(self):
         publish = job('publish')
         steps = publish.partition('    steps:\n')[2]
-        self.assertIn("if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", publish)
+        self.assertIn(PUBLISH_EVENTS, JOBS['publish']['if'])
         self.assertIsNone(re.search(r'^    permissions:', publish, re.M))
         self.assertIn('repositories: ${{ github.event.repository.name }}', publish)
         self.assertIn('permission-contents: write', publish)
@@ -186,6 +223,63 @@ class ReleaseWorkflowTest(unittest.TestCase):
             with self.subTest(step=step):
                 self.assertLess(body.rindex('pnpm build'), body.index(check))
                 self.assertLess(body.index(check), body.index('electron-builder'))
+
+    def test_build_bakes_update_keys_and_checks_them_before_packaging(self):
+        build = job('build')
+        self.assertIn('B4M_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}', build)
+        check = 'node scripts/sign-update-manifests.mjs check-build out'
+        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
+            body = build.split(step, 1)[1].split('- name:', 1)[0]
+            with self.subTest(step=step):
+                self.assertLess(body.rindex('pnpm build'), body.index(check))
+                self.assertLess(body.index(check), body.index('electron-builder'))
+
+    def test_signing_key_is_held_by_one_job_that_runs_only_with_keys_on_publish_events(self):
+        sign = JOBS['sign']
+        self.assertEqual(sign['needs'], 'validate')
+        self.assertEqual(sign['environment'], 'desktop-update-signing')
+        self.assertEqual(sign['permissions'], {'contents': 'read'})
+        self.assertEqual(WORKFLOW.count('secrets.DESKTOP_UPDATE_SIGNING_KEY'), 1)
+        self.assertIn('DESKTOP_UPDATE_SIGNING_KEY: ${{ secrets.DESKTOP_UPDATE_SIGNING_KEY }}', job('sign'))
+        for keys, event, runs in (('', 'push', False), ('key', 'push', True), ('key', 'workflow_dispatch', True),
+                                  ('key', 'pull_request', False)):
+            with self.subTest(keys=keys, event=event):
+                self.assertEqual(condition(sign['if'], keys=keys, event=event), runs)
+        steps = sign['steps']
+        downloads = [step['with'] for step in steps if step.get('uses', '').startswith('actions/download-artifact')]
+        self.assertEqual(downloads, [{'name': 'installer-checksums', 'path': 'manifests'}])
+        signing = next(step for step in steps if step.get('name') == 'Sign update manifests')
+        self.assertEqual(signing['run'], 'node apps/desktop/scripts/sign-update-manifests.mjs sign manifests')
+        self.assertEqual(signing['env']['DESKTOP_UPDATE_PUBLIC_KEYS'], '${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}')
+        upload = next(step['with'] for step in steps if step.get('uses', '').startswith('actions/upload-artifact'))
+        self.assertEqual((upload['name'], upload['path'], upload['if-no-files-found']),
+                         ('update-manifest-signatures', 'manifests/*.yml.sig', 'error'))
+
+    def test_publish_needs_signatures_only_once_keys_are_configured(self):
+        publish = JOBS['publish']
+        self.assertEqual(publish['needs'], ['version', 'validate', 'sign'])
+        cases = [
+            ({}, True),
+            ({'validate': 'failure'}, False),
+            ({'cancelled': True}, False),
+            ({'event': 'pull_request'}, False),
+            ({'keys': 'key', 'sign': 'success'}, True),
+            ({'keys': 'key', 'sign': 'skipped'}, False),
+            ({'keys': 'key', 'sign': 'failure'}, False),
+            ({'keys': 'key', 'sign': 'success', 'validate': 'failure'}, False),
+        ]
+        for run, publishes in cases:
+            with self.subTest(**run):
+                self.assertEqual(condition(publish['if'], **run), publishes)
+        steps = publish['steps']
+        names = [step.get('name') or step.get('with', {}).get('name') for step in steps]
+        verify = steps[names.index('Verify update manifest signatures')]
+        self.assertEqual(verify['run'], 'node apps/desktop/scripts/sign-update-manifests.mjs verify installers')
+        for name in ('update-manifest-signatures', 'Verify update manifest signatures'):
+            self.assertEqual(steps[names.index(name)]['if'], "vars.DESKTOP_UPDATE_PUBLIC_KEYS != ''")
+        self.assertEqual(steps[names.index('update-manifest-signatures')]['with']['path'], 'installers')
+        self.assertLess(names.index('installer-checksums'), names.index('Verify update manifest signatures'))
+        self.assertLess(names.index('Verify update manifest signatures'), names.index('Check distribution destination'))
 
     def test_orphaned_reservation_is_released_before_reserving(self):
         # The version job treats any reservation on an older main commit as abandoned; that holds only

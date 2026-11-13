@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 
 /**
- * The admin Tutorials tab: the Core section with its switch card and module list. With no core tutorial
+ * The admin Tutorials tab: the Core section with its switch card, module list and made-tutorials card. With no core tutorial
  * registered the list shows its empty state. The switch is toggled on and put back, since the setting is global.
  */
 test.describe('Admin - Tutorials tab', () => {
@@ -20,6 +20,14 @@ test.describe('Admin - Tutorials tab', () => {
     await expect(
       modules.getByTestId('tutorial-modules-empty').or(modules.locator('[data-testid^="tutorial-module-row-"]').first())
     ).toBeVisible();
+
+    const drafts = page.getByTestId('tutorial-drafts-card');
+    await expect(drafts).toBeVisible();
+    await expect(drafts.getByTestId('tutorial-capture-submit')).toBeVisible();
+    await expect(
+      drafts.getByTestId('tutorial-drafts-list').or(drafts.getByTestId('tutorial-drafts-error'))
+    ).toBeVisible();
+    await expect(drafts.getByTestId('tutorial-drafts-error')).toHaveCount(0);
 
     const toggle = page.getByTestId('tutorials-switch');
     await expect(toggle).toBeAttached();
