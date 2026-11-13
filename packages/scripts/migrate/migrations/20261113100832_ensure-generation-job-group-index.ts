@@ -8,7 +8,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921240212,
+  id: 20261113100832,
   name: 'ensure generation job group index',
 
   up: async () => {
