@@ -99,7 +99,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
       organizationName: org.name,
       heading: input.title,
       message: input.message,
-      settingsUrl: `${appUrl}/organizations/${input.organizationId}?tab=settings`,
+      settingsUrl: `${appUrl}/organizations/${input.organizationId}?tab=members`,
     });
     const skipEmail = new Set(input.excludeEmailUserIds ?? []);
     if (input.excludeOwnerEmail) skipEmail.add(org.userId);

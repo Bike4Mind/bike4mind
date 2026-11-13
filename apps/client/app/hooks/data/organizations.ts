@@ -5,6 +5,9 @@ import {
   WithId,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
+  type IOrgBudgetAlerts,
+  type OrgAlertKind,
+  type OrgAlertKindPrefs,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { AxiosResponse } from 'axios';
@@ -481,6 +484,95 @@ export function useSetMemberCreditOverride() {
     },
     'Member credit limit updated'
   );
+}
+
+const orgAlertSettingsKey = (organizationId: string) => ['organizations', organizationId, 'alert-settings'];
+const myOrgNotificationPrefsKey = (organizationId: string) => [
+  'organizations',
+  organizationId,
+  'my-notification-prefs',
+];
+
+/** The org's budget and low-balance alert thresholds; null when never configured. */
+export function useOrgAlertSettings(organizationId: string | null) {
+  return useQuery({
+    queryKey: orgAlertSettingsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<{ budgetAlerts: IOrgBudgetAlerts | null }>(
+        `/api/organizations/${organizationId}/alert-settings`
+      );
+      return response.data.budgetAlerts;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateOrgAlertSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      budgetAlerts,
+    }: {
+      organizationId: string;
+      budgetAlerts: IOrgBudgetAlerts;
+    }) => {
+      const response = await api.put<{ budgetAlerts: IOrgBudgetAlerts }>(
+        `/api/organizations/${organizationId}/alert-settings`,
+        budgetAlerts
+      );
+      return response.data.budgetAlerts;
+    },
+    onSuccess: (budgetAlerts, { organizationId }) => {
+      queryClient.setQueryData(orgAlertSettingsKey(organizationId), budgetAlerts);
+      // budgetAlerts is also on the org document.
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId] });
+      toast.success('Budget alerts saved');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to save budget alerts: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+export interface MyOrgNotificationPrefs {
+  role: 'owner' | 'manager';
+  kinds: Record<OrgAlertKind, boolean>;
+}
+
+/** The caller's effective alert opt-ins. Enable only for the owner or a current manager (the route 404s others). */
+export function useMyOrgNotificationPrefs(organizationId: string | null) {
+  return useQuery({
+    queryKey: myOrgNotificationPrefsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`
+      );
+      return response.data;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateMyOrgNotificationPrefs() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ organizationId, kinds }: { organizationId: string; kinds: OrgAlertKindPrefs }) => {
+      const response = await api.put<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`,
+        { kinds }
+      );
+      return response.data;
+    },
+    onSuccess: (prefs, { organizationId }) => {
+      queryClient.setQueryData(myOrgNotificationPrefsKey(organizationId), prefs);
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to update alert preferences: ${getErrorMessage(error)}`);
+    },
+  });
 }
 
 /** Make one member a manager, or remove them as one (owner or platform admin only). */

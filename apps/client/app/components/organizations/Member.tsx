@@ -33,6 +33,8 @@ import BulkInviteModal from './BulkInviteModal';
 import InviteLinksPanel from './InviteLinksPanel';
 import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import MyOrgNotificationPrefsCard from './MyOrgNotificationPrefsCard';
+import OrgBudgetAlertsCard from './OrgBudgetAlertsCard';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import {
   useOrganizationInvites,
@@ -177,6 +179,15 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
 
   // Mirrors the server gate on the credit-budget routes.
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
+
+  // Alerts live on this tab rather than Settings because an appointed manager with only a read
+  // row cannot open Settings. Prefs mirror the my-notification-prefs route: owner or current
+  // manager only, never a platform admin, never a personal org.
+  const canManageBudgetAlerts = canManageCreditBudgets && !organization.personal;
+  const isOrgAlertRecipient =
+    !!currentUser &&
+    !organization.personal &&
+    isOrgOwnerOrCurrentAdmin({ id: currentUser.id, isAdmin: false }, organization);
 
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
   const canManageManagers =
@@ -408,6 +419,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      {canManageBudgetAlerts && <OrgBudgetAlertsCard organizationId={organization.id} />}
+      {isOrgAlertRecipient && <MyOrgNotificationPrefsCard organizationId={organization.id} />}
 
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>

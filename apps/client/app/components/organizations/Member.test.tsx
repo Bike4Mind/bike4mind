@@ -45,6 +45,8 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('./InviteLinksPanel', () => ({ default: () => null }));
+vi.mock('./OrgBudgetAlertsCard', () => ({ default: () => <div data-testid="org-budget-alerts-card" /> }));
+vi.mock('./MyOrgNotificationPrefsCard', () => ({ default: () => <div data-testid="org-alert-prefs-card" /> }));
 vi.mock('./BulkInviteModal', () => ({
   default: (p: { availableSeats: number; onDone: () => void }) => (
     <div data-testid="bulk-invite-modal" data-seats={p.availableSeats}>
@@ -205,6 +207,59 @@ const shareUpdateRow = (userId: string) => ({
 
 // Each control must match the server predicate behind its own endpoint: invites (Add Member, Cancel Invite)
 // gate on isOrgMember then isOrgOwnerOrCurrentAdmin, Revoke Access on canAdministerOrganization.
+describe('OrganizationMembers org alert cards', () => {
+  beforeEach(() => {
+    mocks.viewerId = 'viewer';
+    mocks.viewer = undefined;
+    mocks.members = [];
+    mocks.invitations = [];
+  });
+
+  const managerOrg = (overrides: Partial<IOrganizationDocument> = {}) =>
+    buildOrg({
+      adminUserIds: ['viewer'],
+      users: [{ userId: 'viewer', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+      ...overrides,
+    });
+
+  it('shows both cards to the owner', () => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('org-budget-alerts-card')).toBeTruthy();
+    expect(screen.getByTestId('org-alert-prefs-card')).toBeTruthy();
+  });
+
+  it('shows both cards to an appointed manager with a read-only users[] row', () => {
+    renderMembers(managerOrg());
+    expect(screen.getByTestId('org-budget-alerts-card')).toBeTruthy();
+    expect(screen.getByTestId('org-alert-prefs-card')).toBeTruthy();
+  });
+
+  it('gives a platform admin the settings but no personal prefs, since they are not a recipient', () => {
+    mocks.viewer = { id: 'viewer', isAdmin: true };
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('org-budget-alerts-card')).toBeTruthy();
+    expect(screen.queryByTestId('org-alert-prefs-card')).toBeNull();
+  });
+
+  it('shows neither card to a plain member, a stale manager, or on a personal org', () => {
+    const { unmount } = renderMembers(
+      buildOrg({ users: [{ userId: 'viewer', permissions: [Permission.read] }] as IOrganizationDocument['users'] })
+    );
+    expect(screen.queryByTestId('org-budget-alerts-card')).toBeNull();
+    expect(screen.queryByTestId('org-alert-prefs-card')).toBeNull();
+    unmount();
+
+    const stale = renderMembers(buildOrg({ adminUserIds: ['viewer'] }));
+    expect(screen.queryByTestId('org-alert-prefs-card')).toBeNull();
+    stale.unmount();
+
+    renderMembers(managerOrg({ personal: true }));
+    expect(screen.queryByTestId('org-budget-alerts-card')).toBeNull();
+    expect(screen.queryByTestId('org-alert-prefs-card')).toBeNull();
+  });
+});
+
 describe('OrganizationMembers roster controls', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'viewer', isAdmin: false };

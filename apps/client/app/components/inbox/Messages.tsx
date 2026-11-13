@@ -566,9 +566,10 @@ const InboxDisplayModal: React.FC<{
               {inbox.message}
             </Typography>
           </Box>
-          {!showReplyInput && (
+          {/* System notices (org alerts and the like) have no sender to reply to. */}
+          {!showReplyInput && inbox.userId !== 'SYSTEM' && (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: '24px' }}>
-              <Button color={'primary'} onClick={onReply} sx={blueButtonStyle}>
+              <Button color={'primary'} onClick={onReply} sx={blueButtonStyle} data-testid="inbox-message-reply-btn">
                 Reply
               </Button>
             </Box>

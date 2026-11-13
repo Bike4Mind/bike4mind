@@ -79,7 +79,7 @@ describe('dispatchOrgAlert', () => {
     expect(await inboxFor(ids.stale)).toHaveLength(0);
     expect(publish.mock.calls.map(([e]) => e.to).sort()).toEqual(['optedIn@example.com', 'owner@example.com']);
     expect((await inboxFor(ids.owner))[0].userId).toBe('SYSTEM');
-    expect(publish.mock.calls[0][0].body).toContain(`/organizations/${str(ids.org)}?tab=settings`);
+    expect(publish.mock.calls[0][0].body).toContain(`/organizations/${str(ids.org)}?tab=members`);
   });
 
   it('sends nothing for a second dispatch of the same key', async () => {
