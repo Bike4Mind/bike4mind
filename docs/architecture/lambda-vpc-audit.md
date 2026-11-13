@@ -166,6 +166,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/events/spider.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/stripe/customerSubscriptionUpdated.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/stripe/invoicePaymentSucceeded.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |
+| `apps/workers/src/events/studioJobCompleted.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/telemetryAlert.handler` | `infra/eventBus.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/events/wafAlarmToSlack.handler` | `infra/waf.ts` | linked: `secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL`, `secrets.SLACK_ALARMS_WEBHOOK_URL`, `secrets.SLACK_COST_ALARMS_WEBHOOK_URL` | No | Already outside the VPC. SNS alarm to Slack relay. |
 | `apps/workers/src/jobs/dataSyncerHandler.handler` | `infra/dataSyncer.ts` | MongoDB; linked: `secrets.MONGODB_URI` | Yes | Connects to MongoDB. |

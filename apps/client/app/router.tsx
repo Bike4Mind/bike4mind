@@ -96,6 +96,7 @@ const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
@@ -1109,6 +1110,17 @@ const artifactsDemoRoute = createRoute({
   ),
 });
 
+// Composer status-line states with mock data, for design work (routes/composer-lab.tsx).
+const composerLabRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/composer-lab',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ComposerLabPage />
+    </Suspense>
+  ),
+});
+
 // The standalone Data Lakes page was retired in #1943 - its capabilities live in the in-chat
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
@@ -1402,6 +1414,7 @@ const routeTree = rootRoute.addChildren([
     organizationsRoute,
     organizationDetailRoute,
     artifactsDemoRoute,
+    composerLabRoute,
     dataLakesRoute,
     hudRoute,
     hearthRoute,

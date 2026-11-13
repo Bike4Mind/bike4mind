@@ -18,6 +18,7 @@ export * from './InviteType';
 export * from './organizationInviteRoles';
 export * from './MessageTypes';
 export * from './OrganizationTypes';
+export * from './OrganizationLibraryTypes';
 export * from './SessionTypes';
 export * from './SessionAgentConfigTypes';
 export * from './SessionToolApprovalTypes';

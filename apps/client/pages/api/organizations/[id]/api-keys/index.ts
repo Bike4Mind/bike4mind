@@ -3,19 +3,26 @@
 // member leaving (server/organizations/orgApiKeys.ts). Owner, current manager or platform admin
 // (verifyOrgAccess). POST returns the key's secret once.
 
-import { CreditHolderType, type IOrgApiKeySecretResponse, type IOrgApiKeyView } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  OrgApiKeyGrantsSchema,
+  type IOrgApiKeySecretResponse,
+  type IOrgApiKeyView,
+} from '@bike4mind/common';
 import { agentRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { isKnownApiKeyScope, isOrgApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { isKnownApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  assertOrgApiKeyScopesOffered,
   creatorDisplayName,
   findServiceAccount,
   getOrCreateServiceAccount,
+  normalizeOrgApiKeyGrants,
   resolveCreatorNames,
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
@@ -25,12 +32,10 @@ import { z } from 'zod';
 
 const CreateOrgApiKeyBodySchema = z.object({
   name: z.string().trim().min(1).max(100),
-  scopes: z
-    .array(z.string())
-    .min(1)
-    .refine(scopes => scopes.every(isOrgApiKeyScope), {
-      message: 'Scope not allowed on an organization key',
-    }),
+  // Product gates are judged on the org in the handler (assertOrgApiKeyScopesOffered).
+  scopes: z.array(z.string()).min(1),
+  // The key's reach into org-shared content; omitted = default deny.
+  grants: OrgApiKeyGrantsSchema.default([]),
   expiresAt: z.iso
     .datetime()
     .optional()
@@ -64,6 +69,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const user = req.user!;
       const org = await verifyOrgAccess(user, orgIdOf(req.query));
       const body = parseOrBadRequest(CreateOrgApiKeyBodySchema, req.body);
+      await assertOrgApiKeyScopesOffered(org.id, body.scopes);
+      const grants = await normalizeOrgApiKeyGrants(org.id, body.grants);
 
       // The admin paid-only switch, judged on the org this key bills. apiKeyAuth re-runs it on every use.
       await assertApiKeyAccessAllowed(
@@ -85,7 +92,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
             metadata: { createdFrom: 'dashboard' },
             billingOwnerType: CreditHolderType.Organization,
             organizationId: org.id,
-            orgOwned: { createdByUserId: user.id },
+            orgOwned: { createdByUserId: user.id, ...(grants.length > 0 ? { grants } : {}) },
           },
           {
             db: { userApiKeys: userApiKeyRepository, agents: agentRepository },
@@ -97,7 +104,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
           actorScope: 'organization',
           target: { kind: 'organization', id: org.id, displayName: org.name },
           summary: `created organization API key "${minted.name}"`,
-          details: { keyId: minted.id, keyPrefix: minted.keyPrefix, scopes: minted.scopes },
+          details: { keyId: minted.id, keyPrefix: minted.keyPrefix, scopes: minted.scopes, grants },
         });
         return minted;
       });
