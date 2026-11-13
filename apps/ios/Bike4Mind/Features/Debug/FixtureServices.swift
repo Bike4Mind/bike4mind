@@ -10,6 +10,9 @@
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
     static let studio: any StudioAPI = FixtureStudioAPI()
+    /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
+    static let frameUploader = FrameUploader(
+      capture: FixtureUploader(), media: media, put: { _, _, _ in }, sleep: { _ in })
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
@@ -58,10 +61,18 @@
               id: "fixture-video", name: "Fixture Video",
               capabilities: .video(
                 VideoCapabilities(
-                  inputRoles: ["first_frame": 1], duration: .range(min: 1, max: 15, step: 1),
+                  modes: ["text_to_video", "image_to_video"], inputRoles: ["first_frame": 1],
+                  duration: .range(min: 1, max: 15, step: 1),
                   aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
                   defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
                   creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-morph", name: "Fixture Video Morph",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["image_to_video"], inputRoles: ["first_frame": 1, "last_frame": 1],
+                  duration: .discrete([5, 8]), aspectRatios: ["16:9"], resolutions: ["720p"], defaultDuration: 5,
+                  defaultAspectRatio: "16:9", defaultResolution: "720p"))),
             GenerationModel(
               id: "fixture-video-short", name: "Fixture Video Short",
               capabilities: .video(
@@ -103,6 +114,16 @@
       func cancel(_ handle: GenerationHandle) async throws {}
 
       func createSession(name: String) async throws -> String { "fixture-session" }
+    }
+
+    private struct FixtureUploader: FileUploading {
+      func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
+        UploadTicket(
+          fileID: "fixture-media-0", uploadURL: URL(string: "https://fixture.invalid/upload")!,
+          expiresAt: Date().addingTimeInterval(600))
+      }
+
+      func fileStatus(fileID: String) async throws -> RemoteFileStatus { .clean }
     }
 
     private struct FixtureAccountAPI: AccountAPI {

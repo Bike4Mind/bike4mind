@@ -162,6 +162,25 @@ final class AppServices {
     return current.studio
   }
 
+  /// Uploads a frame grabbed from a video so it can be edited or animated. The PUT carries no `Authorization`
+  /// header: the presigned signature is the credential.
+  var frameUploader: FrameUploader {
+    #if DEBUG
+      if FixtureServices.isEnabled { return FixtureServices.frameUploader }
+    #endif
+    return FrameUploader(
+      capture: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth), media: media,
+      put: { url, data, contentType in
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
+        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+          throw APIError.malformedResponse
+        }
+      })
+  }
+
   @ObservationIgnored private var studioTrackerState: (environment: ServerEnvironment, tracker: GenerationTracker)?
 
   /// Follows Studio generations app-wide, so leaving Studio does not lose track of them. One per server.

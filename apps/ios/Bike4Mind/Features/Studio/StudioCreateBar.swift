@@ -20,6 +20,9 @@ struct StudioCreateBar: View {
         Spacer(minLength: 0)
         modelMenu
       }
+      if !model.videoInputs.isEmpty {
+        inputsRow
+      }
       if !model.controls.isEmpty || model.estimatedCredits != nil {
         paramsRow
       }
@@ -45,6 +48,25 @@ struct StudioCreateBar: View {
     .background(.bar)
     .task(id: model.kind) { await model.loadModels() }
     .sheet(isPresented: $showsParams) { StudioParamsSheet(model: model) }
+  }
+
+  /// The images attached by "Turn into...": each can be removed, and the prompt and settings stay editable.
+  private var inputsRow: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: Tokens.Spacing.s) {
+          ForEach(model.videoInputs) { input in
+            InputChip(input: input) { model.remove(input: input) }
+          }
+        }
+      }
+      if let issue = model.inputIssue {
+        Text(issue)
+          .font(Tokens.Typography.meta)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("studio-create-input-issue")
+      }
+    }
   }
 
   /// The summary chip opens the full panel; the prompt stays the one field a first-time user needs.
@@ -158,5 +180,37 @@ extension StudioSubmitError {
     case .rejected(_, let message): message
     case .api(let error): error.message
     }
+  }
+}
+
+private struct InputChip: View {
+  let input: StudioInput
+  let onRemove: () -> Void
+
+  var body: some View {
+    HStack(spacing: Tokens.Spacing.xs) {
+      AsyncImage(url: input.item.url) { phase in
+        if let image = phase.image {
+          image.resizable().scaledToFill()
+        } else {
+          Tokens.Palette.groupedBackground
+        }
+      }
+      .frame(width: 32, height: 32)
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.sm, style: .continuous))
+      Text(input.role.title)
+        .font(Tokens.Typography.meta)
+      Button(action: onRemove) {
+        Image(systemName: "xmark.circle.fill")
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .frame(minWidth: 44, minHeight: 44)
+      }
+      .accessibilityLabel("Remove \(input.role.title) image")
+      .accessibilityIdentifier("studio-create-input-remove-\(input.role.rawValue)")
+    }
+    .padding(.leading, Tokens.Spacing.xs)
+    .background(Tokens.Palette.groupedBackground, in: Capsule())
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("studio-create-input-\(input.role.rawValue)")
   }
 }
