@@ -339,6 +339,11 @@ const nextConfig = {
     // Skip server source map generation to reduce build memory pressure on CI.
     // Recommended in the Next.js memory-usage guide for large projects.
     serverSourceMaps: false,
+    // Next 16.4 defaults this on. The self-host image build starts from an empty .next and
+    // discards it, so the cache is never read back, and persisting it at shutdown, which
+    // `next build` awaits after printing the route table, intermittently never finished
+    // there (the Self-host image workflow timed out with the route table as its last output).
+    ...(process.env.B4M_SELF_HOST === 'true' ? { turbopackFileSystemCacheForBuild: false } : {}),
   },
 };
 
