@@ -625,6 +625,7 @@ export async function shellApproval(
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
+    ...(reasons.length > 0 ? { reasons } : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
@@ -676,12 +677,21 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true, unchecked: true };
-  return {
-    detail: [
+  // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
+  if (!mayReachDistro)
+    return {
       detail,
-      'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.',
-    ].join('\n\n'),
+      key,
+      askInAuto: true,
+      askInFull: true,
+      reasons: ['Could not read this command, so where it acts cannot be checked.'],
+      unchecked: true,
+    };
+  const reason =
+    'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
+  return {
+    detail: [detail, reason].join('\n\n'),
+    reasons: [reason],
     key,
     askInAuto: true,
     askInFull: true,

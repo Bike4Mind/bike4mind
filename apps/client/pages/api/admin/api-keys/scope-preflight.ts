@@ -27,7 +27,7 @@ const MAX_ROWS = 500;
  *
  * The collection has exactly one writer: `baseApi` -> `apiKeyAuth`'s `res.finish`
  * hook (apps/client/server/middlewares/apiKeyAuth.ts). Everything authenticated
- * through `verifyApiKey` (apps/client/server/cli/auth.ts) - public contract routes
+ * through `verifyApiKey` (packages/server-utils/src/cli/auth.ts) - public contract routes
  * via `resolveContractAuth`, and the embed surfaces - logs nothing. A preflight
  * over those paths returns zero rows however busy they are, which would make this
  * tool assert the one thing it must never assert: a false "nobody calls these".

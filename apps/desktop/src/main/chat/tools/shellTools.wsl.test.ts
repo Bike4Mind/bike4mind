@@ -124,6 +124,8 @@ describe('a shell command the scan could not read', () => {
     expect(prompt.askInFull).toBe(true);
     expect(prompt.always?.ungranted).toEqual([UNREAD_WSL_COMMAND]);
     expect(prompt.detail).toContain('Could not read this command');
+    expect(prompt.unchecked).toBe(true);
+    expect(prompt.reasons).toEqual([expect.stringContaining('may reach a WSL distro')]);
 
     const parsed = parseRule(`Bash(${call.input.command})`, { native: true });
     if (!parsed.ok) throw new Error(parsed.reason);
@@ -147,6 +149,8 @@ describe('a shell command the scan could not read', () => {
     expect(prompt.askInAuto).toBe(true);
     expect(prompt.askInFull).toBe(true);
     expect(prompt.always).toBeUndefined();
+    expect(prompt.unchecked).toBe(true);
+    expect(prompt.reasons).toEqual(['Could not read this command, so where it acts cannot be checked.']);
     scanned.unreadable = false;
   });
 });

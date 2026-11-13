@@ -697,6 +697,12 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
+   * surface that shows less than the full card (the menu bar, the mini window) can tell the call
+   * carries a reason it would otherwise drop.
+   */
+  reasons?: readonly string[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**

@@ -9,8 +9,8 @@ import {
   type IErasureRecord,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
-import { purgeAccountContent } from './purgeAccountContent';
+import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDeletedUserData';
+import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;

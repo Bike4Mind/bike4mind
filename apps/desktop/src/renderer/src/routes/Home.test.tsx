@@ -25,6 +25,7 @@ vi.mock('../chat/ChatShell', () => ({
 }));
 vi.mock('../auth/SignedInPanel', () => ({ SignedInPanel: () => null }));
 vi.mock('../chat/UpdateNotice', () => ({ AppUpdateNotice: () => null }));
+vi.mock('../chat/useAppUpdate', () => ({ useAppUpdate: () => ({}) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

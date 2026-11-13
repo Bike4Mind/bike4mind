@@ -107,7 +107,7 @@ export type UserReference = ErasureAction & {
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
    * the person's personal-workspace organizations, so the executor must reuse the account purge's
-   * predicate (`personalFilter` in `server/users/purgeAccountContent.ts`; for `FabFile` also
+   * predicate (`personalFilter` in `packages/server-utils/src/users/purgeAccountContent.ts`; for `FabFile` also
    * `isOrganizationFile` in `packages/server-utils/src/users/purgeAccountFiles.ts`, which keeps legacy org uploads).
    */
   scope?: 'personal';

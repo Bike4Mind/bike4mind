@@ -40,7 +40,7 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 /** First-write and backup paths: they upload bytes but invalidate nothing. */
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
-  'apps/client/server/tutorials/sheet.ts',
+  'packages/server-utils/src/tutorials/sheet.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
@@ -76,7 +76,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
-  'apps/client/server/generationJobs/wiring.ts',
+  'packages/server-utils/src/generationJobs/wiring.ts',
   // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
   'packages/server-utils/src/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
