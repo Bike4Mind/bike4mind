@@ -92,7 +92,7 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
 
         {state.status === 'available' && (
           <Button size="sm" variant="solid" onClick={download} data-testid="update-download-btn">
-            Download
+            Download and update
           </Button>
         )}
 
