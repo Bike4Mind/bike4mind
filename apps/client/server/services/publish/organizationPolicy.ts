@@ -20,28 +20,26 @@ export async function publicationOrganizationIds(context: PublicationPolicyConte
     const project = await projectRepository.findById(context.scopeId);
     if (project?.organizationId) ids.add(project.organizationId);
   }
+  const addSessionOrganizations = async (sessionId: string) => {
+    const session = await sessionRepository.findById(sessionId);
+    if (session?.organizationId) ids.add(session.organizationId);
+    for (const project of await projectRepository.findAllBySessionId(sessionId)) {
+      if (project.organizationId) ids.add(project.organizationId);
+    }
+  };
   const source = context.source;
   if (source?.artifactId) {
     const artifact = await artifactRepository.findOne({ id: source.artifactId });
     if (artifact?.organizationId) ids.add(artifact.organizationId);
     if (artifact?.sessionId) {
-      const session = await sessionRepository.findById(artifact.sessionId);
-      if (session?.organizationId) ids.add(session.organizationId);
+      await addSessionOrganizations(artifact.sessionId);
     }
     if (artifact?.projectId) {
       const project = await projectRepository.findById(artifact.projectId);
       if (project?.organizationId) ids.add(project.organizationId);
     }
   }
-  if (source?.sessionId) {
-    const session = await sessionRepository.findById(source.sessionId);
-    if (session?.organizationId) ids.add(session.organizationId);
-    // A session keeps the organizationId it was created with, so one added to an org-bound project
-    // later answers to that project's org through the project, as the artifact arm does.
-    for (const project of await projectRepository.findAllBySessionId(source.sessionId)) {
-      if (project.organizationId) ids.add(project.organizationId);
-    }
-  }
+  if (source?.sessionId) await addSessionOrganizations(source.sessionId);
   if (source?.fabFileId) {
     const file = await fabFileRepository.findById(source.fabFileId);
     if (file?.organizationId) ids.add(file.organizationId);

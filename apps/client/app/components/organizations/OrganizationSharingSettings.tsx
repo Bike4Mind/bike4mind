@@ -21,15 +21,24 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 
 export function OrganizationSharingSettings({ organization }: { organization: IOrganizationDocument }) {
+  return <OrganizationSharingSettingsForm key={organization.id} organization={organization} />;
+}
+
+function OrganizationSharingSettingsForm({ organization }: { organization: IOrganizationDocument }) {
   const { currentUser } = useUser();
   const mutation = useUpdateOrganization();
   const [policy, setPolicy] = useState(() => organizationSharingPolicy(organization));
   const [domains, setDomains] = useState(policy.allowedDomains.join('\n'));
+  const persisted = organizationSharingPolicy(organization);
+  const persistedDomains = persisted.allowedDomains.join('\n');
   useEffect(() => {
-    const next = organizationSharingPolicy(organization);
-    setPolicy(next);
-    setDomains(next.allowedDomains.join('\n'));
-  }, [organization.id, organization.sharingPolicy]);
+    setPolicy({
+      allowPublicLinks: persisted.allowPublicLinks,
+      allowExternalSharing: persisted.allowExternalSharing,
+      allowedDomains: persistedDomains.split('\n').filter(Boolean),
+    });
+    setDomains(persistedDomains);
+  }, [persisted.allowPublicLinks, persisted.allowExternalSharing, persistedDomains]);
   const canEdit = !!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization);
   const parsed = OrganizationSharingPolicySchema.safeParse({
     ...policy,
@@ -44,21 +53,21 @@ export function OrganizationSharingSettings({ organization }: { organization: IO
       </Typography>
       {!canEdit && <Alert color="neutral">Only organization owners and managers can change sharing policy.</Alert>}
       <Stack spacing={2}>
-        <FormControl>
+        <FormControl disabled={!canEdit || mutation.isPending}>
           <FormLabel>Allow public links</FormLabel>
           <Switch
             checked={policy.allowPublicLinks}
-            disabled={!canEdit}
+            disabled={!canEdit || mutation.isPending}
             onChange={event => setPolicy({ ...policy, allowPublicLinks: event.target.checked })}
             slotProps={{ input: { 'data-testid': 'organization-sharing-public-switch' } }}
           />
           <FormHelperText>When blocked, public publication and anonymous share links are unavailable.</FormHelperText>
         </FormControl>
-        <FormControl>
+        <FormControl disabled={!canEdit || mutation.isPending}>
           <FormLabel>Allow sharing outside the organization</FormLabel>
           <Switch
             checked={policy.allowExternalSharing}
-            disabled={!canEdit}
+            disabled={!canEdit || mutation.isPending}
             onChange={event => setPolicy({ ...policy, allowExternalSharing: event.target.checked })}
             slotProps={{ input: { 'data-testid': 'organization-sharing-external-switch' } }}
           />
@@ -67,11 +76,11 @@ export function OrganizationSharingSettings({ organization }: { organization: IO
             blocked.
           </FormHelperText>
         </FormControl>
-        <FormControl error={!parsed.success}>
+        <FormControl error={!parsed.success} disabled={!canEdit || mutation.isPending}>
           <FormLabel>Approved external email domains</FormLabel>
           <Textarea
             value={domains}
-            disabled={!canEdit}
+            disabled={!canEdit || mutation.isPending}
             onChange={event => setDomains(event.target.value)}
             placeholder="example.com"
             slotProps={{ textarea: { 'data-testid': 'organization-sharing-domains-input' } }}
@@ -83,7 +92,7 @@ export function OrganizationSharingSettings({ organization }: { organization: IO
           </FormHelperText>
         </FormControl>
         <Button
-          disabled={!canEdit || !parsed.success}
+          disabled={!canEdit || mutation.isPending || !parsed.success}
           loading={mutation.isPending}
           data-testid="organization-sharing-save-btn"
           onClick={async () => {

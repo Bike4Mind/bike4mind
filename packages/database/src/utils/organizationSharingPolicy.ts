@@ -8,6 +8,7 @@ import {
   PUBLIC_SHARING_BLOCKED,
   type IOrganizationDocument,
   type UserShareGrant,
+  type OrganizationShareRecipient,
 } from '@bike4mind/common';
 
 type BoundContent = {
@@ -34,7 +35,7 @@ async function loadOrganization(id: string): Promise<IOrganizationDocument> {
 
 export async function assertOrganizationRecipients(
   organizationId: string | undefined,
-  recipients: Array<{ id: string; email?: string | null }>
+  recipients: OrganizationShareRecipient[]
 ): Promise<void> {
   if (!organizationId) return;
   const org = await loadOrganization(organizationId);
@@ -123,6 +124,17 @@ const SHARING_KEYS = [
   'sessionIds',
   'fileIds',
 ];
+// The one repository pipeline performs recipient checks before constructing its atomic merge.
+// Query identity keeps that exception local to the checked write, rather than an ambient bypass.
+const checkedSharingQueries = new WeakSet<object>();
+export function checkedOrganizationSharingQuery<Query extends object>(query: Query): Query {
+  checkedSharingQueries.add(query);
+  return query;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 // Operators that only remove or clear values; they can never widen a share, so they pass unchecked.
 const NARROWING_OPERATORS = new Set(['$pull', '$pullAll', '$pop', '$unset']);
 
@@ -138,8 +150,18 @@ function readableSharingChanges(update: Record<string, unknown>): Record<string,
   const changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(update)) {
     if (!key.startsWith('$')) changes[key] = value;
-    else if (key === '$set') Object.assign(changes, value);
+    else if (key === '$set' && isRecord(value)) Object.assign(changes, value);
     else if (
+      key === '$rename' &&
+      isRecord(value) &&
+      Object.values(value).some(
+        destination =>
+          typeof destination === 'string' &&
+          (destination === 'organizationId' || touchesSharingKey({ [destination]: true }))
+      )
+    ) {
+      throw new ForbiddenError('Sharing fields cannot be rename destinations.');
+    } else if (
       !NARROWING_OPERATORS.has(key) &&
       value &&
       typeof value === 'object' &&
@@ -148,10 +170,19 @@ function readableSharingChanges(update: Record<string, unknown>): Record<string,
       throw new ForbiddenError(`Sharing fields can only be changed with $set, not ${key}.`);
     }
   }
+  if (
+    Object.keys(changes).some(
+      key =>
+        key.includes('.') &&
+        SHARING_KEYS.some(field => key.startsWith(`${field}.`)) &&
+        !(key.startsWith('permissions.') && key.split('.').length === 2)
+    )
+  )
+    throw new ForbiddenError('Sharing arrays must be replaced as a whole.');
   return changes;
 }
 
-// All grant writers, including project propagation, pass through these model boundaries.
+// Supported model writes are checked here; the atomic grant pipeline checks before marking its query.
 export function organizationContentPolicyPlugin(schema: Schema): void {
   schema.pre('save', async function () {
     const content = this.toObject() as BoundContent;
@@ -189,22 +220,66 @@ export function organizationContentPolicyPlugin(schema: Schema): void {
     }
   });
   schema.pre(['updateOne', 'findOneAndUpdate'], async function () {
+    if (checkedSharingQueries.has(this)) return;
     const changes = sharingChangesOf(this.getUpdate());
     if (!changes) return;
     const current = await this.model.findOne(this.getFilter()).lean<BoundContent>();
     if (current) await assertSharingChange(current, changes);
   });
   schema.pre('updateMany', async function () {
+    if (checkedSharingQueries.has(this)) return;
     const changes = sharingChangesOf(this.getUpdate());
     if (!changes) return;
     for (const current of await this.model.find(this.getFilter()).lean<BoundContent[]>()) {
       await assertSharingChange(current, changes);
     }
   });
+  schema.pre('bulkWrite', function (next, operations: unknown[]) {
+    for (const operation of operations) {
+      if (!isRecord(operation)) continue;
+      for (const kind of ['updateOne', 'updateMany']) {
+        const write = operation[kind];
+        if (isRecord(write) && sharingChangesOf(write.update)) {
+          throw new ForbiddenError('Sharing fields cannot be changed through bulkWrite; use a checked model update.');
+        }
+      }
+      if (operation.replaceOne) throw new ForbiddenError('Content replacement is not supported through bulkWrite.');
+      const insert = operation.insertOne;
+      if (
+        isRecord(insert) &&
+        isRecord(insert.document) &&
+        (insert.document.organizationId || touchesSharingKey(insert.document))
+      ) {
+        throw new ForbiddenError('Shared or organization-bound content must be created through the model.');
+      }
+    }
+    next();
+  });
 }
 
 function sharingChangesOf(update: unknown): Record<string, unknown> | null {
-  if (!update || typeof update !== 'object' || Array.isArray(update)) return null;
+  if (Array.isArray(update)) {
+    for (const stage of update) {
+      if (!isRecord(stage)) throw new ForbiddenError('Unsupported content update pipeline.');
+      for (const [operator, fields] of Object.entries(stage)) {
+        if (operator === '$unset') {
+          const paths = Array.isArray(fields) ? fields : [fields];
+          if (paths.includes('organizationId')) throw new ForbiddenError('The content organization is immutable.');
+          continue;
+        }
+        if (
+          !['$set', '$addFields'].includes(operator) ||
+          !isRecord(fields) ||
+          'organizationId' in fields ||
+          touchesSharingKey(fields)
+        ) {
+          throw new ForbiddenError('Sharing fields require a checked update rather than an arbitrary pipeline.');
+        }
+      }
+    }
+    return null;
+  }
+  if (!isRecord(update)) return null;
   const changes = readableSharingChanges(update as Record<string, unknown>);
   return touchesSharingKey(changes) ? changes : null;
 }

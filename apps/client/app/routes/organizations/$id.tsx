@@ -109,8 +109,12 @@ const OrganizationPage: FC = () => {
   }, [currentUser, organization]);
 
   const canManageOrg = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
+    return (
+      userPermissions.includes(Permission.share) ||
+      userPermissions.includes(Permission.update) ||
+      (!!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization))
+    );
+  }, [userPermissions, currentUser, organization]);
 
   // Usage and Analysis admit current managers; integrations stay owner-only (orgTabAccess.ts).
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
@@ -339,11 +343,6 @@ const OrganizationPage: FC = () => {
                 Audit
               </Tab>
             )}
-            {canViewAudit && (
-              <Tab value={OrganizationTabs.Audit} data-testid="organization-audit-tab">
-                Audit
-              </Tab>
-            )}
           </TabList>
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
@@ -473,7 +472,7 @@ const OrganizationHeader: FC<{
     // Grant admin permissions if user is a system admin
     if (currentUser.isAdmin) return true;
     // Grant full permissions if user is the owner
-    if (currentUser.id === organization.userId) return true;
+    if (isOrgOwnerOrCurrentAdmin(currentUser, organization)) return true;
     const memberDetails = organization.users.find(u => u.userId === currentUser.id);
     return memberDetails?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
   }, [currentUser, organization]);

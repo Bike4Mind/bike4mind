@@ -777,8 +777,12 @@ export function PublishShareModal({
   }, [confirmingClear]);
 
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
-  const runShareToken = async (action: () => Promise<MintedLink | null>, successMsg: string): Promise<void> => {
-    if (!result || shareBusy || publicLinkBlockedReason) return;
+  const runShareToken = async (
+    action: () => Promise<MintedLink | null>,
+    successMsg: string,
+    revoking = false
+  ): Promise<void> => {
+    if (!result || shareBusy || (!revoking && publicLinkBlockedReason)) return;
     setShareBusy(true);
     try {
       const minted = await action();
@@ -805,10 +809,14 @@ export function PublishShareModal({
       'Link regenerated - the old link no longer works'
     );
   const onRevokeShareToken = () =>
-    runShareToken(async () => {
-      await revokeShareToken(result!.publicId);
-      return null;
-    }, 'Link turned off');
+    runShareToken(
+      async () => {
+        await revokeShareToken(result!.publicId);
+        return null;
+      },
+      'Link turned off',
+      true
+    );
 
   const copyToClipboard = async (text: string) => {
     try {

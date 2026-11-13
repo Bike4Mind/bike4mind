@@ -165,9 +165,6 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
       : !sharingPolicy.allowExternalSharing
         ? EXTERNAL_SHARING_BLOCKED
         : null);
-  useEffect(() => {
-    if (linkBlockedReason) setTabIndex(index => (index === 1 ? 0 : index));
-  }, [linkBlockedReason]);
   const [generatedLink, setGeneratedLink] = useState('');
   const [completedShares, setCompletedShares] = useState<number>(0);
   const [sharedUsers, setSharedUsers] = useState<IUserShare[]>(users || []);
@@ -622,7 +619,6 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             </Tooltip>
             <Tooltip title={linkBlockedReason || 'By Link'}>
               <Tab
-                disabled={!!linkBlockedReason}
                 data-testid="share-modal-link-tab"
                 sx={{
                   width: '33.33%',
@@ -850,7 +846,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                 <Button
                   className="share-modal-submit-button"
                   data-testid="share-modal-submit-button"
-                  disabled={loading}
+                  disabled={loading || (tabIndex === 1 && !!linkBlockedReason)}
                   type={'submit'}
                   sx={{ minWidth: { xs: 0, sm: '200px' }, flex: { xs: 1, sm: 'none' } }}
                   variant={'solid'}

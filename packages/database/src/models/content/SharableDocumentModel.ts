@@ -10,7 +10,11 @@ import {
   UserSharesChange,
 } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
-import { assertOrganizationUserGrants, assertProjectContentGrants } from '../../utils/organizationSharingPolicy';
+import {
+  assertOrganizationUserGrants,
+  assertProjectContentGrants,
+  checkedOrganizationSharingQuery,
+} from '../../utils/organizationSharingPolicy';
 
 export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
@@ -328,10 +332,12 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
       { $unset: USERS_BEFORE }
     );
 
-    const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
-      new: true,
-      ...(includeDeleted ? { includeDeleted: true } : {}),
-    });
+    const doc = await checkedOrganizationSharingQuery(
+      this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
+        new: true,
+        ...(includeDeleted ? { includeDeleted: true } : {}),
+      })
+    );
     return (doc?.toJSON() ?? null) as T | null;
   }
 }

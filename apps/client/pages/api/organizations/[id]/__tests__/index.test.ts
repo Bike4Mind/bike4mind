@@ -146,6 +146,15 @@ describe('PUT /api/organizations/[id] - URL id wins', () => {
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit unavailable');
   });
 
+  it('attributes policy audit to the real impersonating administrator', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req.user, { impersonatedBy: 'real-admin' });
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'real-admin', action: 'policy.updated' });
+    expect(update.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'owner1' });
+  });
+
   it('takes the org id from the URL, not from any id field in the body', async () => {
     const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
     (req as any).body = { id: 'from-body', name: 'renamed' };

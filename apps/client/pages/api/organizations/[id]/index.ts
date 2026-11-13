@@ -139,7 +139,7 @@ const handler = baseApi()
               if (profile.sharingPolicy !== undefined) {
                 await recordOrganizationAuditEvent({
                   organizationId: orgId,
-                  actorUserId: req.user!.id,
+                  actorUserId: req.user!.impersonatedBy ?? req.user!.id,
                   action: 'policy.updated',
                 });
               }

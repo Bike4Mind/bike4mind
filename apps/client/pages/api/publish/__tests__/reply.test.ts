@@ -32,6 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  projectRepository: { findAllBySessionId: async () => [] },
   Quest: {
     findOne: (filter: unknown) => {
       dbMocks.questFindOne(filter);

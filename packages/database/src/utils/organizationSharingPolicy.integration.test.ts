@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../__test__/createMongoServer';
 import { Organization } from '../models/infra/admin/OrganizationModel';
 import { Project, projectRepository } from '../models/content/ProjectModel';
+import { Artifact } from '../models/content/ArtifactModel';
 import { Session } from '../models/auth/SessionModel';
 import { assertOrganizationPublicLink } from './organizationSharingPolicy';
 
@@ -21,6 +22,7 @@ afterEach(async () => {
     Organization.collection.deleteMany({}),
     Project.collection.deleteMany({}),
     Session.collection.deleteMany({}),
+    Artifact.collection.deleteMany({}),
   ]);
 });
 
@@ -137,6 +139,89 @@ describe('persisted organization sharing boundary', () => {
     ).rejects.toThrow('approved email domains');
     expect((await Project.findById(project.id))?.groups).toHaveLength(0);
   });
+  it.each([
+    { $set: { 'users.0.userId': 'outsider' } },
+    { $set: { 'groups.0.groupId': 'foreign-group' } },
+    { $rename: { name: 'users' } },
+  ])('rejects unsupported dotted or renamed sharing writes: %j', async update => {
+    const org = await seed();
+    const project = await Project.create({ name: 'bound', userId: 'owner', organizationId: org.id });
+    await expect(Project.updateOne({ _id: project.id }, update)).rejects.toThrow();
+    expect((await Project.findById(project.id))?.users).toHaveLength(0);
+    expect((await Project.findById(project.id))?.groups).toHaveLength(0);
+  });
+  it('rejects dotted artifact recipient positions and permits checked whole permission arrays', async () => {
+    const org = await seed();
+    const artifact = await Artifact.create({
+      id: 'artifact',
+      type: 'html',
+      title: 'Bound',
+      contentId: new mongoose.Types.ObjectId(),
+      contentHash: 'hash',
+      contentSize: 1,
+      userId: 'owner',
+      organizationId: org.id,
+      visibility: 'private',
+      permissions: { canRead: ['member'], canWrite: [], canDelete: [], isPublic: false },
+    });
+    await expect(
+      Artifact.updateOne({ _id: artifact._id }, { $set: { 'permissions.canRead.0': 'outsider' } })
+    ).rejects.toThrow('as a whole');
+    await expect(
+      Artifact.updateOne({ _id: artifact._id }, { $set: { 'permissions.canWrite.$[]': 'outsider' } })
+    ).rejects.toThrow('as a whole');
+    expect((await Artifact.findById(artifact._id))?.permissions?.canRead).toEqual(['member']);
+    await Artifact.updateOne({ _id: artifact._id }, { $set: { 'permissions.canRead': [] } });
+    expect((await Artifact.findById(artifact._id))?.permissions?.canRead).toEqual([]);
+  });
+
+  it('rejects arbitrary sharing pipelines while preserving checked grants and revocation', async () => {
+    const org = await seed();
+    const project = await Project.create({ name: 'bound', userId: 'owner', organizationId: org.id });
+    await expect(
+      Project.updateOne({ _id: project.id }, [{ $set: { users: [{ userId: 'outsider', permissions: ['read'] }] } }])
+    ).rejects.toThrow('checked update');
+    await expect(Project.updateOne({ _id: project.id }, [{ $unset: 'organizationId' }])).rejects.toThrow('immutable');
+    await projectRepository.shareable.updateUserShares(project.id, {
+      add: [{ userId: 'member', permissions: ['read'] }],
+    });
+    expect((await Project.findById(project.id))?.users.map(row => row.userId)).toEqual(['member']);
+    await projectRepository.shareable.updateUserShares(project.id, { remove: { userId: 'member' } });
+    expect((await Project.findById(project.id))?.users).toHaveLength(0);
+  });
+  it('preflights bulk operations before writing and keeps metadata and removals available', async () => {
+    const org = await seed();
+    const project = await Project.create({ name: 'before', userId: 'owner', organizationId: org.id });
+    await expect(
+      Project.bulkWrite(
+        [
+          { updateOne: { filter: { _id: project.id }, update: { $set: { name: 'must not commit' } } } },
+          {
+            updateOne: {
+              filter: { _id: project.id },
+              update: { $set: { users: [{ userId: 'outsider', permissions: ['read'] }] } },
+            },
+          },
+        ],
+        { ordered: false }
+      )
+    ).rejects.toThrow('bulkWrite');
+    expect((await Project.findById(project.id))?.name).toBe('before');
+    await Project.bulkWrite([
+      {
+        updateOne: {
+          filter: { _id: project.id },
+          update: { $set: { name: 'after' }, $pull: { users: { userId: 'old' } } },
+        },
+      },
+    ]);
+    expect((await Project.findById(project.id))?.name).toBe('after');
+    await expect(
+      Project.bulkWrite([{ insertOne: { document: { name: 'forged', userId: 'outsider', organizationId: org.id } } }])
+    ).rejects.toThrow('through the model');
+    expect(await Project.countDocuments({})).toBe(1);
+  });
+
   it('refuses widening operators on sharing fields and permits narrowing ones', async () => {
     const org = await seed();
     const project = await Project.create({ name: 'bound', userId: 'owner', organizationId: org.id });

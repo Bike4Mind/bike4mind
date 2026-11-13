@@ -196,8 +196,8 @@ export function useUpdateOrganization() {
       const response = await api.put<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, data);
       return response.data;
     },
-    onSuccess: data => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    onSuccess: async data => {
+      await queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.setQueryData(['organizations', data.id], data);
       toast.success('Organization updated successfully');
     },

@@ -49,6 +49,23 @@ describe('publication organization policy', () => {
     ).toEqual(['project-org']);
     expect(mocks.sessionProjects).toHaveBeenCalledWith('session');
   });
+  it('checks every project organization reached through an artifact session', async () => {
+    mocks.artifact.mockResolvedValue({ sessionId: 'nested-session' });
+    mocks.session.mockResolvedValue({});
+    mocks.sessionProjects.mockResolvedValue([{ organizationId: 'first-org' }, { organizationId: 'blocked-org' }]);
+    mocks.publicLink.mockImplementation(async (id: string) => {
+      if (id === 'blocked-org') throw new Error('public links blocked');
+    });
+    await expect(
+      assertPublicationPublicLink({
+        tier: 'user',
+        scopeId: 'owner',
+        source: { artifactId: 'artifact' },
+      })
+    ).rejects.toThrow('public links blocked');
+    expect(mocks.sessionProjects).toHaveBeenCalledWith('nested-session');
+    expect(mocks.publicLink.mock.calls.map(call => call[0])).toEqual(['first-org', 'blocked-org']);
+  });
   it('finds a project org binding and leaves unbound legacy content personal', async () => {
     mocks.project.mockResolvedValueOnce({ organizationId: 'org' });
     expect(await publicationOrganizationIds({ tier: 'project', scopeId: 'project' })).toEqual(['org']);

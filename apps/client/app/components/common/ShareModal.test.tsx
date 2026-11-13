@@ -107,12 +107,19 @@ const openByUsersTab = async (files?: IFabFileDocument[]) => {
 };
 
 describe('ShareModal - By Link tab', () => {
-  it('disables links and explains the organization restriction', async () => {
+  it('blocks generation but keeps existing link revocation available under organization restrictions', async () => {
     mocks.apiGet.mockResolvedValue({
       data: { policy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: ['partner.example'] } },
     });
     renderModal();
-    await waitFor(() => expect(screen.getByTestId('share-modal-link-tab')).toHaveAttribute('aria-disabled', 'true'));
+    await screen.findByTestId('share-modal-policy-explanation');
+    expect(screen.getByTestId('share-modal-link-tab')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('share-modal-submit-button')).toBeDisabled();
+    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    const confirmation = mocks.confirm.mock.calls.at(-1)?.[0] as { onOk: () => void };
+    confirmation.onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
     expect(screen.getByTestId('share-modal-policy-explanation')).toHaveTextContent(
       'Your organization does not allow public links'
     );
