@@ -341,6 +341,19 @@ export const shouldStampPersistedVersion = (params: {
   params.latestVersion > (params.currentVersion ?? 0);
 
 /**
+ * Decides whether a new saved version of `artifactId` means the open artifact must be restored.
+ * Sending a message clears `artifactData` while the tab stays on screen, and the viewer only reads
+ * the saved artifact through `artifactData`, so without restoring it a tab that is still shown
+ * never sees the new version. Another tab, or an artifactData that already is this artifact, needs
+ * nothing.
+ */
+export const shouldRestoreOpenArtifact = (params: {
+  shownItemId?: string;
+  openArtifactId?: string;
+  artifactId: string;
+}): boolean => params.shownItemId === params.artifactId && params.openArtifactId !== params.artifactId;
+
+/**
  * Decides whether an empty KnowledgeViewer may push the layout to `hide`.
  *
  * An empty pane is only collapse-worthy once it has actually SHOWN items in the current
@@ -512,8 +525,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       includeVersions: false,
     }
   );
-
-  useRefreshArtifactOnNewVersion();
 
   // Ref tracks the last updated version to prevent infinite loops.
   const lastUpdatedVersionRef = React.useRef<number | undefined>(undefined);
@@ -995,6 +1006,23 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const currentItem = useMemo(() => {
     return knowledgeItems[selectedTabIndex];
   }, [knowledgeItems, selectedTabIndex]);
+
+  const restoreOpenArtifact = React.useCallback(
+    (artifactId: string) => {
+      if (
+        currentItem &&
+        shouldRestoreOpenArtifact({
+          shownItemId: currentItem.id,
+          openArtifactId: useSessionLayout.getState().artifactData?.id,
+          artifactId,
+        })
+      ) {
+        saveOpenArtifactContent(artifactId, currentItem.content as ArtifactData['content']);
+      }
+    },
+    [currentItem]
+  );
+  useRefreshArtifactOnNewVersion(restoreOpenArtifact);
 
   // Keyed on primitive item props so it does not depend on the whole array.
   useEffect(() => {
