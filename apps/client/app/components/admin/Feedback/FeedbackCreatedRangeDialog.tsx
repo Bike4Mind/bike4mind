@@ -72,7 +72,7 @@ export function FeedbackCreatedRangeDialog({
               type="date"
               value={from}
               onChange={event => setFrom(event.target.value)}
-              slotProps={{ input: { max: to || today, 'data-testid': 'feedback-created-range-from-input' } }}
+              slotProps={{ input: { max: to || undefined, 'data-testid': 'feedback-created-range-from-input' } }}
             />
           </FormControl>
           <FormControl sx={{ flex: '1 1 140px' }} error={inverted}>

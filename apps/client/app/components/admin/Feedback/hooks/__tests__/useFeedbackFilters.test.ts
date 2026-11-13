@@ -7,6 +7,9 @@ vi.mock('@tanstack/react-router', async () => (await import('../../../__tests__/
 import { fakeAdminRouter } from '../../../__tests__/fakeAdminRouter';
 import { useFeedbackFilters } from '../useFeedbackFilters';
 
+// A UTC runner cannot tell local-day boundaries from UTC ones, so pin a zone and assert literals.
+process.env.TZ = 'America/Los_Angeles';
+
 /**
  * The hook's whole job is translating filter UI state into the GET /api/feedback query, so the
  * assertions here are on `filterParams` rather than on any filtered array: the filtering itself
@@ -215,8 +218,8 @@ describe('useFeedbackFilters', () => {
       act(() => result.current.setCreatedRange({ createdFrom: '2026-11-01', createdTo: '2026-11-08' }));
 
       expect(fakeAdminRouter.search).toMatchObject({ feedbackFrom: '2026-11-01', feedbackTo: '2026-11-08' });
-      expect(result.current.filterParams.createdFrom).toBe(new Date(2026, 10, 1, 0, 0, 0, 0).toISOString());
-      expect(result.current.filterParams.createdTo).toBe(new Date(2026, 10, 8, 23, 59, 59, 999).toISOString());
+      expect(result.current.filterParams.createdFrom).toBe('2026-11-01T07:00:00.000Z');
+      expect(result.current.filterParams.createdTo).toBe('2026-11-09T07:59:59.999Z');
     });
 
     it('replaces a preset window, and a preset window replaces it', () => {
