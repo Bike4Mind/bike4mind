@@ -113,6 +113,20 @@ if (isMonitoredStage) {
     },
   });
 
+  // Signup network caps skipped because the settings read or the signup count failed
+  // (packages/server-utils/src/auth/signupNetworkLimits.ts). Counted only, no alarm.
+  new aws.cloudwatch.LogMetricFilter('signupLimitFailOpenFilter', {
+    name: `${$app.name}-${$app.stage}-signup-limit-fail-open`,
+    logGroupName: serverLogGroupName,
+    pattern: messageFilterPattern('signup-limit-failed-open'),
+    metricTransformation: {
+      name: 'SignupLimitFailOpen',
+      namespace: metricNamespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
   if (hourlyThreshold !== undefined) {
     new aws.cloudwatch.MetricAlarm('signupCodeSendRate', {
       name: `${$app.name}-${$app.stage}-signup-code-send-rate`,
