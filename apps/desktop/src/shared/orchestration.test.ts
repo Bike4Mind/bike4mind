@@ -155,6 +155,16 @@ describe('orchestration contracts and role routing', () => {
       );
     });
   });
+  it('points a refused hosted spawn at the parent picker before any worker exists', () => {
+    const models = [
+      { id: 'worker', name: 'Hosted worker', supportsTools: true },
+      { id: 'local:qwen', name: 'Local worker', supportsTools: true },
+    ];
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-parent' })).toThrow(
+      'Worker model worker is blocked: a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.'
+    );
+    expect(() => validateWorkerModel('local:qwen', models, { localOnly: 'local-parent' })).not.toThrow();
+  });
   it('validates a self-contained bounded contract and explicit empty sections', () => {
     expect(taskContractSchema.parse(contract)).toEqual(contract);
     expect(renderTaskBrief(contract)).toContain('Focused behavior passes');

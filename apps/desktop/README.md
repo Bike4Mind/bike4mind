@@ -841,8 +841,12 @@ If a configured model disappears, becomes unavailable or lacks required capabili
 role-routed work blocks before starting; no more expensive or hosted replacement is selected.
 Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
 run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
-model picker for that task. Device-local tasks cannot switch to a hosted model. Settings read/save
-failures and blocked task evidence remain visible; retry the operation after repairing access.
+model picker for that task. In a connected app, explicitly picking a hosted model there authorizes
+moving that worker's future turns off its local model; approving a task escalation alone does not.
+For a conversation with history, the picker first asks "Send this conversation to Bike4Mind?".
+A local parent cannot start a hosted worker until you explicitly pick a hosted model for the parent
+conversation. A device-local app permits only local models until you sign in to use hosted models.
+Settings read/save failures and blocked task evidence remain visible; retry after repairing access.
 
 ## Authentication
 

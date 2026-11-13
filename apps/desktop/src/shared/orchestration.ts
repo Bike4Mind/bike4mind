@@ -177,15 +177,18 @@ export function resolveWorkerModel(
 /**
  * Why a worker model must be local: `device` when the app runs device-local and cannot reach a
  * hosted model at all, `local-work` when work already on a local model would otherwise be moved to
- * a hosted one without the user picking it.
+ * a hosted one without the user picking it, and `local-parent` when a local planner attempts
+ * to start a hosted child before that child exists.
  */
-export type WorkerLocality = false | 'device' | 'local-work';
+export type WorkerLocality = false | 'device' | 'local-work' | 'local-parent';
 
 const LOCALITY_BLOCKS: Record<Exclude<WorkerLocality, false>, string> = {
   device:
     'this app is running device-local, so only local models can run here. Choose a local model, or sign in to use hosted models.',
   'local-work':
     'work on a local model is never moved to a hosted model automatically. To move it, pick a hosted model for this worker in the model picker.',
+  'local-parent':
+    'a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.',
 };
 
 export function validateWorkerModel(

@@ -1341,8 +1341,9 @@ export class ChatService {
     return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
-  private workerLocality(localWork: boolean): WorkerLocality {
-    return this.deviceLocal() ? 'device' : localWork && 'local-work';
+  private workerLocality(localWork: boolean, context: 'local-work' | 'local-parent' = 'local-work'): WorkerLocality {
+    if (this.deviceLocal()) return 'device';
+    return localWork ? context : false;
   }
 
   /**
@@ -6208,7 +6209,7 @@ export class ChatService {
           const contextWindow = models.find(model => model.id === resolved.effectiveModel)?.contextWindow;
           const briefTokens = Math.ceil((validated.contract ? renderTaskBrief(validated.contract) : seed).length / 3);
           validateWorkerModel(resolved.effectiveModel, models, {
-            localOnly: this.workerLocality(isLocalModel(parent.model)),
+            localOnly: this.workerLocality(isLocalModel(parent.model), 'local-parent'),
             ...validated.requirements,
             contextTokens:
               validated.requirements?.contextTokens !== undefined
