@@ -108,3 +108,18 @@ describe('RegistrationInviteRepository.listByGrantPackage', () => {
     expect(await registrationInviteRepository.listByGrantPackage('none', 50)).toEqual({ data: [], truncated: false });
   });
 });
+
+describe('RegistrationInviteRepository.reopenUnlessClosed', () => {
+  setupMongoTest();
+
+  it('reopens a waiting code but leaves a code an admin closed as used', async () => {
+    const waiting = await invite({ status: RegInviteStatusType.waiting, unlimitedUse: true });
+    const closed = await invite({ status: RegInviteStatusType.used, unlimitedUse: true });
+
+    await registrationInviteRepository.reopenUnlessClosed(String(waiting._id));
+    await registrationInviteRepository.reopenUnlessClosed(String(closed._id));
+
+    expect((await RegistrationInvite.findById(waiting._id).lean())?.status).toBe(RegInviteStatusType.open);
+    expect((await RegistrationInvite.findById(closed._id).lean())?.status).toBe(RegInviteStatusType.used);
+  });
+});

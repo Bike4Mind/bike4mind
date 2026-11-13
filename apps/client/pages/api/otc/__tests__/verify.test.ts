@@ -162,6 +162,7 @@ vi.mock('@bike4mind/database', () => ({
     findBySettingName: (...args: unknown[]) => mockFindSetting(...args),
     claimOnce: (...args: unknown[]) => mockClaimOnce(...args),
     releaseClaim: (...args: unknown[]) => mockReleaseClaim(...args),
+    reopenUnlessClosed: async () => undefined,
   },
   User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   organizationRepository: {},

@@ -80,6 +80,7 @@ describe('registerUser', () => {
           update: vi.fn().mockResolvedValue(undefined),
           claimUnused: vi.fn().mockResolvedValue(true),
           releaseClaim: vi.fn().mockResolvedValue(undefined),
+          reopenUnlessClosed: vi.fn().mockResolvedValue(undefined),
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
@@ -1013,6 +1014,7 @@ describe('registerViaOTC', () => {
           update: vi.fn(),
           claimUnused: vi.fn().mockResolvedValue(true),
           releaseClaim: vi.fn(),
+          reopenUnlessClosed: vi.fn(),
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),

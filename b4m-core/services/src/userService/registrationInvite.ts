@@ -16,6 +16,8 @@ export interface RegistrationInviteRepository {
   claimUnused: (inviteId: string, usedAt: Date) => Promise<boolean>;
   /** Reopens a code claimed at `usedAt` that no account has redeemed yet, restoring its prior status. */
   releaseClaim: (inviteId: string, usedAt: Date, status: RegInviteStatusType) => Promise<void>;
+  /** Sets status open unless the stored status is used (closed by an admin). */
+  reopenUnlessClosed: (inviteId: string) => Promise<void>;
 }
 
 export interface ResolvedRegistrationInvite {
@@ -81,7 +83,7 @@ export async function claimRegistrationInvite(
 export async function redeemRegistrationInvite(
   { invite, isUnlimited }: Pick<ResolvedRegistrationInvite, 'invite' | 'isUnlimited'>,
   userId: string,
-  registrationInvites: Pick<RegistrationInviteRepository, 'update'>
+  registrationInvites: Pick<RegistrationInviteRepository, 'update' | 'reopenUnlessClosed'>
 ): Promise<void> {
   const usedAt = new Date();
   invite.usageHistory = [...(invite.usageHistory ?? []), { userId, usedAt }];
@@ -89,11 +91,11 @@ export async function redeemRegistrationInvite(
   if (isUnlimited) {
     delete invite.used;
     delete invite.usedbyId;
-    invite.status = RegInviteStatusType.open;
     await registrationInvites.update(
-      { id: invite.id, usageHistory: invite.usageHistory, status: invite.status },
+      { id: invite.id, usageHistory: invite.usageHistory },
       { unset: ['used', 'usedbyId'] }
     );
+    await registrationInvites.reopenUnlessClosed(invite.id);
     return;
   }
 
