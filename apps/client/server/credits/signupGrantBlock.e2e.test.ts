@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { creditService, userService } from '@bike4mind/services';
 import { rerunDomainGrantAfterUnblock } from './rerunDomainGrantAfterUnblock';
-import { holdsPaidStanding } from '../entitlements/paidStanding';
+import { holdsPaidStanding } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupProtection } from '@bike4mind/common';
 import {
