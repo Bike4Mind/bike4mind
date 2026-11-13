@@ -68,7 +68,7 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
-  '"Full access" asks only before spending credits, an action that cannot be undone, acting in a browser page you are signed in to, and a command that names this app\'s data, a credential folder, or permission and hook settings. It runs commands Desktop cannot fully follow, and git forms it does not list as safe, without asking.',
+  '"Full access" asks only before spending credits, an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It runs commands Desktop cannot fully follow, and git forms it does not list as safe, without asking.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',
   'A session the agent starts on its own never runs at full access; it inherits at most "Approve for me".',
   'A new conversation starts in the mode you picked last, except "Full access", which is never carried over.',
