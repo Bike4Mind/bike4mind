@@ -12,7 +12,6 @@ const m = vi.hoisted(() => ({
   countReported: vi.fn(),
   countAdminResolvable: vi.fn(),
   countPendingSuggestions: vi.fn(),
-  countOverdue: vi.fn(),
   countFailed: vi.fn(),
   countNewFeedback: vi.fn(),
   getQueueAttributes: vi.fn(),
@@ -35,16 +34,12 @@ vi.mock('@bike4mind/database', () => ({
   countNewFeedback: m.countNewFeedback,
   oldestNewFeedbackAt: vi.fn(),
 }));
-vi.mock('@bike4mind/database/infra', () => ({ secretRotationRepository: { countOverdue: m.countOverdue } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: m.loggerError } }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqRegistry: m.getDlqRegistry,
   getDlqUrl: (label: string) => `https://sqs.test/${label}`,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ getQueueAttributes: m.getQueueAttributes }));
-vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
-  getSecretRotationConfig: () => ({ JWT_SECRET: {}, OTHER_SECRET: {} }),
-}));
 
 import {
   ADMIN_ACTION_COUNTERS,
@@ -69,7 +64,6 @@ beforeEach(() => {
     m.countReported,
     m.countAdminResolvable,
     m.countPendingSuggestions,
-    m.countOverdue,
     m.countFailed,
     m.countNewFeedback,
   ]) {
@@ -176,11 +170,6 @@ describe('computeAdminActionCounts failures and caps', () => {
     expect(m.countPendingSuggestions).toHaveBeenCalledWith(limit);
     expect(m.countFailed).toHaveBeenCalledWith(limit);
     expect(m.countNewFeedback).toHaveBeenCalledWith(limit);
-    expect(m.countOverdue).toHaveBeenCalledWith({
-      now: NOW,
-      keyNames: ['JWT_SECRET', 'OTHER_SECRET'],
-      limit: ADMIN_ACTION_COUNT_CAP,
-    });
   });
 
   it('uses the capped unreviewed audit count', async () => {
