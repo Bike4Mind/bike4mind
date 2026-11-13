@@ -785,9 +785,8 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Account Data Export Queue
-// Self-service "download all my data": builds a zip of the user's data under the fabFileBucket
-// exports/ prefix (expired by its lifecycle rule) and emails a link to the app download page.
+// Account and organization exports share a consumer and retry policy, with a payload discriminator.
+// Both write under the expiring exports/ prefix and email an authenticated app download page.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',

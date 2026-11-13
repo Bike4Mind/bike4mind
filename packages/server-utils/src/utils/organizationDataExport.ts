@@ -23,7 +23,7 @@ export async function requireOrganizationExportOwner(user: { id: string; imperso
   return org;
 }
 
-export async function organizationExportStatus(id: string, userId: string, exportJobId: string) {
+export async function organizationExportStatus(id: string, userId: string, exportJobId: string, download = false) {
   const filter = { organizationId: id, actorUserId: userId, targetId: exportJobId };
   const request = await OrganizationAuditEventModel.findOne({ ...filter, action: 'export.requested' }).lean();
   if (!request) throw new NotFoundError('Export not found');
@@ -38,9 +38,12 @@ export async function organizationExportStatus(id: string, userId: string, expor
     const failed = await OrganizationAuditEventModel.exists({ ...filter, action: 'export.failed' });
     return { status: failed ? ('failed' as const) : ('pending' as const), exportJobId };
   }
+  if (!download) return { status: 'ready' as const, exportJobId, expiresAt: expiresAt.toISOString() };
+  const remainingSeconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+  if (remainingSeconds < 1) return { status: 'expired' as const, exportJobId };
   const url = await storage.getSignedUrl(key, 'get', {
     audience: 'browser',
-    expiresIn: Math.max(1, Math.min(300, Math.floor((expiresAt.getTime() - Date.now()) / 1000))),
+    expiresIn: Math.min(300, remainingSeconds),
     ResponseContentDisposition: 'attachment; filename="organization-data.zip"',
   });
   await recordOrganizationAuditEvent({ ...filter, action: 'export.downloaded' });

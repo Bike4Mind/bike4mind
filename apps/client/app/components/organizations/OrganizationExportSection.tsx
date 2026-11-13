@@ -63,7 +63,7 @@ export default function OrganizationExportSection({ organizationId }: { organiza
   };
   const download = async () => {
     try {
-      const response = await api.get<ExportStatus>(`${base}/${jobId}`);
+      const response = await api.get<ExportStatus>(`${base}/${jobId}`, { params: { download: 'true' } });
       setStatus(response.data);
       if (response.data.url) window.location.assign(response.data.url);
     } catch {

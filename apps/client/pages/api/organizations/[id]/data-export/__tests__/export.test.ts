@@ -108,7 +108,7 @@ describe('organization export routes', () => {
   it('returns completion only after the owner gate', async () => {
     const { res, promise } = call('get', 1);
     await promise;
-    expect(h.status).toHaveBeenCalledWith(id, 'owner', jobId);
+    expect(h.status).toHaveBeenCalledWith(id, 'owner', jobId, false);
     expect(res._getJSONData().status).toBe('ready');
     expect(res.getHeader('Cache-Control')).toContain('no-store');
   });

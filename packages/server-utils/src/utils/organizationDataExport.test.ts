@@ -44,7 +44,7 @@ describe('organization export authorization and expiry', () => {
   });
 
   it('scopes request lookup and storage to organization, requester and job', async () => {
-    const result = await organizationExportStatus('org', 'owner', 'job');
+    const result = await organizationExportStatus('org', 'owner', 'job', true);
     expect(h.request).toHaveBeenCalledWith({
       organizationId: 'org',
       actorUserId: 'owner',
@@ -70,6 +70,12 @@ describe('organization export authorization and expiry', () => {
     expect(h.sign).not.toHaveBeenCalled();
   });
 
+  it('does not sign or audit a download when only polling readiness', async () => {
+    expect(await organizationExportStatus('org', 'owner', 'job')).toMatchObject({ status: 'ready' });
+    expect(h.sign).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('refuses expired exports even while storage still retains them', async () => {
     h.request.mockResolvedValue({ occurredAt: new Date(Date.now() - ORGANIZATION_EXPORT_TTL_MS) });
     expect(await organizationExportStatus('org', 'owner', 'job')).toEqual({ status: 'expired', exportJobId: 'job' });
@@ -78,7 +84,7 @@ describe('organization export authorization and expiry', () => {
 
   it('never signs beyond the remaining export lifetime', async () => {
     h.request.mockResolvedValue({ occurredAt: new Date(Date.now() - ORGANIZATION_EXPORT_TTL_MS + 60000) });
-    await organizationExportStatus('org', 'owner', 'job');
+    await organizationExportStatus('org', 'owner', 'job', true);
     expect(h.sign.mock.calls[0][2].expiresIn).toBeLessThanOrEqual(60);
   });
 
