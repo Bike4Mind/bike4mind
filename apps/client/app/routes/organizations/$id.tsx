@@ -1,4 +1,10 @@
-import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  Permission,
+  WithId,
+  hasOrgPermission,
+  isOrgOwnerOrPlatformAdmin,
+} from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -105,8 +111,12 @@ const OrganizationPage: FC = () => {
   }, [currentUser, organization]);
 
   const canManageOrg = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
+    return (
+      userPermissions.includes(Permission.share) ||
+      userPermissions.includes(Permission.update) ||
+      (!!currentUser && !!organization && hasOrgPermission(currentUser, organization, 'managePolicies'))
+    );
+  }, [userPermissions, currentUser, organization]);
 
   // Every tab below asks the org permission its routes check (orgTabAccess.ts); none follows the
   // sharing ACL that drives canManageOrg.
@@ -459,8 +469,8 @@ const OrganizationHeader: FC<{
     if (!currentUser || !organization) return false;
     // Grant admin permissions if user is a system admin
     if (currentUser.isAdmin) return true;
-    // Grant full permissions if user is the owner
-    if (currentUser.id === organization.userId) return true;
+    // The owner and anyone who sets team policy (sharing policy lives in Settings).
+    if (hasOrgPermission(currentUser, organization, 'managePolicies')) return true;
     const memberDetails = organization.users.find(u => u.userId === currentUser.id);
     return memberDetails?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
   }, [currentUser, organization]);

@@ -97,6 +97,12 @@ class ReleaseWorkflowTest(unittest.TestCase):
         branch = notes.split('elif [ "$MAC_RELEASE_MODE" = selfsigned ]; then', 1)[1].split('\n          else\n', 1)[0]
         self.assertIn('self-signed certificate, not Developer ID signed or notarized', branch)
         self.assertIn('in-app updates are enabled from this build onward', branch)
+        self.assertIn("'## macOS: in-app updates'", branch)
+        self.assertIn('Run the install command above once more', branch)
+        # The note quotes what an older build shows, so the two must not drift apart.
+        sentence = 'This build does not check for updates.'
+        self.assertIn(f'"{sentence}"', branch)
+        self.assertIn(sentence, (ROOT / 'apps/desktop/src/renderer/src/chat/UpdateSettings.tsx').read_text())
 
     def test_self_signed_signing_is_main_only_and_keeps_the_keychain_private(self):
         build = job('build')

@@ -12,8 +12,9 @@ import OrganizationStorageUsage from './OrganizationStorageUsage';
 type UsageTab = 'usage' | 'ledger' | 'storage';
 
 /**
- * The org's AI spend for viewers holding `viewUsage`: the same Usage and Ledger dashboards as the
- * admin Credit Analytics tab, but pinned to this org (picker hidden), plus the org's storage pool.
+ * The org's AI spend for viewers holding `viewUsage` (owner, manager, billing manager): the same
+ * Usage and Ledger dashboards as the admin Credit Analytics tab, but pinned to this org (picker
+ * hidden), plus the org's storage pool.
  * Credit access is enforced server-side via `viewUsage`. Storage reads go through
  * verifyOrgAdminRead (`manageContent`, orgAccess.ts), so the Storage subtab is offered only to
  * holders of that permission - a billing manager sees spend but not storage.

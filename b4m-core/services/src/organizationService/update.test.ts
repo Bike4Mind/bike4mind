@@ -349,4 +349,34 @@ describe('organizationService - update', () => {
       expect(persisted()).not.toHaveProperty('billingContact');
     });
   });
+
+  describe('sharingPolicy', () => {
+    const policy = { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] };
+    const appointedAdmin = { id: 'manager1', isAdmin: false } as IUserDocument;
+    const orgWithManager = {
+      ...existingOrganization,
+      adminUserIds: ['manager1'],
+      users: [{ userId: 'manager1', permissions: ['read'] }],
+    };
+
+    it('lets an appointed admin change the policy on its own', async () => {
+      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithManager);
+      mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+
+      await update(appointedAdmin, { id: 'org1', sharingPolicy: policy }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', sharingPolicy: policy });
+    });
+
+    it('keeps the update-access scope for profile fields sent alongside the policy', async () => {
+      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithManager);
+      mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+
+      await expect(
+        update(appointedAdmin, { id: 'org1', sharingPolicy: policy, systemPrompt: 'changed' }, mockAdapters)
+      ).rejects.toThrow(NotFoundError);
+      expect(mockAdapters.db.organizations.shareable.findUpdateAccessById).toHaveBeenCalledWith(appointedAdmin, 'org1');
+      expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
+  });
 });

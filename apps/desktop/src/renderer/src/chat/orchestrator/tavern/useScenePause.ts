@@ -6,11 +6,20 @@ export const UNFOCUSED_PAUSE_MS = 3 * 60 * 1000;
 /** Why the room is holding still: its window is hidden, or has been out of focus a while. */
 export type ScenePause = 'hidden' | 'unfocused' | undefined;
 
+export interface ScenePauseOptions {
+  /** How long (ms) unfocused before pausing; 0 pauses as soon as focus leaves. */
+  unfocusedAfterMs?: number;
+  /** Keep animating while unfocused (never while hidden): the mini Tavern, while someone needs you. */
+  awake?: boolean;
+}
+
 /**
  * Drives the scene's `data-paused` attribute, which pauses every infinite animation under it
  * (embers, flicker, bob, drift) while nobody is looking, so an idle window stops burning frames.
  */
-export function useScenePause(unfocusedAfterMs: number = UNFOCUSED_PAUSE_MS): ScenePause {
+export function useScenePause(options: number | ScenePauseOptions = UNFOCUSED_PAUSE_MS): ScenePause {
+  const { unfocusedAfterMs = UNFOCUSED_PAUSE_MS, awake = false } =
+    typeof options === 'number' ? { unfocusedAfterMs: options } : options;
   const [hidden, setHidden] = useState(() => document.hidden);
   const [unfocused, setUnfocused] = useState(false);
 
@@ -42,5 +51,5 @@ export function useScenePause(unfocusedAfterMs: number = UNFOCUSED_PAUSE_MS): Sc
   }, [unfocusedAfterMs]);
 
   if (hidden) return 'hidden';
-  return unfocused ? 'unfocused' : undefined;
+  return unfocused && !awake ? 'unfocused' : undefined;
 }

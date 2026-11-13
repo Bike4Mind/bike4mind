@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MUSIC_MODEL_STRENGTHS, type PublicMusicModel } from '@bike4mind/common';
+import type { PublicMusicModel } from '@bike4mind/common';
 import { musicFieldProblems, musicModelCards } from './musicCreateV2';
 import { estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
@@ -8,6 +8,8 @@ const model = (overrides: Partial<PublicMusicModel> = {}): PublicMusicModel => (
   object: 'music_model',
   display_name: 'Exact',
   provider: 'elevenlabs',
+  provider_label: 'ElevenLabs',
+  blurb: 'Exact-length songs with lyric control.',
   vocals: 'optional',
   lyrics: { max_chars: 100, max_line_chars: 20 },
   duration: { control: 'exact', min: 3, max: 300, default: 60 },
@@ -63,7 +65,7 @@ describe('musicModelCards', () => {
       id: 'music_v2',
       name: 'Exact',
       provider: 'ElevenLabs',
-      strength: MUSIC_MODEL_STRENGTHS.music_v2,
+      strength: 'Exact-length songs with lyric control.',
       creditsPerOutput: estimateCredits(initialFormFor(exact)),
       outputNoun: 'song',
       modes: ['Vocals', 'Instrumental', 'Your lyrics'],
@@ -72,5 +74,10 @@ describe('musicModelCards', () => {
     });
     expect(cards[1]?.unavailableReason).toBeNull();
     expect(cards[1]?.mismatchReason).toEqual(expect.any(String));
+  });
+
+  it('falls back to the provider id and no strength when the server sends no card copy', () => {
+    const [card] = musicModelCards([model({ provider_label: undefined, blurb: undefined })], form());
+    expect(card).toMatchObject({ provider: 'elevenlabs', strength: '' });
   });
 });

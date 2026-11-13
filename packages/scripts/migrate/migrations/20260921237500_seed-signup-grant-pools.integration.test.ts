@@ -8,6 +8,8 @@ vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260921237500_seed-signup-grant-pools';
 
+const FAIL_CLOSED_BACKFILL_ID = 20260922000001;
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -43,7 +45,9 @@ describe('seed-signup-grant-pools migration', () => {
     const signupSeeds = AvailableMigrations.filter(m => m !== migration && /signup/.test(m.name));
     expect(signupSeeds.length).toBeGreaterThan(0);
     for (const seed of signupSeeds) expect(migration.id).toBeGreaterThan(seed.id);
-    expect(Math.max(...ids)).toBe(20260922000001);
+    // Pinned to the backfill's id, not to the overall max: every later migration sorts above both.
+    expect(ids).toContain(FAIL_CLOSED_BACKFILL_ID);
+    expect(migration.id).toBeLessThan(FAIL_CLOSED_BACKFILL_ID);
   });
 
   it.each([
