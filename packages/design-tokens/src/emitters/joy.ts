@@ -89,7 +89,10 @@ const toJoyPalette = (scheme: SemanticColorScheme): JoyPaletteFragment => ({
 
 // Joy wraps every shadow in its ring var and shadow channel/opacity vars; the
 // fallbacks are the token defaults, so the output is Joy's own default string.
-const toJoyShadow = (shadows: DesignTokens['shadows'], layers: Array<DesignTokens['shadows']['levels']['xs'][number]>) =>
+const toJoyShadow = (
+  shadows: DesignTokens['shadows'],
+  layers: Array<DesignTokens['shadows']['levels']['xs'][number]>
+) =>
   [
     'var(--joy-shadowRing, 0 0 #000)',
     ...layers.map(
