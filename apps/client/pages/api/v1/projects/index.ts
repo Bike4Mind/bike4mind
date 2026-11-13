@@ -3,7 +3,7 @@
  * POST /api/v1/projects - the public twin of POST /api/projects.
  *
  * Auth mode, scopes and validation come from `listProjectsContract` / `createProjectContract`; the
- * SPA routes under /api/projects are unchanged. Every response renders through toPublicProject.
+ * SPA routes under /api/projects are unchanged. Every response renders through toPublicProject (toPublicProjectsFor).
  */
 import { createProjectContract, HTTPError, listProjectsContract, ProjectEvents } from '@bike4mind/common';
 import { fabFileRepository, projectRepository, sessionRepository } from '@bike4mind/database';
@@ -16,7 +16,7 @@ import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKe
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
-import { toPublicProject } from '@server/projects/toPublicProject';
+import { toPublicProjectFor, toPublicProjectsFor } from '@server/projects/projectItemReach';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 
 const CURSOR_SCOPE = 'v1.projects';
@@ -36,7 +36,7 @@ const listRoute = nextRouteForContract(listProjectsContract, {
   const lastId = page.data.at(-1)?.id;
 
   return res.json({
-    data: page.data.map(toPublicProject),
+    data: await toPublicProjectsFor(req.user, page.data),
     next_cursor: page.hasMore && lastId ? encodeCursor(CURSOR_SCOPE, String(lastId)) : null,
   });
 });
@@ -64,7 +64,7 @@ const createRoute = nextRouteForContract(createProjectContract, {
 
   await logProjectCreated(req.user.id, project, { ability: req.ability }, req.logger);
 
-  return res.status(201).json(toPublicProject(project));
+  return res.status(201).json(await toPublicProjectFor(req.user, project));
 });
 
 /** Same analytics events POST /api/projects emits, so API-created projects are not invisible. */
