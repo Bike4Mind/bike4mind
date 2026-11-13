@@ -18,7 +18,13 @@ const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
 
 function referencePaths(reference: UserReference): string[] {
   const scopePaths = reference.scope === 'personal' ? ['organizationId'] : [];
-  return [reference.path, ...Object.keys(reference.where ?? {}), ...scopePaths, ...alsoRedactOf(reference)];
+  return [
+    reference.path,
+    ...Object.keys(reference.where ?? {}),
+    ...scopePaths,
+    ...alsoRedactOf(reference),
+    ...(reference.identifies ?? []),
+  ];
 }
 
 function alsoRedactOf(reference: UserReference): readonly string[] {
@@ -216,6 +222,17 @@ describe('data holder registry', () => {
     const basePaths = new Set(listSchemaPaths(mongoose.model(base).schema));
     const added = userReferenceLikePaths(mongoose.model(modelName).schema).filter(path => !basePaths.has(path));
     expect(added).toEqual([]);
+  });
+
+  it('sets exportScope and identifies only on retain references', () => {
+    // An `anonymize` already exports only its match, with `alsoRedact` repeating the person, and
+    // erasure clears those fields; the two export-only fields would silently mean nothing there.
+    const misplaced = classifiedModels.flatMap(name =>
+      referencesOf(DATA_HOLDER_REGISTRY[name])
+        .filter(reference => reference.action !== 'retain' && (reference.exportScope || reference.identifies))
+        .map(reference => `${name}.${reference.path}`)
+    );
+    expect(misplaced).toEqual([]);
   });
 
   it.each(

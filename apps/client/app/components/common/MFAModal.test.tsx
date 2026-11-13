@@ -112,6 +112,17 @@ describe('MFAModal leaving setup', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('does not sign out on a click outside the dialog during forced setup', () => {
+    const onSignOut = vi.fn();
+    const onClose = vi.fn();
+    renderSetup({ onSignOut, onClose });
+
+    fireEvent.click(screen.getByTestId('mfa-modal-backdrop'));
+
+    expect(onSignOut).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('shows the sign-out inside an enforced dialog, which has no close icon', () => {
     const onSignOut = vi.fn();
     renderSetup({ onSignOut, isEnforced: true });
