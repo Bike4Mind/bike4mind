@@ -167,6 +167,13 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    mfaPolicy: {
+      type: new Schema(
+        { required: { type: Boolean, default: false }, graceEndsAt: { type: Date, default: null } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   {
     virtuals: true,
