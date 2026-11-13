@@ -327,6 +327,8 @@ export interface RegisteredChat {
   modelSettings: ModelSettingsStore;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
+  /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
+  respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
 }
 
 /**
@@ -1198,8 +1200,11 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
+  // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
+  // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
+  const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => approvals.resolve(approvalId, answer);
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
-    approvals.resolve(approvalId, answer)
+    respondToApproval(approvalId, answer)
   );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one
@@ -1556,6 +1561,7 @@ export function registerChat(
     localContext,
     modelSettings,
     capabilityLedger,
+    respondToApproval,
   };
 }
 
