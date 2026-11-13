@@ -23,7 +23,7 @@ import {
   sessionScriptRun,
   shellCommandRan,
 } from './sessionScripts';
-import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
 import { folderReaches, shellReachesProtected } from '../permissions/rules';
@@ -246,7 +246,7 @@ function runCommand(
     };
     const onError = (error: Error) => {
       finish();
-      reject(error);
+      reject(spawnFailure(error, cwd, launch));
     };
     const onClose = (closeCode: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
