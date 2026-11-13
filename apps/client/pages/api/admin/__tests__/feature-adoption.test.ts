@@ -46,7 +46,7 @@ describe('feature adoption route', () => {
     expect(mocks.get).toHaveBeenLastCalledWith({ accounts: 'internal', client: 'api', days: 28, end: '2026-06-14' });
   });
   it('rejects invalid filters, dates and oversized cohorts without substituting zeros', async () => {
-    for (const query of [{ accounts: 'staff' }, { client: 'desktop' }, { days: '999' }, { end: 'bad' }]) {
+    for (const query of [{ accounts: 'staff' }, { client: 'invalid' }, { days: '999' }, { end: 'bad' }]) {
       expect((await run(query))._getStatusCode()).toBe(400);
     }
     expect(mocks.get).not.toHaveBeenCalled();

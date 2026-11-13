@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMPLETION_SOURCES } from '@bike4mind/common';
 import { ANALYTICS_ACCOUNTS } from './analyticsOverview';
 
 export const ADOPTION_FEATURES = ['chat', 'image_generation', 'image_edit'] as const;
@@ -7,7 +8,11 @@ export const ADOPTION_LABELS: Record<(typeof ADOPTION_FEATURES)[number], string>
   image_generation: 'Image generation',
   image_edit: 'Image editing',
 };
-export const ADOPTION_CLIENTS = ['all', 'web', 'cli', 'api', 'agent', 'unknown'] as const;
+export const ADOPTION_CLIENTS = [
+  'all',
+  ...COMPLETION_SOURCES.filter(source => source !== 'system'),
+  'unknown',
+] as const;
 export const featureAdoptionQuerySchema = z.object({
   accounts: z.enum(ANALYTICS_ACCOUNTS).default('external'),
   client: z.enum(ADOPTION_CLIENTS).default('all'),

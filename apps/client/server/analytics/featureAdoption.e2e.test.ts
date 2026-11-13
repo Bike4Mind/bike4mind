@@ -127,13 +127,15 @@ describe('feature adoption ledger aggregation', () => {
   it('preserves unknown/mixed attribution and keeps API and agent populations separate', async () => {
     await seed('api', '2026-06-10', { source: 'api' });
     await seed('agent', '2026-06-10', { source: 'agent' });
+    await seed('desktop', '2026-06-10', { source: 'desktop' });
     await seed('unknown', '2026-06-10', { source: null });
     await seed('mixed', '2026-06-10', { source: 'web' });
     await seed('mixed', '2026-06-10', { source: 'api' });
     for (const [client, count] of [
-      ['all', 4],
+      ['all', 5],
       ['api', 1],
       ['agent', 1],
+      ['desktop', 1],
       ['unknown', 2],
       ['web', 0],
     ] as const) {

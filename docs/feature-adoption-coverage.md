@@ -9,7 +9,7 @@ discovery scope.
 
 `GET /api/admin/analytics/feature-adoption` requires a JWT session with
 `support:read`. Parameters: `accounts=external|internal|all` (default external),
-`client=all|web|cli|api|agent|unknown`, `days=7|28|90`, optional inclusive `end`
+`client=all|web|cli|desktop|api|agent|unknown`, `days=7|28|90`, optional inclusive `end`
 (a complete UTC day; default yesterday). Two adjacent equal windows exclude today,
 matching Analytics' complete-day comparison rule. Repeat use is the intersection
 of successful users in those two windows, not signup-cohort retention.

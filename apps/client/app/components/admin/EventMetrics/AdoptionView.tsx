@@ -10,6 +10,7 @@ import {
 } from '@client/app/utils/featureAdoption';
 import {
   DataTable,
+  EmptyState,
   ErrorState,
   FilterChip,
   LoadingState,
@@ -141,6 +142,23 @@ export function AdoptionView() {
         data && (
           <>
             <UpdatingBar active={query.isFetching} testId="adoption-updating" />
+            {data.features.every(feature => feature.users.length === 0) && (
+              <EmptyState
+                action={
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    onClick={refresh}
+                    data-testid="adoption-empty-refresh"
+                  >
+                    Refresh observations
+                  </Button>
+                }
+                title="No recorded successful operations in either period"
+                description="Coverage is unknown. This does not establish that these features were available or unused."
+              />
+            )}
             <Typography level="body-sm" data-testid="adoption-window">
               Complete UTC days: {data.window.from} to {data.window.to}; previous: {data.window.previousFrom} to{' '}
               {data.window.previousTo}. Comparisons are observations over equal windows, not signup-cohort retention.
