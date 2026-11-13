@@ -3,6 +3,10 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
 
+// Must stay in sync with the `content` / `description` maxlength in SystemPromptModel and SystemPromptHistoryModel.
+const MAX_CONTENT_LENGTH = 50000;
+const MAX_DESCRIPTION_LENGTH = 2000;
+
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
@@ -44,6 +48,20 @@ const handler = adminApi({
       return res.status(400).json({
         error: 'Invalid content',
         message: 'content is required',
+      });
+    }
+
+    if (content.length > MAX_CONTENT_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid content',
+        message: `content must be at most ${MAX_CONTENT_LENGTH} characters`,
+      });
+    }
+
+    if (typeof description === 'string' && description.length > MAX_DESCRIPTION_LENGTH) {
+      return res.status(400).json({
+        error: 'Invalid description',
+        message: `description must be at most ${MAX_DESCRIPTION_LENGTH} characters`,
       });
     }
 
