@@ -1,17 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, waitFor } from '@testing-library/react';
 
-const { mockToastSuccess, mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState } = vi.hoisted(() => ({
-  mockToastSuccess: vi.fn(),
-  mockGet: vi.fn(),
-  mockTrackPurchaseConversion: vi.fn(),
-  mockBootstrapSession: vi.fn(),
-  tokenState: { accessToken: 'token' as string | null },
-}));
+const { mockToastSuccess, mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState, userState } =
+  vi.hoisted(() => ({
+    mockToastSuccess: vi.fn(),
+    mockGet: vi.fn(),
+    mockTrackPurchaseConversion: vi.fn(),
+    mockBootstrapSession: vi.fn(),
+    tokenState: { accessToken: 'token' as string | null },
+    userState: { currentUser: { id: 'buyer' } },
+  }));
 
 vi.mock('sonner', () => ({ toast: { success: mockToastSuccess } }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: { getState: () => userState } }));
 vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
 vi.mock('@client/app/utils/sessionBootstrap', () => ({ bootstrapSession: mockBootstrapSession }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: { getState: () => tokenState } }));
@@ -51,6 +55,7 @@ describe('StripeCheckoutSuccessHandler', () => {
     window.sessionStorage.clear();
     consumeBillingCheckoutReturn();
     tokenState.accessToken = 'token';
+    userState.currentUser = { id: 'buyer' };
     mockBootstrapSession.mockResolvedValue(undefined);
     mockGet.mockResolvedValue({ data: SUMMARY });
   });
@@ -152,6 +157,28 @@ describe('StripeCheckoutSuccessHandler', () => {
     }
   });
 
+  it('keeps same-page team navigation and one conversion across StrictMode effect replay', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      window.history.replaceState({}, '', `/${CHECKOUT_RETURN}`);
+      render(
+        <StrictMode>
+          <StripeCheckoutSuccessHandler />
+        </StrictMode>
+      );
+      await waitFor(() => expect(replace).toHaveBeenCalledExactlyOnceWith('/organizations/org1?team_created=true'));
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith({
+        ...SUMMARY,
+        teamCheckout: true,
+        organizationId: 'org1',
+      });
+      expect(window.location.search).toBe('');
+    } finally {
+      replace.mockRestore();
+    }
+  });
+
   it('waits for team provisioning without reporting the purchase twice', async () => {
     const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -164,6 +191,85 @@ describe('StripeCheckoutSuccessHandler', () => {
       expect(replace).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1500);
       expect(replace).toHaveBeenCalledWith('/organizations/org1?team_created=true');
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
+
+  it.each(['navigation', 'unmount', 'account switch'])(
+    'does not redirect after %s during a held provisioning lookup',
+    async change => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let resolveLookup!: (response: {
+          data: typeof SUMMARY & { teamCheckout: boolean; organizationId: string };
+        }) => void;
+        mockGet.mockResolvedValueOnce({ data: { ...SUMMARY, teamCheckout: true } }).mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              resolveLookup = resolve;
+            })
+        );
+        const view = returnTo(CHECKOUT_RETURN);
+        await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(mockGet).toHaveBeenCalledTimes(2);
+        if (change === 'navigation') window.history.pushState({}, '', '/notebooks/draft');
+        if (change === 'unmount') view.unmount();
+        if (change === 'account switch') userState.currentUser = { id: 'other-buyer' };
+        resolveLookup({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(replace).not.toHaveBeenCalled();
+        expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith({ ...SUMMARY, teamCheckout: true });
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(mockGet).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+        replace.mockRestore();
+      }
+    }
+  );
+
+  it('retries provisioning once from the current page even if Check again is clicked twice', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(9000);
+      const options = mockToastSuccess.mock.lastCall?.[1] as { action: { onClick: () => void } };
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      options.action.onClick();
+      options.action.onClick();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGet).toHaveBeenCalledTimes(8);
+      expect(replace).toHaveBeenCalledExactlyOnceWith('/organizations/org1?team_created=true');
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
+
+  it('does not revive an obsolete check-again action after leaving the return page', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(9000);
+      const options = mockToastSuccess.mock.lastCall?.[1] as { action: { onClick: () => void } };
+      expect(options.action).toBeDefined();
+      window.history.pushState({}, '', '/notebooks/draft');
+      options.action.onClick();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(mockGet).toHaveBeenCalledTimes(7);
+      expect(replace).not.toHaveBeenCalled();
       expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
@@ -189,6 +295,7 @@ describe('checkoutConfirmation', () => {
       vi.clearAllMocks();
       window.sessionStorage.clear();
       tokenState.accessToken = 'token';
+      userState.currentUser = { id: 'buyer' };
       mockBootstrapSession.mockResolvedValue(undefined);
       mockGet.mockResolvedValue({ data: SUMMARY });
     });
