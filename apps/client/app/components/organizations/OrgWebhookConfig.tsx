@@ -64,6 +64,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
   // Staged edit of the subscribed events; null while it still matches what is stored.
   const [editedEvents, setEditedEvents] = useState<string[] | null>(null);
+  const [eventsSaving, setEventsSaving] = useState(false);
   const [testTargetUrl, setTestTargetUrl] = useState('');
 
   // Data hooks
@@ -197,10 +198,15 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
 
   const handleSaveEvents = useCallback(async () => {
     if (!editedEvents) return;
-    await updateConfig.mutateAsync({
-      orgId: organization.id,
-      data: { subscribedEvents: editedEvents },
-    });
+    setEventsSaving(true);
+    try {
+      await updateConfig.mutateAsync({
+        orgId: organization.id,
+        data: { subscribedEvents: editedEvents },
+      });
+    } finally {
+      setEventsSaving(false);
+    }
     setEditedEvents(null);
     toast.success('Subscribed events updated');
   }, [editedEvents, organization.id, updateConfig]);
@@ -476,7 +482,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
       </Stack>
       <OrgFormSaveBar
         count={eventChangeCount}
-        pending={updateConfig.isPending}
+        pending={eventsSaving}
         // The server reads an empty list as "all events", so clearing a specific selection would
         // silently widen it; the change is refused rather than reinterpreted.
         blockedReason={editedEvents && editedEvents.length === 0 ? 'Select at least one event.' : undefined}

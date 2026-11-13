@@ -243,3 +243,62 @@ describe('OrgCustomMcpPolicySection', () => {
     expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('OrgCustomMcpPolicySection save bar', () => {
+  const switchChecked = (testId: string) =>
+    (within(screen.getByTestId(testId)).getByRole('switch') as HTMLInputElement).checked;
+
+  beforeEach(() => {
+    state.view = viewOf();
+    state.connections = [];
+    state.policyError = false;
+    state.save.mockReset();
+  });
+
+  it('counts each edited field and drops back to zero when an edit is undone', () => {
+    renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+
+    toggle('org-custom-mcp-write-tools-switch');
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('2 unsaved changes');
+
+    toggle('org-custom-mcp-write-tools-switch');
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+  });
+
+  it('still counts an invalid draft as unsaved and blocks Save', () => {
+    renderSection();
+    fireEvent.change(within(screen.getByTestId('org-custom-mcp-max-connections')).getByRole('spinbutton'), {
+      target: { value: '500' },
+    });
+
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(saveButton());
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it('Discard restores the stored policy', () => {
+    renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(switchChecked('org-custom-mcp-require-approval-switch')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(switchChecked('org-custom-mcp-require-approval-switch')).toBe(false);
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it('Save sends the edited policy once', () => {
+    renderSection();
+    toggle('org-custom-mcp-write-tools-switch');
+    fireEvent.click(saveButton());
+    expect(state.save).toHaveBeenCalledTimes(1);
+    expect(state.save).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'allowlist', allowedHostPatterns: ['mcp.example.com'] })
+    );
+  });
+});

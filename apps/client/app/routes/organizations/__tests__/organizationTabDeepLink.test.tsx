@@ -336,6 +336,66 @@ describe('organization detail page - Integrations tab', () => {
     });
   });
 
+  describe.each([
+    ['github', 'github'],
+    ['webhooks', 'webhooks'],
+  ])('a manager opening the old ?tab=%s link', tab => {
+    const MANAGER_ORG = {
+      ...ORG,
+      adminUserIds: ['mgr3'],
+      users: [...(ORG.users ?? []), { userId: 'mgr3', permissions: [Permission.read] }],
+    } as unknown as IOrganizationDocument;
+
+    const renderAsManager = () => {
+      searchParams.current = { tab };
+      user.current = { id: 'mgr3' };
+      orgQuery.current = { data: undefined, isLoading: true };
+      const { rerender } = render(wrapper(<OrganizationPage />));
+      orgQuery.current = { data: MANAGER_ORG, isLoading: false };
+      rerender(wrapper(<OrganizationPage />));
+      return rerender;
+    };
+
+    it('lands on Connectors, the only section a manager sees', () => {
+      renderAsManager();
+
+      expect(selectedTabName()).toBe('Integrations');
+      expect(screen.getByTestId('organization-integration-section-connectors')).toBeTruthy();
+      expect(screen.queryByTestId(`organization-integration-section-${tab}`)).toBeNull();
+    });
+
+    it('rewrites the URL to the resolved section once the legacy rewrite has settled', () => {
+      const rerender = renderAsManager();
+      applyNavigation(rerender);
+
+      expect(navigateSpy).toHaveBeenLastCalledWith({
+        to: '/organizations/$id',
+        params: { id: 'org1' },
+        search: { tab: OrganizationTabs.Integrations, section: 'connectors' },
+        replace: true,
+      });
+
+      const calls = navigateSpy.mock.calls.length;
+      applyNavigation(rerender);
+      expect(navigateSpy).toHaveBeenCalledTimes(calls);
+    });
+  });
+
+  it('does not rewrite before the user and organization have loaded', () => {
+    searchParams.current = { tab: 'integrations', section: 'github' };
+    orgQuery.current = { data: undefined, isLoading: true };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite a section the caller can see, or an Integrations link with no section', () => {
+    searchParams.current = { tab: 'integrations', section: 'webhooks' };
+    renderThroughLoad();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
   // A bare ?tab=integrations meant the Slack panel before the merge, and the Slack OAuth callback
   // still returns there, so it must keep opening Slack.
   it('opens Slack when no section is named, as the pre-merge link and the Slack OAuth return did', () => {

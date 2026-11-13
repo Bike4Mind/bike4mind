@@ -98,9 +98,9 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           <Chip size="sm" variant="soft" data-testid="organization-user-card-member-chip">
             {t('organization.roles.member')}
           </Chip>
-          {/* Not a role: share/update on the ACL row opens the Settings tab (canManageOrg in
-              routes/organizations/$id.tsx), so the owner needs to see who holds it. */}
-          {user.permissions.some(p => p === Permission.share || p === Permission.update) && (
+          {/* Not a role: update on the ACL row opens the Settings tab (canManageOrgSettings in
+              routes/organizations/orgTabAccess.ts), so the owner needs to see who holds it. */}
+          {user.permissions.some(p => p === Permission.update) && (
             <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
               {t('organization.access.can_edit_settings')}
             </Chip>
