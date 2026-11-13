@@ -54,13 +54,16 @@ type Draft = {
   expiresOn: string;
 };
 
+const expiryDay = (pkg: IGrantPackageDocument | null): string =>
+  pkg?.expiresAt ? new Date(pkg.expiresAt).toISOString().slice(0, 10) : '';
+
 const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   name: pkg?.name ?? '',
   credits: pkg ? String(pkg.credits) : '',
   totalCap: pkg?.totalCap != null ? String(pkg.totalCap) : '',
   dailyCap: pkg?.dailyCap != null ? String(pkg.dailyCap) : '',
   active: pkg?.active ?? true,
-  expiresOn: pkg?.expiresAt ? new Date(pkg.expiresAt).toISOString().slice(0, 10) : '',
+  expiresOn: expiryDay(pkg),
 });
 
 /** The chosen day stays redeemable through its end in UTC, the same day boundary as the daily cap. */
@@ -88,7 +91,10 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
   const credits = WHOLE.test(creditsText) ? Number(creditsText) : null;
   const totalCap = parseCap(draft.totalCap);
   const dailyCap = parseCap(draft.dailyCap);
-  const expiresAt = expiresAtFromDay(draft.expiresOn);
+  // An edit that leaves the day alone keeps the stored instant; only a newly picked day is rounded to its end.
+  const expiryChanged = !current || draft.expiresOn !== expiryDay(current);
+  const expiresAt =
+    !expiryChanged && current?.expiresAt ? new Date(current.expiresAt) : expiresAtFromDay(draft.expiresOn);
   const expiryInvalid =
     expiresAt !== null && (Number.isNaN(expiresAt.getTime()) || (!current && isGrantPackageExpired({ expiresAt })));
   const valid =
@@ -109,7 +115,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
         totalCap,
         dailyCap,
         active: draft.active,
-        expiresAt,
+        ...(expiryChanged ? { expiresAt } : {}),
         ...(reasonRequired ? { reason: composeAdminReason(reason) } : {}),
       };
       if (current) return { pkg: await updateGrantPackage(current.id, body), failure: null };
