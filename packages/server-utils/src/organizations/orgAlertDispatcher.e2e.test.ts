@@ -101,11 +101,19 @@ describe('dispatchOrgAlert', () => {
     expect(result.recipientUserIds).toEqual([str(ids.optedIn)]);
   });
 
-  it('skips email but keeps the Inbox entry for excluded recipients', async () => {
-    await dispatchOrgAlert(alert({ excludeEmailUserIds: [str(ids.owner)] }));
+  it('skips the owner email but keeps their Inbox entry when excludeOwnerEmail is set', async () => {
+    await dispatchOrgAlert(alert({ excludeOwnerEmail: true }));
 
     expect(publish.mock.calls.map(([e]) => e.to)).toEqual(['optedIn@example.com']);
     expect(await inboxFor(ids.owner)).toHaveLength(1);
+  });
+
+  it('stores inboxMessage in the Inbox while the email keeps message', async () => {
+    await dispatchOrgAlert(alert({ message: 'Sam hit the cap', inboxMessage: 'A member hit the cap' }));
+
+    expect(publish.mock.calls[0][0].body).toContain('Sam hit the cap');
+    const [entry] = await inboxFor(ids.owner);
+    expect(entry.message).toBe('A member hit the cap');
   });
 
   it('releases the claim when every delivery fails, so a later event retries', async () => {
