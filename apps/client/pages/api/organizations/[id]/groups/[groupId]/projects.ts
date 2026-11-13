@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
-const handler = baseApi().put(
+const handler = baseApi({ auth: 'jwtOnly' }).put(
   asyncHandler<{}, unknown, unknown, { id?: string; groupId?: string }>(async (req, res) => {
     const { id: organizationId, groupId } = req.query;
     if (!organizationId || !groupId) throw new NotFoundError('Group not found');
