@@ -471,7 +471,11 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
-  return { reason: reasons.join(' '), kinds };
+  return {
+    mode: (entry.unread && !entry.refsMovedOnly) || entry.gitUnlisted ? 'full' : 'auto',
+    reason: reasons.join(' '),
+    kinds,
+  };
 }
 
 /**
@@ -554,10 +558,14 @@ export async function shellApproval(
     secret ||
     scan.unreadScript === true ||
     writesWhileUnresolved;
-  // 'full' stops only where the scan sees the protected floor; what it cannot follow asks in 'auto' alone.
-  const asksInFull = (touchesProtected && !scan.readOnly) || secret || writesWhileUnresolved;
+  const scriptAsksInFull =
+    (touchesProtected && !scan.readOnly) ||
+    scan.unreadScript === true ||
+    secret ||
+    writesWhileUnresolved ||
+    unreachable.length > 0;
   // A part that sets the environment changes what every later part runs, so none is decided alone.
-  const byPart = !scriptAsks && !scan.setsEnvironment;
+  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
   const reasons = [
     ...(scriptCheckFailed
       ? ['Could not check whether it runs code written in this session, so it is asked each time.']
@@ -607,6 +615,7 @@ export async function shellApproval(
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scriptAsks || parts.some(ask => ask !== undefined);
+  const asksInFull = scriptAsksInFull || parts.some(ask => ask?.mode === 'full');
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -653,7 +662,7 @@ export async function shellApproval(
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
 /**
- * The prompt for a command the scan could not read. It asks in auto mode, and when the command
+ * The prompt for a command the scan could not read. It asks in auto and full mode, and when the command
  * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
  * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
  */
@@ -667,7 +676,7 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true, unchecked: true };
+  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true, unchecked: true };
   return {
     detail: [
       detail,
@@ -675,6 +684,7 @@ function unreadApproval(
     ].join('\n\n'),
     key,
     askInAuto: true,
+    askInFull: true,
     unchecked: true,
     always: {
       namespace: tool,

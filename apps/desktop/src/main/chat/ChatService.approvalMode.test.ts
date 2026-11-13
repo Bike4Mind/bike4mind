@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -11,7 +11,9 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
-import { bashExecute } from './tools/shellTools';
+import { bashExecute, shellApproval } from './tools/shellTools';
+import * as shellScanner from './tools/shellScan';
+import * as wslPaths from '../wsl/wslPath';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -324,9 +326,8 @@ describe('ChatService approval modes', () => {
   });
 
   /**
-   * Full access asks only about credits, irreversible calls, signed-in browser pages and what the scan sees
-   * reach a protected location. A command the scan cannot follow, or a git form it does not list, asks in
-   * auto alone.
+   * Full access retains the opaque-command floor. Readable Git workflows may run despite
+   * a prior reference change; an unlisted Git option alone is separate from an unread command.
    */
   describe('what full access still asks about', () => {
     const git = (cwd: string, ...args: string[]): void => {
@@ -358,7 +359,6 @@ describe('ChatService approval modes', () => {
       'git fetch origin main && git rebase origin/main',
       'git fetch origin main && git reset --hard origin/main',
       'git show --format= HEAD',
-      'git status --frobnicate',
     ];
 
     it.each(routine)('runs %s in full access', async command => {
@@ -370,12 +370,100 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it.each(routine)('asks before %s in approve for me', async command => {
+    it.each(routine.filter(command => command !== 'git show --format= HEAD'))(
+      'asks before %s in approve for me',
+      async command => {
+        await startTurn('auto');
+        streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+        streams[0].write(frame('[DONE]'));
+
+        await awaitStatus('awaiting-approval');
+        expect(calls('done')).toHaveLength(0);
+      }
+    );
+
+    it('runs a literal empty git format option in approve for me', async () => {
       await startTurn('auto');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git show --format= HEAD', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
+      expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it.each([
+      'cp notes.txt "$(printf .cl%sude a)"/settings.json',
+      'git status && rm "$OPAQUE_TARGET"',
+      'echo "unterminated',
+      'git status --frobnicate',
+      'git opaque-approval-test',
+      'git fetch origin main && git reset --hard "$OPAQUE_REF"',
+      'git fetch origin main && git reset --hard origin/main > "$OPAQUE_OUTPUT"',
+      'GIT_WORK_TREE="$OPAQUE_ROOT" git fetch origin main && git reset --hard origin/main',
+    ])('asks before the opaque command %s in full access', async command => {
+      await startTurn('full');
       streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[0].write(frame('[DONE]'));
-
       await awaitStatus('awaiting-approval');
+      expect(calls('done')).toHaveLength(0);
+    });
+
+    it('retains remote-clone destination evidence after a Git reference change', async () => {
+      const context = { roots: [root], workingDirectory: root, signal: new AbortController().signal };
+      const ordinary = await shellApproval(
+        'bash_execute',
+        {
+          command: 'git fetch origin main && git clone https://example.invalid/repo.git copy',
+          cwd: root,
+        },
+        context
+      );
+      expect(ordinary.detail).toContain('Clones a repository from another computer');
+      expect(ordinary.askInAuto).toBe(true);
+      expect(ordinary.askInFull).toBeUndefined();
+      const protectedDestination = await shellApproval(
+        'bash_execute',
+        {
+          command: 'git fetch origin main && git clone https://example.invalid/repo.git .',
+          cwd: root,
+        },
+        context
+      );
+      expect(protectedDestination.askInFull).toBe(true);
+    });
+
+    it('asks in full access when an unread command may reach an ungranted WSL distro', async () => {
+      // Exercise the real prompt and ChatService decision without requiring a running distro.
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      vi.spyOn(wslPaths, 'wslLocation').mockImplementation(wslPaths.parseWslPath);
+      vi.spyOn(bashExecute, 'approval').mockImplementation((input, context) =>
+        shellApproval('bash_execute', input, { ...context, roots: [String.raw`\\wsl.localhost\Ubuntu\home\me\repo`] })
+      );
+      await startTurn('full');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'echo "unterminated', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalDetail).toContain('may reach a WSL distro');
+      expect(asked.approvalDetail).toContain('It asks each time');
+      expect(calls('done')).toHaveLength(0);
+    });
+
+    it('keeps known protected destinations when an earlier Git command changes refs', async () => {
+      git(root, 'checkout', '-qb', 'protected-change');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), '{}');
+      git(root, 'add', '.claude/settings.json');
+      git(root, 'commit', '-qm', 'settings fixture');
+      git(root, 'checkout', '-q', 'main');
+      await startTurn('full');
+      streams[0].write(
+        toolTurn('c1', 'bash_execute', {
+          command: 'git fetch origin main && git merge --ff-only protected-change',
+          cwd: root,
+        })
+      );
+      streams[0].write(frame('[DONE]'));
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalDetail).toContain('Reaches a location Desktop protects');
       expect(calls('done')).toHaveLength(0);
     });
 

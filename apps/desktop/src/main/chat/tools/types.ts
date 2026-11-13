@@ -742,10 +742,10 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
-  /** For a shell command the scan could not fully follow (unparsed, an unread part or script, an unlisted git form): 'auto' asks, 'full' runs it. */
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
   unchecked?: true;
   /**
-   * `askInAuto` comes only from parts that say so in `always.commands[].ask`, with no reason
+   * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
    */
   byPart?: true;
@@ -768,8 +768,8 @@ export interface ApprovalPart {
   words?: string;
   expanded?: string;
   opaque?: string;
-  /** Why this part asks in auto mode; full mode runs it. Only set on a prompt with `byPart`. */
-  ask?: { reason: string; kinds: readonly PartAskKind[] };
+  /** Why this part asks: 'full' requires an explicit decision in every mode. Only set with `byPart`. */
+  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */

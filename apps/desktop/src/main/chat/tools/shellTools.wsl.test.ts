@@ -50,6 +50,7 @@ describe('a shell command that reaches a WSL distro no root is in', () => {
     const prompt = await shellApproval('bash_execute', { command: `ls '${DEBIAN}'` }, context);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.detail).toContain(`Reaches ${DEBIAN}, in a WSL distro this project has no folder in.`);
     expect(prompt.always?.directories).toEqual([]);
     expect(prompt.always?.ungranted).toEqual([DEBIAN]);
@@ -71,6 +72,7 @@ describe('a shell command that reaches a WSL distro no root is in', () => {
     const prompt = await shellApproval('bash_execute', { command: 'ls', cwd: DEBIAN }, context);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always?.directories).toEqual([]);
     expect(prompt.always?.ungranted).toEqual([DEBIAN]);
   });
@@ -119,6 +121,7 @@ describe('a shell command the scan could not read', () => {
     const prompt = await shellApproval('bash_execute', call.input, wslContext);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always?.ungranted).toEqual([UNREAD_WSL_COMMAND]);
     expect(prompt.detail).toContain('Could not read this command');
 
@@ -142,6 +145,7 @@ describe('a shell command the scan could not read', () => {
     const prompt = await shellApproval('bash_execute', { command: 'cat ~/x' }, context);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always).toBeUndefined();
     scanned.unreadable = false;
   });

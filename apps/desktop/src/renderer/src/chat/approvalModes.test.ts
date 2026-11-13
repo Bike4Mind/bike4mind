@@ -25,13 +25,13 @@ describe('approval mode copy', () => {
     expect(full.description).toMatch(/without asking/i);
   });
 
-  it('names what full access still asks about, and what it no longer does', () => {
+  it('names the opaque-command floor and bounded Git exceptions in full access', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/"Full access" asks only before spending credits/);
+    expect(notes).toMatch(/"Full access" asks before spending credits/);
     expect(notes).toMatch(/cannot be undone/i);
     expect(notes).toMatch(/browser page you are signed in to/i);
     expect(notes).toMatch(/permission and hook settings/i);
-    expect(notes).toMatch(/cannot fully follow, and git forms it does not list as safe, without asking/i);
+    expect(notes).toMatch(/asks when Desktop cannot follow a command or its operands/i);
   });
 
   it('does not promise that approve-for-me checks everything', () => {

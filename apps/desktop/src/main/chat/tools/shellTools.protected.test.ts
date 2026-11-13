@@ -238,7 +238,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
-    it('runs an opaque write to the project settings in full access, marked unchecked', async () => {
+    it('asks before an opaque write to the project settings in full access, marked unchecked', async () => {
       const prompt = await shellApproval(
         'bash_execute',
         { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
@@ -246,7 +246,7 @@ describe('shell commands that reach a protected location', () => {
       );
       expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
         askInAuto: true,
-        askInFull: undefined,
+        askInFull: true,
         unchecked: true,
       });
     });
