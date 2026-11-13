@@ -17,6 +17,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProjectFor, toPublicProjectsFor } from '@server/projects/projectItemReach';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 
 const CURSOR_SCOPE = 'v1.projects';
 
@@ -44,12 +45,13 @@ const createRoute = nextRouteForContract(createProjectContract, {
   rateLimit: perUserRateLimit('POST /api/v1/projects'),
 }).post(async (req, res) => {
   const { name, description, session_ids: sessionIds, file_ids: fileIds } = req.validated;
+  const organizationId = await resolveActiveOrg(req, req.validated.organization_id);
 
   let project;
   try {
     project = await projectService.createProject(
       req.user,
-      { name, description, sessionIds, fileIds },
+      { name, description, organizationId, sessionIds, fileIds },
       { db: { projects: projectRepository, fabFiles: fabFileRepository, sessions: sessionRepository } }
     );
   } catch (error) {

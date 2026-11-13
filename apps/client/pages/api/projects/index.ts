@@ -15,10 +15,12 @@ import { InternalServerError, UnprocessableEntityError } from '@bike4mind/utils'
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
 import { withReadableProjectItems } from '@server/projects/projectItemReach';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 
 const createProjectBodySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  organizationId: z.string().optional(),
   sessionIds: z.array(z.string()).optional(),
   fileIds: z.array(z.string()).optional(),
 });
@@ -46,6 +48,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
   .post(async (req, res) => {
     assertProjectsWriteScope(req);
     const body = createProjectBodySchema.parse(req.body);
+    body.organizationId = await resolveActiveOrg(req, body.organizationId);
     try {
       const project = await projectService.createProject(req.user, body, {
         db: {

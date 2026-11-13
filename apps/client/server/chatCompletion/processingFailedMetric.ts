@@ -5,8 +5,8 @@ import { categorizeToolError } from '@bike4mind/services';
 import { isOperatorFault } from '@bike4mind/services/llm';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 
-/** Completion entry point a failure came from: internal `/process`, the CLI SSE/WS routes, or embed chat. */
-export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'cli-ws' | 'embed';
+/** Completion entry point a failure came from: internal `/process`, the CLI SSE route, or embed chat. */
+export type ProcessingFailureSurface = '/process' | 'cli-sse' | 'embed';
 
 /**
  * Count one completion failure on the operator-facing `ProcessingFailed` metric. Never rejects and

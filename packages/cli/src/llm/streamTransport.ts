@@ -5,16 +5,11 @@ import type { StreamEvent } from './streamEvents';
 /**
  * Ports & adapters for CLI streaming completions.
  *
- * Both transports - `ServerLlmBackend` (SSE) and `WebSocketLlmBackend` (HTTP
- * POST + WebSocket frames) - used to reimplement the same "turn a stream into
- * exactly one delivered completion" policy inline, and the two had diverged
- * (retry, deliver-exactly-once, and empty-completion handling all differed).
- *
- * This module defines the seam that fixes that: a transport is reduced to the
- * ONE thing it alone can do - open a wire stream and decode frames into the
- * shared {@link StreamEvent} union - behind {@link StreamTransport}. The retry
- * / accumulate / finalize-exactly-once / empty / abort policy lives once in
- * `runCompletion` (see runCompletion.ts) and both transports inherit it.
+ * A transport (`ServerLlmBackend` over SSE, or `InMemoryStreamTransport` in
+ * tests) is reduced to the ONE thing it alone can do - open a wire stream and
+ * decode frames into the shared {@link StreamEvent} union - behind
+ * {@link StreamTransport}. The retry / accumulate / finalize-exactly-once /
+ * empty / abort policy lives once in `runCompletion` (see runCompletion.ts).
  */
 
 /**
@@ -41,7 +36,7 @@ export interface CompletionRequest {
  *
  * Contract (the core relies on all three):
  * - Normal completion: the async iterable RETURNS after yielding every event
- *   (an SSE `[DONE]` / a `cli_completion_done` frame ends iteration).
+ *   (an SSE `[DONE]` ends iteration).
  * - Wire failure: the iterable THROWS, ideally a classified `ModelCallError`
  *   (modelCallError.ts). `decideRetry` retries a transient kind and lets the
  *   rest propagate. A server-sent `error` frame is surfaced as a throw, NOT
