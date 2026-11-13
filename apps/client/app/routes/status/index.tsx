@@ -12,6 +12,10 @@ import FlakyTable from '@client/app/components/QaStatus/FlakyTable';
 import RunList from '@client/app/components/QaStatus/RunList';
 import StatusHeader from '@client/app/components/QaStatus/StatusHeader';
 import RunExpanded from '@client/app/components/QaStatus/RunExpanded';
+import { chartRangeFor, resolveRange } from '@client/app/components/QaStatus/dateRange';
+
+/** Shown first when the URL names no product; any other product is one dropdown pick away. */
+const DEFAULT_PRODUCT = 'bike4mind';
 
 const QaStatusPage: FC = () => {
   useDocumentTitle('QA Status');
@@ -19,7 +23,8 @@ const QaStatusPage: FC = () => {
   const navigate = useNavigate();
   // Unscoped facets pick the default product; scoped ones fill the tenant/env options.
   const allFacets = useQaFacets();
-  const product = search.product ?? allFacets.data?.products[0];
+  const products = allFacets.data?.products;
+  const product = search.product ?? (products?.includes(DEFAULT_PRODUCT) ? DEFAULT_PRODUCT : products?.[0]);
   const facets = useQaFacets(product);
   const effective: QaStatusSearch = { ...search, product };
   const overview = useQaOverview(effective);
@@ -42,7 +47,7 @@ const QaStatusPage: FC = () => {
         {overview.data && (
           <>
             <StatusTiles tiles={overview.data.tiles} onOpenRun={openRun} />
-            <StatusCharts series={overview.data.series} range={effective.range} />
+            <StatusCharts series={overview.data.series} range={chartRangeFor(resolveRange(effective))} />
             <FlakyTable rows={overview.data.flaky} onOpenTest={openTest} />
           </>
         )}

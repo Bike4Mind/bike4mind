@@ -10,9 +10,11 @@ export const UNLABELED = 'default';
 
 export type ChartRange = '7d' | '30d';
 
-/** 30d plots one bucket per local day; 7d one point per run. */
+/** '30d' (any range over a week, see dateRange.ts) plots one bucket per local day; '7d' one point per run. */
 const DAILY_RANGE: ChartRange = '30d';
 const DAILY_TICK_STEP = 3;
+/** Daily ticks widen past this many so a 90-day axis stays readable. */
+const MAX_DAILY_TICKS = 10;
 
 export type ChartRow = { t: number } & Record<string, number | null | undefined>;
 
@@ -29,7 +31,7 @@ export interface ChartData {
   hidden: number;
   unit: string;
   fail: 'above' | 'below';
-  /** Local-midnight x ticks across the row range: daily on 7d, every 3rd day on 30d. */
+  /** Local-midnight x ticks across the row range: daily on 7d; on 30d every 3rd day, wider past 30 days. */
   ticks: number[];
   /** Rows are daily buckets (30d), so `runs` is meaningful. */
   daily: boolean;
@@ -124,6 +126,11 @@ interface BuildOptions {
   round?: (n: number) => number;
 }
 
+function dailyTickStep(rows: ChartRow[]): number {
+  const days = Math.round((rows[rows.length - 1].t - rows[0].t) / 86_400_000) + 1;
+  return Math.max(DAILY_TICK_STEP, Math.ceil(days / MAX_DAILY_TICKS));
+}
+
 /** Series keep first-appearance order so a state keeps its color across renders. */
 function build(entries: Entry[], o: BuildOptions): ChartData {
   const order: string[] = [];
@@ -172,7 +179,7 @@ function build(entries: Entry[], o: BuildOptions): ChartData {
     hidden: order.length - kept.size,
     unit,
     fail: o.fail,
-    ticks: sorted.length ? dayTicks(sorted[0].t, sorted[sorted.length - 1].t, daily ? DAILY_TICK_STEP : 1) : [],
+    ticks: sorted.length ? dayTicks(sorted[0].t, sorted[sorted.length - 1].t, daily ? dailyTickStep(sorted) : 1) : [],
     daily,
     runs,
   };

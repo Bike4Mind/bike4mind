@@ -1,6 +1,18 @@
 import { FC, useState } from 'react';
-import { Button, ButtonGroup, Input, Option, Select, Stack } from '@mui/joy';
+import { Button, FormLabel, Input, Option, Select, Stack, useTheme } from '@mui/joy';
 import type { QaFacets, QaStatusSearch } from '@client/app/hooks/data/qaStatus';
+import {
+  MAX_RANGE_DAYS,
+  RANGE_PRESETS,
+  activePreset,
+  addDays,
+  parseIsoDay,
+  presetRange,
+  resolveRange,
+  spanDays,
+  toIsoDay,
+  type DayRange,
+} from './dateRange';
 
 /**
  * Joy's Select clears a value that is not among its options when the options change, so a
@@ -32,70 +44,127 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
     if (next !== (search.branch ?? 'main')) onChange({ branch: next });
   };
 
+  const theme = useTheme();
+  const range = resolveRange(search);
+  const today = toIsoDay(new Date());
+  const preset = activePreset(range);
+  const setRange = (next: DayRange) => onChange({ from: next.from, to: next.to, range: undefined });
+  // A picked day past the other end moves that end with it; an over-wide range keeps the picked day.
+  const pickFrom = (picked: string) => {
+    if (!parseIsoDay(picked)) return;
+    const from = picked > today ? today : picked;
+    let to = range.to < from ? from : range.to;
+    if (spanDays({ from, to }) > MAX_RANGE_DAYS) to = addDays(from, MAX_RANGE_DAYS - 1);
+    setRange({ from, to: to > today ? today : to });
+  };
+  const pickTo = (to: string) => {
+    if (!parseIsoDay(to)) return;
+    let from = range.from > to ? to : range.from;
+    if (spanDays({ from, to }) > MAX_RANGE_DAYS) from = addDays(to, -(MAX_RANGE_DAYS - 1));
+    setRange({ from, to });
+  };
+
   return (
-    <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center" data-testid="qa-filters">
-      <ButtonGroup size="sm">
-        {(facets?.products ?? []).map(p => (
-          <Button
-            key={p}
-            data-testid={`qa-filter-product-${p}`}
-            variant={p === search.product ? 'solid' : 'outlined'}
-            onClick={() => onChange({ product: p, tenant: undefined, env: undefined })}
-          >
-            {p}
-          </Button>
-        ))}
-      </ButtonGroup>
-      <Select
-        size="sm"
-        data-testid="qa-filter-tenant"
-        value={search.tenant ?? ''}
-        onChange={(_, v) => onChange({ tenant: v || undefined })}
-        sx={{ minWidth: 140 }}
-      >
-        <Option value="">All tenants</Option>
-        {withCurrent(facets?.tenants, search.tenant).map(t => (
-          <Option key={t} value={t}>
-            {t}
-          </Option>
-        ))}
-      </Select>
-      <Select
-        size="sm"
-        data-testid="qa-filter-env"
-        value={search.env ?? ''}
-        onChange={(_, v) => onChange({ env: v || undefined })}
-        sx={{ minWidth: 140 }}
-      >
-        <Option value="">All envs</Option>
-        {withCurrent(facets?.envs, search.env).map(e => (
-          <Option key={e} value={e}>
-            {e}
-          </Option>
-        ))}
-      </Select>
-      <Input
-        size="sm"
-        data-testid="qa-filter-branch"
-        startDecorator="branch:"
-        value={branch}
-        onChange={e => setBranch(e.target.value)}
-        onBlur={commitBranch}
-        onKeyDown={e => e.key === 'Enter' && commitBranch()}
-        sx={{ width: 200 }}
-      />
-      <ButtonGroup size="sm" spacing={0.5}>
-        {(['7d', '30d'] as const).map(r => (
-          <Button
-            key={r}
-            data-testid={`qa-filter-range-${r}`}
-            variant={(search.range ?? '7d') === r ? 'solid' : 'outlined'}
-            onClick={() => onChange({ range: r })}
-          >
-            {r}
-          </Button>
-        ))}
-      </ButtonGroup>
+    <Stack spacing={1.5} data-testid="qa-filters">
+      <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center">
+        <Select
+          size="sm"
+          data-testid="qa-filter-product"
+          aria-label="Product"
+          placeholder="Product"
+          value={search.product ?? null}
+          onChange={(_, v) => v && v !== search.product && onChange({ product: v, tenant: undefined, env: undefined })}
+          sx={{ minWidth: 160 }}
+        >
+          {withCurrent(facets?.products, search.product).map(p => (
+            <Option key={p} value={p}>
+              {p}
+            </Option>
+          ))}
+        </Select>
+        <Select
+          size="sm"
+          data-testid="qa-filter-tenant"
+          value={search.tenant ?? ''}
+          onChange={(_, v) => onChange({ tenant: v || undefined })}
+          sx={{ minWidth: 140 }}
+        >
+          <Option value="">All tenants</Option>
+          {withCurrent(facets?.tenants, search.tenant).map(t => (
+            <Option key={t} value={t}>
+              {t}
+            </Option>
+          ))}
+        </Select>
+        <Select
+          size="sm"
+          data-testid="qa-filter-env"
+          value={search.env ?? ''}
+          onChange={(_, v) => onChange({ env: v || undefined })}
+          sx={{ minWidth: 140 }}
+        >
+          <Option value="">All envs</Option>
+          {withCurrent(facets?.envs, search.env).map(e => (
+            <Option key={e} value={e}>
+              {e}
+            </Option>
+          ))}
+        </Select>
+        <Input
+          size="sm"
+          data-testid="qa-filter-branch"
+          startDecorator="branch:"
+          value={branch}
+          onChange={e => setBranch(e.target.value)}
+          onBlur={commitBranch}
+          onKeyDown={e => e.key === 'Enter' && commitBranch()}
+          sx={{ width: 200 }}
+        />
+      </Stack>
+      <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center" data-testid="qa-filter-dates">
+        <Stack direction="row" spacing={1} alignItems="center">
+          <FormLabel htmlFor="qa-filter-from-input" sx={{ m: 0, whiteSpace: 'nowrap' }}>
+            Start date
+          </FormLabel>
+          <Input
+            size="sm"
+            type="date"
+            sx={{ colorScheme: theme.palette.mode }}
+            data-testid="qa-filter-from"
+            value={range.from}
+            onChange={e => pickFrom(e.target.value)}
+            slotProps={{ input: { id: 'qa-filter-from-input', max: today } }}
+          />
+        </Stack>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <FormLabel htmlFor="qa-filter-to-input" sx={{ m: 0, whiteSpace: 'nowrap' }}>
+            End date
+          </FormLabel>
+          <Input
+            size="sm"
+            type="date"
+            sx={{ colorScheme: theme.palette.mode }}
+            data-testid="qa-filter-to"
+            value={range.to}
+            onChange={e => pickTo(e.target.value)}
+            slotProps={{ input: { id: 'qa-filter-to-input', min: range.from, max: today } }}
+          />
+        </Stack>
+        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+          {RANGE_PRESETS.map(p => (
+            <Button
+              key={p.id}
+              size="sm"
+              data-testid={`qa-filter-preset-${p.id}`}
+              aria-pressed={preset?.id === p.id}
+              variant={preset?.id === p.id ? 'solid' : 'outlined'}
+              onClick={() => setRange(presetRange(p.days))}
+            >
+              {p.label}
+            </Button>
+          ))}
+        </Stack>
+      </Stack>
     </Stack>
   );
 };
