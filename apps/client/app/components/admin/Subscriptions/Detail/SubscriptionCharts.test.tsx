@@ -199,6 +199,13 @@ describe('Credits per cycle chart', () => {
     expect(within(table).getByText('400')).toBeInTheDocument();
   });
 
+  it('explains extra grants and an estimated legacy termination window', () => {
+    renderCharts(stripeDetail(), buildStripeState(), history({ data: { ...HISTORY, creditWindowEndEstimated: true } }));
+    const note = screen.getByTestId(`${CREDITS_CHART_ID}-note`);
+    expect(note).toHaveTextContent('Granted includes top-ups and seat-increase credits within the plan cycle');
+    expect(note).toHaveTextContent('The exact subscription end is unavailable');
+  });
+
   it('shows a skeleton while the history loads', () => {
     renderCharts(stripeDetail(), buildStripeState(), history({ data: undefined, isLoading: true }));
     expect(screen.getByTestId(`${CREDITS_CHART_ID}-skeleton`)).toBeInTheDocument();

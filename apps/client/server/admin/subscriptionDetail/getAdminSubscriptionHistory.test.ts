@@ -84,6 +84,7 @@ describe('getAdminSubscriptionHistory usage time limit', () => {
   const rejectWith = (error: unknown) => ({ option: () => Promise.reject(error) });
 
   beforeEach(() => {
+    aggregate.mockReset().mockReturnValue({ option: () => Promise.resolve([]) });
     findById.mockReturnValue(
       chain({
         subscriptionId: 'sub_1',
@@ -98,11 +99,13 @@ describe('getAdminSubscriptionHistory usage time limit', () => {
   });
 
   it('returns granted cycles with null usage when the aggregate hits the time limit', async () => {
-    aggregate.mockReturnValue(rejectWith(Object.assign(new Error('operation exceeded time limit'), { code: 50 })));
+    aggregate
+      .mockReturnValueOnce({ option: () => Promise.resolve([{ _id: at(1), credits: 500 }]) })
+      .mockReturnValueOnce(rejectWith(Object.assign(new Error('operation exceeded time limit'), { code: 50 })));
     const history = await getAdminSubscriptionHistory('a'.repeat(24), at(20));
     expect(history?.creditUsageUnavailable).toBe(true);
     expect(history?.creditCycles).toEqual([
-      { start: at(1).toISOString(), end: at(20).toISOString(), granted: 1000, used: null, current: true },
+      { start: at(1).toISOString(), end: at(20).toISOString(), granted: 1500, used: null, current: true },
     ]);
   });
 
@@ -110,10 +113,18 @@ describe('getAdminSubscriptionHistory usage time limit', () => {
     aggregate.mockClear().mockReturnValue({ option: () => Promise.resolve([]) });
     await getAdminSubscriptionHistory('a'.repeat(24), at(20));
     // AWS's supported-stage matrix excludes $bucket on DocumentDB 5.
-    const pipeline: Record<string, unknown>[] = aggregate.mock.calls[0][0];
     const supportedStages = new Set(['$match', '$group']);
-    expect(pipeline.every(stage => Object.keys(stage).every(name => supportedStages.has(name)))).toBe(true);
-    expect(pipeline.some(stage => '$group' in stage)).toBe(true);
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    for (const call of aggregate.mock.calls) {
+      const pipeline: Record<string, unknown>[] = call[0];
+      expect(pipeline.every(stage => Object.keys(stage).every(name => supportedStages.has(name)))).toBe(true);
+      expect(pipeline.some(stage => '$group' in stage)).toBe(true);
+    }
+  });
+
+  it('rejects instead of understating granted credits when the extra-grant total times out', async () => {
+    aggregate.mockReturnValueOnce(rejectWith(Object.assign(new Error('extra grants timed out'), { code: 50 })));
+    await expect(getAdminSubscriptionHistory('a'.repeat(24), at(20))).rejects.toThrow('extra grants timed out');
   });
 
   it('still rejects on any other aggregate error', async () => {

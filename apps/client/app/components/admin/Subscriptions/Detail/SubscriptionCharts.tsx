@@ -362,6 +362,9 @@ export const CreditCyclesChart: React.FC<{ detail: AdminSubscriptionDetail; hist
           {history.data.creditUsageUnavailable
             ? USAGE_UNAVAILABLE_NOTE
             : 'Used counts everything the owner spent in the cycle, from any credit source.'}
+          {' Granted includes top-ups and seat-increase credits within the plan cycle.'}
+          {history.data.creditWindowEndEstimated &&
+            ' The exact subscription end is unavailable; the final window uses the stored period end, capped at today.'}
           {history.data.creditCyclesTruncated && ` Showing the latest ${MAX_CREDIT_CYCLES} cycles.`}
         </Note>
       ),

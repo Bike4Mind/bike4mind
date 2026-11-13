@@ -47,8 +47,23 @@ const seedSubscription = (fields: Record<string, unknown>) =>
   });
 
 // Raw inserts, so the seeded createdAt is not replaced by the schema timestamps.
-const ledger = (ownerId: string, ownerType: string, type: string, credits: number, createdAt: Date) =>
-  CreditTransaction.collection.insertOne({ ownerId, ownerType, type, credits, createdAt, updatedAt: createdAt });
+const ledger = (
+  ownerId: string,
+  ownerType: string,
+  type: string,
+  credits: number,
+  createdAt: Date,
+  metadata: Record<string, unknown> = {}
+) =>
+  CreditTransaction.collection.insertOne({
+    ownerId,
+    ownerType,
+    type,
+    credits,
+    createdAt,
+    updatedAt: createdAt,
+    metadata,
+  });
 
 const billingEvent = (stripeEventId: string, type: string, quantity: number | undefined, occurredAt: Date) =>
   BillingEventModel.collection.insertOne({
@@ -154,5 +169,151 @@ describe('getAdminSubscriptionHistory', () => {
 
     expect((await getAdminSubscriptionHistory(String(userSub._id), NOW))?.seatChanges).toBeNull();
     expect((await getAdminSubscriptionHistory(String(comp._id), NOW))?.seatChanges).toEqual([]);
+  });
+  it('folds top-ups and seat increases into plan cycles with renewal-time extras in the new cycle', async () => {
+    const sub = await seedSubscription({});
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(70));
+    await ledger('org-1', 'Organization', 'subscription', 5000, daysAgo(50), { source: 'admin_topup' });
+    await ledger('org-1', 'Organization', 'text_generation_usage', -10, daysAgo(60));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -20, daysAgo(50));
+    await ledger('org-1', 'Organization', 'subscription', 250, daysAgo(45), { type: 'subscription_seat_increase' });
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(40));
+    await ledger('org-1', 'Organization', 'subscription', 100, daysAgo(40), { source: 'admin_topup' });
+    await ledger('org-1', 'Organization', 'text_generation_usage', -30, daysAgo(40));
+    await ledger('org-2', 'Organization', 'subscription', 9999, daysAgo(45), { source: 'admin_topup' });
+    await ledger('org-1', 'User', 'subscription', 9999, daysAgo(45), { source: 'admin_topup' });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles).toEqual([
+      { start: daysAgo(70).toISOString(), end: daysAgo(40).toISOString(), granted: 6250, used: 30, current: false },
+      { start: daysAgo(40).toISOString(), end: NOW.toISOString(), granted: 1100, used: 30, current: true },
+    ]);
+  });
+
+  it('limits real plan boundaries before folding many extras and excludes extras older than the retained window', async () => {
+    const sub = await seedSubscription({ createdAt: daysAgo(500) });
+    for (let index = 13; index >= 1; index--)
+      await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(index * 30));
+    await ledger('org-1', 'Organization', 'subscription', 99999, daysAgo(390), { source: 'admin_topup' });
+    for (let index = 1; index <= 20; index++)
+      await ledger('org-1', 'Organization', 'subscription', 5, daysAgo(index), { source: 'admin_topup' });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCyclesTruncated).toBe(true);
+    expect(history?.creditCycles).toHaveLength(12);
+    expect(history?.creditCycles[0]).toMatchObject({ start: daysAgo(360).toISOString(), granted: 1000 });
+    expect(history?.creditCycles.at(-1)).toMatchObject({ start: daysAgo(30).toISOString(), granted: 1100 });
+  });
+
+  it('keeps exactly twelve plan cycles untruncated despite more than thirteen extras', async () => {
+    const sub = await seedSubscription({ createdAt: daysAgo(500) });
+    for (let index = 12; index >= 1; index--)
+      await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(index * 30));
+    for (let index = 1; index <= 20; index++)
+      await ledger('org-1', 'Organization', 'subscription', 5, daysAgo(index), { type: 'subscription_seat_increase' });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCyclesTruncated).toBe(false);
+    expect(history?.creditCycles).toHaveLength(12);
+    expect(history?.creditCycles.at(-1)?.granted).toBe(1100);
+  });
+
+  it('anchors a zero-credit comp with later extras at creation and leaves a comp without grants empty', async () => {
+    const sub = await seedSubscription({ source: 'admin_grant', subscriptionId: 'admin_grant_zero' });
+    expect((await getAdminSubscriptionHistory(String(sub._id), NOW))?.creditCycles).toEqual([]);
+    await ledger('org-1', 'Organization', 'subscription', 500, daysAgo(10), { source: 'admin_topup' });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles).toEqual([
+      { start: daysAgo(70).toISOString(), end: NOW.toISOString(), granted: 500, used: 0, current: true },
+    ]);
+  });
+
+  it('preserves unknown legacy and user plan grants as boundaries', async () => {
+    const sub = await seedSubscription({ ownerType: 'User', ownerId: 'user-1' });
+    await ledger('user-1', 'User', 'subscription', 1000, daysAgo(60));
+    await ledger('user-1', 'User', 'subscription', 1500, daysAgo(30), { type: 'legacy_unknown' });
+    expect((await getAdminSubscriptionHistory(String(sub._id), NOW))?.creditCycles.map(cycle => cycle.granted)).toEqual(
+      [1000, 1500]
+    );
+  });
+
+  it.each([
+    [
+      'mirrored effective end',
+      { status: 'canceled', endedAt: daysAgo(20), canceledAt: daysAgo(40), cancelAtPeriodEnd: true },
+      daysAgo(20),
+    ],
+    ['immediate cancellation', { status: 'canceled', canceledAt: daysAgo(20), cancelAtPeriodEnd: false }, daysAgo(20)],
+    [
+      'scheduled terminal cancellation',
+      { status: 'canceled', canceledAt: daysAgo(40), cancelAtPeriodEnd: true, periodEndsAt: daysAgo(10) },
+      daysAgo(10),
+    ],
+    [
+      'custom terminal cancellation',
+      { status: 'canceled', canceledAt: daysAgo(40), cancelAtPeriodEnd: false, cancelAt: daysAgo(10) },
+      daysAgo(10),
+    ],
+    ['active scheduled cancellation', { status: 'active', canceledAt: daysAgo(40), cancelAtPeriodEnd: true }, NOW],
+  ])('uses %s without counting usage on or after the effective end', async (_label, fields, end) => {
+    const sub = await seedSubscription(fields);
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(60));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -10, daysAgo(50));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -20, end);
+    await ledger('org-1', 'Organization', 'text_generation_usage', -30, daysAgo(-1));
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles).toEqual([
+      {
+        start: daysAgo(60).toISOString(),
+        end: end.toISOString(),
+        granted: 1000,
+        used: 10,
+        current: fields.status === 'active',
+      },
+    ]);
+    expect(history?.creditWindowEndEstimated).toBe(false);
+  });
+
+  it('uses a historical deletion event time with matching owner instead of its later ingestion time', async () => {
+    const sub = await seedSubscription({ status: 'canceled', canceledAt: daysAgo(40) });
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(60));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -10, daysAgo(30));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -100, daysAgo(20));
+    await billingEvent('evt_deleted', 'customer.subscription.deleted', 5, daysAgo(20));
+    await BillingEventModel.updateOne({ stripeEventId: 'evt_deleted' }, { $set: { createdAt: NOW } });
+    await BillingEventModel.collection.insertOne({
+      stripeEventId: 'evt_other',
+      type: 'customer.subscription.deleted',
+      ownerType: 'organization',
+      ownerId: 'org-2',
+      subscriptionId: 'sub_hist',
+      occurredAt: daysAgo(1),
+      data: {},
+    });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles[0]).toMatchObject({ end: daysAgo(20).toISOString(), used: 10 });
+    expect(history?.creditWindowEndEstimated).toBe(false);
+  });
+
+  it('discloses an estimated end when legacy cancellation flags and deletion events are absent', async () => {
+    const sub = await seedSubscription({ status: 'canceled', canceledAt: daysAgo(40) });
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(60));
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles[0]?.end).toBe(NOW.toISOString());
+    expect(history?.creditWindowEndEstimated).toBe(true);
+  });
+  it('stops a manually ended comp at canceledAt even when its original expiry is still ahead', async () => {
+    const sub = await seedSubscription({
+      source: 'admin_grant',
+      subscriptionId: 'admin_grant_ended',
+      status: 'canceled',
+      canceledAt: daysAgo(20),
+    });
+    await ledger('org-1', 'Organization', 'subscription', 1000, daysAgo(60), { source: 'admin_grant' });
+    await ledger('org-1', 'Organization', 'text_generation_usage', -10, daysAgo(30));
+    await ledger('org-1', 'Organization', 'text_generation_usage', -100, daysAgo(10));
+    await ledger('org-1', 'Organization', 'subscription', 500, daysAgo(10), { source: 'admin_topup' });
+    const history = await getAdminSubscriptionHistory(String(sub._id), NOW);
+    expect(history?.creditCycles).toEqual([
+      { start: daysAgo(60).toISOString(), end: daysAgo(20).toISOString(), granted: 1000, used: 10, current: false },
+    ]);
+    expect(history?.creditWindowEndEstimated).toBe(false);
   });
 });
