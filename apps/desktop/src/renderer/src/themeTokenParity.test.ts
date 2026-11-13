@@ -1,13 +1,11 @@
-// @vitest-environment node
-import { readFileSync, writeFileSync } from 'fs';
 import { describe, expect, it } from 'vitest';
+import fixture from './__fixtures__/desktopThemeBefore.json';
 import { desktopTheme } from './theme';
 
 // Pins what the desktop theme renders. The fixture was captured from the hand-written theme
 // before it was derived from @bike4mind/design-tokens, so a green run proves the switch changed
-// no color or metric. If a value changes on purpose, regenerate it in the same PR and say so:
-//   WRITE_DESKTOP_THEME_FIXTURE=1 pnpm --filter @bike4mind/desktop exec vitest run themeTokenParity
-const FIXTURE_URL = new URL('./__fixtures__/desktopThemeBefore.json', import.meta.url);
+// no color or metric. If a value changes on purpose, regenerate it from `snapshot()` in the same
+// PR and say so.
 
 const COLOR = /^(?:#([0-9a-f]{6})|rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:\s*[,/]\s*([\d.]+))?\s*\))$/i;
 
@@ -45,9 +43,6 @@ const snapshot = () =>
 
 describe('desktop theme parity', () => {
   it('renders the same palette and metrics as the pre-token theme', () => {
-    if (process.env.WRITE_DESKTOP_THEME_FIXTURE) {
-      writeFileSync(FIXTURE_URL, JSON.stringify(snapshot(), null, 2) + '\n');
-    }
-    expect(snapshot()).toEqual(JSON.parse(readFileSync(FIXTURE_URL, 'utf8')));
+    expect(snapshot()).toEqual(fixture);
   });
 });

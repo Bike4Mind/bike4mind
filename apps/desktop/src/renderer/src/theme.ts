@@ -64,7 +64,6 @@ export const desktopTheme = extendTheme({
   spacing: tokens.spacing,
   radius: tokens.radius,
   shadow: tokens.shadow,
-  motion: tokens.motion,
   colorSchemes: {
     light: {
       palette: {
