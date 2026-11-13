@@ -459,6 +459,8 @@ export interface ToolContext {
   loopMerge?: { merge(prUrl: string): Promise<string> };
   /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
   loop?: LoopContext;
+  /** A Desktop loop run's loop_ticket_* tools, bound to its run. Absent elsewhere; they refuse. */
+  localLoopTickets?: { call(tool: string, input: Record<string, unknown>): Promise<string> };
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**

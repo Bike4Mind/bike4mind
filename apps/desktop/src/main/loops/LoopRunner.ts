@@ -3,16 +3,15 @@ import type {
   ChatApprovalMode,
   ChatSession,
   ChatStreamEvent,
-  ChatToolCall,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
 } from '@shared/chat';
-import { DEFAULT_HOLD_LABELS, type LoopPolicy, type LoopRunnerState } from '@shared/loopRunner';
-import { parsePullRequestUrl, type PrMergeMethod, type PrRef, type PrSnapshot } from '@shared/pullRequest';
+import type { LoopPolicy, LoopRunnerState } from '@shared/loopRunner';
+import { parsePullRequestUrl, type PrRef } from '@shared/pullRequest';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import type { GhRunner } from '../pr/gh';
 import { admit, hardFloorBreached, laneCapFor, nextIdleDelay, type MachineSample } from './budget';
-import { mergeDecision, readLabels, runDeployCheck, runSmoke, type SmokeDeps } from './guards';
+import type { SmokeDeps } from './guards';
 import {
   LeaseLost,
   USER_WIDE_REFUSALS,
@@ -22,6 +21,17 @@ import {
 } from './LoopRunnerClient';
 import type { LoopPolicyStore } from './LoopPolicyStore';
 import { ProgressBatcher } from './progress';
+import {
+  afterMergeChecks,
+  CREDIT_STOP,
+  mergeLoopPr,
+  openLoopSession,
+  opensPr,
+  pendingReason,
+  PR_URL,
+  startLoopTurn,
+  type LoopMergeGithub,
+} from './session';
 
 /** The parts of ChatService the runner drives; every call is one a user's own click could make. */
 export interface RunnerChat {
@@ -39,10 +49,7 @@ export interface RunnerChat {
   endLoopRun(runId: string): void;
 }
 
-export interface RunnerGithub {
-  snapshot(ref: PrRef, options: { threads: boolean; queue?: boolean }): Promise<PrSnapshot>;
-  merge(ref: PrRef, method: PrMergeMethod, headSha: string): Promise<void>;
-  enqueue(nodeId: string, headSha: string): Promise<number>;
+export interface RunnerGithub extends LoopMergeGithub {
   findOpenForBranch(cwd: string, branch: string): Promise<string | null>;
 }
 
@@ -59,6 +66,8 @@ export interface LoopRunnerDeps {
   github: RunnerGithub;
   powerSaveBlocker: { start(type: 'prevent-app-suspension'): number; stop(id: number): void };
   smoke?: SmokeDeps;
+  /** Lanes Desktop-owned loops hold now: they share this machine's lane cap. */
+  otherLanes?: () => number;
   /** Whether a window has focus; polling stays fast while the user is looking. */
   focused(): boolean;
   onChange(): void;
@@ -94,21 +103,6 @@ const USER_WIDE_REASON: Record<string, string> = {
   user_budget: 'your loops have spent their daily budget',
 };
 
-/**
- * A completions refusal at the credit cap: the run stops and the ticket goes back, never retried.
- * Matches both of completions.ts toRequestError's forms, with and without the server's body.
- */
-const CREDIT_STOP = /status 422\b/;
-
-const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
-/** Only a call that creates a PR names the run's own PR; reads (CHANGELOGs, gh pr list) name others. */
-const opensPr = (call: ChatToolCall): boolean =>
-  typeof call.input.command === 'string' && /\bgh\s+pr\s+create\b/.test(call.input.command);
-
-/** Prefixed to every claim prompt: the agent otherwise went looking for the repository on disk. */
-const WORKTREE_LINE =
-  "You are already in this loop's repository: a git worktree that is your shell's current directory. Work there; do not search the filesystem for the repository.";
-
 interface Lane {
   claim: RunnerClaim;
   policy: LoopPolicy;
@@ -129,19 +123,6 @@ interface Lane {
   ran: number;
   /** Set once the run has an outcome; later events for it are ignored. */
   finished: boolean;
-}
-
-function pendingReason(event: ChatStreamEvent): string | undefined {
-  if (event.type !== 'tool-start' || event.call.status !== 'awaiting-approval') return undefined;
-  const { call } = event;
-  if (call.name === 'ask_user') {
-    const questions = Array.isArray(call.input.questions) ? (call.input.questions as { question?: unknown }[]) : [];
-    const asked = questions
-      .map(question => (typeof question.question === 'string' ? question.question : ''))
-      .filter(Boolean);
-    return `Question: ${asked.join(' / ') || 'the agent asked for input'}`;
-  }
-  return `Needs approval: ${call.approvalDetail ?? call.name}`;
 }
 
 /**
@@ -271,7 +252,7 @@ export class LoopRunner {
       for (const ticket of tickets) {
         const policy = policies.get(ticket.loopId);
         if (!policy || running.has(ticket.ticketId)) continue;
-        const admission = admit(sample, previous, this.lanes.size, settings);
+        const admission = admit(sample, previous, this.lanes.size + (this.deps.otherLanes?.() ?? 0), settings);
         if (!admission.ok) {
           this.waitingReason = admission.reason;
           break;
@@ -316,22 +297,16 @@ export class LoopRunner {
   private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
     const { runId } = claim;
     this.lastBlocked = undefined;
-    let sessionId: string | undefined;
-    try {
-      const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
-      if (!created.ok) {
-        await this.report(runId, this.now(), { outcome: 'failed', reason: created.error });
-        return;
-      }
-      sessionId = created.session.id;
-      await this.deps.chat.setApprovalMode(sessionId, policy.approvalMode);
-      if (claim.model) await this.deps.chat.setLoopRunModel(sessionId, claim.model);
-    } catch (err) {
-      // No turn has run, so no worktree exists yet: only the empty conversation is left to remove.
-      if (sessionId) await this.deps.chat.deleteSession(sessionId).catch(() => undefined);
-      await this.report(runId, this.now(), { outcome: 'released', reason: `could not start: ${String(err)}` });
+    const opened = await openLoopSession(this.deps.chat, {
+      directory: policy.directory,
+      approvalMode: policy.approvalMode,
+      ...(claim.model ? { model: claim.model } : {}),
+    });
+    if (!opened.ok) {
+      await this.report(runId, this.now(), { outcome: opened.outcome, reason: opened.reason });
       return;
     }
+    const { sessionId } = opened;
     const lane: Lane = {
       claim,
       policy,
@@ -355,15 +330,13 @@ export class LoopRunner {
     this.lanes.set(runId, lane);
     this.updateBlocker();
 
-    const started = await this.deps.chat
-      .startAutomaticTurn(sessionId, `${WORKTREE_LINE}\n\n${claim.prompt}`, {
-        kind: 'loop-runner',
-        loopId: claim.ticket.loopId,
-        ticketId: claim.ticket.ticketId,
-        runId,
-        summary: claim.ticket.title,
-      })
-      .catch((err: unknown) => ({ ok: false as const, error: String(err) }));
+    const started = await startLoopTurn(this.deps.chat, sessionId, claim.prompt, {
+      kind: 'loop-runner',
+      loopId: claim.ticket.loopId,
+      ticketId: claim.ticket.ticketId,
+      runId,
+      summary: claim.ticket.title,
+    });
     if (!started.ok) await this.finish(lane, { outcome: 'failed', reason: started.error });
   }
 
@@ -438,28 +411,14 @@ export class LoopRunner {
 
   /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
   private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
-    const guards = lane.claim.stage.guards ?? lane.policy.guards;
-    // No merge sha means the PR went to the merge queue, which may still drop it: wait for it to land.
-    if (lane.merged && (guards?.deployWorkflow || !lane.merged.mergeSha)) {
-      const deployed = await runDeployCheck(
-        this.deps.gh,
-        {
-          pr: lane.merged.pr,
-          mergeSha: lane.merged.mergeSha,
-          ...(guards?.deployWorkflow ? { workflow: guards.deployWorkflow } : {}),
-          cwd: lane.policy.directory,
-        },
-        { now: this.now, sleep: this.sleep }
-      );
-      if (!deployed.ok) return { outcome: 'blocked', reason: deployed.reason, answer };
-    }
-    if (lane.merged && guards?.smoke) {
-      const session = await this.deps.chat.getSession(lane.sessionId);
-      const cwd = session?.project?.workingDirectory ?? lane.policy.directory;
-      const smoked = await runSmoke(guards.smoke, cwd, this.deps.smoke);
-      if (!smoked.ok) return { outcome: 'blocked', reason: smoked.reason, answer };
-    }
-    return { outcome: 'advanced', answer };
+    const checked = await afterMergeChecks(
+      { gh: this.deps.gh, smoke: this.deps.smoke, now: this.now, sleep: this.sleep },
+      lane.merged,
+      lane.claim.stage.guards ?? lane.policy.guards,
+      lane.policy.directory,
+      async () => (await this.deps.chat.getSession(lane.sessionId))?.project?.workingDirectory ?? lane.policy.directory
+    );
+    return checked.ok ? { outcome: 'advanced', answer } : { outcome: 'blocked', reason: checked.reason, answer };
   }
 
   private creditStopped(): boolean {
@@ -484,49 +443,16 @@ export class LoopRunner {
       throw new Error(`${reason} The ticket is handed to the user; stop here.`);
     };
 
-    // Only the loop's own repository: the user's gh could merge a green PR anywhere it has rights.
-    const repo = lane.policy.repo ?? lane.policy.repoHint?.toLowerCase();
-    if (`${ref.owner}/${ref.repo}`.toLowerCase() !== repo)
-      return blocked(`${ref.url} is not in this loop's repository (${repo ?? 'unknown'}).`);
-
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
-    let snapshot: PrSnapshot;
-    let labels: string[];
-    try {
-      [snapshot, labels] = await Promise.all([
-        this.deps.github.snapshot(ref, { threads: false, queue: true }),
-        readLabels(this.deps.gh, ref),
-      ]);
-    } catch (err) {
-      // Not a tool error the model could finish past: an unreadable PR is not merged, so the ticket waits.
-      return blocked(`Could not read ${ref.url}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    const decision = mergeDecision(
-      snapshot,
-      labels,
-      lane.claim.stage.mergePolicy,
-      guards?.holdLabels ?? DEFAULT_HOLD_LABELS
-    );
-    if (!decision.merge) return blocked(decision.reason);
-    try {
-      if (decision.via === 'queue') {
-        if (!snapshot.nodeId) return blocked('GitHub did not give the PR id needed to enqueue it.');
-        await this.deps.github.enqueue(snapshot.nodeId, snapshot.headSha);
-        lane.merged = { pr: ref };
-        lane.prUrl = ref.url;
-        return `Added ${ref.url} to the merge queue.`;
-      }
-      await this.deps.github.merge(ref, decision.method, snapshot.headSha);
-    } catch (err) {
-      return blocked(`GitHub refused the merge: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    const view = await this.deps
-      .gh(['pr', 'view', ref.url, '--json', 'mergeCommit'])
-      .then(text => (JSON.parse(text) as { mergeCommit?: { oid?: string } | null }).mergeCommit?.oid)
-      .catch(() => undefined);
-    lane.merged = { pr: ref, ...(view ? { mergeSha: view } : {}) };
+    const result = await mergeLoopPr({ github: this.deps.github, gh: this.deps.gh }, ref, {
+      repo: lane.policy.repo ?? lane.policy.repoHint?.toLowerCase(),
+      mergePolicy: lane.claim.stage.mergePolicy,
+      ...(guards?.holdLabels ? { holdLabels: guards.holdLabels } : {}),
+    });
+    if (!result.ok) return blocked(result.reason);
+    lane.merged = result.merged;
     lane.prUrl = ref.url;
-    return `Merged ${ref.url}.`;
+    return result.message;
   }
 
   /**

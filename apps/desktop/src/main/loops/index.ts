@@ -18,7 +18,7 @@ import { HttpLoopRunnerClient } from './LoopRunnerClient';
 import { LoopPolicyStore } from './LoopPolicyStore';
 import { LoopRunner } from './LoopRunner';
 
-function originOf(directory: string): Promise<string> {
+export function originOf(directory: string): Promise<string> {
   return new Promise(resolve =>
     execFile('git', ['remote', 'get-url', 'origin'], { cwd: directory, timeout: 5_000 }, (error, stdout) =>
       resolve(error ? '' : stdout)
@@ -30,7 +30,13 @@ function originOf(directory: string): Promise<string> {
  * Settings > Loop runner, and the runner behind it. Call after registerChat, passing the runner's
  * `unattended` and `merge` through registerChat's loop hooks.
  */
-export function registerLoopRunner(auth: AuthService, chat: ChatService, background: BackgroundProcessRegistry) {
+export function registerLoopRunner(
+  auth: AuthService,
+  chat: ChatService,
+  background: BackgroundProcessRegistry,
+  /** Lanes Desktop-owned loops hold (loops/local): one machine lane pool for both. */
+  otherLanes: () => number = () => 0
+) {
   const logger = createMainLogger(process.env.B4M_DESKTOP_VERBOSE === '1');
   const store = new LoopPolicyStore(privateFile(join(app.getPath('userData'), 'loop-runner.json')));
   const github = new PrGithub(runGh);
@@ -69,6 +75,7 @@ export function registerLoopRunner(auth: AuthService, chat: ChatService, backgro
     gh: runGh,
     github,
     powerSaveBlocker,
+    otherLanes,
     focused: () => BrowserWindow.getFocusedWindow() !== null,
     onChange: push,
     logger,
@@ -139,5 +146,5 @@ export function registerLoopRunner(auth: AuthService, chat: ChatService, backgro
   });
 
   void sync();
-  return { runner, sync };
+  return { runner, sync, store };
 }

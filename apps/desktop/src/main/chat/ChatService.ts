@@ -561,6 +561,8 @@ export interface ChatServiceDeps {
   approvals?: ApprovalGate;
   /** Merges for loop_merge_pr; see main/loops. Absent in tests and builds without the runner. */
   loopMerge?: (sessionId: string, prUrl: string) => Promise<string>;
+  /** The loop_ticket_* tools of a Desktop loop run; see main/loops/local. Absent in tests and builds without it. */
+  localLoopTickets?: (sessionId: string, tool: string, input: Record<string, unknown>) => Promise<string>;
   /**
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
    * only by the approval card's "Always allow"; no tool can reach it.
@@ -1040,9 +1042,10 @@ export class ChatService {
    * Loop runner sessions, and every session they spawned, to the run id they work for. Unlike
    * autoFixTurns it lasts the session's life. It alone decides the runner-only behaviour: the
    * loopRunnerToolRefusal guard, loop_merge_pr, low process priority, the credit tag on
-   * completions and unattended approval cards.
+   * completions and unattended approval cards. A `local` run (a Desktop-owned loop) gets all of it but the credit
+   * tag: its id means nothing to the server.
    */
-  private readonly loopRuns = new Map<string, string>();
+  private readonly loopRuns = new Map<string, { runId: string; local?: true }>();
 
   /**
    * Spawned sessions whose running turn the user typed, so someone is there to answer a card.
@@ -2601,19 +2604,24 @@ export class ChatService {
     this.active.get(sessionId)?.abort();
   }
 
-  private markLoopRun(sessionId: string, runId: string): void {
-    this.loopRuns.set(sessionId, runId);
+  private markLoopRun(sessionId: string, run: { runId: string; local?: true }): void {
+    this.loopRuns.set(sessionId, run);
     this.deps.approvals?.setUnattended(sessionId, true);
   }
 
   /** The loop run a session works for, its own or the one of the runner session that spawned it. */
   loopRunOf(sessionId: string): string | undefined {
-    return this.loopRuns.get(sessionId);
+    return this.loopRuns.get(sessionId)?.runId;
+  }
+
+  /** Whether the session works for a Desktop-owned loop's run. */
+  isLocalLoopRun(sessionId: string): boolean {
+    return this.loopRuns.get(sessionId)?.local === true;
   }
 
   /** Every session working for this run: the runner's own and any it spawned, at any depth. */
   loopRunSessions(runId: string): string[] {
-    return [...this.loopRuns].filter(([, run]) => run === runId).map(([sessionId]) => sessionId);
+    return [...this.loopRuns].filter(([, run]) => run.runId === runId).map(([sessionId]) => sessionId);
   }
 
   /**
@@ -2980,7 +2988,9 @@ export class ChatService {
 
     if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
-    if (released?.automatic?.kind === 'loop-runner') this.markLoopRun(sessionId, released.automatic.runId);
+    if (released?.automatic?.kind === 'loop-runner') this.markLoopRun(sessionId, { runId: released.automatic.runId });
+    if (released?.automatic?.kind === 'local-loop')
+      this.markLoopRun(sessionId, { runId: released.automatic.runId, local: true });
     // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
     if (!released?.relay && !released?.automatic && !options.loop && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
@@ -3702,7 +3712,9 @@ export class ChatService {
             keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
           }
         : undefined;
-      const loopRunId = this.loopRuns.get(sessionId);
+      const loopRun = this.loopRuns.get(sessionId);
+      // The server's run id only: it tags explore and completion calls for the run's credits (X-B4M-Loop-Run).
+      const loopRunId = loopRun && !loopRun.local ? loopRun.runId : undefined;
       const simulatorDeps = this.deps.simulator;
       const simulator: SimulatorContext | undefined = simulatorDeps
         ? {
@@ -3790,7 +3802,8 @@ export class ChatService {
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
-              loopMerge: !!loopRunId && !!this.deps.loopMerge,
+              loopMerge: !!loopRun && !!this.deps.loopMerge,
+              localLoopTickets: !!loopRun?.local && !!this.deps.localLoopTickets,
             });
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
@@ -5025,6 +5038,7 @@ export class ChatService {
     const pullRequests = this.deps.pullRequests;
     const loopRun = this.loopRuns.get(sessionId);
     const loopMerge = this.deps.loopMerge;
+    const localLoopTickets = this.deps.localLoopTickets;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -5181,6 +5195,13 @@ export class ChatService {
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
           ...(loopRun ? { lowPriority: true } : {}),
           ...(loopRun && loopMerge ? { loopMerge: { merge: (url: string) => loopMerge(sessionId, url) } } : {}),
+          ...(loopRun?.local && localLoopTickets
+            ? {
+                localLoopTickets: {
+                  call: (tool: string, input: Record<string, unknown>) => localLoopTickets(sessionId, tool, input),
+                },
+              }
+            : {}),
           // Not on the declaration alone: an undeclared tool still resolves by name, and in a turn
           // the user did not type nobody can have asked for the change.
           ...(pullRequests && attended
@@ -9590,6 +9611,8 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
       return `Agents finished: ${automatic.summary}`;
     case 'loop-runner':
       return `Loop ticket: ${automatic.summary}`;
+    case 'local-loop':
+      return `Loop: ${automatic.summary}`;
     case 'auto-fix':
       return `Auto-fix: ${automatic.summary}`;
   }
