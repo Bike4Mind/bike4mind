@@ -33,6 +33,7 @@ export type AgentExecutionTrace = {
   /** Loop runs only: a ticket's escalated last run, or a triage run. */
   escalated?: boolean;
   loopRunKind?: IAgentExecution['loopRunKind'];
+  loopReflection?: IAgentExecution['loopReflection'];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -107,6 +108,7 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     model: execution.model,
     ...(execution.escalated && { escalated: true }),
     ...(execution.loopRunKind && { loopRunKind: execution.loopRunKind }),
+    ...(execution.loopReflection && { loopReflection: execution.loopReflection }),
     createdAt: execution.createdAt,
     updatedAt: execution.updatedAt,
   };

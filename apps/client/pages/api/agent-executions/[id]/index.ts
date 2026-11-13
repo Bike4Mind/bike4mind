@@ -53,6 +53,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     model: trace.model,
     escalated: trace.escalated,
     loopRunKind: trace.loopRunKind,
+    loopReflection: trace.loopReflection,
     children,
   });
 });

@@ -60,6 +60,7 @@ import {
   buildTriageQuery,
   LOOP_PROMPT_ANSWERS,
   LOOP_PROMPT_DIRECTIVES,
+  LOOP_PROMPT_REFLECTIONS,
   parseLoopMemory,
   renderLoopStageSkills,
 } from '@server/utils/loopMemory';
@@ -1034,12 +1035,18 @@ async function dispatchLoop(
     const { model, escalated } = ticket
       ? loopRunModel(loop, stage, ticket.runCount ?? 0, ticketRunLimit(loop.stages))
       : { model: loop.model, escalated: false };
-    const [directives, overseen, handoffTargets, answered, skills] = await Promise.all([
+    const [directives, overseen, handoffTargets, answered, skills, reflections] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
       Promise.all((loop.handoffTargets ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
       ticket ? loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS) : [],
       renderLoopStageSkills(loop.userId, stage.skills, logger),
+      agentExecutionRepository.listLoopReflections(
+        loop.id,
+        loop.sessionId,
+        ticket?.id ?? null,
+        LOOP_PROMPT_REFLECTIONS
+      ),
     ]);
     const agentId = stage.agentId ?? loop.agentId;
     result = await startAgentExecution(
@@ -1061,7 +1068,8 @@ async function dispatchLoop(
             : undefined,
           { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) },
           desktopStagesOf(loop),
-          handoffTargets.filter((target): target is ILoop => !!target)
+          handoffTargets.filter((target): target is ILoop => !!target),
+          reflections
         ),
         model,
         connectionId: HEADLESS_CONNECTION_ID,

@@ -13,6 +13,7 @@ import {
   Drawer,
   IconButton,
   Link,
+  Sheet,
   Stack,
   Typography,
 } from '@mui/joy';
@@ -289,6 +290,22 @@ export default function LoopDetailPage() {
             <Typography level="body-sm">Rate &quot;{runTicket.title}&quot;</Typography>
             <LoopTicketRating loopId={loop.id} ticket={runTicket} />
           </Stack>
+        )}
+        {runInfo?.loopReflection && (
+          <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }} data-testid="loop-run-reflection">
+            <Stack direction="row" justifyContent="space-between" gap={1}>
+              <Typography level="title-sm">Reflection</Typography>
+              <Typography level="body-xs" data-testid="loop-run-reflection-credits">
+                {formatCredits(runInfo.loopReflection.credits)} credits
+              </Typography>
+            </Stack>
+            <Typography level="body-sm" data-testid="loop-run-reflection-text">
+              {runInfo.loopReflection.reflection}
+            </Typography>
+            <Typography level="body-sm" data-testid="loop-run-reflection-next">
+              Next time: {runInfo.loopReflection.nextIntendedAction}
+            </Typography>
+          </Sheet>
         )}
         <Box sx={{ overflowY: 'auto' }}>{run && <AgentRunViewer executionId={run} />}</Box>
       </Drawer>

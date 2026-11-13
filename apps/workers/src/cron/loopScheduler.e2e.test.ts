@@ -1104,6 +1104,35 @@ describe('runLoopSchedulerTick - stage config', () => {
     expect(input.query).not.toContain('Instructions for the');
   });
 
+  it("shows the ticket's earlier reflections, labelled by stage, in the next run's query", async () => {
+    const loop = await createLoop({ stages: STAGES });
+    const ticket = await createTicket(loop.id);
+    await mongoose.model('AgentExecution').create({
+      userId: loop.userId,
+      sessionId: loop.sessionId,
+      questId: loop.sessionId,
+      query: 'q',
+      model: 'm',
+      status: 'completed',
+      loopId: loop.id,
+      workItemId: ticket.id,
+      loopStage: 'todo',
+      totalCreditsUsed: 0,
+      loopReflection: {
+        reflection: 'The fix needed a rebase',
+        nextIntendedAction: 'Rebase first',
+        credits: 0.2,
+        createdAt: new Date('2026-11-10T00:00:00Z'),
+      },
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain(
+      '- [todo, 2026-11-10] "The fix needed a rebase" Next time: "Rebase first"'
+    );
+  });
+
   it("applies the ticket's stage model, tools and instructions, and the loop defaults elsewhere", async () => {
     const stageConfig = [{ stage: 'review', model: 'm2', tools: ['web_search'], instructions: 'Review only' }];
     const reviewing = await createLoop({ stages: STAGES, stageConfig });

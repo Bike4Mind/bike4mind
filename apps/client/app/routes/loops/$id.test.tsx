@@ -256,6 +256,32 @@ describe('LoopDetailPage run drawer', () => {
       runInfo.data = undefined;
     }
   });
+
+  it("shows the run's reflection when it has one, and nothing otherwise", () => {
+    search.run = 'ticket-run';
+    try {
+      runInfo.data = {
+        model: 'm',
+        loopReflection: {
+          reflection: 'The tests were flaky',
+          nextIntendedAction: 'Rerun CI first',
+          credits: 3,
+          createdAt: '2026-11-10T00:00:00Z',
+        },
+      };
+      const { unmount } = renderPage();
+      expect(screen.getByTestId('loop-run-reflection-text')).toHaveTextContent('The tests were flaky');
+      expect(screen.getByTestId('loop-run-reflection-next')).toHaveTextContent('Next time: Rerun CI first');
+      expect(screen.getByTestId('loop-run-reflection-credits')).toHaveTextContent('3 credits');
+      unmount();
+
+      runInfo.data = { model: 'm' };
+      renderPage();
+      expect(screen.queryByTestId('loop-run-reflection')).toBeNull();
+    } finally {
+      runInfo.data = undefined;
+    }
+  });
 });
 
 describe('LoopDetailPage log', () => {

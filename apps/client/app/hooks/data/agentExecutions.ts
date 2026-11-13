@@ -32,6 +32,7 @@ export interface AgentExecutionTrace {
   /** Loop runs only. */
   escalated?: boolean;
   loopRunKind?: 'triage';
+  loopReflection?: { reflection: string; nextIntendedAction: string; credits: number; createdAt: string };
   children: AgentExecutionChildSnapshot[];
 }
 

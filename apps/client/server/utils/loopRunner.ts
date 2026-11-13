@@ -44,6 +44,7 @@ import {
   buildLoopQuery,
   LOOP_PROMPT_ANSWERS,
   LOOP_PROMPT_DIRECTIVES,
+  LOOP_PROMPT_REFLECTIONS,
   parseLoopMemory,
   renderLoopStageSkills,
 } from './loopMemory';
@@ -269,11 +270,12 @@ async function loopPrompt(
   stage: Omit<ILoopStageConfig, 'stage'>,
   logger: Logger
 ): Promise<string> {
-  const [directives, overseen, answered, skills] = await Promise.all([
+  const [directives, overseen, answered, skills, reflections] = await Promise.all([
     loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
     Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
     loopEventRepository.listAnsweredForTicket(loop.userId, ticket.id, LOOP_PROMPT_ANSWERS),
     renderLoopStageSkills(loop.userId, stage.skills, logger),
+    agentExecutionRepository.listLoopReflections(loop.id, loop.sessionId, ticket.id, LOOP_PROMPT_REFLECTIONS),
   ]);
   return buildLoopQuery(
     loop.goal,
@@ -285,7 +287,10 @@ async function loopPrompt(
       instructions: stage.instructions,
       skills,
     },
-    { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) }
+    { directives, overseen: overseen.filter((watched): watched is ILoop => !!watched) },
+    [],
+    [],
+    reflections
   );
 }
 

@@ -265,10 +265,15 @@ export const useLoopRunInfo = (executionId?: string) =>
   useQuery({
     queryKey: ['loops', 'run', executionId],
     queryFn: async () => {
-      const { data } = await api.get<Pick<AgentExecutionTrace, 'model' | 'escalated' | 'loopRunKind'>>(
-        `/api/agent-executions/${executionId}`
-      );
-      return { model: data.model, escalated: data.escalated, loopRunKind: data.loopRunKind };
+      const { data } = await api.get<
+        Pick<AgentExecutionTrace, 'model' | 'escalated' | 'loopRunKind' | 'loopReflection'>
+      >(`/api/agent-executions/${executionId}`);
+      return {
+        model: data.model,
+        escalated: data.escalated,
+        loopRunKind: data.loopRunKind,
+        loopReflection: data.loopReflection,
+      };
     },
     enabled: !!executionId,
     staleTime: Infinity,

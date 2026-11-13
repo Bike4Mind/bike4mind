@@ -237,6 +237,32 @@ describe('claimRunnerTicket', () => {
     expect((await loopOf(loop.id)).activeExecutionIds).toBeUndefined();
   });
 
+  it("adds the ticket's earlier cloud reflections to the prompt", async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    await AgentExecution.create({
+      userId: USER,
+      sessionId: 'session-1',
+      questId: 'session-1',
+      query: 'q',
+      model: 'm',
+      status: 'completed',
+      loopId: loop.id,
+      workItemId: ticket.id,
+      loopStage: 'plan',
+      loopReflection: {
+        reflection: 'Spec was vague',
+        nextIntendedAction: 'Ask first',
+        credits: 0.1,
+        createdAt: new Date('2026-11-10T00:00:00Z'),
+      },
+    });
+
+    const result = await claim(ticket.id);
+
+    expect(result.prompt).toContain('- [plan, 2026-11-10] "Spec was vague" Next time: "Ask first"');
+  });
+
   it("adds the stage's skills to the prompt, skipping one no longer available", async () => {
     const skill = await Skill.create({ userId: USER, name: 'pr-checklist', description: 'd', body: 'CHECK IT' });
     const gone = new mongoose.Types.ObjectId().toString();
