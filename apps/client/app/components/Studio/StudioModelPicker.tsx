@@ -115,10 +115,11 @@ const ModelPanel = ({ testIdPrefix, cards, selectedId, onSelect }: ModelPanelPro
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState(ALL_PROVIDERS);
   const providers = [...new Set(cards.map(card => card.provider))];
+  const shortlist = shortlistOf(cards, selectedId);
   const listed = showAll
     ? cards.filter(card => matchesQuery(card, query) && (provider === ALL_PROVIDERS || card.provider === provider))
-    : shortlistOf(cards, selectedId);
-  const hiddenCount = cards.length - shortlistOf(cards, selectedId).length;
+    : shortlist;
+  const hiddenCount = cards.length - shortlist.length;
 
   return (
     <Stack gap={1.5} data-testid={`${testIdPrefix}-model-panel`}>

@@ -43,8 +43,9 @@ const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormSt
 
 /**
  * Create's image form. The model row shows the ranked pick for the settings, and its panel says for every model
- * whether it can make what they ask for; the default is a visible choice the user can swap, never a hidden auto-pick. Settings persist across a model
- * switch; one the picked model does not take is marked with its reason and a fix, and holds Generate.
+ * whether it can make what they ask for; the default is a visible choice the user can swap, never a hidden auto-pick.
+ * Settings persist across a model switch; one the picked model does not take is marked with its reason and a fix, and
+ * holds Generate.
  */
 const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProps) => {
   const [form, setForm] = useState<ImageFormState>(INITIAL_FORM);
