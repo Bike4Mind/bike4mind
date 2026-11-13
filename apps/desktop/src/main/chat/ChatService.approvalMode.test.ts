@@ -358,6 +358,7 @@ describe('ChatService approval modes', () => {
       'git fetch origin main && git merge --ff-only origin/main',
       'git fetch origin main && git rebase origin/main',
       'git fetch origin main && git reset --hard origin/main',
+      'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2',
       'git show --format= HEAD',
     ];
 
@@ -400,6 +401,7 @@ describe('ChatService approval modes', () => {
       'git opaque-approval-test',
       'git fetch origin main && git reset --hard "$OPAQUE_REF"',
       'git fetch origin main && git reset --hard origin/main > "$OPAQUE_OUTPUT"',
+      'git fetch origin main && git reset --hard "$OPAQUE_REF" 2>&1 | tail -2',
       'GIT_WORK_TREE="$OPAQUE_ROOT" git fetch origin main && git reset --hard origin/main',
     ])('asks before the opaque command %s in full access', async command => {
       await startTurn('full');
