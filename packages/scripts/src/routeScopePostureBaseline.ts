@@ -6,10 +6,10 @@ const LEGACY_SEED = `
 02a9a8784972 02db23b9c09d 02eb81a2d4be 03ae80759d70 0499f2fb2938 04c2eb056241 059f95b85ce8
 069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 080ed3e0d392 085a16311592 085f7b671c0e 08e7e98a46ea
 0a251cf95f46 0aabf881da2b 0b337074c70f 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
-1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 11cc92235ae8 12482b7e1ad0 129566209214 1321a72682a9
+1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 12482b7e1ad0 129566209214 1321a72682a9
 1684e10bfdb3 174f292b2c5d 17e8900be450 194285aca1ba 1aaca6dce28e 1bb806fd997f
 1bc6f6451909 1fb1f3fc424e 2008c3ee7616 206ac1b5c273 21d0bb0f522a 22394c3ae59f 23c5dbe38c62
-242d5a2b2e97 243cad0a8ac5 24eadc5b33cc 25067d35251b 258fbe859b6d 25bcdf101b50 25ce8ddf9d2b
+243cad0a8ac5 24eadc5b33cc 25067d35251b 258fbe859b6d 25bcdf101b50 25ce8ddf9d2b
 29051873ed26 2920ec150470 2a04f7bff6fe 2bf7b61bed84 2bff116a55f5 2c025eb3b73c
 2c901735a4cb 2d305da3cdc4 2d3670ecd606 2e37fbac941b 2e3ac54b7154 2e6353f669e3 2eb927ef4a46
 2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f91883ed973 2fc40391ca31 2fdc2e0b829c
@@ -21,7 +21,7 @@ const LEGACY_SEED = `
 4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 5086931d9a00
 5104cfb8d929 51423d9e0878 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274
-5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
+5d5074ebd89b 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
 66a1f13bee09 66b8806c19b4 694c40e91bf8 6a032237a84b 6cc07f5224fa 6d4d6131f033
 6e4748fb4c51 6e5c5d7e8628 6e730bc9a088 6ed0cb009120 6efb9ab92dd4 6f6415cc0c9e 704dec55a202
 71962a5dc759 747dbc66d426 74d86b0154ca 759e9e7d0711
@@ -39,7 +39,7 @@ ab42063db17b acd55bc542a0 adacd7acc19b ae16bf8273b5 b1697044be20 b23231a84d81
 b353e60d17ba b40ffa3a1dbf b41b44ce4353 b4a4a2b7ffc8 b6b845a3bc97 b7b08bbdbe5a b7b736e1f21b b82d70b355a2
 b874bdda5f71 baf01b51e4b7 bb2d0b43d52a beef1bc8cb2d bf09f35f0f2e c0adb9f551c2
 c4fae3cb4fe3 c540d14fc295 c791ba46d0aa c85527a2a3c4
-c87f0ad2714d c93de48dc431 c9e85a6882b7 cb023f64b05c ccd61d7ec1a4 cd0d66e9428d ce6de24d1ac3
+c87f0ad2714d c93de48dc431 c9e85a6882b7 cb023f64b05c cd0d66e9428d ce6de24d1ac3
 cf3724707a21 cf69d9fa323d d044ae74b577 d0edc8b9aaa7 d1700eeb02c3 d233b56c881c
 d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7d544e14816
 d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
@@ -63,8 +63,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/agent-executions/[id]',
     '/api/ai/classify-intent',
     '/api/ai/test-realtime-voice',
-    '/api/ai/transcribe',
-    '/api/ai/transcribe/init',
     '/api/ai/voice-sessions',
     '/api/analytics/aggregate',
     '/api/analytics/log-event',
@@ -137,7 +135,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/friends/by-user/[id]',
     '/api/gears/stamp',
     '/api/gears/status',
-    '/api/generated-content/[ref]',
     '/api/google-drive/callback',
     '/api/google-drive/connect',
     '/api/google-drive/disconnect',
@@ -208,7 +205,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/modals/[id]/delete',
     '/api/modals/[id]/update',
     '/api/modals/create',
-    '/api/models',
     '/api/models/stats',
     '/api/notebooks/curate',
     '/api/notebooks/curate/[sessionId]',
