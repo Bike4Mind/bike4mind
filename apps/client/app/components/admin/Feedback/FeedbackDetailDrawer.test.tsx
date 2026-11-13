@@ -264,7 +264,7 @@ describe('FeedbackDetailDrawer', () => {
     const { onStatusChange } = renderDrawer({ onNext, onPrevious });
     const email = await screen.findByTestId('feedback-detail-email-reporter-btn');
     const emailClick = vi.spyOn(email, 'click').mockImplementation(() => {});
-    screen.getByTestId('feedback-detail-close-btn').focus();
+    expect(screen.getByTestId('feedback-detail-close-btn')).toHaveFocus();
     await userEvent.keyboard('jkice');
     expect(onNext).toHaveBeenCalledOnce();
     expect(onPrevious).toHaveBeenCalledOnce();

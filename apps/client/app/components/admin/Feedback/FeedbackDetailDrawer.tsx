@@ -203,6 +203,7 @@ const FeedbackDetailDrawer = ({
           )}
           <Tooltip title="Close">
             <IconButton
+              autoFocus
               size="sm"
               variant="plain"
               aria-label="Close"
