@@ -98,6 +98,14 @@ The History tab records a research-configuration edit only when a setting meanin
 Saving the same values again, or reordering the same entries in **Sites to review**, **Never these
 sites** or **Tags to propose**, does not add a row.
 
+**Can research read a feed instead of searching the web?**
+Yes. Set **Source** to **Feed** on a research configuration and enter the address of an RSS or Atom
+feed. The **Topic** field then holds the question each feed item is judged against. Each run
+considers only items it has not seen before. Passing items go to the review queue like any other
+result. Changing the feed address, the topic, the model, the relevance threshold or any site list
+checks the feed's current items once more under the new settings. A feed that publishes more items
+than **Feed items per run** allows falls behind. The run card shows how many items are waiting.
+
 **Can research add sources to a lake without my approval?**
 Only from sites you list as trusted. Add a site to **Trusted sites** on a research configuration and
 turn on automatic adding. A new source from that site, or one of its subdomains, is then added to the

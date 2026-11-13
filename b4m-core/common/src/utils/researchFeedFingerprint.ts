@@ -68,3 +68,13 @@ export const withResearchFeedStatus = <
   const { feedCursor: _cursor, ...rest } = config;
   return { ...rest, feedStatus: researchFeedStatus(config) };
 };
+
+/** `origin + path` of a feed address, never its query string or credentials. */
+export function feedLabel(feedUrl: string): string {
+  try {
+    const { origin, pathname } = new URL(feedUrl);
+    return `${origin}${pathname}`;
+  } catch {
+    return '(invalid address)';
+  }
+}

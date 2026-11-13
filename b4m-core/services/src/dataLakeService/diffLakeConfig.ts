@@ -12,6 +12,7 @@ import {
   LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_FINGERPRINTED_FIELDS,
   capLakeConfigValue,
+  feedLabel,
   lakeConfigTextFingerprint,
 } from '@bike4mind/common';
 
@@ -271,16 +272,6 @@ export function researchSourceChange(
 ): ILakeConfigLiteralChange {
   const label = source === 'feed' ? `feed ${feedUrl ? feedLabel(feedUrl) : ''}`.trim() : 'web search';
   return literalChange('researchConfig', undefined, `source: ${label}: ${configName}`);
-}
-
-/** `origin + path` of a feed address, never its query string or credentials. */
-export function feedLabel(feedUrl: string): string {
-  try {
-    const { origin, pathname } = new URL(feedUrl);
-    return `${origin}${pathname}`;
-  } catch {
-    return '(invalid address)';
-  }
 }
 
 /**
