@@ -57,11 +57,13 @@ const ownerTierGate = (
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
 /**
- * Who may see the Usage tab - the org's credit spend (`usage/index.ts`) and its ledger
- * (`admin/transactions.ts`, `admin/session-usage.ts`), all `verifyOrgOwner`. Owner or platform
- * admin; managers are refused.
+ * Usage and ledger reads use verifyOrgAccess: owner, current manager or platform admin.
+ * Billing actions retain their separate owner-only gate.
  */
-export const canViewOrgUsage = ownerTierGate;
+export const canViewOrgUsage = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
 /**
  * Who may see the Integrations, GitHub API and Webhooks tabs - Slack wiring

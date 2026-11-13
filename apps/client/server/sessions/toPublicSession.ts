@@ -12,6 +12,7 @@ export function toPublicSession(session: ISessionDocument): SessionResponse {
     _id: redacted.id,
     name: redacted.name,
     userId: redacted.userId,
+    organizationId: redacted.organizationId,
     knowledgeIds: redacted.knowledgeIds,
     artifactIds: redacted.artifactIds,
     tags: redacted.tags?.map(({ name, strength }) => ({ name, strength })),

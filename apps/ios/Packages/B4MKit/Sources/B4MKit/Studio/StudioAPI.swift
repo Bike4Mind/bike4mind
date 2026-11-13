@@ -33,12 +33,18 @@ public struct GenerationRequest: Equatable, Sendable {
   public let modelID: String
   /// Only the values changed from the model defaults; everything else is left to the server.
   public let params: GenerationParams
+  /// Images attached as video frames, reference or style; only video requests carry them.
+  public let inputs: [GenerationInput]
 
-  public init(kind: GenerationKind, prompt: String, modelID: String, params: GenerationParams = GenerationParams()) {
+  public init(
+    kind: GenerationKind, prompt: String, modelID: String, params: GenerationParams = GenerationParams(),
+    inputs: [GenerationInput] = []
+  ) {
     self.kind = kind
     self.prompt = prompt
     self.modelID = modelID
     self.params = params
+    self.inputs = inputs
   }
 }
 

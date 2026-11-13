@@ -131,6 +131,24 @@ describe('organization detail page - ?tab= deep link', () => {
     navigateSpy.mockClear();
   });
 
+  it('admits a read-only current manager to settings and renders exactly one audit tab', () => {
+    user.current = { id: 'read-manager' };
+    searchParams.current = { tab: 'settings' };
+    orgQuery.current = {
+      data: {
+        ...ORG,
+        adminUserIds: ['read-manager'],
+        users: [...ORG.users, { userId: 'read-manager', permissions: [Permission.read] }],
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(selectedTabName()).toContain('Settings');
+    expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+  });
+
   it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
     orgQuery.current = {
       data: undefined,
@@ -314,17 +332,11 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
-  // The header grants its own button on isAdmin while the page's canManageOrg does not, so a
-  // platform admin who is not a member sees a button the page refuses to act on. That disagreement
-  // predates the URL sync and is left as found; what is pinned here is that the page-side guard is
-  // still what decides, and a refusal writes nothing.
-  it('leaves the URL alone when the page refuses the header settings click', () => {
+  it('honors the header settings click for a platform policy administrator', () => {
     user.current = { id: 'admin9', isAdmin: true };
-
     renderThroughLoad();
     fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
-
-    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
   // Rewriting ?tab=usage to ?tab=overview for a caller who may not see Usage destroys the link for
