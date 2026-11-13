@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import type { Page, Response } from '@playwright/test';
+import type { Frame, Page, Response } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
 import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
@@ -37,6 +37,39 @@ const teamsUrl = (baseURL: string | undefined): string => new URL('/organization
 
 const isSubscribeResponse = (r: Response): boolean =>
   r.request().method() === 'POST' && new URL(r.url()).pathname === SUBSCRIBE_PATH;
+
+/**
+ * Where Stripe's hosted page keeps its payment form. It moved into an iframe on 2026-11-13, so the
+ * pay button and the card fields are looked up in whichever document holds the button: the main
+ * frame or a child frame. Stripe's frames come and go while the page boots, so a frame that detaches
+ * mid-look is skipped rather than failing the look. Gives up after ACTION with every frame's URL and
+ * accessibility tree in the error, which is the only way to see inside a cross-origin frame from CI.
+ */
+async function paymentForm(page: Page): Promise<Frame> {
+  const button = (frame: Frame) => frame.getByTestId('hosted-payment-submit-button');
+  const deadline = Date.now() + TIMEOUTS.ACTION;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      if (
+        await button(frame)
+          .count()
+          .catch(() => 0)
+      )
+        return frame;
+    }
+    await page.waitForTimeout(500);
+  }
+  const dump = await Promise.all(
+    page.frames().map(async frame => {
+      const tree = await frame
+        .locator('body')
+        .ariaSnapshot()
+        .catch(() => '(unreadable)');
+      return `${frame.url()}\n${tree.slice(0, 4000)}`;
+    })
+  );
+  throw new Error(`No hosted-payment-submit-button in any of ${page.frames().length} frames:\n${dump.join('\n---\n')}`);
+}
 
 /** "Total Price: $150/month" -> 150 */
 async function modalTotal(teamsPage: TeamsPage): Promise<number> {
@@ -144,7 +177,8 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     });
 
     await test.step('the hosted checkout page renders with a pay button', async () => {
-      await expect(page.getByTestId('hosted-payment-submit-button')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      const form = await paymentForm(page);
+      await expect(form.getByTestId('hosted-payment-submit-button')).toBeVisible({ timeout: TIMEOUTS.ACTION });
     });
 
     await test.step('the total matches the modal, in US dollars', async () => {
@@ -181,13 +215,14 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
     expect(sessionUrl).toContain('cs_test_');
 
     await test.step('pay with the 4242 test card', async () => {
-      await page.locator('#cardNumber').fill('4242424242424242');
-      await page.locator('#cardExpiry').fill('12 / 34');
-      await page.locator('#cardCvc').fill('123');
-      await page.locator('#billingName').fill('E2E Teams');
-      const postal = page.locator('#billingPostalCode');
+      const form = await paymentForm(page);
+      await form.locator('#cardNumber').fill('4242424242424242');
+      await form.locator('#cardExpiry').fill('12 / 34');
+      await form.locator('#cardCvc').fill('123');
+      await form.locator('#billingName').fill('E2E Teams');
+      const postal = form.locator('#billingPostalCode');
       if (await postal.isVisible().catch(() => false)) await postal.fill('94103');
-      await page.getByTestId('hosted-payment-submit-button').click();
+      await form.getByTestId('hosted-payment-submit-button').click();
       await page.waitForURL(`${teamsUrl(baseURL)}**`, { timeout: TIMEOUTS.ACTION * 2 });
     });
 

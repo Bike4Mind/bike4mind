@@ -20,9 +20,9 @@ const NO_EXPORT: ExportScope = { scope: 'none' };
 
 /**
  * A `deleteDocument` or `retain` match on a scalar path marks the document as the person's own
- * record, so it is exported whole. Every other match (an `anonymize`, a `pullFromArray`, or any
- * match through an array) records the person inside a document that is someone else's, so only the
- * matched paths are exported.
+ * record, so it is exported whole. Every other match (an `anonymize`, a `pullFromArray`, a `retain`
+ * with `exportScope: 'reference'`, or any match through an array) records the person inside a
+ * document that is someone else's, so only the matched paths are exported.
  */
 export function holderExportScope(matches: readonly ReferenceMatch[]): ExportScope {
   if (matches.length === 0) return NO_EXPORT;
@@ -47,14 +47,18 @@ export function viaParentExportScope(
 }
 
 function isOwnRecordMatch({ reference, throughArray }: ReferenceMatch): boolean {
-  return !throughArray && (reference.action === 'deleteDocument' || reference.action === 'retain');
+  if (throughArray || reference.exportScope === 'reference') return false;
+  return reference.action === 'deleteDocument' || reference.action === 'retain';
 }
 
-// An `anonymize` reference's `alsoRedact` fields repeat the matched person's identity (a cached name,
-// email or IP of the same person), so they are that person's data and travel with the match.
+// An `anonymize` reference's `alsoRedact` fields and any reference's `identifies` fields repeat the
+// matched person's identity (a cached name, email or IP of the same person), so they are that
+// person's data and travel with the match.
 function uniquePaths(matches: readonly ReferenceMatch[]): string[] {
-  const paths = matches.flatMap(({ reference }) =>
-    reference.action === 'anonymize' ? [reference.path, ...(reference.alsoRedact ?? [])] : [reference.path]
-  );
+  const paths = matches.flatMap(({ reference }) => [
+    reference.path,
+    ...(reference.action === 'anonymize' ? (reference.alsoRedact ?? []) : []),
+    ...(reference.identifies ?? []),
+  ]);
   return [...new Set(paths)];
 }
