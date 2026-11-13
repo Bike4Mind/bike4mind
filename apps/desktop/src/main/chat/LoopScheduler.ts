@@ -1,4 +1,4 @@
-import { loopDecision, type LoopState } from '@shared/loop';
+import { formatLoopUntil, loopDecision, type LoopState } from '@shared/loop';
 
 export type LoopOutcome = { ok: true; reply: string } | { ok: false; error: string };
 
@@ -44,12 +44,14 @@ export class LoopScheduler {
 
   idle(sessionId: string): void {
     const entry = this.entries.get(sessionId);
-    if (entry?.state.phase === 'waiting' && !this.busy(sessionId)) this.arm(entry, 0);
+    if (entry?.state.phase !== 'waiting') return;
+    if (this.ended(entry)) this.end(entry);
+    else if (!this.busy(sessionId)) this.arm(entry, 0);
   }
 
   pauseWaiting(sessionId: string): void {
     const entry = this.entries.get(sessionId);
-    if (!entry || entry.state.phase === 'running') return;
+    if (!entry || entry.state.phase === 'running' || entry.state.phase === 'ended') return;
     clearTimeout(entry.timer);
     entry.state.phase = 'paused';
     entry.state.nextRunAt = null;
@@ -61,7 +63,26 @@ export class LoopScheduler {
     this.changed(entry.state.sessionId, { ...entry.state });
   }
 
+  private ended(entry: Entry): boolean {
+    const { until } = entry.state;
+    return until !== undefined && Date.now() >= until;
+  }
+
+  /** Kept until stopped or replaced, so the session shows why the loop is gone. */
+  private end(entry: Entry): void {
+    clearTimeout(entry.timer);
+    entry.state.phase = 'ended';
+    entry.state.nextRunAt = null;
+    entry.state.notice = `Loop ended: no run starts after its end time, ${formatLoopUntil(entry.state.until ?? Date.now())}.`;
+    this.publish(entry);
+  }
+
   private arm(entry: Entry, delay: number): void {
+    const { until } = entry.state;
+    if (until !== undefined && Date.now() + delay >= until) {
+      this.end(entry);
+      return;
+    }
     entry.state.phase = 'scheduled';
     entry.state.nextRunAt = Date.now() + delay;
     this.publish(entry);
@@ -71,6 +92,10 @@ export class LoopScheduler {
   private async fire(entry: Entry): Promise<void> {
     const { sessionId } = entry.state;
     if (this.entries.get(sessionId) !== entry) return;
+    if (this.ended(entry)) {
+      this.end(entry);
+      return;
+    }
     entry.state.nextRunAt = null;
     if (this.busy(sessionId)) {
       entry.state.phase = 'waiting';

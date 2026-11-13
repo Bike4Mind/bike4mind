@@ -127,6 +127,13 @@ export function parseStagedScopes(raw: string | undefined): {
   return { staged, rejected };
 }
 
+export type ScopeGateOptions = {
+  /** Route opts into `grandfatherLegacyKeys` and the key is a legacy key. Never overrides a confined or exchange key. */
+  grandfathered?: boolean;
+  /** Key was minted by the federated AI-token exchange. */
+  exchangeKey?: boolean;
+};
+
 /**
  * The scope gate's whole decision, isolated from Express so it can be tested
  * directly.
@@ -153,6 +160,9 @@ export function parseStagedScopes(raw: string | undefined): {
  * flow and nothing else. Callers must therefore invoke this even when
  * `requiredScopes` is undefined.
  *
+ * A key minted by the federated AI-token exchange (`exchangeKey`) is confined the same way, whatever
+ * scopes it holds.
+ *
  * A confined key can ONLY be allowed by an explicit `requiredScopes` match - the
  * confinement check sits above both the no-scope and the staged branch, so a
  * rollout window cannot admit one to a route it has no business on.
@@ -166,29 +176,31 @@ export function decideScopeGate(
   requiredScopes: ApiKeyScopeValue[] | undefined,
   heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
-  alsoRequiredScopes?: ApiKeyScopeValue[]
+  alsoRequiredScopes?: ApiKeyScopeValue[],
+  options?: ScopeGateOptions & { grandfathered?: false }
 ): Exclude<ScopeGateDecision, { outcome: 'legacyAllow' }>;
 export function decideScopeGate(
   requiredScopes: ApiKeyScopeValue[] | undefined,
   heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
   alsoRequiredScopes: ApiKeyScopeValue[] | undefined,
-  grandfathered: boolean
+  options: ScopeGateOptions
 ): ScopeGateDecision;
 export function decideScopeGate(
   requiredScopes: ApiKeyScopeValue[] | undefined,
   heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
   alsoRequiredScopes?: ApiKeyScopeValue[],
-  grandfathered = false
+  options: ScopeGateOptions = {}
 ): ScopeGateDecision {
+  const { grandfathered = false, exchangeKey = false } = options;
   if (alsoRequiredScopes?.some(scope => !heldScopes?.includes(scope))) {
     return { outcome: 'deny' };
   }
   if (requiredScopes?.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
   // Above both branches below: neither a missing declaration nor an active staging
   // window may admit a confined key.
-  if (isConfinedKey(heldScopes)) return { outcome: 'deny' };
+  if (exchangeKey || isConfinedKey(heldScopes)) return { outcome: 'deny' };
   if (!requiredScopes) return { outcome: 'allow' };
   // An empty `requiredScopes` denies (a route asking for "one of nothing" can
   // satisfy nobody); `every` on [] is true, so guard the length explicitly.
@@ -200,7 +212,12 @@ export function decideScopeGate(
 }
 
 export type ScopedRequest = {
-  apiKeyInfo?: { keyId?: string; scopes?: ApiKeyScopeValue[]; createdAt?: Date };
+  apiKeyInfo?: {
+    keyId?: string;
+    scopes?: ApiKeyScopeValue[];
+    createdAt?: Date;
+    oauthExchangeClientId?: string;
+  };
   logger?: { info: (message: string, context?: Record<string, unknown>) => void };
 };
 
@@ -231,7 +248,10 @@ export function holdsApiKeyScope(
   const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
   const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(req.apiKeyInfo.createdAt);
-  const { outcome } = decideScopeGate(required, held, staged, undefined, grandfathered);
+  const { outcome } = decideScopeGate(required, held, staged, undefined, {
+    grandfathered,
+    exchangeKey: !!req.apiKeyInfo.oauthExchangeClientId,
+  });
   if (outcome === 'legacyAllow' && shouldLogLegacyPass(req.apiKeyInfo.keyId, required.join(','))) {
     // Same line as apiKeyAuth's door, so one query finds every key still relying on the window.
     req.logger?.info(LEGACY_SCOPE_PASS_LOG, {

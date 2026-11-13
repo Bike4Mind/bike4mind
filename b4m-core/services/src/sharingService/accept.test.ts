@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { InviteType, Permission } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
+import { NotFoundError, ForbiddenError, BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
+import { ConflictError } from '@bike4mind/common';
 import { acceptInvite } from './accept';
 
 const shares = () => ({ updateUserShares: vi.fn(async () => ({})) });
@@ -13,12 +14,19 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; findByToken: Mock; update: Mock; acceptRecipient: Mock };
+      invites: {
+        findById: Mock;
+        findByToken: Mock;
+        update: Mock;
+        acceptRecipient: Mock;
+        findAllByDocumentId: Mock;
+        cancelPendingRecipient: Mock;
+      };
       sessions: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock };
       fabFiles: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
       groups: { findById: Mock };
-      organization: { findById: Mock; update: Mock; ensureUserDetails: Mock };
+      organization: { findById: Mock; addMemberIfUnderCeiling: Mock; ensureUserDetails: Mock };
       users: { findById: Mock; update: Mock };
     };
   };
@@ -32,18 +40,23 @@ describe('sharingService - acceptInvite (Organization)', () => {
     ...overrides,
   });
 
-  const makeInvite = () => ({
+  const makeInvite = (overrides: Record<string, unknown> = {}) => ({
     id: inviteId,
     type: InviteType.Organization,
     documentId: organizationId,
     permissions: [Permission.read],
     remaining: 5,
     accepted: 0,
+    inviterId: 'minter',
     recipients: { pending: ['member@example.com'], refused: [], accepted: [] },
+    ...overrides,
   });
+
+  const asAdapters = () => mockAdapters as unknown as Parameters<typeof acceptInvite>[2];
 
   const makeOrganization = (overrides: Record<string, unknown> = {}) => ({
     id: organizationId,
+    userId: 'minter',
     users: [],
     userDetails: [],
     seats: 10,
@@ -59,12 +72,18 @@ describe('sharingService - acceptInvite (Organization)', () => {
           findByToken: vi.fn(async () => null),
           update: vi.fn(),
           acceptRecipient: acceptRecipientMock(),
+          findAllByDocumentId: vi.fn(async () => []),
+          cancelPendingRecipient: vi.fn(async () => null),
         },
         sessions: { shareable: shares(), findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { shareable: shares(), findById: vi.fn(), update: vi.fn() },
         fabFiles: { shareable: shares(), findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         groups: { findById: vi.fn() },
-        organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+        organization: {
+          findById: vi.fn(),
+          addMemberIfUnderCeiling: vi.fn(async () => ({})),
+          ensureUserDetails: vi.fn(),
+        },
         users: { findById: vi.fn(), update: vi.fn() },
       },
     };
@@ -72,7 +91,9 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
   it("sets the accepting user's organizationId and persists the user", async () => {
     const user = makeUser();
-    mockAdapters.db.users.findById.mockResolvedValue(user);
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === 'minter' ? makeUser({ id: 'minter' }) : user
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
 
@@ -84,23 +105,22 @@ describe('sharingService - acceptInvite (Organization)', () => {
     expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
   });
 
-  it('adds the user to the organization users[] via a targeted write and seeds the credit row atomically', async () => {
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+  it('joins through the conditional seat-checked add, with no reservation for a named invite', async () => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    // users[] persisted through a targeted write - never the whole document (which would $set a
-    // stale userDetails snapshot able to clobber a concurrent credit increment).
-    const updateArg = mockAdapters.db.organization.update.mock.calls[0][0];
-    expect(updateArg).toStrictEqual({
-      id: organizationId,
-      users: [{ userId, permissions: [Permission.read], projectId: undefined, sessionId: undefined }],
-    });
-    expect(updateArg).not.toHaveProperty('userDetails');
-
-    // Credit side-table seeded through the idempotent guarded $push, not an unconditional push.
+    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalledWith(
+      organizationId,
+      { userId, permissions: [Permission.read] },
+      0
+    );
+    // A named invite's seat was reserved at mint, so its accept never counts the other invites.
+    expect(mockAdapters.db.invites.findAllByDocumentId).not.toHaveBeenCalled();
     expect(mockAdapters.db.organization.ensureUserDetails).toHaveBeenCalledWith(organizationId, {
       id: userId,
       email: 'member@example.com',
@@ -112,7 +132,9 @@ describe('sharingService - acceptInvite (Organization)', () => {
     // The old path did `userDetails.push(...)` unconditionally, so re-accepting an invite for an org
     // the member already had a row in produced a second phantom row. Routing through the guarded
     // primitive is what makes the seed idempotent - mirrors the Group double-accept guard below.
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(
       makeOrganization({
@@ -127,17 +149,18 @@ describe('sharingService - acceptInvite (Organization)', () => {
       email: 'member@example.com',
       name: 'Member',
     });
-    // No raw push into the persisted document.
-    expect(mockAdapters.db.organization.update.mock.calls[0][0]).not.toHaveProperty('userDetails');
   });
 
-  it('updates the organization before persisting the user (membership is fully provisioned)', async () => {
+  it('adds the member before persisting the user (membership is fully provisioned)', async () => {
     const callOrder: string[] = [];
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
-    mockAdapters.db.organization.update.mockImplementation(async () => {
-      callOrder.push('organization.update');
+    mockAdapters.db.organization.addMemberIfUnderCeiling.mockImplementation(async () => {
+      callOrder.push('organization.add');
+      return {};
     });
     mockAdapters.db.users.update.mockImplementation(async () => {
       callOrder.push('users.update');
@@ -145,14 +168,16 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(callOrder).toEqual(['organization.update', 'users.update']);
+    expect(callOrder).toEqual(['organization.add', 'users.update']);
   });
 
   it('overwrites a previously selected organizationId with the newly accepted one', async () => {
     // organizationId is the *currently selected* org; accepting a new invite
     // selects that org, matching organizationService.addMember.
     const user = makeUser({ organizationId: 'previous-org' });
-    mockAdapters.db.users.findById.mockResolvedValue(user);
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === 'minter' ? makeUser({ id: 'minter' }) : user
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
 
@@ -163,19 +188,271 @@ describe('sharingService - acceptInvite (Organization)', () => {
   });
 
   it('throws when the organization is full and does not update the user', async () => {
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
-    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
-    // seats reached: existing users + owner (+1) >= seats
-    mockAdapters.db.organization.findById.mockResolvedValue(
-      makeOrganization({ users: [{ userId: 'a' }, { userId: 'b' }], seats: 3 })
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
     );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+    mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
 
-    await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(ForbiddenError);
+    await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow('Organization is full');
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+  });
+
+  const linkOnly = { isLinkOnly: true, recipients: { pending: [], refused: [], accepted: [] } };
+
+  it('reports a concurrent link join of the same user as already a member, not as full', async () => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite(linkOnly));
+    mockAdapters.db.organization.findById
+      .mockResolvedValueOnce(makeOrganization())
+      .mockResolvedValueOnce(makeOrganization({ users: [{ userId }] }));
+    mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(ConflictError);
+  });
+
+  it.each([
+    ['a member', makeOrganization({ users: [{ userId }] })],
+    ['the owner', makeOrganization({ userId })],
+  ])('refuses %s joining by link with 409 before any write', async (_label, organization) => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite(linkOnly));
+    mockAdapters.db.organization.findById.mockResolvedValue(organization);
+
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(ConflictError);
+    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+    expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a member', makeOrganization({ users: [{ userId }] })],
+    ['the owner', makeOrganization({ userId })],
+  ])(
+    'consumes a named Editor invite sent to %s, keeps their role and reports already-member',
+    async (_label, organization) => {
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+        makeUser(id === 'minter' ? { id: 'minter' } : {})
+      );
+      mockAdapters.db.invites.findById.mockResolvedValue(
+        makeInvite({ permissions: [Permission.read, Permission.update, Permission.share] })
+      );
+      mockAdapters.db.organization.findById.mockResolvedValue(organization);
+
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({
+        invite: { id: inviteId },
+        outcome: 'already-member',
+      });
+      expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      if (_label === 'a member')
+        expect(mockAdapters.db.organization.ensureUserDetails).toHaveBeenCalledWith(organizationId, {
+          id: userId,
+          email: 'member@example.com',
+          name: 'Member',
+        });
+      else expect(mockAdapters.db.organization.ensureUserDetails).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('consumes a named invite when a concurrent join already added the user', async () => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById
+      .mockResolvedValueOnce(makeOrganization())
+      .mockResolvedValueOnce(makeOrganization({ users: [{ userId }] }));
+    mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+    await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).resolves.toEqual({
+      invite: { id: inviteId },
+      outcome: 'already-member',
+    });
+    expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+  });
+
+  it.each([
+    ['owner', { userId: 'minter', users: [] }, { id: 'minter' }, [Permission.read, Permission.update], true],
+    [
+      'current manager',
+      { userId: 'owner', adminUserIds: ['minter'], users: [{ userId: 'minter', permissions: [Permission.read] }] },
+      { id: 'minter' },
+      [Permission.read],
+      true,
+    ],
+    [
+      'removed manager',
+      { userId: 'owner', adminUserIds: ['minter'], users: [] },
+      { id: 'minter' },
+      [Permission.read],
+      false,
+    ],
+    [
+      'demoted manager',
+      { userId: 'owner', adminUserIds: [], users: [{ userId: 'minter', permissions: [Permission.read] }] },
+      { id: 'minter' },
+      [Permission.read],
+      false,
+    ],
+    [
+      'manager above Viewer',
+      { userId: 'owner', adminUserIds: ['minter'], users: [{ userId: 'minter', permissions: [Permission.read] }] },
+      { id: 'minter' },
+      [Permission.read, Permission.update],
+      false,
+    ],
+    [
+      'platform admin',
+      { userId: 'owner', users: [] },
+      { id: 'minter', isAdmin: true },
+      [Permission.read, Permission.update],
+      true,
+    ],
+    ['deleted minter', { userId: 'minter', users: [] }, null, [Permission.read], false],
+  ] as const)(
+    'checks the current authority of a link minter: %s',
+    async (_label, organization, minter, permissions, allowed) => {
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) => (id === 'minter' ? minter : makeUser()));
+      mockAdapters.db.invites.findById.mockResolvedValue(makeInvite({ ...linkOnly, permissions }));
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization(organization));
+      const completion = acceptInvite(userId, { id: inviteId }, asAdapters());
+      if (allowed) {
+        await expect(completion).resolves.toMatchObject({ outcome: 'accepted' });
+        expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalledOnce();
+      } else {
+        await expect(completion).rejects.toThrow(ForbiddenError);
+        expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+        expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each([0, 3])(
+    'returns the member outcome when reopening a previously accepted link with %s remaining slots',
+    async remaining => {
+      mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+      mockAdapters.db.invites.findById.mockResolvedValue(
+        makeInvite({ ...linkOnly, remaining, recipients: { accepted: ['MEMBER@example.com'] } })
+      );
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ users: [{ userId }] }));
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(ConflictError);
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+    }
+  );
+
+  describe('share link', () => {
+    const linkInvite = (overrides: Record<string, unknown> = {}) =>
+      makeInvite({ isLinkOnly: true, recipients: { pending: [], refused: [], accepted: [] }, ...overrides });
+
+    const accept = async (invite: Record<string, unknown>, user = makeUser()) => {
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+        id === 'minter' ? makeUser({ id: 'minter' }) : user
+      );
+      mockAdapters.db.invites.findById.mockResolvedValue(invite);
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+      return acceptInvite(userId, { id: inviteId }, asAdapters());
+    };
+
+    it('holds back seats for live named invites other than the accepter', async () => {
+      const future = new Date(Date.now() + 60_000);
+      const past = new Date(Date.now() - 60_000);
+      mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+        { type: InviteType.Organization, remaining: 2, recipients: { pending: ['a@x.com', 'B@x.com'] } },
+        { type: InviteType.Organization, remaining: 1, expiresAt: future, recipients: { pending: ['b@x.com'] } },
+        { type: InviteType.Organization, remaining: 1, recipients: { pending: ['Member@example.com'] } },
+        { type: InviteType.Organization, remaining: 1, expiresAt: past, recipients: { pending: ['expired@x.com'] } },
+        { type: InviteType.Organization, remaining: 0, recipients: { pending: ['spent@x.com'] } },
+        { type: InviteType.Organization, remaining: 1, revokedAt: past, recipients: { pending: ['rev@x.com'] } },
+        { type: InviteType.Group, remaining: 1, recipients: { pending: ['group@x.com'] } },
+      ]);
+
+      await accept(linkInvite());
+
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalledWith(
+        organizationId,
+        { userId, permissions: [Permission.read] },
+        2
+      );
+      expect(mockAdapters.db.invites.acceptRecipient).toHaveBeenCalledWith(inviteId, 'member@example.com');
+    });
+
+    it('clears the joiner from their own pending named invites so those stop holding a seat', async () => {
+      mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          id: 'named-own',
+          type: InviteType.Organization,
+          remaining: 1,
+          recipients: { pending: [' Member@Example.com'] },
+        },
+        { id: 'named-other', type: InviteType.Organization, remaining: 1, recipients: { pending: ['a@x.com'] } },
+      ]);
+
+      await accept(linkInvite());
+
+      expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledTimes(1);
+      expect(mockAdapters.db.invites.cancelPendingRecipient).toHaveBeenCalledWith('named-own', 'member@example.com');
+    });
+
+    it('leaves pending named invites alone when the seat check refuses the join', async () => {
+      mockAdapters.db.invites.findAllByDocumentId.mockResolvedValue([
+        {
+          id: 'named-own',
+          type: InviteType.Organization,
+          remaining: 1,
+          recipients: { pending: ['member@example.com'] },
+        },
+      ]);
+      mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+      await expect(accept(linkInvite())).rejects.toThrow('Organization is full');
+      expect(mockAdapters.db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
+    });
+
+    it('refuses a revoked link before touching the organization', async () => {
+      await expect(accept(linkInvite({ revokedAt: new Date() }))).rejects.toThrow(UnprocessableEntityError);
+      await expect(accept(linkInvite({ revokedAt: new Date() }))).rejects.toThrow('Invite has been revoked');
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+    });
+
+    it('refuses an expired link', async () => {
+      await expect(accept(linkInvite({ expiresAt: new Date(Date.now() - 1000) }))).rejects.toThrow(
+        'Invite has expired'
+      );
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+    });
+
+    it('admits a verified address on an allowed domain', async () => {
+      await accept(linkInvite({ allowedDomains: ['example.com'] }), makeUser({ emailVerified: true }));
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another domain', { email: 'member@other.com', emailVerified: true }],
+      ['a subdomain', { email: 'member@eu.example.com', emailVerified: true }],
+      ['a lookalike suffix', { email: 'member@badexample.com', emailVerified: true }],
+      ['an unverified address', { emailVerified: false }],
+      ['a user with no verification flag', {}],
+    ])('refuses %s on a domain-limited link', async (_label, overrides) => {
+      await expect(accept(linkInvite({ allowedDomains: ['example.com'] }), makeUser(overrides))).rejects.toThrow(
+        ForbiddenError
+      );
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expect(mockAdapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+    });
   });
 
   it('throws NotFoundError when the organization does not exist', async () => {
-    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(null);
 

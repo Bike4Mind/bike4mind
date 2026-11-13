@@ -83,6 +83,13 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
+  // A data subject export carries all of a person's stored data, so both steps are critical and fail
+  // the action when they cannot be recorded (the request before it is queued, the download before it is signed).
+  'user.data_export.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.data_export.downloaded': { category: 'account', severity: 'critical', write: 'strict' },
+  // The request was recorded but could not be queued; the export list shows it as failed.
+  'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -106,6 +113,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.group_member.unassigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite.resent': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },

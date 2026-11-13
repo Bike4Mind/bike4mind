@@ -1,4 +1,5 @@
 import { sharingService } from '@bike4mind/services';
+import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
   organizationRepository,
@@ -66,12 +67,14 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
 
 export async function acceptInviteForUser(req: InviteResponder, id: string) {
   const user = req.user!;
+  // Charged before the lookup and outside the transaction, so a refused or rolled-back accept still counts.
+  await reserveInviteAccept(user.id);
   // Wrap in a transaction so the invite mutation and the document/user writes it
   // drives (e.g. org membership + user.organizationId in the Organization path) commit
   // atomically. Without it, a failure between the two writes could leave a user in an
   // org with organizationId still null. Mirrors the add-member handler, which already
   // wraps organizationService.addMember.
-  const invite = await withTransaction(() =>
+  const { invite, outcome } = await withTransaction(() =>
     sharingService.acceptInvite(
       user.id,
       { id },
@@ -124,7 +127,7 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
     await transferFileTagsToUser(invite.documentId, user.id);
   }
 
-  return invite;
+  return { invite, outcome };
 }
 
 export async function refuseInviteForUser(req: InviteResponder, id: string) {

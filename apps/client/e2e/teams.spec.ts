@@ -184,7 +184,7 @@ test.describe('Teams', () => {
 
     await teamsPage.openMemberMenu(invitee.userId);
     await page.getByTestId('organization-user-card-revoke-access').click();
-    await teamsPage.confirm();
+    await teamsPage.confirmOffboard();
 
     await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
   });

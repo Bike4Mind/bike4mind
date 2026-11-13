@@ -134,6 +134,25 @@ describe('DlqReplayLogRepository.findRecent', () => {
     expect(await dlqReplayLogRepository.countAttempts(base.messageId)).toBe(3);
   });
 
+  it('counts attempts for many messages at once, the same way countAttempts does', async () => {
+    const base = {
+      queueLabel: 'quest-export',
+      messageBody: 'retained',
+      sourceQueue: 'Quest Export',
+      replayedBy: 'admin-1',
+    };
+    await DlqReplayLogModel.create([
+      { ...base, messageId: 'batch-a', status: 'success' },
+      { ...base, messageId: 'batch-a', status: 'failed' },
+      { ...base, messageId: 'batch-a', status: 'skipped' },
+      { ...base, messageId: 'batch-b', status: 'failed', operation: 'discard' },
+      { ...base, messageId: 'batch-other', status: 'success' },
+    ]);
+    const counts = await dlqReplayLogRepository.countAttemptsByMessage(['batch-a', 'batch-b', 'batch-none']);
+    expect(Object.fromEntries(counts)).toEqual({ 'batch-a': 2, 'batch-b': 0, 'batch-none': 0 });
+    expect(counts.get('batch-a')).toBe(await dlqReplayLogRepository.countAttempts('batch-a'));
+  });
+
   it.each(['discarded', 'failed'] as const)(
     'finalizes a pending discard as %s without consuming replay attempts',
     async status => {

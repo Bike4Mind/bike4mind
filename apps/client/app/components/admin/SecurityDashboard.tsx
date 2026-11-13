@@ -31,6 +31,7 @@ import {
   type ViewTab,
 } from './shared';
 import { SecurityFindingsTable } from './SecurityDashboard/SecurityFindingsTable';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const statusColorMap: Record<SecurityCheckStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
   pass: 'success',
@@ -977,7 +978,7 @@ const SecurityDashboard: React.FC = () => {
   const { view, scan, setView, setScan } = useSecurityDashboardSearch();
 
   return (
-    <Stack spacing={2.5} sx={{ width: '100%', p: 2 }} data-testid="security-dashboard-root">
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="security-dashboard-root">
       <AdminPageHeader
         title="Security"
         description="Live incident signals, firewall traffic and scan results."
