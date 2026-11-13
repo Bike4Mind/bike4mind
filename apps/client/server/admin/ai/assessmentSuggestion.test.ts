@@ -5,11 +5,12 @@ const h = vi.hoisted(() => ({
   findDetection: vi.fn(),
   createPending: vi.fn(),
   recordAiDecision: vi.fn(),
+  findForEntities: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   abuseAssessmentRepository: { findById: h.findAssessment },
   shadowDetectionRepository: { findById: h.findDetection },
-  adminAiSuggestionRepository: { createPending: h.createPending },
+  adminAiSuggestionRepository: { createPending: h.createPending, findForEntities: h.findForEntities },
 }));
 vi.mock('./audit', () => ({ recordAiDecision: h.recordAiDecision }));
 
@@ -17,6 +18,7 @@ import {
   recordDetectionAssessmentDecision,
   recordUserAssessmentOverride,
   userAssessmentSuggestion,
+  withSuggestionDecisions,
 } from './assessmentSuggestion';
 
 const ASSESSMENT_ID = 'a'.repeat(24);
@@ -28,8 +30,11 @@ const assessment = (result: string, detectionId = 'det-1') => ({
   id: ASSESSMENT_ID,
   detectionId,
   result,
-  probabilities: [],
-  confidence: 0.9,
+  probabilities: [
+    { value: result, probability: 0.9 },
+    { value: 'insufficient_evidence', probability: 0.1 },
+  ],
+  confidence: 0.4,
   reasons: [{ key: 'shared_network', probability: 0.72 }],
   model: 'decision-model',
   policyVersion: 3,
@@ -37,7 +42,11 @@ const assessment = (result: string, detectionId = 'det-1') => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.createPending.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, id: SUGGESTION_ID }));
+  h.createPending.mockImplementation(async (input: Record<string, unknown>) => ({
+    ...input,
+    id: SUGGESTION_ID,
+    status: 'pending',
+  }));
   h.recordAiDecision.mockResolvedValue({ id: SUGGESTION_ID });
 });
 
@@ -91,6 +100,23 @@ describe('recordDetectionAssessmentDecision', () => {
     });
   });
 
+  it('links nothing when the suggestion was already decided (a regrade)', async () => {
+    h.findAssessment.mockResolvedValue(assessment('abuse'));
+    h.recordAiDecision.mockResolvedValue(null);
+
+    await expect(decide('legitimate_human')).resolves.toBeUndefined();
+  });
+
+  it('falls back to the confidence when the proposed result has no probability', async () => {
+    h.findAssessment.mockResolvedValue({ ...assessment('abuse'), probabilities: [] });
+
+    await decide('confirmed_abuse');
+
+    expect(h.createPending).toHaveBeenCalledWith(
+      expect.objectContaining({ confidence: { probability: 0.4, band: 'low' } })
+    );
+  });
+
   it("falls back to the grader's reason when no why-wrong reason was picked", async () => {
     h.findAssessment.mockResolvedValue(assessment('abuse'));
 
@@ -134,6 +160,25 @@ describe('userAssessmentSuggestion', () => {
     );
   });
 
+  it('matches an upper-case account id against the detection', async () => {
+    h.findAssessment.mockResolvedValue(assessment('abuse'));
+    h.findDetection.mockResolvedValue({ id: 'det-1', userIds: ['ab'.repeat(12)] });
+
+    await userAssessmentSuggestion('signupRiskReview', 'AB'.repeat(12), ASSESSMENT_ID);
+
+    expect(h.createPending).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'ab'.repeat(12) }));
+  });
+
+  it('refuses a suggestion already decided on this queue with a 409', async () => {
+    h.findAssessment.mockResolvedValue(assessment('abuse'));
+    h.findDetection.mockResolvedValue({ id: 'det-1', userIds: [USER_ID] });
+    h.createPending.mockResolvedValue({ id: SUGGESTION_ID, status: 'accepted' });
+
+    await expect(userAssessmentSuggestion('signupRiskReview', USER_ID, ASSESSMENT_ID)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+  });
+
   it('never offers a non-abuse judgment as a suggestion', async () => {
     h.findAssessment.mockResolvedValue(assessment('legitimate_automation'));
 
@@ -151,6 +196,31 @@ describe('userAssessmentSuggestion', () => {
       'does not name this account'
     );
     expect(h.createPending).not.toHaveBeenCalled();
+  });
+});
+
+describe('withSuggestionDecisions', () => {
+  it("adds this queue's decision per advisory, null while undecided or decided elsewhere", async () => {
+    const [decided, open, elsewhere] = ['1', '2', '3'].map(digit => digit.repeat(24));
+    h.findForEntities.mockResolvedValue([
+      { entityType: 'heldSignupGrant', entityId: decided, inputHash: 'heldSignupGrant:x1', status: 'overridden' },
+      { entityType: 'heldSignupGrant', entityId: open, inputHash: 'heldSignupGrant:x2', status: 'pending' },
+      { entityType: 'signupRiskReview', entityId: elsewhere, inputHash: 'heldSignupGrant:x3', status: 'accepted' },
+    ]);
+    const advisories = new Map([
+      [decided, { assessmentId: 'x1' }],
+      [open, { assessmentId: 'x2' }],
+      [elsewhere, { assessmentId: 'x3' }],
+    ]);
+
+    const result = await withSuggestionDecisions('heldSignupGrant', advisories);
+
+    expect(h.findForEntities).toHaveBeenCalledWith('abuseAssessment', [
+      { entityId: decided, inputHash: 'heldSignupGrant:x1' },
+      { entityId: open, inputHash: 'heldSignupGrant:x2' },
+      { entityId: elsewhere, inputHash: 'heldSignupGrant:x3' },
+    ]);
+    expect([...result.values()].map(advisory => advisory.decision)).toEqual(['overridden', null, null]);
   });
 });
 

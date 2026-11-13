@@ -23,6 +23,11 @@ const ObjectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid us
 export const signupRiskReviewAdvisorySchema = z.object({
   /** The AbuseAssessment shown; an admin action taken from it names this id. */
   assessmentId: z.string(),
+  /**
+   * The admin's decision on this queue's suggestion for that assessment, null while undecided. Set by
+   * each queue's list endpoint, since the same assessment is a separate suggestion on each queue.
+   */
+  decision: z.enum(['accepted', 'overridden']).nullable().optional(),
   detectionId: z.string(),
   detector: z.enum(SHADOW_DETECTORS),
   result: z.enum(ABUSE_ASSESSMENT_JUDGMENTS),

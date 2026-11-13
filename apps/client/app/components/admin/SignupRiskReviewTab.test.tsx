@@ -50,7 +50,8 @@ vi.mock('./Users/BulkAbuseResponseModal', () => ({
   },
 }));
 
-import SignupRiskReviewTab, { advisoryTooltip } from './SignupRiskReviewTab';
+import SignupRiskReviewTab from './SignupRiskReviewTab';
+import { advisoryTooltip } from './SignupAdvisoryCell';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -554,6 +555,25 @@ describe('SignupRiskReviewTab', () => {
 
       expect(m.mutate.mock.calls[0][0]).not.toHaveProperty('aiDecision');
     });
+
+    it.each(['accepted', 'overridden'] as const)(
+      'offers no accept or override once the assessment is %s',
+      async decision => {
+        m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: { ...advisoryOf('abuse'), decision } })]));
+        renderTab();
+
+        fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+        await screen.findByTestId('signup-risk-approve-u1');
+        expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-override-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+        expect(screen.getByTestId('signup-risk-decision-u1')).toHaveTextContent(
+          decision === 'accepted' ? 'Accepted' : 'Overridden'
+        );
+        fireEvent.keyDown(screen.getByTestId('signup-risk-row-u1'), { key: 'a' });
+        expect(m.accept).not.toHaveBeenCalled();
+      }
+    );
 
     it('offers no accept or override on a non-abuse verdict', async () => {
       m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('legitimate_automation') })]));

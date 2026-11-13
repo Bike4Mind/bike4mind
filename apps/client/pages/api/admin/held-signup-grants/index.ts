@@ -1,9 +1,11 @@
 import { z } from 'zod';
+import type { SignupRiskReviewAdvisory } from '@bike4mind/common';
 import { signupGrantReleaseRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
+import { withSuggestionDecisions } from '@server/admin/ai/assessmentSuggestion';
 
 const querySchema = z.object({
   reason: z.enum(['budget_exhausted']).optional(),
@@ -28,10 +30,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
     const advisories = await findRiskReviewAdvisories(
       page.map(row => row.id),
       req.logger
-    ).catch(error => {
-      req.logger.warn('Held signup grant advisories unavailable', { error });
-      return new Map();
-    });
+    )
+      .then(found => withSuggestionDecisions('heldSignupGrant', found))
+      .catch(error => {
+        req.logger.warn('Held signup grant advisories unavailable', { error });
+        return new Map<string, SignupRiskReviewAdvisory>();
+      });
     const data = page.map(row => ({ ...row, advisory: advisories.get(row.id) ?? null }));
     res.status(200).json({ data, nextCursor: rows.length > PAGE_SIZE ? page[page.length - 1].id : null });
   })

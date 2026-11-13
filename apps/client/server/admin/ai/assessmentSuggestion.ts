@@ -12,7 +12,7 @@ import {
   type ShadowDetectionVerdict,
 } from '@bike4mind/common';
 import { abuseAssessmentRepository, adminAiSuggestionRepository, shadowDetectionRepository } from '@bike4mind/database';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { recordAiDecision } from './audit';
 
 /**
@@ -64,6 +64,9 @@ function proposalFor(
   return { action: USER_SURFACE_PROPOSAL[surface] };
 }
 
+const suggestionInputHash = (surface: AssessmentSuggestionSurface, assessmentId: string): string =>
+  `${surface}:${assessmentId}`;
+
 /**
  * The pending (or already decided) suggestion row for this queue item and assessment. Keyed per
  * surface so the same assessment shown on two queues is decided separately on each.
@@ -73,12 +76,16 @@ async function suggestionFor(
   entityId: string,
   assessment: AbuseAssessmentItem & { result: AbuseAssessmentJudgment }
 ): Promise<AdminAiSuggestionItem> {
-  const probability = assessment.confidence ?? 0;
+  // The proposed result's own probability, as the Detections panel shows it; confidence is a spread.
+  const probability =
+    assessment.probabilities.find(entry => entry.value === assessment.result)?.probability ??
+    assessment.confidence ??
+    0;
   return adminAiSuggestionRepository.createPending({
     feature: SURFACE_FEATURE[surface],
     entityType: surface,
     entityId,
-    inputHash: `${surface}:${assessment.id}`,
+    inputHash: suggestionInputHash(surface, assessment.id),
     policyVersion: String(assessment.policyVersion),
     model: assessment.model,
     verdict: assessment.result,
@@ -97,7 +104,8 @@ async function suggestionFor(
 /**
  * Records a Detections grade taken from the detection's assessment: accepted when the grade is the
  * one the assessment proposed, else overridden with the admin's reason. Returns the suggestion id
- * for the audit entry. A suggestion that was already decided keeps its first decision.
+ * for the audit entry, or undefined when the suggestion was already decided (a regrade): the first
+ * decision stands and the regrade is not linked to it.
  */
 export async function recordDetectionAssessmentDecision(input: {
   detectionId: string;
@@ -105,35 +113,68 @@ export async function recordDetectionAssessmentDecision(input: {
   aiDecision: AssessmentAiDecision;
   fallbackReason: string;
   decidedBy: AdminDecider;
-}): Promise<string> {
+}): Promise<string | undefined> {
   const assessment = await loadJudgedAssessment(input.aiDecision.assessmentId);
   if (assessment.detectionId !== input.detectionId) throw new BadRequestError('Assessment is for another detection');
   const suggestion = await suggestionFor('shadowDetection', input.detectionId, assessment);
   const accepted = ASSESSMENT_PROPOSED_VERDICT[assessment.result] === input.verdict;
-  await recordAiDecision(suggestion.id, accepted ? 'accepted' : 'overridden', {
+  const decided = await recordAiDecision(suggestion.id, accepted ? 'accepted' : 'overridden', {
     decidedBy: input.decidedBy,
     overrideAction: accepted ? null : { verdict: input.verdict },
     overrideReason: accepted ? null : overrideReasonText(input.aiDecision.overrideReason ?? input.fallbackReason),
     overrideCostly: false,
   });
-  return suggestion.id;
+  return decided?.id;
 }
 
 /**
  * The suggestion row for an abuse assessment shown on a user queue, after checking the assessment
  * judged a detection naming that user. Only an abuse judgment is a suggestion there: a model's
- * "legitimate" never proposes approving or paying an account.
+ * "legitimate" never proposes approving or paying an account. A suggestion already decided on this
+ * queue is a 409, checked before the caller acts, so a later action never silently loses its record.
  */
 export async function userAssessmentSuggestion(
   surface: UserSurface,
   userId: string,
   assessmentId: string
 ): Promise<AdminAiSuggestionItem> {
+  const accountId = userId.toLowerCase();
   const assessment = await loadJudgedAssessment(assessmentId);
   if (assessment.result !== 'abuse') throw new BadRequestError('Only an abuse assessment can be decided here');
   const detection = await shadowDetectionRepository.findById(assessment.detectionId);
-  if (!detection?.userIds.includes(userId)) throw new BadRequestError('Assessment does not name this account');
-  return suggestionFor(surface, userId, assessment);
+  if (!detection?.userIds.includes(accountId)) throw new BadRequestError('Assessment does not name this account');
+  const suggestion = await suggestionFor(surface, accountId, assessment);
+  if (suggestion.status !== 'pending') throw new ConflictError('This suggestion was already reviewed');
+  return suggestion;
+}
+
+/**
+ * Adds this queue's decision on each advisory's suggestion (null while undecided), so the queue stops
+ * offering accept and override once decided. Keyed per queue like the suggestion rows themselves.
+ */
+export async function withSuggestionDecisions<T extends { assessmentId: string }>(
+  surface: UserSurface,
+  advisories: Map<string, T>
+): Promise<Map<string, T & { decision: 'accepted' | 'overridden' | null }>> {
+  const keys = [...advisories].map(([userId, advisory]) => ({
+    entityId: userId,
+    inputHash: suggestionInputHash(surface, advisory.assessmentId),
+  }));
+  const rows = await adminAiSuggestionRepository.findForEntities(SURFACE_FEATURE[surface], keys);
+  const decisions = new Map(
+    rows
+      .filter(row => row.entityType === surface && (row.status === 'accepted' || row.status === 'overridden'))
+      .map(row => [`${row.entityId}|${row.inputHash}`, row.status as 'accepted' | 'overridden'])
+  );
+  return new Map(
+    [...advisories].map(([userId, advisory]) => [
+      userId,
+      {
+        ...advisory,
+        decision: decisions.get(`${userId}|${suggestionInputHash(surface, advisory.assessmentId)}`) ?? null,
+      },
+    ])
+  );
 }
 
 /** Records an admin acting against a user-queue abuse assessment (approving or releasing anyway). */

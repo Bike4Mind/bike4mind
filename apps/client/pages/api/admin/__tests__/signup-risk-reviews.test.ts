@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   settings: vi.fn(),
   release: vi.fn(),
   advisories: vi.fn(),
+  decisions: vi.fn(),
   warn: vi.fn(),
   aiSuggestion: vi.fn(),
   aiOverride: vi.fn(),
@@ -98,6 +99,7 @@ vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRisk
 vi.mock('@server/admin/ai/assessmentSuggestion', () => ({
   userAssessmentSuggestion: h.aiSuggestion,
   recordUserAssessmentOverride: h.aiOverride,
+  withSuggestionDecisions: h.decisions,
 }));
 import '@pages/api/admin/signup-risk-reviews';
 
@@ -136,6 +138,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 
 beforeEach(() => {
   h.advisories.mockResolvedValue(new Map());
+  h.decisions.mockImplementation(async (_surface: string, found: Map<string, object>) => found);
   h.warn.mockReset();
   h.findPending.mockReset().mockResolvedValue([]);
   h.findAutoApprovals.mockReset().mockResolvedValue([]);
@@ -314,11 +317,16 @@ describe('signup risk review queue', () => {
         ],
       ])
     );
+    h.decisions.mockImplementation(
+      async (_surface: string, found: Map<string, object>) =>
+        new Map([...found].map(([userId, advisory]) => [userId, { ...advisory, decision: 'accepted' }]))
+    );
     const { req, res } = request('GET');
 
     await h.handlers.get(req, res);
 
     expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B], expect.objectContaining({ warn: h.warn }));
+    expect(h.decisions).toHaveBeenCalledWith('signupRiskReview', expect.any(Map));
     const body = res._getJSONData();
     expect(body.data[0].advisory).toEqual({
       assessmentId: 'a1',
@@ -329,6 +337,7 @@ describe('signup risk review queue', () => {
       assessedAt: assessedAt.toISOString(),
       otherVerdicts: 2,
       newerVerdicts: 1,
+      decision: 'accepted',
     });
     expect(body.data[1].advisory).toBeNull();
   });

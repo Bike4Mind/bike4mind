@@ -262,6 +262,43 @@ describe('HeldSignupGrantsTab', () => {
       await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
       expect(postMock.mock.calls[0][1]).toEqual({ userIds: [abuseRow.id], reason: 'Goodwill grant' });
     });
+
+    it.each(['accepted', 'overridden'] as const)(
+      'offers no accept or override once the assessment is %s',
+      async decision => {
+        const decided = { ...abuseRow, advisory: advisory({ decision }) };
+        getMock.mockResolvedValue({ data: { data: [decided], nextCursor: null } });
+        renderTab();
+        expect(await screen.findByTestId(`held-signup-grants-decision-${decided.id}`)).toHaveTextContent(
+          decision === 'accepted' ? 'Accepted' : 'Overridden'
+        );
+        expect(screen.queryByTestId(`held-signup-grants-ai-${decided.id}`)).toBeNull();
+        expect(screen.queryByTestId(`held-signup-grants-actions-${decided.id}`)).toBeNull();
+        fireEvent.keyDown(screen.getByTestId(`held-signup-grants-select-${decided.id}`), { key: 'a' });
+        expect(postMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it('hides the AI assessment column when no row has an advisory', async () => {
+      getMock.mockResolvedValue({ data: { data: rows, nextCursor: null } });
+      renderTab();
+      await screen.findByTestId(`held-signup-grants-select-${rows[0].id}`);
+      expect(screen.queryByText('AI assessment')).toBeNull();
+    });
+
+    it('keeps the multi-row selection when an override release succeeds', async () => {
+      postMock.mockResolvedValue({
+        data: { batchId: 'batch-1', results: [{ userId: abuseRow.id, outcome: 'released', credits: 5 }] },
+      });
+      renderTab();
+      fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${bareRow.id}`));
+      fireEvent.click(screen.getByTestId(`held-signup-grants-select-${legitRow.id}`));
+      fireEvent.click(screen.getByTestId(`held-signup-grants-actions-${abuseRow.id}`));
+      fireEvent.click(await screen.findByTestId(`held-signup-grants-override-assessment-${abuseRow.id}`));
+      await confirmRelease();
+      await waitFor(() => expect(screen.getByTestId('held-signup-grants-release-result')).toBeInTheDocument());
+      expect(screen.getByTestId('held-signup-grants-release-btn')).toHaveTextContent('Release selected (2)');
+    });
   });
 
   it('does not release until the dialog is confirmed with a reason', async () => {

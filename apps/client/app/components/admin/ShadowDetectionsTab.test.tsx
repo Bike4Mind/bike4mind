@@ -156,13 +156,14 @@ describe('ShadowDetectionsTab', () => {
   });
 
   describe('AI advisory suggestion', () => {
-    const advise = (detectionId = DETECTION_ID) => {
+    const advise = (detectionId = DETECTION_ID, assessmentId: string | null = 'assessment-1') => {
       m.advisory = {
         data: {
           advisories: [
             {
               userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
               detectionId,
+              ...(assessmentId ? { assessmentId } : {}),
               detector: 'signupNetworkBurst',
               abuseProbability: 0.9,
               assessedAt: '2026-10-30T11:00:00.000Z',
@@ -296,6 +297,29 @@ describe('ShadowDetectionsTab', () => {
           expect.objectContaining({ aiDecision: { assessmentId: 'assessment-1' } })
         )
       );
+    });
+
+    it('names the advisory assessment for a row-shortcut accept before the assessments load', async () => {
+      advise();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ aiDecision: { assessmentId: 'assessment-1' } })
+        )
+      );
+    });
+
+    it('opens the plain dialog, without an AI accept, when the advisory has no assessment id', async () => {
+      advise(DETECTION_ID, null);
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      expect(m.mutateAsync).not.toHaveBeenCalled();
     });
 
     it('sends no aiDecision when there is no assessment', async () => {

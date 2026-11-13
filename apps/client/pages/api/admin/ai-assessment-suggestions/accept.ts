@@ -1,8 +1,13 @@
-import { ApiKeyScope, assessmentSuggestionAcceptSchema } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { ApiKeyScope, assertCanActOnAdminTarget, assessmentSuggestionAcceptSchema } from '@bike4mind/common';
+import { userRepository, withTransaction } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, ConflictError } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { recordAiDecision, withAiSuggestionId } from '@server/admin/ai/audit';
@@ -15,6 +20,12 @@ const ACCEPT_RATE_LIMIT = 60;
 const SURFACE_PERMISSION = {
   signupRiskReview: 'users:moderate',
   heldSignupGrant: 'credits:adjust',
+} as const;
+
+/** The denial each queue's own endpoint records when an admin acts on their own account. */
+const SURFACE_SELF_DENIAL = {
+  signupRiskReview: { action: 'user.signup_risk.denied', target: 'review the signup of' },
+  heldSignupGrant: { action: 'user.credits.denied', target: 'release signup credits for' },
 } as const;
 
 const SURFACE_LABEL = {
@@ -37,10 +48,21 @@ const handler = adminApi({
     asyncHandler(async (req, res) => {
       const parsed = assessmentSuggestionAcceptSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a queue, a user id and an assessment id');
-      const { surface, userId, assessmentId } = parsed.data;
+      const { surface, assessmentId } = parsed.data;
+      const userId = parsed.data.userId.toLowerCase();
       requireAdminPermission(req, SURFACE_PERMISSION[surface]);
+      // Same guards as the queue's own actions: no deciding on your own account or a peer admin's.
+      if (isSelfOrImpersonator(req.user, userId)) {
+        await denySelfAdminAction(req, {
+          action: SURFACE_SELF_DENIAL[surface].action,
+          attempted: 'security.ai_assessment.accepted',
+          target: await userAuditTarget(userId),
+        });
+      }
+      for (const account of await userRepository.findAdminTargetsByIds([userId]))
+        assertCanActOnAdminTarget(req.user, account, SURFACE_SELF_DENIAL[surface].target);
 
-      const suggestion = await userAssessmentSuggestion(surface, userId.toLowerCase(), assessmentId);
+      const suggestion = await userAssessmentSuggestion(surface, userId, assessmentId);
       // The strict audit entry rides in the same transaction, so an unrecorded accept rolls back.
       await withTransaction(async () => {
         const decided = await recordAiDecision(suggestion.id, 'accepted', {

@@ -32,6 +32,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({ signupGrantReleaseRepository: { listHeld } }));
 const advisories = vi.hoisted(() => vi.fn());
 vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: advisories }));
+const decisions = vi.hoisted(() => vi.fn());
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({ withSuggestionDecisions: decisions }));
 import '@pages/api/admin/held-signup-grants';
 
 const run = async (query: Record<string, string>, isAdmin = true, user: Record<string, unknown> = {}) => {
@@ -50,6 +52,12 @@ const row = (id: string) => ({ id, email: `${id}@example.test`, reason: 'budget_
 beforeEach(() => {
   listHeld.mockReset().mockResolvedValue([]);
   advisories.mockReset().mockResolvedValue(new Map());
+  decisions
+    .mockReset()
+    .mockImplementation(
+      async (_surface: string, found: Map<string, object>) =>
+        new Map([...found].map(([userId, advisory]) => [userId, { ...advisory, decision: null }]))
+    );
 });
 
 describe('GET /api/admin/held-signup-grants', () => {
@@ -92,7 +100,18 @@ describe('GET /api/admin/held-signup-grants', () => {
     const body = (await run({}))._getJSONData();
 
     expect(advisories).toHaveBeenCalledWith([named, other], expect.anything());
-    expect(body.data.map((r: { advisory: unknown }) => r.advisory)).toEqual([advisory, null]);
+    expect(decisions).toHaveBeenCalledWith('heldSignupGrant', expect.any(Map));
+    expect(body.data.map((r: { advisory: unknown }) => r.advisory)).toEqual([{ ...advisory, decision: null }, null]);
+  });
+  it('still lists the held grants when the decision lookup fails', async () => {
+    listHeld.mockResolvedValue([row('a'.repeat(24))]);
+    advisories.mockResolvedValue(new Map([['a'.repeat(24), { assessmentId: 'x1' }]]));
+    decisions.mockRejectedValue(new Error('read failed'));
+
+    const res = await run({});
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData().data[0].advisory).toBeNull();
   });
   it('still lists the held grants when the advisory read fails', async () => {
     listHeld.mockResolvedValue([row('a'.repeat(24))]);

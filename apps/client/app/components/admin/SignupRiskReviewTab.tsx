@@ -31,7 +31,7 @@ import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
-import { SignupAdvisoryCell, advisoryTooltip } from './SignupAdvisoryCell';
+import { SignupAdvisoryCell, isAssessmentOpen } from './SignupAdvisoryCell';
 import {
   useSignupRiskReviewDecision,
   useSignupRiskReviews,
@@ -40,8 +40,6 @@ import {
 import { useAcceptAssessmentSuggestion } from '@client/app/hooks/data/aiAssessmentSuggestions';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toast } from 'sonner';
-
-export { advisoryTooltip };
 
 export const SIGNAL_LABELS: Record<SignupRiskSignal, string> = {
   riskyDomain: 'Risky domain',
@@ -213,7 +211,7 @@ export const SignupRiskReviewTab: React.FC = () => {
   const moderateMissing = useMissingAdminPermission('users:moderate');
 
   const acceptAssessment = (row: SignupRiskReviewRow) => {
-    if (row.advisory?.result !== 'abuse') return;
+    if (!isAssessmentOpen(row.advisory)) return;
     acceptSuggestion.mutate(
       { surface: 'signupRiskReview', userId: row.userId, assessmentId: row.advisory.assessmentId },
       {
@@ -223,14 +221,14 @@ export const SignupRiskReviewTab: React.FC = () => {
     );
   };
   const overrideAssessment = (row: SignupRiskReviewRow) => {
-    if (row.advisory?.result !== 'abuse') return;
+    if (!isAssessmentOpen(row.advisory)) return;
     decision.reset();
     setOverriddenAssessmentId(row.advisory.assessmentId);
     setApproving([row]);
   };
   // Only an abuse verdict can be accepted or overridden; accepting records agreement and changes no account.
   const decisions = (row: SignupRiskReviewRow): RowDecisions =>
-    row.advisory?.result === 'abuse' && !moderateMissing
+    isAssessmentOpen(row.advisory) && !moderateMissing
       ? {
           a: () => acceptAssessment(row),
           ...(approveMissing ? {} : { o: () => overrideAssessment(row) }),
@@ -344,7 +342,7 @@ export const SignupRiskReviewTab: React.FC = () => {
             >
               Approve account
             </MenuItem>
-            {row.advisory?.result === 'abuse' && (
+            {isAssessmentOpen(row.advisory) && (
               <MenuItem
                 data-testid={`signup-risk-accept-assessment-${row.userId}`}
                 disabled={acceptSuggestion.isPending}
@@ -353,7 +351,7 @@ export const SignupRiskReviewTab: React.FC = () => {
                 Accept AI assessment
               </MenuItem>
             )}
-            {row.advisory?.result === 'abuse' && (
+            {isAssessmentOpen(row.advisory) && (
               <MenuItem
                 disabled={!!approveMissing}
                 title={approveMissing ?? undefined}

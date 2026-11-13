@@ -34,7 +34,11 @@ import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
 import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
 import { withAiSuggestionId } from '@server/admin/ai/audit';
-import { recordUserAssessmentOverride, userAssessmentSuggestion } from '@server/admin/ai/assessmentSuggestion';
+import {
+  recordUserAssessmentOverride,
+  userAssessmentSuggestion,
+  withSuggestionDecisions,
+} from '@server/admin/ai/assessmentSuggestion';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -104,10 +108,12 @@ const handler = adminApi({
         userApiKeyRepository.countCreatedByUserIds(ids),
         getSettingsMap({ adminSettings: adminSettingsRepository }),
         // Advisory only: a missing verdict must not fail the queue.
-        findRiskReviewAdvisories(ids, req.logger).catch(error => {
-          req.logger.warn('Signup risk review advisories unavailable', { error });
-          return new Map<string, SignupRiskReviewAdvisory>();
-        }),
+        findRiskReviewAdvisories(ids, req.logger)
+          .then(found => withSuggestionDecisions('signupRiskReview', found))
+          .catch(error => {
+            req.logger.warn('Signup risk review advisories unavailable', { error });
+            return new Map<string, SignupRiskReviewAdvisory>();
+          }),
       ]);
       const { reviewThreshold } = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
       const data = listed.flatMap((user): SignupRiskReviewItem[] =>
@@ -166,11 +172,6 @@ const handler = adminApi({
       if (aiDecision && (parsed.data.action !== 'approve' || userIds.length !== 1)) {
         throw new BadRequestError('An AI suggestion decision applies to approving one account');
       }
-      // Validated before anything moves: an assessment that does not name the account is a 400.
-      const aiSuggestion = aiDecision
-        ? await userAssessmentSuggestion('signupRiskReview', userIds[0], aiDecision.assessmentId)
-        : null;
-
       const self = userIds.find(userId => isSelfOrImpersonator(req.user, userId));
       if (self) {
         await denySelfAdminAction(req, {
@@ -185,6 +186,11 @@ const handler = adminApi({
           assertCanActOnAdminTarget(req.user, target, 'review the signup of');
         }
       }
+      // Checked before anything moves: an assessment that does not name the account is a 400, an
+      // already decided suggestion a 409.
+      const aiSuggestion = aiDecision
+        ? await userAssessmentSuggestion('signupRiskReview', userIds[0], aiDecision.assessmentId)
+        : null;
 
       const updatedUserIds: string[] = [];
       const skippedUserIds: string[] = [];

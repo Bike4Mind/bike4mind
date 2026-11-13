@@ -44,9 +44,13 @@ type Props = {
   onOverride?: () => void;
 };
 
+/** An abuse verdict this queue has not yet decided: the only state that offers accept or override. */
+export const isAssessmentOpen = (advisory: SignupAdvisory | null | undefined): advisory is SignupAdvisory =>
+  advisory?.result === 'abuse' && !advisory.decision;
+
 /**
  * The model's advisory verdict on a user queue row. An abuse verdict is an AI suggestion the admin
- * can accept or override; any other verdict stays a neutral chip with no accept, so a model's
+ * can accept or override; a decided one shows its outcome; any other verdict stays a neutral chip with no accept, so a model's
  * "legitimate" never reads as a reason to approve.
  */
 export const SignupAdvisoryCell: React.FC<Props> = ({
@@ -59,7 +63,7 @@ export const SignupAdvisoryCell: React.FC<Props> = ({
   onOverride,
 }) => {
   if (!advisory) return null;
-  if (advisory.result === 'abuse') {
+  if (advisory.result === 'abuse' && !advisory.decision) {
     return (
       <AiSuggestion
         variant="row"
@@ -80,6 +84,13 @@ export const SignupAdvisoryCell: React.FC<Props> = ({
     <Tooltip title={advisoryTooltip(advisory, now)}>
       <span tabIndex={0} data-testid={`${testIdPrefix}-advisory-${userId}`}>
         <StatusChip tone={display.tone} label={display.label} />
+        {advisory.decision && (
+          <StatusChip
+            tone="neutral"
+            label={advisory.decision === 'accepted' ? 'Accepted' : 'Overridden'}
+            data-testid={`${testIdPrefix}-decision-${userId}`}
+          />
+        )}
       </span>
     </Tooltip>
   );
