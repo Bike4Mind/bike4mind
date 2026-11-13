@@ -22,7 +22,7 @@ vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   },
 }));
 
-import { reflectLoopRun } from './agentExecutor.loopReflection';
+import { LOOP_REFLECT_TIMEOUT_MS, reflectLoopRun } from './agentExecutor.loopReflection';
 
 const logger = { info: vi.fn(), warn: vi.fn() } as unknown as Parameters<typeof reflectLoopRun>[1];
 const complete = vi.fn();
@@ -96,6 +96,8 @@ describe('reflectLoopRun', () => {
     ['subagent', { parentExecutionId: 'parent' }],
     ['aborted', { abortedAt: new Date() }],
     ['budget-stopped', { failureReason: 'credit_cap' }],
+    ['spend-capped', { failureReason: 'spend_cap' }],
+    ['out-of-credits', { failureReason: 'insufficient_credits' }],
     ['not a loop run', { loopId: undefined }],
     ['capped below the hold', { creditCap: 5.5, totalCreditsUsed: 5 }],
   ])('makes no call for a %s run', async (_label, patch) => {
@@ -138,16 +140,68 @@ describe('reflectLoopRun', () => {
     expect(failures).toHaveLength(2);
   });
 
-  it('still adds the credits of a billed attempt when the call then fails', async () => {
-    complete
-      .mockImplementationOnce(async (_m, _msgs, _o, callback) => {
-        await callback(['not json'], { inputTokens: 10, outputTokens: 10 });
-      })
-      .mockImplementationOnce(async () => {
-        throw new Error('timeout');
-      });
+  it('still adds the credits of a billed attempt when the call then fails, without a retry', async () => {
+    complete.mockImplementationOnce(async (_m, _msgs, _o, callback) => {
+      await callback(['not json'], { inputTokens: 10, outputTokens: 10 });
+    });
     await reflectLoopRun(completedRun, logger);
+    expect(complete).toHaveBeenCalledTimes(1);
     expect(db.agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledWith('run1', 2);
     expect(db.agentExecutionRepository.setLoopReflection).not.toHaveBeenCalled();
+  });
+
+  it('adds the credits of a timed-out call that settles after the reflection gave up', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let finish!: () => void;
+      complete.mockImplementationOnce(
+        (_m, _msgs, _o, callback) =>
+          new Promise<void>(resolve => {
+            finish = () => void callback(['{}'], { inputTokens: 10, outputTokens: 10 }).then(() => resolve());
+          })
+      );
+      const running = reflectLoopRun(completedRun, logger);
+      await vi.advanceTimersByTimeAsync(LOOP_REFLECT_TIMEOUT_MS);
+      await running;
+      expect(db.agentExecutionRepository.incrementCreditsUsed).not.toHaveBeenCalled();
+      finish();
+      await vi.waitFor(() => expect(db.agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledWith('run1', 2));
+      expect(db.agentExecutionRepository.setLoopReflection).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bills but does not store a malformed (placeholder) reply', async () => {
+    reply({ reflection: '', nextIntendedAction: 'retry' });
+    await reflectLoopRun(completedRun, logger);
+    expect(db.agentExecutionRepository.setLoopReflection).not.toHaveBeenCalled();
+    expect(db.agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledWith('run1', 2);
+  });
+
+  it('labels a tool step an error only from its toolFailed flag', async () => {
+    await reflectLoopRun(
+      {
+        ...completedRun,
+        steps: [
+          { type: 'observation', content: 'Error: none found', metadata: { toolName: 'grep', timestamp: 1 } },
+          {
+            type: 'observation',
+            content: 'boom',
+            metadata: { toolName: 'flaky', timestamp: 2, toolFailed: true } as IAgentStep['metadata'],
+          },
+        ],
+      },
+      logger
+    );
+    const prompt = complete.mock.calls[0][1].at(-1).content as string;
+    expect(prompt).toContain('- "grep": ok');
+    expect(prompt).toContain('- "flaky": error');
+  });
+
+  it('makes no call when the loop is gone', async () => {
+    db.loopRepository.findById.mockResolvedValue(null);
+    await reflectLoopRun(completedRun, logger);
+    expect(complete).not.toHaveBeenCalled();
   });
 });

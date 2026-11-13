@@ -7,22 +7,25 @@ import type { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 
 // `.catch` placeholders keep a reflection from failing on a malformed field
 // (Mongo requires non-empty strings).
+export const NO_REFLECTION = '(no reflection produced)';
+export const NO_NEXT_ACTION = '(next action undecided)';
 export const ReflectCoreOutputSchema = z.object({
-  reflection: z.string().min(1).catch('(no reflection produced)'),
-  nextIntendedAction: z.string().min(1).catch('(next action undecided)'),
+  reflection: z.string().min(1).catch(NO_REFLECTION),
+  nextIntendedAction: z.string().min(1).catch(NO_NEXT_ACTION),
 });
 
 export async function completeReflection<T>(
   llm: SmallLLMService,
   prompt: string,
   schema: ZodSchema<T>,
-  { timeoutMs, maxTokens }: { timeoutMs: number; maxTokens: number }
+  { timeoutMs, maxTokens, retries }: { timeoutMs: number; maxTokens: number; retries?: number }
 ): Promise<T> {
   const { data } = await llm.completeJSON(prompt, schema, {
     taskType: 'extraction',
     temperature: 0,
     timeoutMs,
     maxTokens,
+    ...(retries !== undefined && { retries }),
   });
   return data;
 }

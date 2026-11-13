@@ -11,11 +11,16 @@ import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/service
 import { createSmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { completionCeilingUsd, createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { completeReflection, ReflectCoreOutputSchema } from '@bike4mind/server-utils/reflection/reflectCore';
+import {
+  completeReflection,
+  NO_NEXT_ACTION,
+  NO_REFLECTION,
+  ReflectCoreOutputSchema,
+} from '@bike4mind/server-utils/reflection/reflectCore';
 import type { Logger } from '@bike4mind/observability';
 
-/** Per attempt (ms); SmallLLMService retries a bad parse once, so a reflection holds the run at most twice this. */
-export const LOOP_REFLECT_TIMEOUT_MS = 10_000;
+/** How long a reflection may hold the run (ms); one attempt, no retry, so the hold check prices the whole call. */
+export const LOOP_REFLECT_TIMEOUT_MS = 15_000;
 
 export interface LoopReflectRun {
   executionId: string;
@@ -33,8 +38,7 @@ export interface LoopReflectRun {
 function toolSteps(steps: IAgentStep[]): { tool: string; ok: boolean }[] {
   return steps.flatMap(step => {
     if (step.type !== 'observation' || !step.metadata?.toolName) return [];
-    const failed = (step.metadata as { toolFailed?: boolean }).toolFailed || step.content.startsWith('Error:');
-    return [{ tool: step.metadata.toolName, ok: !failed }];
+    return [{ tool: step.metadata.toolName, ok: !(step.metadata as { toolFailed?: boolean }).toolFailed }];
   });
 }
 
@@ -93,8 +97,10 @@ export async function reflectLoopRun(run: LoopReflectRun, logger: Logger): Promi
     const user = await User.findById(execution.userId);
     if (!user) return;
 
-    // meterCompletionBackend drops what settle charged; sum it so the run's total matches the ledger.
+    // meterCompletionBackend drops what settle charged; sum it so the run's total matches the ledger. A timed-out
+    // call is not cancelled and can settle after the reflection is written, so a late settle adds its own credits.
     let charged = 0;
+    let written = false;
     const base = createCompletionMeter(user as IUserDocument, logger, 'loop reflection', {
       organizationId: execution.organizationId,
       sessionId: execution.sessionId,
@@ -106,7 +112,12 @@ export async function reflectLoopRun(run: LoopReflectRun, logger: Logger): Promi
         refund: () => metered.refund(),
         settle: async usage => {
           const credits = await metered.settle(usage);
-          charged += credits;
+          if (!written) charged += credits;
+          else if (credits > 0) {
+            await agentExecutionRepository
+              .incrementCreditsUsed(executionId, credits)
+              .catch(error => logger.warn('[Loops] Could not add a late reflection charge', { executionId, error }));
+          }
           return credits;
         },
       };
@@ -118,11 +129,19 @@ export async function reflectLoopRun(run: LoopReflectRun, logger: Logger): Promi
       data = await completeReflection(small, prompt, ReflectCoreOutputSchema, {
         timeoutMs: LOOP_REFLECT_TIMEOUT_MS,
         maxTokens: LOOP_REFLECT_MAX_TOKENS,
+        retries: 0,
       });
     } catch (error) {
-      // A throw after a settled attempt (a retry that timed out) was still billed.
+      written = true;
       if (charged > 0) await agentExecutionRepository.incrementCreditsUsed(executionId, charged);
       throw error;
+    }
+    written = true;
+    // A placeholder is a malformed reply: bill it, but keep it out of the drawer and the next prompts.
+    if (data.reflection === NO_REFLECTION || data.nextIntendedAction === NO_NEXT_ACTION) {
+      if (charged > 0) await agentExecutionRepository.incrementCreditsUsed(executionId, charged);
+      logger.warn('[Loops] Reflection reply was malformed; not stored', { executionId });
+      return;
     }
     await agentExecutionRepository.setLoopReflection(executionId, {
       ...capLoopReflection(data),
