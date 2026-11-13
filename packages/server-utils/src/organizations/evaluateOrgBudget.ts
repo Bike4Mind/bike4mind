@@ -35,8 +35,11 @@ async function loadSettings(organizationId: string, now: number): Promise<IOrgBu
   return alerts;
 }
 
+const attemptKey = (input: Pick<DispatchOrgAlertInput, 'organizationId' | 'kind' | 'scope'> & { periodKey: string }) =>
+  `${input.organizationId}|${input.kind}|${input.scope}|${input.periodKey}`;
+
 async function dispatchOnce(input: DispatchOrgAlertInput & { periodKey: string }, now: number): Promise<void> {
-  const key = `${input.organizationId}|${input.kind}|${input.scope}|${input.periodKey}`;
+  const key = attemptKey(input);
   if ((recentAttempts.get(key) ?? 0) > now) return;
   recentAttempts.set(key, now + CACHE_TTL_MS);
   await dispatchOrgAlert(input);
@@ -76,6 +79,10 @@ export async function evaluateOrgBudget(
   const budget = alerts.monthlyBudgetCredits;
   const thresholds = Array.isArray(alerts.percentThresholds) ? alerts.percentThresholds : [];
   if (!budget || budget <= 0 || thresholds.length === 0) return;
+  const pending = thresholds.some(
+    pct => (recentAttempts.get(attemptKey({ ...base, kind: 'budget_threshold', scope: `pct:${pct}` })) ?? 0) <= nowMs
+  );
+  if (!pending) return;
 
   // Member rows only: usage by the org service account (org-owned API keys) is tracked per key, not here.
   const org = await Organization.findById(event.organizationId, { userDetails: 1 }).lean<{

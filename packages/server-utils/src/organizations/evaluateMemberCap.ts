@@ -39,11 +39,16 @@ export async function evaluateMemberCap(
     serviceAccountUserId: 1,
     userDetails: 1,
   }).lean<MemberCapOrg>();
-  if (!org || org.personal || org.serviceAccountUserId === event.userId) return;
-
-  const row = org.userDetails?.find(u => u.id === event.userId);
-  const cap = resolveMemberCreditCap(row, org.maxCreditsPerMember);
-  if (cap == null) return;
+  const row = org?.userDetails?.find(u => u.id === event.userId);
+  const cap =
+    org && !org.personal && org.serviceAccountUserId !== event.userId
+      ? resolveMemberCreditCap(row, org.maxCreditsPerMember)
+      : null;
+  // Uncapped is settings-only, so it is memoized too; under-cap is not, since usage moves every debit.
+  if (cap == null) {
+    recentChecks.set(memoKey, nowMs + RECHECK_TTL_MS);
+    return;
+  }
   const used = getPeriodUsedCredits(row, now);
   if (!event.refused && used < cap) return;
 

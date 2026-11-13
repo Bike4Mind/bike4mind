@@ -111,4 +111,25 @@ describe('evaluateMemberCap', () => {
 
     expect(await claims()).toHaveLength(0);
   });
+
+  it('skips the org read for an uncapped member within the recheck window', async () => {
+    await seed({ maxCreditsPerMember: null, userDetails: [member(1000)] });
+    const findById = vi.spyOn(Organization, 'findById');
+
+    await check();
+    await check();
+
+    expect(findById).toHaveBeenCalledOnce();
+    findById.mockRestore();
+  });
+
+  it('rechecks an under-cap member on the next debit', async () => {
+    await seed({ userDetails: [member(99)] });
+
+    await check();
+    await Organization.collection.updateOne({ _id: orgId }, { $set: { 'userDetails.0.usedCredits': 100 } });
+    await check();
+
+    expect(await claims()).toHaveLength(1);
+  });
 });

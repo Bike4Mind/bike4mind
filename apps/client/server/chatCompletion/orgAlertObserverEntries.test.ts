@@ -13,6 +13,9 @@ describe('org alert observer registration', () => {
     expect(source).toContain(
       "import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';"
     );
-    expect(source).toMatch(/^registerOrgAlertObserver\(\);$/m);
+    // Zero indent on purpose: a guarded or nested call would not register at module load.
+    expect(source, 'registerOrgAlertObserver() must be an unconditional top-level call').toMatch(
+      /^registerOrgAlertObserver\(\);$/m
+    );
   });
 });

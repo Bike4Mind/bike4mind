@@ -66,6 +66,17 @@ describe('evaluateOrgBudget', () => {
     expect(publish).toHaveBeenCalledOnce();
   });
 
+  it('skips the usage read once every threshold was attempted in the window', async () => {
+    await Organization.collection.updateOne({ _id: orgId }, { $set: { 'userDetails.0.usedCredits': 950 } });
+    await evaluate(2000);
+    expect(await claims({ kind: 'budget_threshold' })).toHaveLength(2);
+
+    const findById = vi.spyOn(Organization, 'findById');
+    await evaluate(1900);
+    expect(findById).not.toHaveBeenCalled();
+    findById.mockRestore();
+  });
+
   it('fires again in the next period', async () => {
     await evaluate(2000);
     await Organization.collection.updateOne(
