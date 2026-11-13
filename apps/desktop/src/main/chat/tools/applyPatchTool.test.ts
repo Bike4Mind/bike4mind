@@ -5,6 +5,7 @@ import type { ChatDiff } from '@shared/chat';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { fileRead } from './fileTools';
+import { fileEdit } from './writeTools';
 import { PathAccessDenied } from './paths';
 import type { ToolContext, ToolReporter } from './types';
 
@@ -411,6 +412,9 @@ describe('apply_patch', () => {
       expect(second?.key).not.toBe(first?.key);
       expect(second?.chatKey).toBe(first?.chatKey);
       expect(other?.chatKey).not.toBe(first?.chatKey);
+
+      const edit = await fileEdit.approval?.({ path: file('a.ts'), oldText: 'one', newText: '1' }, context);
+      expect(edit?.chatKey).toBe(first?.chatKey);
 
       expect((await ask('*** Delete File: a.ts'))?.chatKey).toBeUndefined();
       expect((await ask('*** Update File: a.ts', '*** Move to: c.ts', '@@', '-one', '+1'))?.chatKey).toBeUndefined();
