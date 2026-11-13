@@ -80,10 +80,6 @@ export class SecretRotationRepository
       }
     );
   }
-
-  async findActiveKeys() {
-    return this.secretRotationModel.find({ isActive: true });
-  }
 }
 
 SecretRotationSchema.plugin(softDeletePlugin);
