@@ -17,7 +17,13 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
-const handler = baseApi()
+// Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
+// The door admits legacy keys until the legacy window ends, since GET was open to every key before.
+// DELETE never grandfathers: it already required notebooks:write before the door existed.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   /**
    * Get all sessions
    */
@@ -61,11 +67,9 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler(async (req, res) => {
-      // Gated per verb, not at the door: GET above is the notebook list that notebooks:read and
-      // unscoped keys rely on, so a route-level requiredScopes would newly deny them.
       assertApiKeyScope(
         req,
-        [ApiKeyScope.WRITE_NOTEBOOKS],
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;

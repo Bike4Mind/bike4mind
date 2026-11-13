@@ -21,6 +21,7 @@ import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
 import OrgDomainJoinBanner from '@client/app/components/OrgDomainJoinBanner';
 import CommandPalette from '../components/CommandPalette';
+import StudioJobCompletedListener from '@client/app/components/Studio/completion/StudioJobCompletedListener';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
 
 interface ProviderBundleProps {
@@ -76,6 +77,8 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           </ModalErrorBoundary>
           <ReferralModal inviteType={ReferralInviteType.referral} />
           <ReferralRewardNotice />
+          {/* Under AdminSettingsProvider: its feature gate reads admin settings. */}
+          <StudioJobCompletedListener />
           <HelpModal />
           <PromptMetaInspector />
           <CreateTeamModal />

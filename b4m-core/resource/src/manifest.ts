@@ -156,6 +156,7 @@ export const DEFAULT_MANIFEST = {
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
   accountDataExportQueue: { kind: 'queue', optional: true },
+  accountErasureQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },

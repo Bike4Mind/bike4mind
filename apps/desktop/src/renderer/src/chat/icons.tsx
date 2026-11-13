@@ -60,6 +60,25 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** A pager step: back to the previous item, or on to the next. */
+export function PagerIcon({ direction }: { direction: 'previous' | 'next' }) {
+  return (
+    <Glyph>
+      <path d={direction === 'previous' ? 'M10 4L6 8l4 4' : 'M6 4l4 4-4 4'} />
+    </Glyph>
+  );
+}
+
+/** Following whatever needs attention: a ring around a dot. */
+export function FollowIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="5" />
+      <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+    </Glyph>
+  );
+}
+
 /** Sessions branching off another one: a stem turning into an arrow. */
 export function SubSessionsIcon({ size }: { size?: number } = {}) {
   return (

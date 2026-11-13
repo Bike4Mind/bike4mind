@@ -213,6 +213,29 @@ describe('getRequestActiveSubscriptions', () => {
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
   });
 
+  it('reads an org service account from its organization and marks the memo strict', async () => {
+    const serviceAccount = { id: 'svc', serviceAccountOrganizationId: 'org9' } as never;
+    const req: { user: never; activeSubscriptions?: ActiveSubscription[]; activeSubscriptionsStrict?: boolean } = {
+      user: serviceAccount,
+    };
+
+    await expect(getRequestActiveSubscriptions(req)).resolves.toEqual([seat]);
+
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org9']);
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+    expect(req.activeSubscriptionsStrict).toBe(true);
+    await getRequestActiveSubscriptions(req, { strict: true });
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks an ordinary user memo strict only when asked', async () => {
+    const req: { user: never; activeSubscriptionsStrict?: boolean } = { user };
+
+    await getRequestActiveSubscriptions(req);
+
+    expect(req.activeSubscriptionsStrict).toBe(false);
+  });
+
   it('returns [] without reading for an unauthenticated request', async () => {
     await expect(getRequestActiveSubscriptions({})).resolves.toEqual([]);
     expect(findActiveUserSubscriptions).not.toHaveBeenCalled();

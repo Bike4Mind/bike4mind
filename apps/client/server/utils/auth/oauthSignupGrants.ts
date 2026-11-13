@@ -8,6 +8,7 @@ const NO_GRANT: SignupDomainGrantResult = {
   tagsApplied: [],
   subscriptionCreditsGranted: 0,
   subscriptionGranted: false,
+  packageRefusal: null,
 };
 
 /**

@@ -8,9 +8,10 @@ import type { IUserDocument } from '@bike4mind/common';
 // fails the test rather than passing tautologically.
 const mockVerifyMFA = vi.fn();
 vi.mock('@bike4mind/auth/mfaService', async () => {
-  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt } =
+  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt, userHasTotpConfigured } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
+    userHasTotpConfigured,
     verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
     isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } } | null) => !!user?.mfa?.lockedUntil,
     getLockoutTimeRemaining: () => 0,
@@ -198,6 +199,24 @@ describe('adminService.loginAs - delegated users:impersonate', () => {
     const stale = { ...freshDelegate(), adminPermissions: [] } as unknown as IUserDocument;
     const { adapters } = makeAdapters(stale);
     await expect(run(delegateJwt, adapters)).rejects.toThrow('Missing permission: users:impersonate');
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminService.loginAs - factor gate', () => {
+  it('refuses a passkey-only admin: the code it verifies is an authenticator-app code', async () => {
+    vi.clearAllMocks();
+    const passkeyOnlyAdmin = {
+      id: 'admin1',
+      isAdmin: true,
+      mfa: { totpEnabled: false, passkeyEnabled: true },
+    } as unknown as IUserDocument;
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+
+    await expect(
+      loginAs(passkeyOnlyAdmin, { targetUserId: 'target1', mfaToken: '123456' }, adapters as never)
+    ).rejects.toThrow('An authenticator app must be enabled to use loginAs');
+    expect(mocks.findByIdWithMfaSecrets).not.toHaveBeenCalled();
     expect(mockVerifyMFA).not.toHaveBeenCalled();
   });
 });

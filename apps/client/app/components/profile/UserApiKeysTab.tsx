@@ -72,7 +72,6 @@ import {
 } from '@bike4mind/common';
 import {
   EXPLICIT_ONLY_API_KEY_SCOPES,
-  OPEN_TO_ANY_KEY_ENDPOINTS,
   type ApiKeyScopeOption,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
@@ -1337,9 +1336,6 @@ ai_response = response.json()`,
             <Typography level="body-sm" sx={{ mt: 0, color: 'text.primary' }}>
               Each API key can have different permissions (scopes). Make sure your key has the right scopes for the
               endpoints you want to access.
-            </Typography>
-            <Typography level="body-xs" data-testid="api-keys-scopes-open-endpoints" sx={{ color: 'text.secondary' }}>
-              Every key can also call {OPEN_TO_ANY_KEY_ENDPOINTS.join(', ')}, whatever its scopes.
             </Typography>
 
             <Stack spacing={2} className="project-api-keys-documentation-scope-list">

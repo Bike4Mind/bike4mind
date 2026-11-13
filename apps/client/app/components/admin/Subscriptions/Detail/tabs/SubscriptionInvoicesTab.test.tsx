@@ -23,6 +23,7 @@ const invoice = (overrides: Partial<AdminStripeInvoice>): AdminStripeInvoice => 
   attempts: 1,
   hostedInvoiceUrl: 'https://invoice.stripe.com/i/1',
   creditsGranted: 1500,
+  amountRefunded: 0,
   ...overrides,
 });
 

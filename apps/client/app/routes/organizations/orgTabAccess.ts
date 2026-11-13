@@ -11,6 +11,7 @@ import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
+  Library = 'library',
   Members = 'members',
   Groups = 'groups',
   Usage = 'usage',

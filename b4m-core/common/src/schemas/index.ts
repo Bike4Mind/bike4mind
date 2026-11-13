@@ -50,6 +50,7 @@ export * from './clientConfig';
 export * from './pushToken';
 export * from './personas';
 export * from './pushNotification';
+export * from './studioJobCompleted';
 export * from './liveActivityPush';
 export * from './creditBalance';
 export * from './creditTransaction';

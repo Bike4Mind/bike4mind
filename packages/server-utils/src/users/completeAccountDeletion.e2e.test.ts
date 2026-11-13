@@ -48,7 +48,7 @@ vi.mock('../services/hardDeleteUser', async () => {
     },
   };
 });
-import { completeAccountDeletion } from './completeAccountDeletion';
+import { completeAccountDeletion, type ErasureRegistry } from './completeAccountDeletion';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let database: MongoMemoryReplSet;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -76,7 +76,11 @@ async function seedUser() {
   });
   return String(id);
 }
-const complete = (userId: string) => completeAccountDeletion(userId, { logger: logger as never, now });
+const erasureRegistry: ErasureRegistry = {
+  scope: async () => [],
+  audit: async () => ({ remaining: [], unclassified: [] }),
+};
+const complete = (userId: string) => completeAccountDeletion(userId, { logger: logger as never, now, erasureRegistry });
 describe('account deletion purge claims with Mongo', () => {
   it.each(['first', 'retry'] as const)('waits for an active export lease on the %s purge claim', async phase => {
     const userId = await seedUser();
@@ -89,7 +93,7 @@ describe('account deletion purge claims with Mongo', () => {
         },
       }
     );
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).not.toHaveBeenCalled();
     expect(h.purgeContent).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
@@ -270,7 +274,7 @@ describe('account deletion purge claims with Mongo', () => {
     });
     const first = complete(userId);
     await claimed;
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).toHaveBeenCalledTimes(1);
     unblock?.();
     await expect(first).resolves.toEqual({ deleted: true });
