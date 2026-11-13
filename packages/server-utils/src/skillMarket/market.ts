@@ -149,7 +149,7 @@ export function canSeeListing(
 
 /**
  * Who may approve/reject/delist/audit a listing. Public and unlisted: super-admins, but never on
- * their own Public listing. Organization: the org's owner or manager (the `verifyOrgPermission (manageContent)`
+ * their own Public listing. Organization: the org's owner or manager (the `manageContent`
  * predicate, i.e. `findIdsAdministeredBy`), self-approval allowed, or a super-admin.
  */
 export function canReviewListing(listing: ISkillListing, actor: MarketActor, adminOrgIds: string[]): boolean {
