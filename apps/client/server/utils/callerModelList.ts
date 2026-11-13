@@ -9,15 +9,23 @@ import {
   loadFreeTierAllowedModels,
   loadModelConfigurations,
 } from '@bike4mind/services/llm/modelAdmission';
-import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
+import {
+  apiKeyRepository,
+  adminSettingsRepository,
+  cacheRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   getImageModelCapabilities,
   isImageModel,
+  isModelAllowedByOrgPolicy,
   isModelDeprecated,
   MODEL_LIST_REVISION_CACHE_KEY,
   modelListRevisionOf,
   PAID_PLAN_ENTITLEMENT_KEY,
+  readOrgModelPolicy,
+  type ReadOrgModelPolicy,
   type IUserDocument,
   type ModelAccessLock,
   type ModelInfo,
@@ -45,10 +53,19 @@ type CatalogModelList = {
   catalogUnavailable: boolean;
 };
 
-/** `lockedModels`: paid-only models a free account sees but cannot select (see ModelInfo.access). */
+/**
+ * `lockedModels`: models the caller sees but cannot select (see ModelInfo.access): paid-only ones on a free
+ * account, and ones the organization's model policy does not allow.
+ */
 export type CallerModelList = CatalogModelList & { lockedModels: ModelInfo[] };
 
 const PAID_PLAN_LOCK: ModelAccessLock = { locked: true, reason: 'requires_paid_plan' };
+const ORG_POLICY_LOCK: ModelAccessLock = { locked: true, reason: 'org_policy' };
+
+export type CallerModelListOptions = {
+  /** The org whose model policy applies; validated by the caller (membership or org-billed key). */
+  organizationId?: string | null;
+};
 
 // Short floor for cross-tab / fresh page loads. The dominant repeat-open case is
 // already absorbed by useModelInfo's 1h client staleTime; this just bounds how
@@ -150,11 +167,27 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
 }
 
 /**
- * The model for a request that names none. A free account whose default is paid-only (not listed, and not a text
+ * The model for a request that names none. Under an org model policy, a default the org does not allow gives
+ * way to the first allowed text model the caller can use. A free account whose default is paid-only (not listed, and not a text
  * model while text models are open) starts on the first allowlisted text model, in admin order, that admission
  * accepts. Read failures propagate, as they do at call time.
  */
 export async function resolveCallerDefaultModel(
+  defaultModel: string,
+  user: IUserDocument,
+  logger: { log: (message: string) => void },
+  opts: CallerModelListOptions = {}
+): Promise<string> {
+  const freeTierDefault = await resolveFreeTierDefaultModel(defaultModel, user, logger);
+  const policy = await loadOrgModelPolicy(opts.organizationId);
+  if (policy === null) return freeTierDefault;
+  const { models } = await getCallerModelList(user, logger, opts);
+  if (models.some(model => model.id === freeTierDefault)) return freeTierDefault;
+  // No allowed text model leaves the default in place for admission to refuse with the org reason.
+  return models.find(model => model.type === 'text')?.id ?? freeTierDefault;
+}
+
+async function resolveFreeTierDefaultModel(
   defaultModel: string,
   user: IUserDocument,
   logger: { log: (message: string) => void }
@@ -180,11 +213,47 @@ export async function resolveCallerDefaultModel(
   return defaultModel;
 }
 
+async function loadOrgModelPolicy(organizationId: string | null | undefined): Promise<ReadOrgModelPolicy> {
+  if (!organizationId) return null;
+  const org = await organizationRepository.findById(organizationId);
+  return readOrgModelPolicy(org?.modelPolicy);
+}
+
+/**
+ * Same org rule createModelAdmission refuses at call time, applied after the cache (which stays per user,
+ * org-agnostic). A disallowed model moves to `lockedModels` as org_policy, overriding a paid-plan lock,
+ * since an upgrade would not unlock it.
+ */
+function withOrgPolicy(list: CallerModelList, policy: ReadOrgModelPolicy): CallerModelList {
+  if (policy === null) return list;
+  const models: ModelInfo[] = [];
+  const orgLocked: ModelInfo[] = [];
+  for (const model of list.models) {
+    if (isModelAllowedByOrgPolicy(policy, model)) models.push(model);
+    else if (!model.disabled && !isModelDeprecated(model)) orgLocked.push({ ...model, access: ORG_POLICY_LOCK });
+  }
+  const lockedModels = list.lockedModels.map(model =>
+    isModelAllowedByOrgPolicy(policy, model) ? model : { ...model, access: ORG_POLICY_LOCK }
+  );
+  const offeredIds = new Set<string>(models.map(model => model.id));
+  return {
+    ...list,
+    models,
+    supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)),
+    lockedModels: [...lockedModels, ...orgLocked],
+  };
+}
+
 export async function getCallerModelList(
   user: IUserDocument | null,
-  logger: { log: (message: string) => void }
+  logger: { log: (message: string) => void },
+  opts: CallerModelListOptions = {}
 ): Promise<CallerModelList> {
-  return withoutPaidOnlyModels(await getCachedCallerModelList(user?.id ?? null, logger), user);
+  const [cached, policy] = await Promise.all([
+    getCachedCallerModelList(user?.id ?? null, logger),
+    loadOrgModelPolicy(opts.organizationId),
+  ]);
+  return withOrgPolicy(await withoutPaidOnlyModels(cached, user), policy);
 }
 
 async function getCachedCallerModelList(

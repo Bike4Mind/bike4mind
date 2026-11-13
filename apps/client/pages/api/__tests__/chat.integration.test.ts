@@ -707,7 +707,9 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith(
       'admin-default',
       expect.objectContaining({ id: 'user-1' }),
-      expect.anything()
+      expect.anything(),
+      // The billing org (none here) whose model policy the default must respect.
+      { organizationId: undefined }
     );
     expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
       'allowlisted-model'

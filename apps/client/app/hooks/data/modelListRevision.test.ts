@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { MODEL_LIST_REVISION_MEMO_MS } from '@bike4mind/common';
-import { MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
+import { activeCatalogQueryKey, MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
 import {
   MODEL_LIST_REFETCH_JITTER_MS,
   handleModelListRevisionSetting,
@@ -34,7 +34,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('refetches a list built under a different revision, within the jitter window after the server memo', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0.5);
     vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS + MODEL_LIST_REFETCH_JITTER_MS / 2 - 1);
@@ -45,7 +45,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('never refetches before every server process has dropped the previous revision', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
     vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1);
@@ -56,7 +56,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('waits out the server memo again when a newer revision arrives during the wait', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
     vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1_000);
@@ -70,7 +70,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('keeps the existing deadline when the same revision is replayed during the wait', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
     vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1_000);
@@ -81,11 +81,11 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('tries the same revision again after a failed refetch', async () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
     invalidate.mockImplementation(async () => {
       queryClient
         .getQueryCache()
-        .find({ queryKey: MODEL_CATALOG_QUERY_KEY })
+        .find({ queryKey: activeCatalogQueryKey() })
         ?.setState({
           status: 'error',
           error: new Error('offline'),
@@ -102,7 +102,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('refetches a list that carries no revision', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt(null));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt(null));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-1'), () => 0);
     vi.runAllTimers();
@@ -111,7 +111,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('does nothing when the replayed row matches the list on screen', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-1'));
     vi.runAllTimers();
@@ -120,17 +120,17 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('skips the refetch when the list caught up during the wait', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 1);
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-2'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-2'));
     vi.runAllTimers();
 
     expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('spends one refetch per pushed revision, even if the list still differs after it', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
     vi.runAllTimers();
@@ -144,7 +144,7 @@ describe('handleModelListRevisionSetting', () => {
   });
 
   it('ignores other settings and empty values', () => {
-    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    queryClient.setQueryData(activeCatalogQueryKey(), catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2', 'EnableArtifacts'));
     handleModelListRevisionSetting(queryClient, pushed(''));
@@ -162,7 +162,7 @@ describe('handleModelListRevisionSetting', () => {
       vi.runAllTimers();
       expect(invalidate).not.toHaveBeenCalled();
 
-      await queryClient.fetchQuery({ queryKey: MODEL_CATALOG_QUERY_KEY, queryFn: async () => catalogAt('rev-1') });
+      await queryClient.fetchQuery({ queryKey: activeCatalogQueryKey(), queryFn: async () => catalogAt('rev-1') });
       vi.runAllTimers();
 
       expect(invalidate).toHaveBeenCalledTimes(1);
@@ -173,7 +173,7 @@ describe('handleModelListRevisionSetting', () => {
       const unsubscribe = watchModelListArrivals(queryClient, () => 0);
 
       handleModelListRevisionSetting(queryClient, pushed('rev-2'));
-      await queryClient.fetchQuery({ queryKey: MODEL_CATALOG_QUERY_KEY, queryFn: async () => catalogAt('rev-2') });
+      await queryClient.fetchQuery({ queryKey: activeCatalogQueryKey(), queryFn: async () => catalogAt('rev-2') });
       vi.runAllTimers();
 
       expect(invalidate).not.toHaveBeenCalled();

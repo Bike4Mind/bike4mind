@@ -26,6 +26,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
+import { apiKeyBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
@@ -51,7 +52,9 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       logger: req.logger,
     });
     // A free account must not start on a paid-only admin default.
-    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, {
+      organizationId: apiKeyBillingOrgId(req.apiKeyInfo),
+    });
     // Self-host guard: apiKeys/models are populated only there. Fail fast with
     // actionable guidance rather than a cryptic error deep inside the executor.
     if (resolved.apiKeys && resolved.models) {
