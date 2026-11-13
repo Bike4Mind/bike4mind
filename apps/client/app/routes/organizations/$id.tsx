@@ -77,7 +77,7 @@ import {
   resolveAccessibleTab,
 } from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { FC, ReactNode, useEffect, useMemo } from 'react';
+import { FC, ReactNode, useEffect, useId, useMemo, type AriaAttributes } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const OrganizationPage: FC = () => {
@@ -89,6 +89,7 @@ const OrganizationPage: FC = () => {
   const search = useSearch({ strict: false }) as { tab?: string };
   const { currentUser } = useUser();
   const isMobile = useIsMobile();
+  const sectionId = useId();
 
   // The URL is the only place the requested tab lives; the page keeps no copy, so Back and a
   // pasted link move it like a click does. An unknown value names no tab, which would leave Tabs
@@ -266,6 +267,20 @@ const OrganizationPage: FC = () => {
       : []),
   ];
 
+  const tabId = (value: OrganizationTabs) => `${sectionId}-tab-${value}`;
+  const panelId = (value: OrganizationTabs) => `${sectionId}-panel-${value}`;
+  const panelAccessibility = (
+    value: OrganizationTabs
+  ): Pick<AriaAttributes, 'aria-label' | 'aria-labelledby'> & { id: string } => ({
+    id: panelId(value),
+    ...(isMobile
+      ? {
+          'aria-labelledby': undefined,
+          'aria-label': visibleTabs.find(tab => tab.value === value)?.label ?? value,
+        }
+      : { 'aria-labelledby': tabId(value) }),
+  });
+
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
 
   useEffect(() => {
@@ -400,6 +415,12 @@ const OrganizationPage: FC = () => {
                 <Tab
                   key={tab.value}
                   value={tab.value}
+                  id={tabId(tab.value)}
+                  aria-controls={
+                    tab.value === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
+                      ? undefined
+                      : panelId(tab.value)
+                  }
                   data-testid={tab.testId}
                   sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
                 >
@@ -412,11 +433,11 @@ const OrganizationPage: FC = () => {
 
           <Box sx={{ p: { xs: 1, sm: 3 }, flex: 1, overflow: 'auto', minWidth: 0 }}>
             {canViewAudit && selectedTab === OrganizationTabs.Audit && (
-              <TabPanel value={OrganizationTabs.Audit}>
+              <TabPanel value={OrganizationTabs.Audit} {...panelAccessibility(OrganizationTabs.Audit)}>
                 <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
-            <TabPanel value={OrganizationTabs.Overview}>
+            <TabPanel value={OrganizationTabs.Overview} {...panelAccessibility(OrganizationTabs.Overview)}>
               {currentUser?.id === organization.userId && !organization.personal && (
                 <TeamOnboardingChecklist
                   key={`${currentUser.id}:${organization.id}`}
@@ -427,14 +448,14 @@ const OrganizationPage: FC = () => {
               )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
-            <TabPanel value={OrganizationTabs.Members}>
+            <TabPanel value={OrganizationTabs.Members} {...panelAccessibility(OrganizationTabs.Members)}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
               </Typography>
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {canManageGroups && (
-              <TabPanel value={OrganizationTabs.Groups}>
+              <TabPanel value={OrganizationTabs.Groups} {...panelAccessibility(OrganizationTabs.Groups)}>
                 <Typography level="title-lg" startDecorator={<GroupWorkOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.groups')}
                 </Typography>
@@ -442,7 +463,7 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canViewUsage && (
-              <TabPanel value={OrganizationTabs.Usage}>
+              <TabPanel value={OrganizationTabs.Usage} {...panelAccessibility(OrganizationTabs.Usage)}>
                 <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.usage')}
                 </Typography>
@@ -450,7 +471,7 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canViewAnalysis && (
-              <TabPanel value={OrganizationTabs.Analysis}>
+              <TabPanel value={OrganizationTabs.Analysis} {...panelAccessibility(OrganizationTabs.Analysis)}>
                 <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.analysis')}
                 </Typography>
@@ -458,7 +479,7 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canViewBilling && (
-              <TabPanel value={OrganizationTabs.Billing}>
+              <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
                 <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.billing')}
                 </Typography>
@@ -467,16 +488,16 @@ const OrganizationPage: FC = () => {
             )}
             {canManageIntegrations && (
               <>
-                <TabPanel value={OrganizationTabs.Integrations}>
+                <TabPanel value={OrganizationTabs.Integrations} {...panelAccessibility(OrganizationTabs.Integrations)}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
                     {t('organization.headings.integrations')}
                   </Typography>
                   <OrgSlackIntegration organization={organization} />
                 </TabPanel>
-                <TabPanel value={OrganizationTabs.GitHub}>
+                <TabPanel value={OrganizationTabs.GitHub} {...panelAccessibility(OrganizationTabs.GitHub)}>
                   <OrgGitHubConnectionTab orgId={organization.id} />
                 </TabPanel>
-                <TabPanel value={OrganizationTabs.Webhooks}>
+                <TabPanel value={OrganizationTabs.Webhooks} {...panelAccessibility(OrganizationTabs.Webhooks)}>
                   <Typography level="title-lg" startDecorator={<GitHubIcon />} sx={{ mb: 3 }}>
                     {t('organization.headings.webhooks')}
                   </Typography>
@@ -485,7 +506,7 @@ const OrganizationPage: FC = () => {
               </>
             )}
             {canManageConnectors && (
-              <TabPanel value={OrganizationTabs.Connectors}>
+              <TabPanel value={OrganizationTabs.Connectors} {...panelAccessibility(OrganizationTabs.Connectors)}>
                 <Typography level="title-lg" startDecorator={<HubOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.connectors')}
                 </Typography>
@@ -493,7 +514,7 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canManageConnectors && (
-              <TabPanel value={OrganizationTabs.ApiKeys}>
+              <TabPanel value={OrganizationTabs.ApiKeys} {...panelAccessibility(OrganizationTabs.ApiKeys)}>
                 <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
                   API Keys
                 </Typography>
@@ -505,7 +526,7 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canManageOrg && (
-              <TabPanel value={OrganizationTabs.Settings}>
+              <TabPanel value={OrganizationTabs.Settings} {...panelAccessibility(OrganizationTabs.Settings)}>
                 <Typography level="title-lg" startDecorator={<SettingsOutlinedIcon />} sx={{ mb: 3 }}>
                   {t('organization.headings.settings')}
                 </Typography>

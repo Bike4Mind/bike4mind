@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
@@ -44,10 +44,13 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@client/app/components/common/Breadcrumbs', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/TeamOnboardingChecklist', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
-vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({
+  default: () => <input aria-label="Unsaved settings draft" defaultValue="original" />,
+}));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
@@ -139,6 +142,52 @@ describe('organization detail page - responsive rail', () => {
     const panel = screen.getByRole('tabpanel');
     expect(panel.textContent).toContain('Team Settings');
     expect(panel.hasAttribute('aria-labelledby')).toBe(false);
+  });
+
+  it('preserves drafts and valid panel names through desktop, phone navigation and desktop again', async () => {
+    searchParams.current = { tab: 'settings' };
+    const rerender = renderThroughLoad();
+    const draft = screen.getByRole('textbox', { name: 'Unsaved settings draft' });
+    fireEvent.change(draft, { target: { value: 'keep this unsaved draft' } });
+    const panels = () => screen.getAllByRole('tabpanel', { hidden: true });
+    const expectDesktopLinks = () => {
+      for (const panel of panels()) {
+        const ids = panel.getAttribute('aria-labelledby')?.split(/\s+/).filter(Boolean);
+        expect(ids?.length).toBeGreaterThan(0);
+        for (const id of ids ?? []) {
+          const tab = document.getElementById(id);
+          expect(tab).not.toBeNull();
+          expect(tab).toHaveAttribute('aria-controls', panel.id);
+        }
+      }
+      for (const tab of screen.getAllByRole('tab')) {
+        const controlledId = tab.getAttribute('aria-controls');
+        if (controlledId) expect(document.getElementById(controlledId)).not.toBeNull();
+      }
+    };
+    await waitFor(expectDesktopLinks);
+    mobile.current = true;
+    rerender(wrapper(<OrganizationPage />));
+    expect(screen.getByRole('textbox', { name: 'Unsaved settings draft' })).toBe(draft);
+    expect(draft).toHaveValue('keep this unsaved draft');
+    const expectPhoneNames = () => {
+      for (const panel of panels()) {
+        expect(panel).not.toHaveAttribute('aria-labelledby');
+        expect(panel.getAttribute('aria-label')).toBeTruthy();
+      }
+    };
+    expectPhoneNames();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Team section' }));
+    const listbox = screen.getByRole('listbox', { name: 'Team sections' });
+    expect(within(listbox).getAllByRole('option')).toHaveLength(13);
+    fireEvent.click(within(listbox).getByRole('option', { name: 'Members' }));
+    applyNavigation(rerender);
+    expectPhoneNames();
+    expect(screen.getByRole('tabpanel', { name: 'Members' })).toBeTruthy();
+    mobile.current = false;
+    rerender(wrapper(<OrganizationPage />));
+    await waitFor(expectDesktopLinks);
+    expect(screen.getByRole('tabpanel', { name: 'Members' })).toBeTruthy();
   });
 
   it('offers only the tabs the viewer may open and navigates on pick', () => {
