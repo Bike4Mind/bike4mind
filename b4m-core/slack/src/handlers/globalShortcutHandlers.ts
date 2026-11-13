@@ -678,7 +678,8 @@ async function sendNotebookCreatedDM(
   notebookName: string,
   botToken: string
 ): Promise<void> {
-  const client = new WebClient(botToken);
+  // No retries: this runs before the view_submission ack, which Slack drops after 3s.
+  const client = new WebClient(botToken, { retryConfig: { retries: 0 } });
 
   try {
     // Open DM channel
