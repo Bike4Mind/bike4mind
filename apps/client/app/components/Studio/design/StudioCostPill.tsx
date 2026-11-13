@@ -1,5 +1,5 @@
 import { styled } from '@mui/system';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { formatCreditAmount, formatCreditBalance } from '@client/app/utils/formatCredits';
 import { studioColor, studioFont, studioRadius } from './studioTokens';
 
 const PillRoot = styled('span')({
@@ -59,11 +59,12 @@ const StudioCostPill = ({
   tone = 'default',
   testId = 'studio-cost-pill',
 }: StudioCostPillProps) => {
-  const whole = Math.max(0, Math.floor(amount));
+  const label =
+    unit === 'credits' ? formatCreditBalance(amount) : `${formatCreditAmount(Math.max(0, Math.floor(amount)))} cr`;
   return (
     <PillRoot data-variant={variant} data-tone={tone} data-testid={testId}>
       {tone !== 'default' && <Dot aria-hidden="true" />}
-      {formatCreditAmount(whole)} {unit === 'credits' && whole === 1 ? 'credit' : unit}
+      {label}
     </PillRoot>
   );
 };
