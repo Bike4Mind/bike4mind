@@ -27,8 +27,7 @@ const COPY: Readonly<
     description:
       'Pays each held signup grant now, outside the daily pool. Undo takes the paid credits back and returns the account to the held queue.',
     presets: ADMIN_REASON_PRESETS.signupGrantRelease,
-    // The release route records the batch in its audit entries, not a typed reason.
-    audited: false,
+    audited: true,
   },
   block: {
     label: 'Block signup grants for',

@@ -4,7 +4,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { ActionDialog } from './shared/ActionDialog';
 import { AdminDialog } from './shared/AdminDialog';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { DataTable } from './shared/DataTable';
 import { AdminPermissionAction } from './shared/MissingPermission';
 
@@ -42,7 +44,8 @@ export default function HeldSignupGrantsTab() {
       ).data,
   });
   const release = useMutation({
-    mutationFn: async (userIds: string[]) => (await api.post<ReleaseResult>(`${ENDPOINT}/release`, { userIds })).data,
+    mutationFn: async (body: { userIds: string[]; reason: string }) =>
+      (await api.post<ReleaseResult>(`${ENDPOINT}/release`, body)).data,
     onSuccess: () => setSelected(new Set()),
     onSettled: async () => {
       await Promise.all([
@@ -61,6 +64,7 @@ export default function HeldSignupGrantsTab() {
     },
   });
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
   const rows = query.data?.data ?? [];
   const busy = release.isPending || revoke.isPending;
   const toggle = (id: string) =>
@@ -114,6 +118,22 @@ export default function HeldSignupGrantsTab() {
           {revoke.data.results.some(result => result.outcome === 'reversed' && !result.heldRestored) &&
             ' Releases without saved account state only had their credits taken back and were not returned to the held list.'}
         </Alert>
+      )}
+      {confirmRelease && (
+        <ActionDialog
+          open
+          onClose={() => setConfirmRelease(false)}
+          title={`Release ${selected.size} held grant${selected.size === 1 ? '' : 's'}`}
+          description="Pays each selected held signup grant now, outside the daily pool."
+          reasonPresets={ADMIN_REASON_PRESETS.signupGrantRelease}
+          confirmLabel="Release"
+          pending={release.isPending}
+          onConfirm={async reason => {
+            await release.mutateAsync({ userIds: [...selected], reason });
+            setConfirmRelease(false);
+          }}
+          data-testid="held-signup-grants-release-dialog"
+        />
       )}
       {confirmRevoke && (
         <AdminDialog
@@ -169,7 +189,7 @@ export default function HeldSignupGrantsTab() {
               data-testid="held-signup-grants-release-btn"
               disabled={missingPermission || busy || selected.size === 0}
               loading={release.isPending}
-              onClick={() => release.mutate([...selected])}
+              onClick={() => setConfirmRelease(true)}
             >
               Release selected ({selected.size})
             </Button>

@@ -33,6 +33,12 @@ function renderTab() {
   return invalidate;
 }
 
+async function releaseSelected() {
+  fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+  fireEvent.click(await screen.findByTestId('held-signup-grants-release-dialog-reason-input-preset-0'));
+  fireEvent.click(screen.getByTestId('held-signup-grants-release-dialog-confirm-btn'));
+}
+
 beforeEach(() => {
   user.currentUser = { isAdmin: true };
   getMock.mockReset().mockResolvedValue({ data: { data: rows, nextCursor: null } });
@@ -60,6 +66,18 @@ describe('HeldSignupGrantsTab', () => {
     expect(screen.getByTestId('held-signup-grants-release-btn')).toBeDisabled();
   });
 
+  it('keeps release blocked until a reason is entered', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    const confirm = await screen.findByTestId('held-signup-grants-release-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(postMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-dialog-reason-input-preset-0'));
+    expect(confirm).not.toBeDisabled();
+  });
+
   it('releases the selected grants, then revokes that batch', async () => {
     postMock
       .mockResolvedValueOnce({
@@ -73,9 +91,12 @@ describe('HeldSignupGrantsTab', () => {
       });
     const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[1].id] })
+      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', {
+        userIds: [rows[1].id],
+        reason: expect.stringContaining('Goodwill grant'),
+      })
     );
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] }));
     invalidate.mockClear();
@@ -104,7 +125,7 @@ describe('HeldSignupGrantsTab', () => {
       });
     renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent(
@@ -122,7 +143,7 @@ describe('HeldSignupGrantsTab', () => {
       });
     renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent(
@@ -140,7 +161,7 @@ describe('HeldSignupGrantsTab', () => {
       });
     renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent('Revoked 0 of 1');
@@ -151,7 +172,7 @@ describe('HeldSignupGrantsTab', () => {
     postMock.mockRejectedValue(new Error('Request interrupted'));
     const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
   });
@@ -164,7 +185,7 @@ describe('HeldSignupGrantsTab', () => {
       .mockRejectedValueOnce(new Error('Request interrupted'));
     const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
-    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    await releaseSelected();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     invalidate.mockClear();
     fireEvent.click(screen.getByTestId('held-signup-grants-revoke-confirm-btn'));
