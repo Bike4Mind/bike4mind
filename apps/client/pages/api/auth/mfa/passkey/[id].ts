@@ -5,6 +5,11 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { stepUpGate } from '@server/auth/stepUp';
 
+const LAST_FACTOR_REFUSAL = {
+  error: 'This passkey is your only second factor. Add another one, or turn off two-step verification instead.',
+  code: 'last_factor',
+};
+
 /**
  * Remove one passkey. The repository scopes the delete to req.user.id, so another account's
  * id is indistinguishable from an unknown one (404 either way). A passkey-only user's last
@@ -20,18 +25,23 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       const user = await userRepository.findById(userId);
       if (!user) throw new NotFoundError('User not found');
-      const passkeyCount = await passkeyCredentialRepository.countByUser(userId);
-      if (user.mfa?.passkeyEnabled && !user.mfa.totpEnabled && passkeyCount <= 1) {
-        return res.status(409).json({
-          error: 'This passkey is your only second factor. Add another one, or turn off two-step verification instead.',
-          code: 'last_factor',
-        });
-      }
 
-      const removed = await passkeyCredentialRepository.remove(passkeyId, userId);
-      if (!removed) throw new NotFoundError('Passkey not found');
-      if (passkeyCount <= 1 && user.mfa?.passkeyEnabled) {
-        await userRepository.update({ id: userId, 'mfa.passkeyEnabled': false, updatedAt: new Date() });
+      if (user.mfa?.passkeyEnabled && !user.mfa.totpEnabled) {
+        // The up-front count answers the common case without touching the credential;
+        // removeUnlessLast is what holds the invariant against a concurrent removal.
+        if ((await passkeyCredentialRepository.countByUser(userId)) <= 1) {
+          return res.status(409).json(LAST_FACTOR_REFUSAL);
+        }
+        const outcome = await passkeyCredentialRepository.removeUnlessLast(passkeyId, userId);
+        if (outcome === 'not_found') throw new NotFoundError('Passkey not found');
+        if (outcome === 'last') return res.status(409).json(LAST_FACTOR_REFUSAL);
+      } else {
+        const removed = await passkeyCredentialRepository.remove(passkeyId, userId);
+        if (!removed) throw new NotFoundError('Passkey not found');
+        // Counted after the delete so two concurrent removals of the last two cannot both leave the flag on.
+        if (user.mfa?.passkeyEnabled && (await passkeyCredentialRepository.countByUser(userId)) === 0) {
+          await userRepository.update({ id: userId, 'mfa.passkeyEnabled': false, updatedAt: new Date() });
+        }
       }
 
       await logAuthAudit(req, { userId, event: 'passkey_removed', metadata: { passkeyId, scope: 'one' } });

@@ -71,6 +71,22 @@ export class PasskeyCredentialRepository implements IPasskeyCredentialRepository
     return result.deletedCount > 0;
   }
 
+  /**
+   * Remove one passkey unless it is the user's last. The delete and the count are separate
+   * operations, so two concurrent removals could each count the other's passkey as remaining and
+   * both proceed. Counting after the delete and restoring the credential when none remain closes
+   * that: whichever racer counts last sees the true remainder, and two that both see none both
+   * restore, which errs toward keeping the factor.
+   */
+  async removeUnlessLast(id: string, userId: string): Promise<'removed' | 'not_found' | 'last'> {
+    if (!mongoose.isValidObjectId(id)) return 'not_found';
+    const removed = await PasskeyCredentialModel.findOneAndDelete({ _id: id, userId }).lean();
+    if (!removed) return 'not_found';
+    if ((await PasskeyCredentialModel.countDocuments({ userId })) > 0) return 'removed';
+    await PasskeyCredentialModel.collection.insertOne(removed);
+    return 'last';
+  }
+
   async removeAllForUser(userId: string): Promise<number> {
     const result = await PasskeyCredentialModel.deleteMany({ userId });
     return result.deletedCount ?? 0;

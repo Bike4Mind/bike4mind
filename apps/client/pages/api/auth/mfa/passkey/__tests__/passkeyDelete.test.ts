@@ -17,6 +17,7 @@ const mockFindById = vi.fn();
 const mockUpdate = vi.fn();
 const mockCountByUser = vi.fn();
 const mockRemove = vi.fn();
+const mockRemoveUnlessLast = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   passkeyCredentialRepository: {
     countByUser: (...a: unknown[]) => mockCountByUser(...a),
     remove: (...a: unknown[]) => mockRemove(...a),
+    removeUnlessLast: (...a: unknown[]) => mockRemoveUnlessLast(...a),
   },
 }));
 
@@ -41,6 +43,7 @@ const run = async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockRemove.mockResolvedValue(true);
+  mockRemoveUnlessLast.mockResolvedValue('removed');
 });
 
 describe('DELETE /api/auth/mfa/passkey/[id]', () => {
@@ -53,6 +56,7 @@ describe('DELETE /api/auth/mfa/passkey/[id]', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ code: 'last_factor' });
     expect(mockRemove).not.toHaveBeenCalled();
+    expect(mockRemoveUnlessLast).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
@@ -64,14 +68,35 @@ describe('DELETE /api/auth/mfa/passkey/[id]', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ removed: true, id: 'pk-1' });
-    expect(mockRemove).toHaveBeenCalledWith('pk-1', 'user-1');
+    expect(mockRemoveUnlessLast).toHaveBeenCalledWith('pk-1', 'user-1');
+    expect(mockRemove).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockLogAuthAudit.mock.calls[0][1]).toMatchObject({ event: 'passkey_removed' });
   });
 
+  it('refuses when a concurrent removal took the other passkey first', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { passkeyEnabled: true } });
+    mockCountByUser.mockResolvedValue(2);
+    mockRemoveUnlessLast.mockResolvedValue('last');
+
+    const res = await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({ code: 'last_factor' });
+    expect(mockLogAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 when a passkey-only user removes an unknown passkey', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { passkeyEnabled: true } });
+    mockCountByUser.mockResolvedValue(2);
+    mockRemoveUnlessLast.mockResolvedValue('not_found');
+
+    await expect(run()).rejects.toThrow('Passkey not found');
+  });
+
   it('clears passkeyEnabled when a TOTP user removes their last passkey', async () => {
     mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true, passkeyEnabled: true } });
-    mockCountByUser.mockResolvedValue(1);
+    mockCountByUser.mockResolvedValue(0);
 
     const res = await run();
 
@@ -81,7 +106,7 @@ describe('DELETE /api/auth/mfa/passkey/[id]', () => {
 
   it('keeps passkeyEnabled when a TOTP user still has other passkeys', async () => {
     mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true, passkeyEnabled: true } });
-    mockCountByUser.mockResolvedValue(2);
+    mockCountByUser.mockResolvedValue(1);
 
     await run();
 
@@ -90,7 +115,7 @@ describe('DELETE /api/auth/mfa/passkey/[id]', () => {
 
   it('does not clear the flag when the passkey was not found', async () => {
     mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true, passkeyEnabled: true } });
-    mockCountByUser.mockResolvedValue(1);
+    mockCountByUser.mockResolvedValue(0);
     mockRemove.mockResolvedValue(false);
 
     await expect(run()).rejects.toThrow('Passkey not found');

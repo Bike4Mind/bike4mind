@@ -146,6 +146,11 @@ export interface IMFAConfig {
    * True once a passkey was enrolled as a factor. Denormalized from the passkey collection so the
    * per-request "has MFA" check stays synchronous; set and cleared only through dotted writes
    * (see the user model's secret-less `mfa` guard).
+   *
+   * Authoritative only for a user without an authenticator app. An app user who registered
+   * passkeys before this flag existed has it unset until their next registration (totpEnabled
+   * carries their MFA meanwhile), so an absent flag alongside totpEnabled does not mean "no
+   * passkeys": ask the passkey collection when that matters.
    */
   passkeyEnabled?: boolean;
   backupCodes: string[];

@@ -10,11 +10,19 @@ import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
  * Step 1 of enrolling a passkey: issue the creation options and hold their challenge server-side.
  * Requires recent verification: a passkey is a durable second factor that outlives session
  * revocation. Sign-in enrollment of a first factor skips step-up exactly as the app setup route
- * does (see setup.ts); refusePasskeyEnrollment keeps that skip from adding a passkey ahead of a
- * pending challenge.
+ * does (see setup.ts). The skip is scoped to users with no factor yet: setup.ts refuses once MFA
+ * is on, but this route also adds passkeys for users who already have one, and a fresh session
+ * alone (trusted device, IdP sign-in) has not presented that factor.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
-  .use(stepUpGate({ skip: async req => !!req.user?.mfaPending || (!!req.user && (await isFreshSignIn(req.user))) }))
+  .use(
+    stepUpGate({
+      skip: async req =>
+        !!req.user &&
+        !mfaService.userHasMFAConfigured(req.user) &&
+        (!!req.user.mfaPending || (await isFreshSignIn(req.user))),
+    })
+  )
   .use(rateLimit({ limit: 10, windowMs: 15 * 60 * 1000 }))
   .post(
     asyncHandler(async (req, res) => {
