@@ -36,7 +36,6 @@ const handler = adminApi({
     // Not atomic with the write: two concurrent admin edits are each judged against the pre-edit package.
     const after = { ...stored, ...data };
     if ('totalCap' in data || 'dailyCap' in data) assertCapsConsistent(after);
-    if ('tags' in data) assertCanChangeManagedTags(req.user, stored.tags, data.tags);
     const reasonRequired = updateRequiresGrantReason(stored, after, await loadCreditGrantPolicy());
     const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 
@@ -51,6 +50,11 @@ const handler = adminApi({
     }
 
     const updated = await withTransaction(async () => {
+      // Read in the transaction, so a concurrent edit conflicts instead of being judged against a stale package.
+      if ('tags' in data) {
+        const current = await grantPackageRepository.findById(id);
+        assertCanChangeManagedTags(req.user, current?.tags, data.tags);
+      }
       const pkg = await grantPackageRepository.updatePackage(id, reason ? { ...data, reason } : data);
       if (!pkg) throw new NotFoundError('Grant package not found');
       const changes: AuditChange[] = changedFields.map(field => ({

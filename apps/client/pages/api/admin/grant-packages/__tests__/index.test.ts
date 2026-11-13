@@ -322,6 +322,19 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
       expect(repo.updatePackage).toHaveBeenCalledWith('p1', { tags: ['Developer', 'alpha-cohort'] });
     });
 
+    it('judges a delegate against the package as read inside the transaction', async () => {
+      repo.findById
+        .mockResolvedValueOnce({ ...stored, tags: ['beta-cohort'] })
+        .mockResolvedValueOnce({ ...stored, tags: ['beta-cohort', 'Developer'] });
+      const { req, res } = makeReqRes('PATCH', {
+        user: DELEGATE,
+        query: { id: 'p1' },
+        body: { tags: ['alpha-cohort'] },
+      });
+      await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
     it('lets a full admin add a managed tag', async () => {
       repo.findById.mockResolvedValue({ ...stored, tags: [] });
       const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { tags: ['Developer'] } });

@@ -293,6 +293,15 @@ describe('/api/admin/partner-signup-rules/[id] - managed rule tags (PUT)', () =>
     expect(res._getStatusCode()).toBe(200);
   });
 
+  it('judges a delegate against the rule as read inside the transaction', async () => {
+    repo.findById
+      .mockResolvedValueOnce({ id: 'r1', domain: 'partner.com', tags: ['beta'] })
+      .mockResolvedValueOnce({ id: 'r1', domain: 'partner.com', tags: ['beta', 'optihashi:pro'] });
+    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { tags: ['gamma'] } });
+    await expect(handlers.put(req, res)).rejects.toThrow('Only full administrators can assign managed tags');
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   it('lets a full admin remove a managed tag', async () => {
     const { req, res } = makeReqRes('PUT', { body: { tags: ['beta'] } });
     await handlers.put(req, res);
