@@ -41,7 +41,6 @@ it('runs the quick ask with the decrypted bot token', async () => {
 it.each([
   ['workspace is missing', () => mocks.findByIdWithCredentials.mockResolvedValue(null)],
   ['bot token is missing', () => mocks.findByIdWithCredentials.mockResolvedValue({})],
-  ['decrypt fails', () => mocks.decryptToken.mockReturnValue(null)],
 ])('logs an error and does nothing when %s', async (_name, arrange) => {
   arrange();
   await run();
@@ -49,7 +48,17 @@ it.each([
   expect(mocks.logger.error).toHaveBeenCalled();
 });
 
-it('propagates a quick ask failure so the event dead-letters', async () => {
-  mocks.processQuickAskInDM.mockRejectedValue(new Error('boom'));
+it.each([
+  [
+    'token decryption',
+    () =>
+      mocks.decryptToken.mockImplementation(() => {
+        throw new Error('boom');
+      }),
+  ],
+  ['the quick ask', () => mocks.processQuickAskInDM.mockRejectedValue(new Error('boom'))],
+])('propagates a %s failure so the event dead-letters', async (_name, arrange) => {
+  arrange();
   await expect(run()).rejects.toThrow('boom');
+  expect(mocks.logger.error).not.toHaveBeenCalled();
 });
