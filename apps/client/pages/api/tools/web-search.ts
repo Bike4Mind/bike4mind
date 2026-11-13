@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
 import { runAuditedTool } from '@server/cli/runAuditedTool';
-import { billedWebSearch } from '@server/billing/billedWebTools';
+import { billedWebSearch } from '@bike4mind/server-utils/billing/billedWebTools';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { z } from 'zod';
 

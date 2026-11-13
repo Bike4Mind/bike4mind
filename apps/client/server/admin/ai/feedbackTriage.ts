@@ -16,15 +16,15 @@ import {
   lockFeedbackNoteParent,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { executeDecision } from '@server/decisions/executeDecision';
-import { callablePlatformModel, resolveJsonInput } from '@server/decisions/platformDecision';
+import { executeDecision } from '@bike4mind/server-utils/decisions/executeDecision';
+import { callablePlatformModel, resolveJsonInput } from '@bike4mind/server-utils/decisions/platformDecision';
 import { adminAiDecisionAccounting } from './budget';
 import { embedAdminAi, loadFeedbackAiConfig } from './embedAdminAi';
 import { feedbackQuestions, nearestFeedback, readFeedbackAnswers } from './feedbackDecision';
 import { pseudonymiseEvidence } from './pseudonymiseEvidence';
 import { recordAdminAiAttempt } from './telemetry';
 import { AdminAiSkip } from './adminAiSkip';
-import { decisionFailureCode } from '@server/decisions/platformDecision';
+import { decisionFailureCode } from '@bike4mind/server-utils/decisions/platformDecision';
 
 export async function triageFeedback(rawFeedbackId: string): Promise<void> {
   const feedbackId = FeedbackAiReportIdSchema.parse(rawFeedbackId);

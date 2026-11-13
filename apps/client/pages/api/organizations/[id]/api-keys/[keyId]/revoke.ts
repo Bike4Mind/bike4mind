@@ -12,7 +12,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgOwnedKey } from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
-import { verifyOrgPermission } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const RevokeOrgApiKeyBodySchema = z.object({ reason: z.string().trim().max(500).optional() }).optional();

@@ -4,7 +4,7 @@ import { request as httpRequest, type Server } from 'http';
 import express from 'express';
 import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
-import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -102,7 +102,7 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
@@ -111,7 +111,7 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -949,7 +949,8 @@ describe('POST /api/ai/v1/completions - body-parser and method failures', () => 
 });
 
 describe('POST /api/ai/v1/completions - rate limits from the real limiters', () => {
-  const loadActualAuth = () => vi.importActual<typeof import('@server/cli/auth')>('@server/cli/auth');
+  const loadActualAuth = () =>
+    vi.importActual<typeof import('@bike4mind/server-utils/cli/auth')>('@bike4mind/server-utils/cli/auth');
 
   it('turns a JWT limiter throw into a 429 with Retry-After', async () => {
     const actual = await loadActualAuth();

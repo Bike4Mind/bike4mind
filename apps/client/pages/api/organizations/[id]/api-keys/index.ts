@@ -20,7 +20,7 @@ import {
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
-import { verifyOrgPermission } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const CreateOrgApiKeyBodySchema = z.object({
