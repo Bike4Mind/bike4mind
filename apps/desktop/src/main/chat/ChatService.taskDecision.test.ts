@@ -238,6 +238,23 @@ describe('a worker decision that only the user can make', () => {
     await idle(asker.id);
   });
 
+  it('still resumes with the second answer when the first one in flight is rejected', async () => {
+    const { asker, decision } = await ask();
+    const [first, second] = await Promise.allSettled([
+      service.answerTaskDecision(asker.id, decision.decision.id, { status: 'answered', answers: [] }),
+      service.answerTaskDecision(asker.id, decision.decision.id, {
+        status: 'answered',
+        answers: [{ selected: ['Wait for the merge'] }],
+      }),
+    ]);
+    expect(first).toMatchObject({ status: 'rejected' });
+    expect(second).toMatchObject({ status: 'fulfilled' });
+    const resumed = await nextStream('The user answered your decision');
+    expect(wireText(resumed)).toContain('Wait for the merge');
+    finish(resumed);
+    await idle(asker.id);
+  });
+
   it('wakes the root once the resumed worker settles, with the sibling that finished meanwhile', async () => {
     const { asker, sibling, siblingStream, decision, before } = await ask();
     finish(siblingStream, 'Sibling done');

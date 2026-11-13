@@ -407,7 +407,6 @@ const MID_TURN_NOTE =
 const RELAY_MID_TURN_NOTE =
   'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
 
-/** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
 const DECISION_ASKED_RESULT =
   'Your decision is now in front of the user as a question card. End your turn now with one short line and do no more work on this task; it resumes in this conversation with their answer.';
 
@@ -426,6 +425,7 @@ function reportedState(report: TaskReport): WorkerTask['state'] {
   };
 }
 
+/** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
 const CANCELED_TASK_REFUSAL =
   'This task was canceled, so nothing automatic runs in it any more. Type a message in that conversation to follow up, or start a new task.';
 
@@ -2053,6 +2053,8 @@ export class ChatService {
   }
 
   private taskDecisions = new Set<string>();
+  /** In-flight answers to a worker's decision, so a second card waits for the first instead of racing it. */
+  private readonly decisionAnswers = new Map<string, Promise<void>>();
 
   /** The store's task write, keeping the decision index in step with whatever it wrote. */
   private async updateTask(
@@ -2138,13 +2140,28 @@ export class ChatService {
    * copy was answered first is a no-op, so a decision never resumes the task twice.
    */
   async answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    const key = `${this.deps.store.scopeKey()}:${sessionId}`;
+    // The other copy of the card answered first: once it lands, this one finds the decision resolved.
+    for (let first = this.decisionAnswers.get(key); first; first = this.decisionAnswers.get(key))
+      await first.catch(() => undefined);
+    if (this.taskDecisions.has(key)) throw new Error('A task decision is already in progress.');
+    const run = this.resolveTaskDecision(sessionId, decisionId, answer);
+    this.decisionAnswers.set(key, run);
+    try {
+      await run;
+    } finally {
+      if (this.decisionAnswers.get(key) === run) this.decisionAnswers.delete(key);
+    }
+  }
+
+  private async resolveTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
     const scope = this.deps.store.scopeKey();
     const key = `${scope}:${sessionId}`;
-    if (this.taskDecisions.has(key)) return;
     this.taskDecisions.add(key);
+    let settling: symbol | null = null;
     try {
-      // The worker's own turn can still be writing its last line after it asked.
       if ((await this.deps.store.get(sessionId))?.workerTask?.resolvedDecisions.includes(decisionId)) return;
+      // The worker's own turn can still be writing its last line after it asked.
       await this.untilAgentIdle(sessionId);
       if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
       const child = await this.deps.store.get(sessionId);
@@ -2165,6 +2182,12 @@ export class ChatService {
         decidedAt: new Date().toISOString(),
       };
       const skipped = answer.status === 'skipped';
+      const parentId = child.origin?.parentSessionId;
+      // Dropping the decision un-indexes it; until the skip is recorded a sibling settling must still count it.
+      if (skipped && parentId) {
+        settling = Symbol();
+        this.agentsSettling.set(sessionId, { parentId, settling });
+      }
       const updated = await this.updateTask(
         sessionId,
         current => {
@@ -2185,11 +2208,11 @@ export class ChatService {
       );
       if (!updated) throw new Error('Account or task changed. Reopen the conversation.');
       this.deps.summaryChanged?.(updated);
-      const parentId = child.origin?.parentSessionId;
       if (!parentId) return;
       if (skipped) {
         const latest = (await this.deps.store.get(sessionId)) ?? child;
         await this.reportSettledAgent(parentId, latest, isLocalModel(latest.model));
+        if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
         await this.wakeParentForAgents(parentId);
         return;
       }
@@ -2216,6 +2239,7 @@ export class ChatService {
         throw new Error(sent.error);
       }
     } finally {
+      if (settling && this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
       this.taskDecisions.delete(key);
     }
   }
