@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import { isQuickApproval } from '@shared/watch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -177,6 +178,26 @@ describe('ChatService untrusted content in a reply', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('Asked because this reply read content from the web (web_fetch).');
+  });
+
+  // The menu bar and mini Tavern show only the command line, so the gate's own reason for asking
+  // has to reach isQuickApproval structurally, not just as a paragraph of the detail.
+  it('keeps a tainted card out of quick answers, and leaves a plain one quick', async () => {
+    const id = await session('auto');
+    await reply(id, [fetch, build(root)]);
+    const tainted = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(tainted.approvalReasons).toContain('Asked because this reply read content from the web (web_fetch).');
+    expect(isQuickApproval(tainted)).toBe(false);
+    approvals.resolve(tainted.approvalId!, { decision: 'deny' });
+
+    const plain = await session('ask');
+    await reply(plain, [build(root)]);
+    const asked = await vi.waitUntil(
+      () => calls('bash_execute', 'awaiting-approval').find(call => call.approvalId !== tainted.approvalId),
+      { timeout: 5000, interval: 10 }
+    );
+    expect(asked.approvalReasons).toBeUndefined();
+    expect(isQuickApproval(asked)).toBe(true);
   });
 
   it('counts a fetch that failed, whose error text still reaches the model', async () => {
@@ -583,6 +604,7 @@ describe('ChatService untrusted content in a reply', () => {
 
       const asked = await awaitCall('bash_execute', 'awaiting-approval');
       expect(asked.approvalDetail).toContain(reason);
+      expect(isQuickApproval(asked)).toBe(false);
     });
 
     it('offers a rule per sub-command on a compound card with tuning variables', async () => {

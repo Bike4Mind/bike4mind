@@ -664,7 +664,15 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true };
+  // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
+  if (!mayReachDistro)
+    return {
+      detail,
+      key,
+      askInAuto: true,
+      askInFull: true,
+      reasons: ['Could not read this command, so where it acts cannot be checked.'],
+    };
   const reason =
     'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
   return {
