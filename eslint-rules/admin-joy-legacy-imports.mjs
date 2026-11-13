@@ -7,7 +7,6 @@ export default {
   ],
   'AdminModalTabNew.tsx': [[2, '1fd68f8a7bbdebfd']],
   'AdminSettingInputField.tsx': [[6, '2df9fe7f525eecc9']],
-  'AdminSystemHealthTab.tsx': [[1, 'c76590d0c3aaf0ac']],
   'AdminWhatsNewModalsTab.tsx': [[1, '27481ac346d5dfed']],
   'AgentExecutionsTab.tsx': [[2, 'd79be72c8bce0206']],
   'AgentOpsTab.tsx': [[2, '6bf18f13b9471baa']],

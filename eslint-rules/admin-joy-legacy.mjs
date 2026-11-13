@@ -6,7 +6,6 @@ const componentsByFile = {
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
   'AdminSettingInputField.tsx': ['Card', 'Modal'],
-  'AdminSystemHealthTab.tsx': ['Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
   'AgentExecutionsTab.tsx': ['Table'],
   'AgentOpsTab.tsx': ['Card', 'Modal', 'Table'],
