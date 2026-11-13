@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { api } from '@client/app/contexts/ApiContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, FormControl, FormLabel, Input, Option, Select, Stack, Switch, Typography } from '@mui/joy';
 import { ADMIN_AI_FEATURES, ADMIN_AI_LADDER_COPY, type AdminAiConfig, type AdminAiFeature } from '@bike4mind/common';
 import type { AdminAiOperations } from '@client/server/admin/ai/operations';
+import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import { StatStrip, StatTile } from './shared/StatStrip';
 import { DataTable } from './shared/DataTable';
@@ -23,6 +24,13 @@ const EMPTY_CLASS = {
   replayAgreed: 0,
   replayArtifact: '',
 };
+async function request<T>(method = 'GET', body?: unknown, path = '/api/admin/ai-operations'): Promise<T> {
+  try {
+    return (await api.request<T>({ method, url: path, data: body })).data;
+  } catch (error) {
+    throw new Error(`Could not ${method === 'GET' ? 'load' : 'save'} AI operations: ${getErrorMessage(error)}`);
+  }
+}
 const usd = (value: number) => `$${value.toFixed(4)}`;
 const agreement = (accepted: number, overridden: number) =>
   accepted + overridden > 0
@@ -31,23 +39,19 @@ const agreement = (accepted: number, overridden: number) =>
 
 export default function AiOperationsTab() {
   const cache = useQueryClient();
-  const query = useQuery({
-    queryKey: KEY,
-    queryFn: async () => (await api.get<AdminAiOperations>('/api/admin/ai-operations')).data,
-  });
+  const query = useQuery({ queryKey: KEY, queryFn: () => request<AdminAiOperations>() });
   const [draft, setDraft] = useState<AdminAiConfig | null>(null);
   const [classDraft, setClassDraft] = useState(EMPTY_CLASS);
   const [classDirty, setClassDirty] = useState(false);
   const save = useMutation({
-    mutationFn: async (config: AdminAiConfig) =>
-      (await api.put<AdminAiOperations>('/api/admin/ai-operations', config)).data,
+    mutationFn: (config: AdminAiConfig) => request<AdminAiOperations>('PUT', config),
     onSuccess: data => {
       cache.setQueryData(KEY, data);
       setDraft(null);
     },
   });
   const saveClass = useMutation({
-    mutationFn: async () => (await api.post<AdminAiOperations>('/api/admin/ai-operations', classDraft)).data,
+    mutationFn: () => request<AdminAiOperations>('POST', classDraft),
     onSuccess: data => {
       cache.setQueryData(KEY, data);
       setClassDraft(EMPTY_CLASS);
@@ -55,7 +59,7 @@ export default function AiOperationsTab() {
     },
   });
   const undo = useMutation({
-    mutationFn: ({ path, id }: { path: string; id: string }) => api.post(path, { aiSuggestionId: id }),
+    mutationFn: ({ path, id }: { path: string; id: string }) => request('POST', { aiSuggestionId: id }, path),
     onSuccess: () => cache.invalidateQueries({ queryKey: KEY }),
   });
   const saving = save.isPending || saveClass.isPending;
@@ -254,8 +258,8 @@ export default function AiOperationsTab() {
             <Stack gap={2}>
               <Typography level="title-md">Class evidence and mode</Typography>
               <Typography level="body-sm">
-                Record a reproducible offline replay artifact, case count and agreement count. Policy changes require
-                fresh evidence. This does not register an action handler.
+                An administrator supplies the replay artifact reference and counts; this console does not verify them.
+                Policy changes require fresh evidence. This does not register an action handler.
               </Typography>
               <FormControl>
                 <FormLabel>Feature</FormLabel>
@@ -293,7 +297,7 @@ export default function AiOperationsTab() {
                 />
               </FormControl>
               <FormControl>
-                <FormLabel>Replay artifact reference</FormLabel>
+                <FormLabel>Replay artifact reference supplied by admin</FormLabel>
                 <Input
                   disabled={saving}
                   value={classDraft.replayArtifact}
@@ -356,7 +360,7 @@ export default function AiOperationsTab() {
               { id: 'mode', label: 'Mode', render: row => row.mode },
               {
                 id: 'replay',
-                label: 'Offline replay',
+                label: 'Replay counts supplied by admin',
                 render: row => `${row.evidence.replayAgreed}/${row.evidence.replayCases}`,
               },
               {

@@ -10,12 +10,15 @@ import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
+import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -54,12 +57,14 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
+  canViewOrgAudit,
   OrganizationTabs,
   resolveAccessibleTab,
 } from '@client/app/routes/organizations/orgTabAccess';
@@ -106,6 +111,7 @@ const OrganizationPage: FC = () => {
   // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
   // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
+  const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
   const canManageIntegrations = useMemo(
     () => canManageOrgIntegrations(currentUser, organization),
@@ -142,6 +148,7 @@ const OrganizationPage: FC = () => {
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
   const selectedTab = resolveAccessibleTab(requestedTab, {
+    canViewAudit,
     canManageOrg,
     canViewUsage,
     canViewAnalysis,
@@ -272,15 +279,31 @@ const OrganizationPage: FC = () => {
                 {t('organization.tabs.connectors')}
               </Tab>
             )}
+            {canManageConnectors && (
+              <Tab value={OrganizationTabs.ApiKeys} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <KeyOutlinedIcon sx={{ fontSize: 16 }} />
+                API Keys
+              </Tab>
+            )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
                 {t('organization.tabs.settings')}
               </Tab>
             )}
+            {canViewAudit && (
+              <Tab value={OrganizationTabs.Audit} data-testid="organization-audit-tab">
+                Audit
+              </Tab>
+            )}
           </TabList>
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
+            {canViewAudit && selectedTab === OrganizationTabs.Audit && (
+              <TabPanel value={OrganizationTabs.Audit}>
+                <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Overview}>
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
@@ -347,6 +370,18 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.connectors')}
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageConnectors && (
+              <TabPanel value={OrganizationTabs.ApiKeys}>
+                <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
+                  API Keys
+                </Typography>
+                <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
+                <Typography level="title-md" sx={{ mt: 4, mb: 2 }}>
+                  Member API keys
+                </Typography>
+                <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageOrg && (

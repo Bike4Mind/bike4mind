@@ -5,8 +5,9 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inheritancePolicy, type TaskContract } from '@shared/orchestration';
-import type { ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import type { ChatAutomaticOrigin, ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { ChatService } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
@@ -62,6 +63,7 @@ describe('role routing and task runtime compatibility', () => {
     });
     service = new ChatService({
       store,
+      queue: new MessageQueue(() => undefined),
       summaryChanged,
       access: { list: async () => [] } as unknown as AccessStore,
       models: { list: async () => ({ models }), cached: () => models } as unknown as ModelCatalog,
@@ -246,6 +248,97 @@ describe('role routing and task runtime compatibility', () => {
         event => event.type === 'tool-end' && event.call.name === 'session_spawn' && event.call.status === 'error'
       )
     ).toBe(true);
+  });
+
+  it('refuses a child when the account changes while its inherited policy is loading', async () => {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'Delegate the bounded task');
+    await waitStream(0);
+
+    let scope = store.scopeKey();
+    vi.spyOn(store, 'scopeKey').mockImplementation(() => scope);
+    const createChild = vi.spyOn(store, 'create');
+    const get = store.get.bind(store);
+    let policyRead = false;
+    let releasePolicy!: () => void;
+    const policyReady = new Promise<void>(resolve => {
+      releasePolicy = resolve;
+    });
+    let reachedPolicy = false;
+    vi.spyOn(service, 'listModels').mockImplementationOnce(async () => {
+      policyRead = true;
+      return { models };
+    });
+    vi.spyOn(store, 'get').mockImplementation(async id => {
+      const snapshot = await get(id);
+      if (policyRead && id === parent.id) {
+        policyRead = false;
+        reachedPolicy = true;
+        await policyReady;
+      }
+      return snapshot;
+    });
+
+    tool(0, 'session_spawn', { prompt: 'Bounded child task', title: 'Child', contract });
+    try {
+      await vi.waitUntil(() => reachedPolicy, { timeout: 5000, interval: 5 });
+      scope = 'another-account';
+      releasePolicy();
+      await vi.waitUntil(() => events.some(event => event.type === 'tool-end' && event.call.name === 'session_spawn'));
+
+      const refused = events.find(event => event.type === 'tool-end' && event.call.name === 'session_spawn');
+      expect(createChild).not.toHaveBeenCalled();
+      expect(refused?.type === 'tool-end' && refused.call.error).toContain('Account changed before launch');
+      expect((await store.list()).filter(session => session.origin?.parentSessionId === parent.id)).toEqual([]);
+      expect(post.mock.calls.every((_call, index) => wire(index).model === 'planner')).toBe(true);
+    } finally {
+      releasePolicy();
+    }
+  });
+
+  it('resolves a family alias to the newest allowed catalog model and offers the field only when overrides exist', async () => {
+    models.push(
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', releaseDate: '2026-09-01', supportsTools: true }
+    );
+    const spawnField = (index: number) =>
+      wire(index).options?.tools?.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.parameters
+        .properties.requested_model_id;
+
+    const closed = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+    });
+    await service.setSessionOrchestrate(closed.id, true);
+    const refusedIndex = streams.length;
+    expect(await spawn(closed, { role: 'implementation', requested_model_id: 'sonnet' })).toBeUndefined();
+    expect(spawnField(refusedIndex)).toBeUndefined();
+    const refusal = events.find(
+      event => event.type === 'tool-end' && event.sessionId === closed.id && event.call.name === 'session_spawn'
+    );
+    expect(refusal?.type === 'tool-end' && refusal.call.error).toMatch(
+      /^Model request refused: 'sonnet' is not an allowed override \(allowed: none\)\. Nothing was started\. Omit requested_model_id to use the role default \(worker\)/
+    );
+
+    const open = await created();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { ...inheritancePolicy().roles, implementation: 'worker' },
+      allowedOverrides: ['claude-sonnet-4-6', 'claude-sonnet-5'],
+    });
+    await service.setSessionOrchestrate(open.id, true);
+    const openIndex = streams.length;
+    const child = await spawn(open, { role: 'implementation', requested_model_id: 'sonnet' });
+    expect(spawnField(openIndex)).toMatchObject({ description: expect.stringContaining('claude-sonnet-5') });
+    expect(child?.model).toBe('claude-sonnet-5');
+    expect((await store.get(child?.id ?? ''))?.workerSelection).toMatchObject({
+      requestedModelId: 'sonnet',
+      effectiveModel: 'claude-sonnet-5',
+      source: 'override',
+    });
   });
 
   it('persists escalation evidence; denial and duplicate delivery make no paid attempt; parent acceptance requires passing results', async () => {
@@ -475,7 +568,72 @@ describe('role routing and task runtime compatibility', () => {
     ).rejects.toThrow(/settled/);
     expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'canceled' });
   });
-  it('refuses Continue after a cancellation while its catalog validation was waiting', async () => {
+  async function drain(ids: string[]) {
+    const ended = new Set<number>();
+    await vi.waitUntil(
+      () => {
+        streams.forEach((stream, index) => {
+          if (ended.has(index)) return;
+          ended.add(index);
+          finish(index);
+        });
+        return ids.every(id => !service.isSessionBusy(id));
+      },
+      { timeout: 5000, interval: 20 }
+    );
+  }
+  async function canceledChild() {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    const child = await spawn(parent, { contract });
+    if (!child) throw new Error('No child');
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await drain([parent.id, child.id]);
+    await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
+    await drain([parent.id, child.id]);
+    const canceled = await store.get(child.id);
+    if (canceled?.workerTask?.state.status !== 'canceled') throw new Error('Task was not canceled');
+    return { parent, child: canceled };
+  }
+  it('runs a user follow-up in a canceled worker session without reopening or reporting the task', async () => {
+    const { parent, child } = await canceledChild();
+    const parentMessages = (await store.get(parent.id))?.messages.length;
+    const calls = post.mock.calls.length;
+    expect(await service.send(child.id, 'Deploy a preview for this PR')).toMatchObject({ ok: true });
+    await waitStream(calls);
+    expect(wire(calls).model).toBe('worker');
+    expect(JSON.stringify(wire(calls).messages)).toContain('not a new attempt at that task');
+    expect(wire(calls).options?.tools?.map(entry => entry.toolSchema.name)).not.toContain('task_report');
+    finish(calls, 'Preview requested');
+    await idle(child.id);
+    const after = await store.get(child.id);
+    expect(after?.workerTask?.state).toMatchObject({
+      status: 'canceled',
+      reason: 'Closing out: the work is finished.',
+    });
+    expect(after?.workerTask?.attempts).toEqual(child.workerTask?.attempts);
+    expect(after?.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Preview requested' });
+    expect((await store.get(parent.id))?.messages.length).toBe(parentMessages);
+    expect(post.mock.calls.length).toBe(calls + 1);
+  });
+  it('lets the user Continue a stopped reply in a canceled worker session and keeps the task canceled', async () => {
+    const { child } = await canceledChild();
+    await store.appendMessage(child.id, {
+      id: 'resumable',
+      role: 'assistant',
+      content: 'Partial result',
+      stopReason: 'tool_turn_limit',
+      createdAt: new Date().toISOString(),
+    });
+    const calls = post.mock.calls.length;
+    expect(await service.continueReply(child.id)).toMatchObject({ ok: true });
+    await waitStream(calls);
+    finish(calls);
+    await idle(child.id);
+    expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+  });
+  it('keeps Continue working when the task is canceled while its catalog validation was waiting', async () => {
     const parent = await created();
     await policy();
     await service.setSessionOrchestrate(parent.id, true);
@@ -503,10 +661,84 @@ describe('role routing and task runtime compatibility', () => {
     const continuing = service.continueReply(child.id);
     await vi.waitUntil(() => listing.mock.calls.length === 1);
     await service.actOnTask(null, child.id, { kind: 'cancel', reason: 'User canceled during catalog validation' });
-    const calls = post.mock.calls.length;
     releaseCatalog?.({ models });
-    expect(await continuing).toMatchObject({ ok: false, error: expect.stringMatching(/canceled/) });
-    expect(post.mock.calls.length).toBe(calls);
+    expect(await continuing).toMatchObject({ ok: true });
     expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+  });
+  it('refuses orchestrator restarts, relays and automatic wakes in a canceled worker session without saving them', async () => {
+    const { parent, child } = await canceledChild();
+    const stored = child.messages.length;
+    const calls = post.mock.calls.length;
+    await expect(
+      service.actOnTask(parent.id, child.id, { kind: 'revise', contract, instruction: 'Try again' })
+    ).rejects.toThrow(/cannot restart/);
+    const exit: ChatAutomaticOrigin = { kind: 'background-exit', processIds: ['p1'], summary: '[p1] exited 0' };
+    expect(await service.startAutomaticTurn(child.id, 'Your command exited', exit)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/canceled/),
+    });
+    await service.send(parent.id, 'Ask the worker for more');
+    await waitStream(calls);
+    tool(calls, 'session_send', { session_id: child.id, message: 'Keep going on the task' });
+    await vi.waitUntil(
+      () =>
+        events.some(
+          event => event.type === 'tool-end' && event.sessionId === parent.id && event.call.name === 'session_send'
+        ),
+      { timeout: 5000, interval: 5 }
+    );
+    const relay = events.find(
+      event => event.type === 'tool-end' && event.sessionId === parent.id && event.call.name === 'session_send'
+    );
+    expect(JSON.stringify(relay)).toContain('canceled task');
+    await waitStream(calls + 1);
+    finish(calls + 1);
+    await idle(parent.id);
+    const after = await store.get(child.id);
+    expect(after?.messages.length).toBe(stored);
+    expect(after?.workerTask?.state.status).toBe('canceled');
+    expect(post.mock.calls.every((_call, index) => index < calls || wire(index).model !== 'worker')).toBe(true);
+  });
+  it('lets a PR auto-fix prompt run in a canceled worker session like a user send', async () => {
+    const { parent, child } = await canceledChild();
+    const parentMessages = (await store.get(parent.id))?.messages.length;
+    const calls = post.mock.calls.length;
+    const autoFix: ChatAutomaticOrigin = {
+      kind: 'auto-fix',
+      prUrl: 'https://github.com/example-org/widgets/pull/611',
+      prNumber: 611,
+      summary: '1 failing check on #611',
+    };
+    expect(await service.startAutomaticTurn(child.id, 'Fix the failing check', autoFix)).toEqual({ ok: true });
+    await waitStream(calls);
+    finish(calls);
+    await idle(child.id);
+    expect((await store.get(child.id))?.workerTask?.state.status).toBe('canceled');
+    expect((await store.get(parent.id))?.messages.length).toBe(parentMessages);
+  });
+  it('refuses an automatic turn canceled between its checks and the write, leaving nothing saved', async () => {
+    const parent = await created();
+    await policy();
+    await service.setSessionOrchestrate(parent.id, true);
+    const child = await spawn(parent, { contract });
+    if (!child) throw new Error('No child');
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    finish(post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker'));
+    await idle(child.id);
+    const stored = (await store.get(child.id))?.messages.length;
+    const append = store.appendMessageIf.bind(store);
+    vi.spyOn(store, 'appendMessageIf').mockImplementationOnce(async (id, message, admit) => {
+      await store.updateWorkerTask(id, task => ({
+        ...task,
+        state: { status: 'canceled', reason: 'Canceled meanwhile' },
+      }));
+      return append(id, message, admit);
+    });
+    const exit: ChatAutomaticOrigin = { kind: 'background-exit', processIds: ['p1'], summary: '[p1] exited 0' };
+    expect(await service.startAutomaticTurn(child.id, 'Your command exited', exit)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/canceled/),
+    });
+    expect((await store.get(child.id))?.messages.length).toBe(stored);
   });
 });

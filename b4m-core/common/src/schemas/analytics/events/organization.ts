@@ -9,6 +9,7 @@ export enum OrganizationEvents {
 export interface IAddMemberToOrganizationEvent extends IBaseEvent {
   type: OrganizationEvents.ADD_ORG_MEMBER;
   metadata: {
+    userId?: string;
     memberEmail: string;
     memberLevel: string;
     organizationId: string;
@@ -32,6 +33,4 @@ export interface ILeaveOrganizationEvent extends IBaseEvent {
 }
 
 export type OrganizationEventPayload =
-  | IAddMemberToOrganizationEvent
-  | IRemoveMemberFromOrganizationEvent
-  | ILeaveOrganizationEvent;
+  IAddMemberToOrganizationEvent | IRemoveMemberFromOrganizationEvent | ILeaveOrganizationEvent;

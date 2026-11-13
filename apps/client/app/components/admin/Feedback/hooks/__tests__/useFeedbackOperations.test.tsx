@@ -169,6 +169,9 @@ describe('useFeedbackOperations handleStatusChange', () => {
 
     const { result } = renderOperations(listParams(1));
     await act(() => result.current.handleStatusChange(item, FeedbackStatus.Closed));
+    expect(mocks.updateFeedbackStatusOnServer).not.toHaveBeenCalled();
+    expect(result.current.feedbackToClose).toBe(item);
+    await act(() => result.current.confirmClose({ resolution: 'fixed' }));
 
     expect(screen.getByTestId('undo-toast-message').textContent).toBe('Thumbs down from rater set to Closed');
   });
@@ -180,6 +183,7 @@ describe('useFeedbackOperations handleStatusChange', () => {
 
     const { result } = renderOperations(listParams(1));
     await act(() => result.current.handleStatusChange(reportItem, FeedbackStatus.Closed));
+    await act(() => result.current.confirmClose({ resolution: 'fixed' }));
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
 
     await waitFor(() =>
@@ -198,6 +202,7 @@ describe('useFeedbackOperations handleStatusChange', () => {
 
     const { result } = renderOperations(listParams(1));
     await act(() => result.current.handleStatusChange(reportItem, FeedbackStatus.Closed));
+    await act(() => result.current.confirmClose({ resolution: 'fixed' }));
     fireEvent.click(screen.getByTestId('undo-toast-audit-btn'));
 
     expect(mocks.navigate).toHaveBeenCalledWith({
@@ -214,6 +219,17 @@ describe('useFeedbackOperations handleStatusChange', () => {
 
     expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining('already Closed'), expect.anything());
     expect(screen.queryByTestId('undo-toast')).toBeNull();
+  });
+
+  it('asks for a resolution when Undo would close a legacy unresolved report', async () => {
+    mocks.updateFeedbackStatusOnServer.mockResolvedValue(statusResponse(FeedbackStatus.New, FeedbackStatus.Closed));
+    const { result } = renderOperations(listParams(1));
+    await act(() =>
+      result.current.handleStatusChange({ ...reportItem, status: FeedbackStatus.Closed }, FeedbackStatus.New)
+    );
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(result.current.feedbackToClose?.status).toBe(FeedbackStatus.New));
+    expect(mocks.updateFeedbackStatusOnServer).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -264,6 +280,7 @@ describe('useFeedbackOperations trends refresh', () => {
     await waitFor(() => expect(result.current.feedback).toHaveLength(1));
 
     await act(() => result.current.handleStatusChange(item, FeedbackStatus.Closed));
+    await act(() => result.current.confirmClose({ resolution: 'fixed' }));
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: FEEDBACK_TRENDS_QUERY_KEY });
   });

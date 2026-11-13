@@ -5,6 +5,8 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import type { UpdateBusyReport, UpdateState } from '@shared/update';
 import { DismissedUpdatePreference } from './DismissedUpdatePreference';
 import { releasePageUrl, resolveFeedUrl } from './feed';
+import { parseUpdatePublicKeys } from './manifestSignature';
+import { SignedFeed } from './signedFeed';
 import { UpdateService, type UpdaterPort } from './UpdateService';
 import { appWindows } from '../windows';
 
@@ -14,6 +16,9 @@ import { appWindows } from '../windows';
  * environment - still has it.
  */
 const CONFIGURED_FEED = process.env.B4M_UPDATE_FEED_URL;
+
+/** Baked the same way. With keys, a manifest is only offered when its `.sig` verifies; see manifestSignature.ts. */
+const CONFIGURED_PUBLIC_KEYS = process.env.B4M_UPDATE_PUBLIC_KEYS;
 
 /**
  * How long after launch the first check waits.
@@ -58,18 +63,21 @@ export interface UpdateDeps {
 /**
  * Wire electron-updater to the state machine, expose it over IPC, and schedule the checks.
  *
- * The updater is only constructed when this is a packaged build WITH a feed. In dev, or in a
- * fork that configured nothing, the service is created with a null port: every operation
- * no-ops, the state stays 'unsupported', and the Customize row still shows the version. That is
- * deliberate - the alternative is electron-updater throwing "application is not packed" on
- * every launch of every dev run.
+ * The updater is only constructed when this is a packaged build WITH a feed, and with update
+ * keys that all parse if any were baked in. In dev, or in a fork that configured nothing, the
+ * service is created with a null port: every operation no-ops, the state stays 'unsupported',
+ * and the Customize row still shows the version. That is deliberate - the alternative is
+ * electron-updater throwing "application is not packed" on every launch of every dev run.
  */
 export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   const feedUrl = resolveFeedUrl(CONFIGURED_FEED);
+  const keys = parseUpdatePublicKeys(CONFIGURED_PUBLIC_KEYS);
   const fakeVersion = app.isPackaged ? null : FAKE_UPDATE_VERSION;
-  const real = app.isPackaged && feedUrl !== null;
+  const real = app.isPackaged && feedUrl !== null && keys.kind !== 'invalid';
   const enabled = real || fakeVersion !== null;
   const log = (message: string) => console.warn(message);
+  if (keys.kind === 'invalid') log(`[update] updates are off in this build: ${keys.reason}`);
+  const signed = real && keys.kind === 'keys' ? new SignedFeed(keys.keys) : null;
 
   const send = (state: UpdateState) => {
     for (const window of appWindows()) {
@@ -92,14 +100,16 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.logger = VERBOSE ? console : null;
-    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    autoUpdater.setFeedURL(signed ? signed.publishOptions(feedUrl) : { provider: 'generic', url: feedUrl });
 
     port = {
       check: async () => {
         await autoUpdater.checkForUpdates();
       },
       download: async () => {
-        await autoUpdater.downloadUpdate();
+        const [file] = await autoUpdater.downloadUpdate();
+        // A mismatch rejects here, so it lands as a failed download like any other.
+        if (signed) service.apply({ type: 'downloaded', version: await signed.confirmDownload(file) });
       },
       install: () => autoUpdater.quitAndInstall(),
     };
@@ -128,7 +138,8 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
       service.apply({ type: 'progress', percent: progress.percent });
     });
     autoUpdater.on('update-downloaded', info => {
-      service.apply({ type: 'downloaded', version: info.version });
+      // With keys, the download port applies this once the file has been checked against the signed manifest.
+      if (!signed) service.apply({ type: 'downloaded', version: info.version });
     });
     // No network, a feed that 404s, a manifest that does not parse, and a signature that does
     // not verify all arrive here. None of them is shown: the user did not ask about updates,

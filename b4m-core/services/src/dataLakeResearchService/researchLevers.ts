@@ -9,6 +9,8 @@ import {
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -103,6 +105,10 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // and the UI both see one representation of it instead of two.
     ...(recencyDays > 0 ? { recencyDays } : {}),
     ...tierFields,
+    autoAdmitTrusted: input.autoAdmitTrusted === true,
+    // Not clamped against maxProposals: the lower cap wins at run time, and a save-time clamp goes
+    // stale when either lever is edited later.
+    maxAutoAdmits: clampInt(input.maxAutoAdmits, RESEARCH_MAX_AUTO_ADMITS_DEFAULT, 1, RESEARCH_MAX_AUTO_ADMITS_LIMIT),
     allowedDomains: deriveLegacyAllowedDomains(tierFields),
     blockedDomains: normalizeDomainList(input.blockedDomains),
     minRelevance: clampUnitInterval(input.minRelevance, RESEARCH_MIN_RELEVANCE_DEFAULT),

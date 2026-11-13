@@ -26,6 +26,12 @@ export type ModelPartMesh = {
   positions: Float32Array;
   indices: Uint32Array;
   /**
+   * The model-source lines that built this part, ascending: every manifold call on the way to its
+   * shape, with the helper calls around them (the engine worker's provenance, engineProtocol.ts).
+   * What point-and-edit points the agent at; absent when nothing was traced (a print build).
+   */
+  lines?: number[];
+  /**
    * Where this part's node has its origin, in model units and model axes: the point it rotates
    * about when an engine animates it (a lid's hinge). Absent means the model origin.
    */

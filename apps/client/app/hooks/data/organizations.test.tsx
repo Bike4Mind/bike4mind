@@ -1,11 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
+import { organizationMemberRole } from '@bike4mind/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import { fabFileKeys } from './fabFileKeys';
+import { dataLakeKeys } from './dataLakeKeys';
 import {
+  useGetOrganization,
+  useOrganizationInviteLinks,
   useGetUserOrganizations,
+  useMemberOffboardingInventory,
+  useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
   useSetMemberCreditDefault,
@@ -21,6 +28,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 const put = api.put as unknown as Mock;
 const del = api.delete as unknown as Mock;
+const get = api.get as unknown as Mock;
 const post = api.post as unknown as Mock;
 
 const renderWithClient = <T,>(useHook: () => T) => {
@@ -128,13 +136,14 @@ describe('cancelled organization refreshes', () => {
   });
 
   it.each([
+    ['single organization', () => useGetOrganization('org1')],
     ['user organizations', () => useGetUserOrganizations('user1')],
     ['organization search', () => useSearchOrganizations({ page: 1, limit: 16, search: '' })],
     ['user organization search', () => useSearchUserOrganizations('user1', '')],
   ] as const)('%s does not fan out a late response after cancellation', async (_name, useHook) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const organizationKey = ['organizations', 'org1'];
-    queryClient.setQueryData(organizationKey, { id: 'org1', currentCredits: 100 });
+    queryClient.setQueryData(organizationKey, { id: 'org1', currentCredits: 100 }, { updatedAt: 0 });
     let resolveResponse!: (response: {
       data: { data: { id: string; currentCredits: number }[]; hasMore: boolean; total: number };
     }) => void;
@@ -201,5 +210,172 @@ describe('manager and ownership mutations', () => {
     expect(post).toHaveBeenCalledWith('/api/organizations/org1/transfer-ownership', { newOwnerId: 'u1' });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['users', 'organization'] });
+  });
+});
+
+describe('member offboarding ownership caches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: { id: 'org1', personalLakeSharesKept: 0 } });
+  });
+
+  it.each([false, true])('refreshes transferred content caches only when transfer is %s', async transferring => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: Infinity }, mutations: { retry: false } },
+    });
+    const contentKeys = [
+      fabFileKeys.doc('file1'),
+      ['projects', 'project1'],
+      ['projects', 'search', { search: 'Roadmap' }],
+      ['joined-projects', 'owner'],
+      ['sessions', 'own', 'owner'],
+      ['sessions', 'notebook1'],
+      ['own-session-count'],
+      ['agents'],
+      ['session-agents', 'notebook1'],
+      ['artifact', 'artifact1'],
+      ['session-artifacts', 'notebook1'],
+    ] as const;
+    const membershipKeys = [['users', 'organization', 'org1'], ['organizations', 'org1'], dataLakeKeys.list] as const;
+    for (const queryKey of [...contentKeys, ...membershipKeys, ['unrelated']]) {
+      queryClient.setQueryData(queryKey, { id: 'cached' });
+    }
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(useRemoveMemberFromOrganization, { wrapper });
+    try {
+      await act(async () => {
+        await view.result.current.mutateAsync({
+          organizationId: 'org1',
+          userId: 'member',
+          ...(transferring ? { reassignTo: 'owner' } : {}),
+        });
+      });
+      for (const queryKey of contentKeys) {
+        expect(queryClient.getQueryState(queryKey)?.isInvalidated, JSON.stringify(queryKey)).toBe(transferring);
+      }
+      for (const queryKey of membershipKeys) {
+        expect(queryClient.getQueryState(queryKey)?.isInvalidated, JSON.stringify(queryKey)).toBe(true);
+      }
+      expect(queryClient.getQueryState(['unrelated'])?.isInvalidated).toBe(false);
+      expect(del).toHaveBeenCalledWith(
+        '/api/organizations/org1/members/member',
+        transferring ? { data: { reassignTo: 'owner' } } : undefined
+      );
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('member offboarding inventory after removal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const removed = { id: 'org1', userId: 'owner', users: [{ userId: 'other', permissions: ['read'] }] };
+    del.mockResolvedValue({ data: { ...removed, personalLakeSharesKept: 0 } });
+    get.mockImplementation(async (url: string) => ({
+      data: url === '/api/organizations/org1' ? removed : { files: { count: 0, sample: [] } },
+    }));
+  });
+
+  it('suppresses removed-member reads and reloads a re-added member despite retained mutation history', async () => {
+    const idleCallbacks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (callback: () => void) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    });
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    for (let index = 0; index < 11; index += 1) {
+      queryClient.setQueryData(['organizations', 'cached', index], { id: 'org1' });
+    }
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    queryClient.setQueryData(['organizations', 'org1'], {
+      id: 'org1',
+      userId: 'owner',
+      users: [
+        { userId: 'member', permissions: [] },
+        { userId: 'other', permissions: ['read'] },
+      ],
+    });
+    const view = renderHook(
+      ({ userId }: { userId: string | null }) => {
+        const organization = useGetOrganization('org1');
+        return {
+          inventory: useMemberOffboardingInventory('org1', userId, {
+            enabled: !!userId && !!organization.data && organizationMemberRole(organization.data, userId) !== null,
+          }),
+          removeMember: useRemoveMemberFromOrganization(),
+        };
+      },
+      { wrapper, initialProps: { userId: 'member' as string | null } }
+    );
+    const inventoryUrl = (userId: string) => `/api/organizations/org1/members/${userId}/offboarding`;
+    const inventoryFetches = (userId: string) => get.mock.calls.filter(([url]) => url === inventoryUrl(userId)).length;
+    try {
+      await waitFor(() => expect(view.result.current.inventory.isSuccess).toBe(true));
+      expect(inventoryFetches('member')).toBe(1);
+
+      await act(async () => {
+        await view.result.current.removeMember.mutateAsync({ organizationId: 'org1', userId: 'member' });
+      });
+      expect(idleCallbacks).toHaveLength(0);
+      expect(queryClient.getQueryData(['organizations', 'org1'])).toMatchObject({
+        users: [{ userId: 'other', permissions: ['read'] }],
+      });
+      view.rerender({ userId: 'member' });
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+
+      expect(inventoryFetches('member')).toBe(1);
+      expect(view.result.current.inventory.fetchStatus).toBe('idle');
+
+      view.rerender({ userId: 'other' });
+      await waitFor(() => expect(inventoryFetches('other')).toBe(1));
+      view.rerender({ userId: null });
+      await act(async () => {
+        queryClient.setQueryData(['organizations', 'org1'], {
+          id: 'org1',
+          userId: 'owner',
+          users: [
+            { userId: 'member', permissions: [] },
+            { userId: 'other', permissions: ['read'] },
+          ],
+        });
+      });
+      expect(
+        queryClient.getMutationCache().findAll({ mutationKey: ['organizations', 'remove-member'], status: 'success' })
+      ).toHaveLength(1);
+      view.rerender({ userId: 'member' });
+      await waitFor(() => expect(inventoryFetches('member')).toBe(2));
+      await waitFor(() => expect(view.result.current.inventory.isSuccess).toBe(true));
+    } finally {
+      view.unmount();
+      queryClient.clear();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('organization invite link pages', () => {
+  it('loads the next cursor and keeps earlier rows', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({ data: [{ id: 'link-a' }], headers: { 'x-next-cursor': '000000000000000000000001' } });
+    const { result } = renderWithClient(() => useOrganizationInviteLinks('org-pages'));
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }]));
+    expect(result.current.hasNextPage).toBe(true);
+    get.mockResolvedValueOnce({ data: [{ id: 'link-b' }], headers: {} });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }, { id: 'link-b' }]));
+    expect(get).toHaveBeenLastCalledWith('/api/organizations/org-pages/invite-links', {
+      params: { after: '000000000000000000000001' },
+    });
+    expect(result.current.hasNextPage).toBe(false);
   });
 });

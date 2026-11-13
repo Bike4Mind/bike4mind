@@ -67,11 +67,14 @@ public struct ChatQuestFrame: Hashable, Sendable {
   /// Present on every frame while the quest waits for approval; absent once resolved.
   public let pendingAction: PendingAction?
   public let statusMessage: String?
+  /// Length of the raw `replies` text (else the scalar `reply`) before `ReplyVisibility` filtered it; `nil`
+  /// when the frame carried no reply text. See `QuestTurn.rawReplyLength`.
+  public let rawReplyLength: Int?
 
   public init(
     questID: String, sessionID: String, prompt: String? = nil, reply: String?, status: QuestTurn.Status?,
     kind: QuestTurn.Kind? = .message, errorCode: QuestTurn.ErrorCode? = nil, creditsUsed: Double? = nil,
-    pendingAction: PendingAction? = nil, statusMessage: String? = nil
+    pendingAction: PendingAction? = nil, statusMessage: String? = nil, rawReplyLength: Int? = nil
   ) {
     self.questID = questID
     self.sessionID = sessionID
@@ -83,6 +86,7 @@ public struct ChatQuestFrame: Hashable, Sendable {
     self.creditsUsed = creditsUsed
     self.pendingAction = pendingAction
     self.statusMessage = statusMessage
+    self.rawReplyLength = rawReplyLength
   }
 
   /// `nil` for any other action, or a frame without the quest identity needed to route it.
@@ -102,18 +106,25 @@ public struct ChatQuestFrame: Hashable, Sendable {
       errorCode: quest["errorCode"]?.stringValue.flatMap(QuestTurn.ErrorCode.init(rawValue:)),
       creditsUsed: quest["creditsUsed"]?.numberValue,
       pendingAction: quest["pendingAction"]?.objectValue.flatMap(PendingAction.init(wire:)),
-      statusMessage: frame.payload["statusMessage"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 })
+      statusMessage: frame.payload["statusMessage"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 },
+      rawReplyLength: Self.rawReplyLength(reply: quest["reply"], replies: quest["replies"]))
   }
 }
 
 extension ChatQuestFrame {
-  /// The joined non-empty `replies` slots, else a non-empty `reply`. `nil` when neither has text, so an
-  /// optimized frame never blanks text an earlier frame showed.
+  /// The visible text of the `replies` slots (see `ReplyVisibility`), else a non-empty `reply`. `nil` when
+  /// neither has text, so an optimized frame never blanks text an earlier frame showed.
   static func replyText(reply: JSONValue?, replies: JSONValue?) -> String? {
-    let joined = (replies?.arrayValue ?? []).compactMap(\.stringValue).filter { !$0.isEmpty }.joined()
-    if !joined.isEmpty { return joined }
+    ReplyVisibility.text(replies: (replies?.arrayValue ?? []).compactMap(\.stringValue), reply: reply?.stringValue)
+  }
+
+  /// The unfiltered length behind `replyText`: the joined `replies`, else the scalar `reply`, as the web guard
+  /// measures `replies.join('')`. `nil` when neither has text.
+  static func rawReplyLength(reply: JSONValue?, replies: JSONValue?) -> Int? {
+    let joined = (replies?.arrayValue ?? []).compactMap(\.stringValue).joined()
+    if !joined.isEmpty { return joined.count }
     guard let reply = reply?.stringValue, !reply.isEmpty else { return nil }
-    return reply
+    return reply.count
   }
 }
 
@@ -138,35 +149,70 @@ extension QuestTurn {
   /// This turn with a live frame applied. The frame's reply REPLACES the text (it is cumulative);
   /// fields an optimized frame omits keep their previous value.
   public func applying(_ frame: ChatQuestFrame) -> QuestTurn {
-    QuestTurn(
+    let next = Self.reply(
+      current: StreamedReply(text: reply, rawLength: rawReplyLength),
+      incoming: StreamedReply(text: frame.reply, rawLength: frame.rawReplyLength),
+      settled: frame.status?.isTerminal ?? false)
+    return QuestTurn(
       id: frame.questID,
       prompt: prompt.flatMap { $0.isEmpty ? nil : $0 } ?? frame.prompt,
-      reply: frame.reply ?? reply,
+      reply: next.text,
       status: frame.status ?? status,
       kind: frame.kind ?? kind,
       errorCode: frame.errorCode ?? errorCode,
       createdAt: createdAt,
       creditsUsed: frame.creditsUsed ?? creditsUsed,
-      pendingAction: frame.pendingAction)
+      pendingAction: frame.pendingAction,
+      rawReplyLength: next.rawLength)
   }
 
   /// This turn updated from a REST poll (`GET /api/v1/quests/{id}`), which carries neither the prompt
   /// nor `creditsUsed` nor `pendingAction`; those keep their previous value while the quest runs.
   public func applying(polled: QuestTurn) -> QuestTurn {
     let terminal = polled.status?.isTerminal ?? false
+    let next = Self.reply(
+      current: StreamedReply(text: reply, rawLength: rawReplyLength),
+      incoming: StreamedReply(text: polled.reply, rawLength: polled.rawReplyLength),
+      settled: terminal)
     return QuestTurn(
       id: id,
       prompt: prompt ?? polled.prompt,
-      reply: polled.reply ?? reply,
+      reply: next.text,
       status: polled.status ?? status,
       kind: polled.kind ?? kind,
       errorCode: polled.errorCode ?? errorCode,
       createdAt: createdAt,
       creditsUsed: polled.creditsUsed ?? creditsUsed,
-      pendingAction: terminal ? nil : (polled.pendingAction ?? pendingAction))
+      pendingAction: terminal ? nil : (polled.pendingAction ?? pendingAction),
+      rawReplyLength: next.rawLength)
   }
 
   public var isFailed: Bool { kind == .error || status == .stopped }
+
+  /// Visible reply text plus the raw length it was filtered from (`nil` when unknown).
+  struct StreamedReply: Equatable {
+    let text: String?
+    let rawLength: Int?
+  }
+
+  /// Mid-stream text only grows, as on the web (useStreamingQueryUpdates): a poll reads the quest as last
+  /// persisted, up to a heartbeat behind the socket, and a retry resets the server's reply slots. A settled
+  /// update is the final display text and wins even when shorter.
+  ///
+  /// Growth is measured on the RAW slots, as the web guard measures `replies.join('')`: hiding a choices block
+  /// or `<think>` reasoning legitimately shrinks the visible text (even to nothing) the moment its marker
+  /// completes, and comparing visible lengths would freeze the turn on the partial marker. With no raw length
+  /// on one side (a REST poll, a local turn), the visible length is the bound: it never exceeds the raw one.
+  static func reply(current: StreamedReply, incoming: StreamedReply, settled: Bool) -> StreamedReply {
+    if let incomingRaw = incoming.rawLength {
+      if settled { return incoming }
+      let currentBound = current.rawLength ?? current.text?.count ?? 0
+      return incomingRaw < currentBound ? current : incoming
+    }
+    guard let incomingText = incoming.text else { return current }
+    if settled { return incoming }
+    return incomingText.count < (current.text?.count ?? 0) ? current : incoming
+  }
 }
 
 /// Where a turn's tool approval stands.
