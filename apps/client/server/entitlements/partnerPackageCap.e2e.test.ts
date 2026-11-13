@@ -9,8 +9,10 @@ import {
   mongoose,
   Organization,
   PartnerSignupRule,
+  SignupGrantBudgetDayModel,
   User,
 } from '@bike4mind/database';
+import { invalidatePartnerRuleCache } from '@bike4mind/server-utils/entitlements/partnerRules';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -49,6 +51,7 @@ const models = [
   GrantPackage,
   GrantPackageRedemption,
   GrantPackageDayCount,
+  SignupGrantBudgetDayModel,
 ];
 
 beforeAll(async () => {
@@ -67,48 +70,68 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   for (const model of models) await model.collection.deleteMany({});
+  // Rules are cached per process, so a rule from an earlier test would otherwise outlive its rows.
+  invalidatePartnerRuleCache();
 });
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Parameters<
   typeof applySignupDomainGrant
 >[0]['logger'];
 
+async function seedRule({ expiresAt = null }: { expiresAt?: Date | null } = {}) {
+  const owner = await User.create({ name: 'owner', username: 'owner', email: 'owner@example.test' });
+  const org = await Organization.create({ name: 'Partner Org', userId: String(owner._id), seats: 10 });
+  const pkg = await GrantPackage.create({
+    name: 'Synthetic partner package',
+    credits: 100,
+    totalCap: 1,
+    dailyCap: null,
+    expiresAt,
+    createdBy: 'synthetic-admin',
+  });
+  await PartnerSignupRule.create({
+    domain: 'partner.example.test',
+    organizationId: String(org._id),
+    signupCredits: 0,
+    grantPackageId: String(pkg._id),
+    subscription: { priceId: 'price_synthetic', durationMonths: 1 },
+  });
+  return { org, pkg };
+}
+
+async function signUpOnDomain(name: string) {
+  const user = await User.create({
+    name,
+    username: name,
+    email: `${name}@partner.example.test`,
+    emailVerified: true,
+    currentCredits: 0,
+  });
+  const result = await applySignupDomainGrant({
+    userId: String(user._id),
+    email: user.email,
+    trigger: 'otc-signup',
+    logger,
+  });
+  return { id: String(user._id), result };
+}
+
+async function expectUnmeteredUnpaid(userId: string) {
+  expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
+  const user = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+  expect(user?.signupGrant ?? null).toBeNull();
+  expect(user?.lastCreditsPurchasedAt ?? null).toBeNull();
+  expect(await CreditTransaction.countDocuments({ ownerId: userId, type: 'purchase' })).toBe(0);
+}
+
 describe('partner signup rule linked to a capped grant package', () => {
+  beforeEach(() => grantSubscription.mockClear());
+
   it('joins every verified signup to the org and plan but credits only the first', async () => {
-    const owner = await User.create({ name: 'owner', username: 'owner', email: 'owner@example.test' });
-    const org = await Organization.create({ name: 'Partner Org', userId: String(owner._id), seats: 10 });
-    const pkg = await GrantPackage.create({
-      name: 'Synthetic partner package',
-      credits: 100,
-      totalCap: 1,
-      dailyCap: null,
-      createdBy: 'synthetic-admin',
-    });
-    await PartnerSignupRule.create({
-      domain: 'partner.example.test',
-      organizationId: String(org._id),
-      signupCredits: 0,
-      grantPackageId: String(pkg._id),
-      subscription: { priceId: 'price_synthetic', durationMonths: 1 },
-    });
+    const { org, pkg } = await seedRule();
 
     const signups = [];
-    for (const name of ['first', 'second']) {
-      const user = await User.create({
-        name,
-        username: name,
-        email: `${name}@partner.example.test`,
-        emailVerified: true,
-        currentCredits: 0,
-      });
-      const result = await applySignupDomainGrant({
-        userId: String(user._id),
-        email: user.email,
-        trigger: 'otc-signup',
-        logger,
-      });
-      signups.push({ id: String(user._id), result });
-    }
+    for (const name of ['first', 'second']) signups.push(await signUpOnDomain(name));
 
     for (const { result } of signups) expect(result.joinedOrganizationId).toBe(String(org._id));
     expect(grantSubscription).toHaveBeenCalledTimes(2);
@@ -119,5 +142,23 @@ describe('partner signup rule linked to a capped grant package', () => {
     const after = await GrantPackage.findById(pkg._id).lean();
     expect(after?.redeemedTotal).toBe(1);
     expect(after?.capHits).toBe(1);
+    expect(signups.map(({ result }) => result.packageRefusal)).toEqual([null, 'total_cap']);
+    for (const { id } of signups) await expectUnmeteredUnpaid(id);
+  });
+
+  it('joins a signup on an expired package to the org but adds no credits and reports the refusal', async () => {
+    const { org, pkg } = await seedRule({ expiresAt: new Date(Date.now() - 60_000) });
+
+    const { id, result } = await signUpOnDomain('late');
+
+    expect(result.joinedOrganizationId).toBe(String(org._id));
+    expect(grantSubscription).toHaveBeenCalledTimes(1);
+    expect(result.creditsGranted).toBe(0);
+    expect(result.packageRefusal).toBe('expired');
+    expect((await User.findById(id).lean())?.currentCredits).toBe(0);
+    const after = await GrantPackage.findById(pkg._id).lean();
+    expect(after?.redeemedTotal).toBe(0);
+    expect(after?.capHits).toBe(0);
+    await expectUnmeteredUnpaid(id);
   });
 });

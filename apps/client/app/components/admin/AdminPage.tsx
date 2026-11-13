@@ -97,6 +97,7 @@ const RetrievalRateTab = dynamic(() => import('./RetrievalRateTab'), { ssr: fals
 const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
+const LegacyApiKeysTab = dynamic(() => import('./LegacyApiKeysTab'), { ssr: false });
 const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
@@ -178,9 +179,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AiOperations}>
             {activeTab === AdminTab.AiOperations && <AiOperationsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.Users} {...selfFramed}>
-            {activeTab === AdminTab.Users && <UsersTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
           <TabPanel value={AdminTab.EmailVerification}>
             {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
           </TabPanel>
@@ -310,7 +309,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-          <TabPanel value={AdminTab.SystemHealth} {...selfFramed}>
+          <TabPanel value={AdminTab.SystemHealth}>
             {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SlackWorkspaces}>
@@ -339,6 +338,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
           <TabPanel value={AdminTab.ApiKeyScopePreflight}>
             {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.LegacyApiKeys}>
+            {activeTab === AdminTab.LegacyApiKeys && <LegacyApiKeysTab />}
           </TabPanel>
           <TabPanel value={AdminTab.IntegrationHealth}>
             {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}

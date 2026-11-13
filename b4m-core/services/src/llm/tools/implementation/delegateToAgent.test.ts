@@ -50,6 +50,75 @@ function makeTracker(): ServerSubagentTracker {
   };
 }
 
+describe('createDelegateToAgentTool thoroughness validation', () => {
+  it.each([false, true])('rejects invalid levels before starting a child (background: %s)', async background => {
+    const tracker = makeTracker();
+    const llm = makeLlm();
+    const onTelemetry = vi.fn();
+    const onStatusUpdate = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm,
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      onTelemetry,
+      onStatusUpdate,
+    });
+
+    for (const thoroughness of ['thorough', '', 'QUICK', null, 123, {}, ['quick']]) {
+      const result = await tool.toolFn({ task: 'Research a topic', agent: 'researcher', thoroughness, background });
+
+      expect(result).toBe('Error: delegate_to_agent thoroughness must be one of: quick, medium, very_thorough');
+      expect(onTelemetry).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          success: false,
+          thoroughness: undefined,
+          error: expect.stringContaining('thoroughness'),
+        })
+      );
+    }
+
+    expect(tracker.onStart).not.toHaveBeenCalled();
+    expect(tracker.onLambdaDispatch).not.toHaveBeenCalled();
+    expect(llm.complete).not.toHaveBeenCalled();
+    expect(onStatusUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['quick', 'medium', 'very_thorough', undefined] as const)(
+    'allows valid or omitted thoroughness: %s',
+    async thoroughness => {
+      const tracker = makeTracker();
+      const tool = createDelegateToAgentTool({
+        userId: 'u1',
+        llm: makeLlm(),
+        logger: makeLogger(),
+        parentTools: [],
+        agentStore: makeStore(),
+        tracker,
+      });
+
+      const result = await tool.toolFn({
+        task: 'Research a topic',
+        agent: 'researcher',
+        thoroughness,
+        background: true,
+      });
+
+      expect(JSON.parse(result as string)).toMatchObject({
+        status: 'background_started',
+        thoroughness: thoroughness ?? 'medium',
+      });
+      expect(tracker.onLambdaDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subagentConfig: expect.objectContaining({ thoroughness: thoroughness ?? 'medium' }),
+        })
+      );
+    }
+  );
+});
+
 describe('createDelegateToAgentTool — background mode', () => {
   it('background: true returns structured payload without running the agent in-process', async () => {
     const tracker = makeTracker();

@@ -242,6 +242,7 @@ export default function HeldSignupGrantsTab() {
               size="sm"
               data-testid="held-signup-grants-release-btn"
               disabled={missingPermission || busy || selected.size === 0}
+              loading={release.isPending}
               onClick={() => {
                 release.reset();
                 setReleasing({ userIds: [...selected] });
@@ -309,10 +310,9 @@ export default function HeldSignupGrantsTab() {
           );
         }}
         data-testid="held-signup-grants-release-dialog"
-        testIds={{ reason: 'held-signup-grants-release-reason', confirm: 'held-signup-grants-release-confirm-btn' }}
       >
         {release.error && (
-          <Alert color="danger" data-testid="held-signup-grants-release-error">
+          <Alert color="danger" data-testid="held-signup-grants-release-dialog-error">
             {getErrorMessage(release.error)}
           </Alert>
         )}

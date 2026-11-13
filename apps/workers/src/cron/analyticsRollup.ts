@@ -1,7 +1,7 @@
 import { connectDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { runNightlyRollup } from '@server/analytics/analyticsRollup';
+import { runNightlyRollup } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import type { ScheduledEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 

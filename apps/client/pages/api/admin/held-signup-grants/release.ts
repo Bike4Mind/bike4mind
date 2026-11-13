@@ -23,7 +23,7 @@ const bodySchema = z.object({
     .min(1)
     .max(userService.MAX_BULK_RELEASE),
   dryRun: z.boolean().optional(),
-  /** Validated by the shared admin reason rule; required when releasing over an AI suggestion. */
+  /** Validated by the shared admin reason rule; required on every release (not on a dry run). */
   reason: z.unknown().optional(),
   /** Releasing one account over its abuse assessment: recorded as an override of that suggestion. */
   aiDecision: assessmentAiDecisionSchema.optional(),
@@ -53,8 +53,6 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
       const { aiDecision } = parsed.data;
       if (aiDecision && userIds.length !== 1)
         throw new BadRequestError('An AI suggestion decision applies to releasing one account');
-      const reason =
-        parsed.data.reason !== undefined || aiDecision ? parseAdminActionReason(parsed.data.reason) : undefined;
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
           { action: 'release_held', userIds },
@@ -62,6 +60,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         );
         return res.status(200).json(preview);
       }
+      const reason = parseAdminActionReason(parsed.data.reason);
       // Validated before paying: an assessment that does not name the account is a 400.
       const aiSuggestion = aiDecision
         ? await userAssessmentSuggestion('heldSignupGrant', userIds[0], aiDecision.assessmentId)
@@ -80,7 +79,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
               action: 'user.credits.adjusted',
               target: { kind: 'user', id: row.userId, displayName: row.userId },
               summary: 'released held signup grant',
-              ...(reason ? { reason } : {}),
+              reason,
               details: aiSuggestion
                 ? withAiSuggestionId(auditDetails(row.credits, result.batchId), aiSuggestion.id)
                 : auditDetails(row.credits, result.batchId),
@@ -92,7 +91,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         }
       }
       const released = result.results.some(row => row.outcome === 'released');
-      if (aiSuggestion && reason && released) {
+      if (aiSuggestion && released) {
         // The payout already committed; a failed suggestion write is logged rather than failing it.
         try {
           const decided = await recordUserAssessmentOverride(aiSuggestion, {

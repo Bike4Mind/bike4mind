@@ -31,12 +31,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         const enforceMFA = await readEnforceMfa();
 
-        // Phase-1 passkeys are an alternative second factor, so they go with MFA. Removed BEFORE
-        // the disable commits: a failure then leaves MFA on, never orphan passkeys that would
-        // satisfy MFA again once it is re-enabled. Gated on the disable being allowed, so a
-        // refused disable does not strip them.
+        // Passkeys are second factors, so they go with MFA. Removed BEFORE the disable commits: a
+        // failure then leaves MFA on, never orphan passkeys that would satisfy MFA again once it is
+        // re-enabled. Gated on the disable being allowed, so a refused disable does not strip them.
         let removedPasskeys = 0;
-        if (freshUser.mfa?.totpEnabled && mfaService.userCanDisableMFA(freshUser, enforceMFA)) {
+        if (mfaService.userHasMFAConfigured(freshUser) && mfaService.userCanDisableMFA(freshUser, enforceMFA)) {
           removedPasskeys = await passkeyCredentialRepository.removeAllForUser(freshUser.id);
         }
 

@@ -50,7 +50,7 @@ vi.mock('@bike4mind/common', () => ({
 // which the real gate needs.
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ ipBlockRefusal: async () => null }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
-vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
 vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: h.assertAccountStateUsable,
 }));

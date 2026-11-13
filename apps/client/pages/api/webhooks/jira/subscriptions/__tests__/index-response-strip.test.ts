@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   getValidTokens: vi.fn(),
 }));
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/slack', () => ({ resolveNotificationDestination: h.destination }));
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: h.getValidTokens },

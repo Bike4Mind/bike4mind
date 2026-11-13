@@ -5,9 +5,13 @@ import { dirname, join, relative } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { type TutorialDraftContent, type TutorialTurn } from '@bike4mind/common';
 import { moduleBundleOf } from '@client/app/components/tutorial/admin/tutorialOverrideExport';
-import { CORE_DRAFT_PROFILE, CORE_DRAFT_SELECTORS, coreDraftCore } from '../../coreDraftProfile';
-import { coreKnownSelectors } from '../../coreDraftProfile';
-import { validateTutorialModule } from '../../validate';
+import {
+  CORE_DRAFT_PROFILE,
+  CORE_DRAFT_SELECTORS,
+  coreDraftCore,
+} from '@bike4mind/server-utils/tutorials/coreDraftProfile';
+import { coreKnownSelectors } from '@bike4mind/server-utils/tutorials/coreDraftProfile';
+import { validateTutorialModule } from '@bike4mind/server-utils/tutorials/validate';
 import { applyModuleBundle, identifiersOf, isModuleBundle, moduleChecklist, parseModuleBundle } from '../applyModule';
 import { assertWritable } from '../applyOverride';
 import { coreLayout, coreModuleFiles } from '../coreLayout';
@@ -67,7 +71,7 @@ describe('a core-made bundle', () => {
     const result = applyModuleBundle(bundle, layout, { dryRun: false });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const dir = join(root, 'apps/client/server/tutorials/modules/my-week');
+    const dir = join(root, 'packages/server-utils/src/tutorials/modules/my-week');
     expect(result.dir).toBe(dir);
     expect(result.files.map(p => relative(dir, p)).sort()).toEqual(
       ['module.ts', 'sheet.ts', 'steps.ts', 'transcript.json'].sort()
@@ -108,7 +112,7 @@ describe('a core-made bundle', () => {
   it('writes nothing on a dry run, and refuses a directory that exists', () => {
     const bundle = exported(made({ moduleId: 'dry-week' }));
     expect(applyModuleBundle(bundle, layout, { dryRun: true }).ok).toBe(true);
-    expect(existsSync(join(root, 'apps/client/server/tutorials/modules/dry-week'))).toBe(false);
+    expect(existsSync(join(root, 'packages/server-utils/src/tutorials/modules/dry-week'))).toBe(false);
     const again = exported(made());
     expect(applyModuleBundle(again, layout, { dryRun: false })).toMatchObject({ ok: false, reason: 'exists' });
   });
@@ -120,7 +124,7 @@ describe('a core-made bundle', () => {
     expect(result.ok === false && result.reason === 'rules' && result.issues.map(i => i.rule)).toContain(
       'draft-visibility'
     );
-    expect(existsSync(join(root, 'apps/client/server/tutorials/modules/no-vis'))).toBe(false);
+    expect(existsSync(join(root, 'packages/server-utils/src/tutorials/modules/no-vis'))).toBe(false);
   });
 
   it('refuses an id that would write outside the modules directory', () => {
@@ -149,7 +153,7 @@ describe('a core-made bundle', () => {
 
   it('names the registries and the fields command in its checklist', () => {
     const list = moduleChecklist(layout, 'my-week').join('\n');
-    expect(list).toContain('apps/client/server/tutorials/registry.ts');
+    expect(list).toContain('packages/server-utils/src/tutorials/registry.ts');
     expect(list).toContain('tutorials:fields');
   });
 });

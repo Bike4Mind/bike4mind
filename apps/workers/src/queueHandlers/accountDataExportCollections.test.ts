@@ -5,7 +5,10 @@ import { accountArchiveFilter, accountArchiveMetadata } from './accountDataExpor
 
 describe('account archive coverage', () => {
   it('requires an explicit adapter policy for every direct purge-listed model', () => {
-    const purge = readFileSync(new URL('../../../client/server/users/purgeAccountContent.ts', import.meta.url), 'utf8');
+    const purge = readFileSync(
+      new URL('../../../../packages/server-utils/src/users/purgeAccountContent.ts', import.meta.url),
+      'utf8'
+    );
     const loops = [
       ...purge.matchAll(
         /for \(const model of \[([^\]]*)\]\) \{\s*await assertLease\(\);\s*await collectionFor\(model\)\.deleteMany\((personalFilter|ownerFilter)\(userId/g

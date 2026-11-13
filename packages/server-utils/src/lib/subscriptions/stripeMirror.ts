@@ -10,6 +10,7 @@ export type SubscriptionStripeMirror = Required<
     | 'intervalCount'
     | 'cancelAtPeriodEnd'
     | 'cancelAt'
+    | 'endedAt'
     | 'trialEndsAt'
     | 'stripeCustomerId'
     | 'lastSyncedAt'
@@ -25,6 +26,7 @@ export type StripeSubscriptionMirrorSource = Pick<
   Stripe.Subscription,
   'currency' | 'cancel_at_period_end' | 'cancel_at' | 'trial_end'
 > & {
+  ended_at?: Stripe.Subscription['ended_at'];
   customer: string | { id: string };
   items: {
     data: ReadonlyArray<{
@@ -69,6 +71,7 @@ export const stripeMirrorFields = (
     intervalCount: price?.recurring?.interval_count ?? null,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
     cancelAt: fromUnix(subscription.cancel_at),
+    endedAt: fromUnix(subscription.ended_at ?? null),
     trialEndsAt: fromUnix(subscription.trial_end),
     stripeCustomerId: typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id,
     lastSyncedAt: syncedAt,

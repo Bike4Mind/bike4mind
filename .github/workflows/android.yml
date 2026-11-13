@@ -1,0 +1,62 @@
+name: Android
+
+# openapi.json is not a trigger: the job regenerates from the committed snapshot in apps/android/client, so it
+# cannot detect drift from the server spec. Same posture as ios.yml; spec sync is a tracked epic follow-up.
+on:
+  pull_request:
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      - 'scripts/check-no-overlay-literals.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      - 'scripts/check-no-overlay-literals.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  android:
+    name: Test, generated-client check, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Validates the committed wrapper jar's checksum and caches Gradle's dependency and build caches.
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Test
+        run: make test
+
+      # The generated client is committed; regenerating from the committed snapshot must be a no-op.
+      - name: Generated client is reproducible
+        run: |
+          make generate-client
+          changes=$(git status --porcelain -- .)
+          if [ -n "$changes" ]; then
+            echo "Regenerating changed the tree (modified or untracked files):" >&2
+            echo "$changes" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: make build
+
+      - name: Lint
+        run: make lint

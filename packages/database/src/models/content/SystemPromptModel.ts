@@ -3,14 +3,15 @@ import mongoose, { Model, model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { systemPromptHistoryRepository } from './SystemPromptHistoryModel';
+import { SYSTEM_PROMPT_MAX_CONTENT_LENGTH, SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH } from './systemPromptLimits';
 
 const SystemPromptModelSchema = new Schema<IAdminSystemPrompt, Model<IAdminSystemPromptDocument>, {}>(
   {
     // unique index with partialFilterExpression added below to coexist with softDeletePlugin
     promptId: { type: String, required: true },
     name: { type: String, required: true, index: true },
-    description: { type: String, required: true, maxlength: 2000 },
-    content: { type: String, required: true, maxlength: 50000 },
+    description: { type: String, required: true, maxlength: SYSTEM_PROMPT_MAX_DESCRIPTION_LENGTH },
+    content: { type: String, required: true, maxlength: SYSTEM_PROMPT_MAX_CONTENT_LENGTH },
     category: { type: String, required: true, index: true },
     tags: [{ type: String, index: true }],
     variables: [{ type: String }],
@@ -381,7 +382,8 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
             lastUpdatedBy: updatedBy,
             lastUpdatedByName: updatedByName,
           },
-        }
+        },
+        { runValidators: true }
       );
     }
 

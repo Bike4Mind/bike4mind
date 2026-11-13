@@ -79,6 +79,7 @@ import {
   type ThinkingVisibility,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
+import { resolveUsageProject } from './usageProject';
 import {
   BadRequestError,
   buildAndSortMessages,
@@ -1335,6 +1336,7 @@ export class ChatCompletionProcess {
   private turnCreditLimiter: TurnCreditLimiter | null = null;
   // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
   private turnApiKeyId: string | undefined;
+  private turnProjectId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
   // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
   private reservationBasis: {
@@ -2203,6 +2205,7 @@ export class ChatCompletionProcess {
     void this.resolveThinkingVisibility();
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     this.turnApiKeyId = initContext.parsedBody.apiKeyId;
+    this.turnProjectId = undefined;
     const {
       parsedBody,
       quest,
@@ -5060,6 +5063,16 @@ export class ChatCompletionProcess {
             });
         }
 
+        this.turnProjectId = await resolveUsageProject({
+          projectId,
+          user: this.user,
+          projects: this.db.projects,
+          ownerId: reservationOwnerId,
+          ownerType: reservationOwnerType,
+        }).catch(() => {
+          logger.warn('Project usage attribution unavailable; recording as Unassigned');
+          return undefined;
+        });
         const holderAfterReservation = await reservationMethods.incrementCredits(reservationOwnerId, -requiredCredits);
 
         if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
@@ -5606,6 +5619,7 @@ export class ChatCompletionProcess {
             ownerId: this.reservedCreditsOwnerId || this.user.id,
             ownerType: this.reservedCreditsOwnerType,
             sessionId: quest.sessionId,
+            projectId: this.turnProjectId,
             feature: 'chat',
             source: 'web',
             ...timedOutAttemptUsageFields(attemptModel, error.usage),
@@ -6135,6 +6149,7 @@ export class ChatCompletionProcess {
                   ownerId: this.reservedCreditsOwnerId || this.user.id,
                   ownerType: this.reservedCreditsOwnerType,
                   sessionId: quest.sessionId,
+                  projectId: this.turnProjectId,
                   feature: 'chat',
                   source: 'web',
                   ...(refusedUsage
@@ -7208,6 +7223,7 @@ export class ChatCompletionProcess {
               ownerId: this.reservedCreditsOwnerId || this.user.id,
               ownerType: this.reservedCreditsOwnerType,
               sessionId: quest.sessionId,
+              projectId: this.turnProjectId,
               feature: 'chat',
               provider: settledLedgerModel.backend,
               model: settledLedgerModel.id,
@@ -8149,6 +8165,7 @@ export class ChatCompletionProcess {
           ownerId,
           ownerType,
           sessionId: quest.sessionId,
+          projectId: this.turnProjectId,
           feature: 'chat',
           provider: usageLedgerModel.backend,
           model: usageLedgerModel.id,

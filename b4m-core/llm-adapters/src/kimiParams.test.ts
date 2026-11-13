@@ -94,7 +94,23 @@ describe('kimiSamplingParams', () => {
     }
   });
 
-  it('passes the group through for a model outside the pinned set', () => {
+  it('omits the group on a catalog-discovered Kimi id this build does not ship', () => {
+    // Moonshot answers a non-1 temperature here with
+    // "400 invalid temperature: only 1 is allowed for this model".
+    for (const model of ['kimi-k3.1-pro-highspeed', 'kimi-k9-preview']) {
+      expect(
+        kimiSamplingParams(model, {
+          temperature: 0.9,
+          topP: 0.5,
+          presencePenalty: 0.2,
+          frequencyPenalty: 0.3,
+          n: 2,
+        })
+      ).toEqual({});
+    }
+  });
+
+  it('passes the group through on the moonshot-v1 family', () => {
     expect(
       kimiSamplingParams('moonshot-v1-8k', {
         temperature: 0.7,

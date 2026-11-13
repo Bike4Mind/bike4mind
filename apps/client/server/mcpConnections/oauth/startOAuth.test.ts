@@ -35,7 +35,7 @@ vi.mock('../connectionService', () => ({
   audit: () => h.auditEntry,
   userOwner: (id: string) => ({ ownerType: 'user', ownerKey: id }),
 }));
-vi.mock('../invokeRemoteMcp', () => ({ cleanScope: (scope: string) => scope }));
+vi.mock('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp', () => ({ cleanScope: (scope: string) => scope }));
 vi.mock('@bike4mind/server-utils/mcpConnections/oauth/clientIdentity', () => ({
   loadConnectionClient: h.loadClient,
   resolveOAuthClient: h.resolveClient,

@@ -16,10 +16,7 @@ import {
 const plural = (count: number) => `${count.toLocaleString()} account${count === 1 ? '' : 's'}`;
 
 const COPY: Readonly<
-  Record<
-    PendingBulkKind,
-    { label: string; done: string; description: string; presets: readonly string[]; audited: boolean }
-  >
+  Record<PendingBulkKind, { label: string; done: string; description: string; presets: readonly string[] }>
 > = {
   release: {
     label: 'Release held grants for',
@@ -27,15 +24,12 @@ const COPY: Readonly<
     description:
       'Pays each held signup grant now, outside the daily pool. Undo takes the paid credits back and returns the account to the held queue.',
     presets: ADMIN_REASON_PRESETS.signupGrantRelease,
-    // The release route records the batch in its audit entries, not a typed reason.
-    audited: false,
   },
   block: {
     label: 'Block signup grants for',
     done: 'Blocked signup grants for',
     description: 'Stops further signup credits and pauses queued rewards. Credits already paid stay paid.',
     presets: ADMIN_REASON_PRESETS.signupGrantBlock,
-    audited: true,
   },
 };
 
@@ -117,7 +111,6 @@ export function PendingBulkDialog({
       title={`${copy.label} ${preview.data ? plural(wouldApply) : 'accounts'}`}
       description={copy.description}
       reasonPresets={copy.presets}
-      reasonAudited={copy.audited}
       confirmLabel={`${kind === 'release' ? 'Release' : 'Block'} ${plural(wouldApply)}`}
       onConfirm={onConfirm}
       tone={kind === 'block' ? 'danger' : 'neutral'}

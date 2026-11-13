@@ -7,7 +7,6 @@ import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
-import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
 import { requireOriginVerify } from './originVerify';
 import { createTaskProtection } from './taskProtection';
@@ -122,7 +121,7 @@ export function createApp() {
   // Lambda via NAT); keep any other direct-only route above this line too.
   app.use(requireOriginVerify);
 
-  // Every user-facing route below (completions, CLI WS completions, embed chat) refuses a caller
+  // Every user-facing route below (completions, embed chat) refuses a caller
   // on an admin's `all` IP block; the internal route above is service-to-service and is not.
   app.use(checkBlockedIP({ surface: 'app' }));
 
@@ -130,11 +129,6 @@ export function createApp() {
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
   registerExternalRoutes(app, track);
-
-  // CLI HTTP->WebSocket completions (POST payload here, chunks stream over the CLI's
-  // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
-  // join the same drain set.
-  registerWsCompletionRoutes(app, track);
 
   // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
   // Same always-on rationale + drain set as the completions route.

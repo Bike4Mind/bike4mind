@@ -24,7 +24,7 @@ import {
   WARN,
   xAxisProps,
   yAxisProps,
-} from '@client/app/components/admin/Revenue/chartParts';
+} from '@client/app/components/admin/shared/chartParts';
 import { useIntegrationHistory } from '../hooks/useIntegrationHistory';
 import { buildLatencyTimeSeries, buildErrorRateSeries } from '../utils/chartDataProcessor';
 import type { IntegrationDashboardEntry, CircuitBreakerMode, IntegrationName, InMemoryBreakerState } from '../types';

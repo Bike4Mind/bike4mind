@@ -36,7 +36,7 @@ import {
 } from './scene';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
-import { useScenePause } from './useScenePause';
+import { useScenePause, type ScenePauseOptions } from './useScenePause';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 
 const BUBBLE_MAX = 28;
@@ -593,7 +593,11 @@ export function TavernView({
   sceneOverlay,
   desk,
   settled = false,
-}: OrchestratorViewProps) {
+  pause,
+}: OrchestratorViewProps & {
+  /** When the scene holds still; the mini Tavern pauses as soon as it loses focus. */
+  pause?: ScenePauseOptions;
+}) {
   const mode = useTheme().palette.mode;
   const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const { placements, previous } = usePlacements(agents);
@@ -627,7 +631,7 @@ export function TavernView({
     };
     stacks.set(placement.zone, stack);
   }
-  const paused = useScenePause();
+  const paused = useScenePause(pause);
   const announcement = useAgentAnnouncements(agents, shortName);
   const summaryId = useId();
   const summary = describeAgentStates(agents.map(agent => agent.state));
