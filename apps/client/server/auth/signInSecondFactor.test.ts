@@ -11,7 +11,9 @@ const {
   mockLogEvent,
   mockLogAuthAudit,
   mockRecordMfaEnrollmentEvent,
+  mockOrgEnrollment,
 } = vi.hoisted(() => ({
+  mockOrgEnrollment: vi.fn(),
   mockRecordMfaEnrollmentEvent: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockLogEvent: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: 
 vi.mock('@server/auth/mfaEnrollmentFunnel', () => ({
   recordMfaEnrollmentEvent: (...a: unknown[]) => mockRecordMfaEnrollmentEvent(...a),
 }));
+vi.mock('./organizationMfa', () => ({ requiresOrganizationMfaEnrollment: mockOrgEnrollment }));
 
 import {
   logSecondFactorSignIn,
@@ -71,9 +74,32 @@ beforeEach(() => {
   mockTrustedDevicesAllowed.mockResolvedValue(true);
   mockConsumeTrustedDevice.mockResolvedValue(null);
   mockCountByUser.mockResolvedValue(0);
+  mockOrgEnrollment.mockResolvedValue(false);
 });
 
 describe('resolveSecondFactor', () => {
+  it('uses the existing setup handoff when an org requires enrollment', async () => {
+    mockOrgEnrollment.mockResolvedValue(true);
+    const outcome = await resolveSecondFactor(req, unenrolled, { origin });
+    expect(outcome.kind).toBe('enroll');
+    expect(decodePending((outcome as { mfaToken: string }).mfaToken)).toMatchObject({ id: 'u2', mfaPending: true });
+  });
+
+  it('does not consult org policy for an enrolled user', async () => {
+    mockOrgEnrollment.mockResolvedValue(true);
+    expect((await resolveSecondFactor(req, enrolled, { origin })).kind).toBe('challenge');
+    expect(mockOrgEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('requires org enrollment for an enterprise sign-in without applying global MFA', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect((await resolveSecondFactor(req, unenrolled, { origin, enterpriseIdp: true })).kind).toBe('satisfied');
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+    mockOrgEnrollment.mockResolvedValue(true);
+    expect((await resolveSecondFactor(req, unenrolled, { origin, enterpriseIdp: true })).kind).toBe('enroll');
+    expect((await resolveSecondFactor(req, enrolled, { origin, enterpriseIdp: true })).kind).toBe('satisfied');
+  });
+
   it('challenges an enrolled user with a short-lived mfaPending token', async () => {
     mockCountByUser.mockResolvedValue(2);
 
