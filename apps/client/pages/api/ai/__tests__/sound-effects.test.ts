@@ -273,7 +273,7 @@ describe('POST /api/ai/sound-effects', () => {
     await promise;
     expect(res._getStatusCode()).toBe(403);
     expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, false, {
-      organizationId: undefined,
+      organizationId: null,
     });
     expect(assertAdmission).toHaveBeenCalledWith('eleven_text_to_sound_v2');
     expect(userIncrement).not.toHaveBeenCalled();
