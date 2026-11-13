@@ -14,7 +14,7 @@ import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '../app/constants/apiKeyScopes';
  * docs/architecture/api-key-scope-rollout.md.
  *
  * Scoped deliberately to the `baseApi`/`apiKeyAuth` gate. The other scope check -
- * `verifyApiKey` (server/cli/auth.ts), which backs Lambda-transport contract routes
+ * `verifyApiKey` (packages/server-utils/src/cli/auth.ts), which backs Lambda-transport contract routes
  * (resolveContractAuth), the cc-bridge, and embed keys - has no staging path and
  * needs none: every gate it runs is either bound to a credential minted with that exact scope or belongs to
  * an endpoint that shipped with its scope from day one, so there is no
@@ -60,11 +60,46 @@ function isConfinedKey(heldScopes: readonly ApiKeyScopeValue[] | undefined): boo
 // above are built from built-in values only.
 const ALL_SCOPE_VALUES: ReadonlySet<string> = ALL_KNOWN_API_KEY_SCOPE_VALUES;
 
+export type LegacyApiKeyWindow = {
+  /** Keys created before this are legacy. `null` until every route keys use has its scopes. */
+  cutoff: Date | null;
+  /** From this instant no key is legacy. `null` until the end date is announced. */
+  endsAt: Date | null;
+};
+
+/**
+ * The legacy API key window. A route that opts in with `grandfatherLegacyKeys` keeps
+ * admitting legacy keys that lack its scopes, so scopes can land on routes keys already
+ * reach without breaking existing keys. Until `cutoff` is set every key counts as legacy;
+ * set both dates together once the scope map is final, and announce them to key owners.
+ * Removed with the grandfathering code when the default flips to deny. See
+ * docs/architecture/api-key-scope-rollout.md.
+ */
+export const LEGACY_API_KEY_WINDOW: Readonly<LegacyApiKeyWindow> = Object.freeze({ cutoff: null, endsAt: null });
+
+/**
+ * Whether a key created at `createdAt` is legacy at `now`. Rotation keeps a key's id and
+ * creation date, so a rotated key keeps its status: rotation never changes scopes, and
+ * dropping the status there would break the key. A key with no creation date is legacy
+ * only while no cutoff is set.
+ */
+export function isLegacyApiKey(
+  createdAt: Date | undefined,
+  now: Date = new Date(),
+  window: Readonly<LegacyApiKeyWindow> = LEGACY_API_KEY_WINDOW
+): boolean {
+  if (window.endsAt && now >= window.endsAt) return false;
+  if (!window.cutoff) return true;
+  return !!createdAt && createdAt < window.cutoff;
+}
+
 export type ScopeGateDecision =
   /** The key holds a required scope, or the route declares none and the key is not confined. */
   | { outcome: 'allow' }
   /** No required scope held, and every one of them is staged - let it through, but say so. */
   | { outcome: 'stagedAllow'; stagedScopes: ApiKeyScopeValue[] }
+  /** No required scope held, but the route grandfathers legacy keys and this one is - let it through, but say so. */
+  | { outcome: 'legacyAllow' }
   /** No required scope held. */
   | { outcome: 'deny' };
 
@@ -92,6 +127,13 @@ export function parseStagedScopes(raw: string | undefined): {
   return { staged, rejected };
 }
 
+export type ScopeGateOptions = {
+  /** Route opts into `grandfatherLegacyKeys` and the key is a legacy key. Never overrides a confined or exchange key. */
+  grandfathered?: boolean;
+  /** Key was minted by the federated AI-token exchange. */
+  exchangeKey?: boolean;
+};
+
 /**
  * The scope gate's whole decision, isolated from Express so it can be tested
  * directly.
@@ -118,41 +160,77 @@ export function parseStagedScopes(raw: string | undefined): {
  * flow and nothing else. Callers must therefore invoke this even when
  * `requiredScopes` is undefined.
  *
+ * A key minted by the federated AI-token exchange (`exchangeKey`) is confined the same way, whatever
+ * scopes it holds.
+ *
  * A confined key can ONLY be allowed by an explicit `requiredScopes` match - the
  * confinement check sits above both the no-scope and the staged branch, so a
  * rollout window cannot admit one to a route it has no business on.
+ *
+ * `grandfathered` is true when the route opts into `grandfatherLegacyKeys` and the key is
+ * {@link isLegacyApiKey}. It admits a key that misses `requiredScopes`, never one that
+ * misses an AND scope and never a confined key: both are checked above it. A staged
+ * pass wins over a legacy one, so the key lands on the staging backlog it belongs to.
  */
 export function decideScopeGate(
   requiredScopes: ApiKeyScopeValue[] | undefined,
   heldScopes: readonly ApiKeyScopeValue[] | undefined,
   staged: ReadonlySet<string>,
-  alsoRequiredScopes?: ApiKeyScopeValue[]
+  alsoRequiredScopes?: ApiKeyScopeValue[],
+  options?: ScopeGateOptions & { grandfathered?: false }
+): Exclude<ScopeGateDecision, { outcome: 'legacyAllow' }>;
+export function decideScopeGate(
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
+  staged: ReadonlySet<string>,
+  alsoRequiredScopes: ApiKeyScopeValue[] | undefined,
+  options: ScopeGateOptions
+): ScopeGateDecision;
+export function decideScopeGate(
+  requiredScopes: ApiKeyScopeValue[] | undefined,
+  heldScopes: readonly ApiKeyScopeValue[] | undefined,
+  staged: ReadonlySet<string>,
+  alsoRequiredScopes?: ApiKeyScopeValue[],
+  options: ScopeGateOptions = {}
 ): ScopeGateDecision {
+  const { grandfathered = false, exchangeKey = false } = options;
   if (alsoRequiredScopes?.some(scope => !heldScopes?.includes(scope))) {
     return { outcome: 'deny' };
   }
   if (requiredScopes?.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
   // Above both branches below: neither a missing declaration nor an active staging
   // window may admit a confined key.
-  if (isConfinedKey(heldScopes)) return { outcome: 'deny' };
+  if (exchangeKey || isConfinedKey(heldScopes)) return { outcome: 'deny' };
   if (!requiredScopes) return { outcome: 'allow' };
   // An empty `requiredScopes` denies (a route asking for "one of nothing" can
   // satisfy nobody); `every` on [] is true, so guard the length explicitly.
   if (requiredScopes.length > 0 && requiredScopes.every(scope => staged.has(scope))) {
     return { outcome: 'stagedAllow', stagedScopes: requiredScopes };
   }
+  if (grandfathered && requiredScopes.length > 0) return { outcome: 'legacyAllow' };
   return { outcome: 'deny' };
 }
 
 export type ScopedRequest = {
-  apiKeyInfo?: { scopes?: ApiKeyScopeValue[] };
+  apiKeyInfo?: {
+    keyId?: string;
+    scopes?: ApiKeyScopeValue[];
+    createdAt?: Date;
+    oauthExchangeClientId?: string;
+  };
+  logger?: { info: (message: string, context?: Record<string, unknown>) => void };
+};
+
+export type ScopeCheckOptions = {
+  /** Admit legacy keys that lack the scope, as `baseApi`'s `grandfatherLegacyKeys` does at the door. */
+  grandfatherLegacyKeys?: boolean;
 };
 
 /**
  * In-handler counterpart of `baseApi`'s `requiredScopes` gate, for a route whose methods
  * need different scopes (the gate is per route, not per method). Honors
  * API_KEY_SCOPE_STAGING, so a grandfathered key rides the same grace window it would at
- * the route gate. Family wrappers: ../files/fileScopes.ts, and in apps/client server/dataLakes/dataLakeScopes.ts,
+ * the route gate. Family wrappers: ../files/fileScopes.ts, ../dataLakes/dataLakeScopes.ts, and in apps/client
  * server/projects/projectScopes.ts, server/agents/agentScopes.ts.
  *
  * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran for them
@@ -161,13 +239,55 @@ export type ScopedRequest = {
  * still has `apiKeyInfo` set, and letting a missing array through would fail open for exactly
  * the caller this gate exists to check.
  */
-export function holdsApiKeyScope(req: ScopedRequest, required: ApiKeyScopeValue[]): boolean {
+export function holdsApiKeyScope(
+  req: ScopedRequest,
+  required: ApiKeyScopeValue[],
+  { grandfatherLegacyKeys = false }: ScopeCheckOptions = {}
+): boolean {
   if (!req.apiKeyInfo) return true;
   const held = req.apiKeyInfo.scopes ?? [];
   const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
-  return decideScopeGate(required, held, staged).outcome !== 'deny';
+  const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(req.apiKeyInfo.createdAt);
+  const { outcome } = decideScopeGate(required, held, staged, undefined, {
+    grandfathered,
+    exchangeKey: !!req.apiKeyInfo.oauthExchangeClientId,
+  });
+  if (outcome === 'legacyAllow' && shouldLogLegacyPass(req.apiKeyInfo.keyId, required.join(','))) {
+    // Same line as apiKeyAuth's door, so one query finds every key still relying on the window.
+    req.logger?.info(LEGACY_SCOPE_PASS_LOG, {
+      keyId: req.apiKeyInfo.keyId,
+      heldScopes: held,
+      requiredScopes: required,
+    });
+  }
+  return outcome !== 'deny';
 }
 
-export function assertApiKeyScope(req: ScopedRequest, required: ApiKeyScopeValue[], message: string): void {
-  if (!holdsApiKeyScope(req, required)) throw new ForbiddenError(message);
+/** Logged on grandfathered passes; the list of keys whose owners still need to re-create them. */
+export const LEGACY_SCOPE_PASS_LOG = 'API key scope check missed but legacy key grandfathered - allowing';
+
+const LEGACY_PASS_LOG_INTERVAL_MS = 60 * 60 * 1000;
+const LEGACY_PASS_LOG_MAX_ENTRIES = 10_000;
+const lastLegacyPassLog = new Map<string, number>();
+
+/**
+ * At most one log line per key and route (or scope set) per hour in each process: a busy key on
+ * a hot route would otherwise log on every request, and the line is a list of keys, not a meter.
+ */
+export function shouldLogLegacyPass(keyId: string | undefined, where: string, now: number = Date.now()): boolean {
+  const entry = `${keyId ?? ''}|${where}`;
+  const last = lastLegacyPassLog.get(entry);
+  if (last !== undefined && now - last < LEGACY_PASS_LOG_INTERVAL_MS) return false;
+  if (lastLegacyPassLog.size >= LEGACY_PASS_LOG_MAX_ENTRIES) lastLegacyPassLog.clear();
+  lastLegacyPassLog.set(entry, now);
+  return true;
+}
+
+export function assertApiKeyScope(
+  req: ScopedRequest,
+  required: ApiKeyScopeValue[],
+  message: string,
+  options?: ScopeCheckOptions
+): void {
+  if (!holdsApiKeyScope(req, required, options)) throw new ForbiddenError(message);
 }

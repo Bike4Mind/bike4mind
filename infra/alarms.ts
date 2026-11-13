@@ -19,6 +19,7 @@ import {
   signupDomainHoldTriageCron,
   spendMonitor,
   voiceHoldSweepCron,
+  personaExpirySweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { reauthConnectionRoute, subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
@@ -1982,6 +1983,28 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  // Personas outlive their expiry if this sweep stops running, so any error pages.
+  if (personaExpirySweepCron) {
+    new aws.cloudwatch.MetricAlarm('personaExpirySweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-persona-expiry-sweep-lambda-errors`,
+      alarmDescription: 'The test persona expiry sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: personaExpirySweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Auth',
         Severity: 'High',
       },
     });

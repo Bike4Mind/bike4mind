@@ -24,6 +24,14 @@ vi.mock('@aws-sdk/client-bedrock-runtime', () => ({
   InvokeModelCommand: class {},
 }));
 
+const { openAiCreate } = vi.hoisted(() => ({ openAiCreate: vi.fn() }));
+
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: openAiCreate } };
+  },
+}));
+
 const { generateAgnosticAiInsights } = await import('./agnosticAiInsights');
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE';
@@ -62,5 +70,16 @@ describe('generateAgnosticAiInsights on Bedrock', () => {
     vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
     expect(await run()).toBeNull();
     expect(clientConfigs[0].credentials).toBeTypeOf('function');
+  });
+});
+
+describe('generateAgnosticAiInsights on OpenAI', () => {
+  it('opts out of OpenAI-side storage', async () => {
+    openAiCreate.mockResolvedValue({ choices: [{ message: { content: 'insight' } }] });
+
+    expect(await generateAgnosticAiInsights({ logs: [], metrics: {} }, 'key', ModelBackend.OpenAI, 'gpt-4o')).toBe(
+      'insight'
+    );
+    expect(openAiCreate).toHaveBeenCalledWith(expect.objectContaining({ store: false }));
   });
 });

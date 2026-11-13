@@ -104,7 +104,7 @@ const verifyOrgAccess = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const getOrCreateSession = vi.hoisted(() => vi.fn());
-vi.mock('@server/managers/sessionCrud', () => ({ getOrCreateSession }));
+vi.mock('@bike4mind/server-utils/managers/sessionCrud', () => ({ getOrCreateSession }));
 
 const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
 vi.mock('@server/utils/loopDispatch', () => dispatch);

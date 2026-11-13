@@ -4,6 +4,7 @@ import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
@@ -456,6 +457,8 @@ export interface ToolContext {
   lowPriority?: boolean;
   /** A loop runner session's merge, under its stage's policy. Absent elsewhere; loop_merge_pr refuses. */
   loopMerge?: { merge(prUrl: string): Promise<string> };
+  /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
+  loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
@@ -480,6 +483,15 @@ export interface McpToolContext {
   reconnect(id: string): Promise<McpServerState | null>;
   setEnabled(id: string, enabled: boolean): Promise<McpServersState>;
   removeServer(id: string): Promise<McpServersState>;
+}
+
+/** One session's loop, through the same start path as the user's /loop. See ChatService.startLoop. */
+export interface LoopContext {
+  /** Whether this turn is one of the session's own loop runs, which may not start another. */
+  inRun(): boolean;
+  start(request: LoopStart): Promise<LoopResult>;
+  current(): LoopState | null;
+  stop(): void;
 }
 
 /** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
@@ -769,7 +781,7 @@ export interface ApprovalPart {
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
-export type PartAskKind = 'unread' | 'outbound' | 'env';
+export type PartAskKind = 'unread' | 'outbound' | 'env' | 'gitUnlisted';
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */

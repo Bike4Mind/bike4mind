@@ -28,6 +28,7 @@
     "@aws-sdk/client-sesv2": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
     "@bike4mind/agents": "workspace:*",
+    "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
     "@bike4mind/db-core": "workspace:*",
@@ -57,7 +58,7 @@
     "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "nodemailer": "^10.2.1",
     "openai": "^6.46.0",
     "sst": "4.17.1",
@@ -75,6 +76,8 @@
     "aws-sdk-client-mock": "^4.1.0",
     "jsdom": "^29.1.1",
     "mongodb-memory-server": "^11.3.0",
+    "next-connect": "^0.13.0",
+    "node-mocks-http": "^1.18.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
   }

@@ -44,7 +44,7 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,

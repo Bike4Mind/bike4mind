@@ -503,7 +503,15 @@ export function frameCamera(
   direction: [number, number, number] = VIEW_DIRECTIONS.iso
 ): THREE.Vector3 {
   root.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(root);
+  return frameBox(camera, new THREE.Box3().setFromObject(root), direction);
+}
+
+/** frameCamera for a box rather than a whole object: what a close-up of some parts frames. */
+export function frameBox(
+  camera: THREE.PerspectiveCamera,
+  box: THREE.Box3,
+  direction: [number, number, number] = VIEW_DIRECTIONS.iso
+): THREE.Vector3 {
   const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), 1) : box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 1e-3);
   // The narrower of the two fields of view decides, or a tall pane crops the model's sides.
@@ -575,6 +583,73 @@ export async function renderContactSheet(
     if (!blob) throw new Error('The screenshot could not be encoded.');
     return new Uint8Array(await blob.arrayBuffer());
   } finally {
+    composer.dispose();
+    stage.dispose();
+    renderer.dispose();
+    renderer.forceContextLoss();
+  }
+}
+
+/** How faint the parts around a close-up's subject are drawn. */
+const CLOSEUP_CONTEXT_OPACITY = 0.14;
+
+/** The world-space bounds of the meshes named `names` under `root`; empty when none match. */
+export function partsBox(root: THREE.Object3D, names: readonly string[]): THREE.Box3 {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  root.traverse(child => {
+    if (child instanceof THREE.Mesh && names.includes(child.name)) box.expandByObject(child);
+  });
+  return box;
+}
+
+/**
+ * A single 3/4 view framed on the parts named `names`, with every other part drawn faint for
+ * context, as a PNG: what a point-and-edit turn attaches so the agent sees exactly what was picked.
+ * Rendered off screen like renderContactSheet, through the same stage and composer.
+ */
+export async function renderPartCloseup(
+  root: THREE.Object3D,
+  names: readonly string[],
+  dark: boolean,
+  angles: Record<string, number> = {}
+): Promise<Uint8Array> {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  const stage = new ModelStage(scene, renderer);
+  const composer = new ModelComposer(renderer, scene, camera);
+  const faded: THREE.Material[] = [];
+  try {
+    renderer.setPixelRatio(TILE_SUPERSAMPLE);
+    renderer.setSize(TILE, TILE, false);
+    composer.setSize(TILE, TILE, TILE_SUPERSAMPLE);
+    const subject = root.clone(true);
+    poseJoints(subject, angles);
+    enableShadows(subject);
+    subject.traverse(child => {
+      if (!(child instanceof THREE.Mesh) || names.includes(child.name)) return;
+      // Cloned: the clone shares materials with the live view, which must not fade.
+      const material = (child.material as THREE.Material).clone();
+      material.transparent = true;
+      material.opacity = CLOSEUP_CONTEXT_OPACITY;
+      material.depthWrite = false;
+      child.material = material;
+      child.castShadow = false;
+      faded.push(material);
+    });
+    scene.add(subject);
+    stage.fit(subject, { dark, grid: false });
+    composer.fit(stage.bounds);
+    const box = partsBox(subject, names);
+    if (box.isEmpty()) box.setFromObject(subject);
+    frameBox(camera, box, VIEW_DIRECTIONS.iso);
+    composer.render();
+    const blob = await new Promise<Blob | null>(resolve => renderer.domElement.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The close-up could not be encoded.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    for (const material of faded) material.dispose();
     composer.dispose();
     stage.dispose();
     renderer.dispose();

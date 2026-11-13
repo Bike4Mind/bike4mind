@@ -117,7 +117,7 @@ write does not imply read) declare the read-or-write gate (`FILES_READ_OR_WRITE_
 or a write-only key is refused at the door before its write assert runs. Assert at the top
 of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
-(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
+(`packages/server-utils/src/dataLakes/dataLakeScopes.ts`) for data lakes,
 `assertFilesReadScope` / `assertFilesWriteScope` (`packages/server-utils/src/files/fileScopes.ts`)
 for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
 (`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
@@ -142,6 +142,36 @@ Do not list `admin:*` among a family's `requiredScopes` while it is rolling out.
 is in its grace period only while EVERY scope it accepts is staged, and `admin:*` can
 never be staged - one mention leaves the family with no grace period at all. Admin keys
 calling those routes are part of the same re-mint list as any other key.
+
+## Grandfathering legacy keys (preferred for routes keys already reach)
+
+Give the route its scopes with `grandfatherLegacyKeys: true` next to `requiredScopes`:
+
+```ts
+baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true })
+```
+
+A legacy key (see `LEGACY_API_KEY_WINDOW` and `isLegacyApiKey` in
+`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) that misses the scopes is still
+admitted, and the pass logs `API key scope check missed but legacy key grandfathered -
+allowing` with its `keyId`, at most once per key and route per hour in each server process.
+That log is the list of owners who still need to create a scoped
+key. A key created after the cutoff, a confined key, and a key missing an `alsoRequiredScopes`
+entry are refused as usual. A method narrowed in the handler passes the same option:
+`assertApiKeyScope(req, [scope], message, { grandfatherLegacyKeys: true })`.
+
+Rules:
+
+- **Only on a route keys could reach before it declared scopes.** A route that already enforced
+  a scope must never opt in: old keys would gain access they do not have today.
+- **No re-mint and no preflight gate before merging.** Grandfathering is per route, so unlike
+  `API_KEY_SCOPE_STAGING` it never re-opens other routes that enforce the same scope, and it
+  works for scopes that already enforce elsewhere. Run the preflight anyway to see who relies on
+  the window.
+- **The window:** until `cutoff` is set every key is legacy. Once every route keys use has its
+  scopes, set `cutoff` and `endsAt` together in one PR, announce the end date to the owners of
+  legacy keys, and let it pass. From `endsAt` grandfathering stops with no deploy. Rotating a
+  key keeps its creation date, so a rotated key keeps its status.
 
 ## Staging the gate
 
@@ -219,7 +249,7 @@ Unset (the default) means every declared gate enforces. Enforcement is the defau
 state; staging is the temporary one.
 
 Staging applies to the `baseApi` gate only. The other scope check - `verifyApiKey`
-(`apps/client/server/cli/auth.ts`), behind public contract routes, the cc-bridge, and
+(`packages/server-utils/src/cli/auth.ts`), behind public contract routes, the cc-bridge, and
 embed keys - always enforces. It needs no staging: every gate it runs is bound to a
 credential minted with that exact scope, or to an endpoint that shipped with its scope
 from the start, so nothing there was ever grandfathered. A contract route declaring a

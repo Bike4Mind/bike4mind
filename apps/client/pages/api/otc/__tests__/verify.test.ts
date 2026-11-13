@@ -20,6 +20,10 @@ import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+const mockOrganizationEnrollment = vi.hoisted(() =>
+  vi.fn(async (_user: { id: string; organizationId?: string }) => false)
+);
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: mockOrganizationEnrollment }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
@@ -163,6 +167,7 @@ vi.mock('@bike4mind/database', () => ({
     claimOnce: (...args: unknown[]) => mockClaimOnce(...args),
     releaseClaim: (...args: unknown[]) => mockReleaseClaim(...args),
   },
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
@@ -224,6 +229,7 @@ beforeEach(() => {
   mockRecordSignupNetwork.mockClear();
   mockRecordLoginEvent.mockClear();
   claims.clear();
+  mockOrganizationEnrollment.mockReset().mockResolvedValue(false);
   mockClearPending.mockResolvedValue({ tags: ['Customer'] });
   mockClaimOnce.mockImplementation(async (name: string, claimId: string) => {
     await Promise.resolve();
@@ -541,6 +547,46 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   });
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+
+  it('requires MFA after a registration domain grant joins a required organization, before session mint', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: 'org-required',
+      tags: [],
+    });
+    mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
+    mockOrganizationEnrollment.mockImplementationOnce(async user => {
+      expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+        { userId: 'user-1', organizationId: 'org-required' },
+        expect.anything()
+      );
+      expect(user.organizationId).toBe('org-required');
+      return true;
+    });
+    vi.mocked(getSettingsValue<'enforceMFA'>).mockReturnValue(false);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+    expect(res._getJSONData()).toEqual({ mfaSetupRequired: true, userId: 'user-1', accessToken: 'signed-token' });
+    expect(authSessionService.issueSession).not.toHaveBeenCalled();
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
+    expect(mockJwtSign).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user-1', mfaPending: true, signInStrategy: 'otc', signInVia: 'otc-registration' }),
+      'test-secret',
+      { algorithm: 'HS256', expiresIn: '10m' }
+    );
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'signup_completed' }));
+  });
+
+  it('keeps ordinary registration sessions when the organization enrollment resolver permits them', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+    expect(mockOrganizationEnrollment).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(authSessionService.issueSession).toHaveBeenCalledOnce();
+    expect(res._getJSONData()).toHaveProperty('accessToken', 'a');
+    expect(res.getHeader('Set-Cookie')).toBeDefined();
+  });
 
   it('scores the new account once it is registered', async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);

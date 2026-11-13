@@ -89,7 +89,7 @@ vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
 vi.mock('@server/websocket/reconnectBudget', () => ({
   decideInlineBudgets: vi.fn().mockReturnValue({ includeStepsInline: true, includeChildrenInline: true }),
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyJwtToken: vi.fn(),
   checkRateLimit: vi.fn(),
   verifyApiKey: vi.fn(),
@@ -125,7 +125,12 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import {
+  verifyApiKey,
+  verifyJwtToken,
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+} from '@bike4mind/server-utils/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';

@@ -248,16 +248,17 @@ export function isNewerRelease(candidate: string, current: string): boolean {
 }
 
 /**
- * The version the floating "update available" notice should announce, or null for no notice.
+ * The version the "update available" notice should announce, or null for no notice.
  *
- * Shown while anything newer is on offer - found, downloading or staged - and hidden for the one
- * version the user dismissed. A later version is a different string, so it shows again.
+ * Shown while anything newer is on offer - found, downloading or staged. Dismissing declines the
+ * offer for that one version; a download, once started, stays on screen until the restart so the
+ * user is never left guessing whether it ran. A later version is a different string, so it shows.
  */
 export function updateNoticeVersion(state: UpdateState): string | null {
   if (state.status !== 'available' && state.status !== 'downloading' && state.status !== 'ready') return null;
   const version = state.version;
   if (!version || !isNewerRelease(version, state.currentVersion)) return null;
-  if (state.dismissedVersion === version) return null;
+  if (state.status === 'available' && state.dismissedVersion === version) return null;
   return version;
 }
 

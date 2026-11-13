@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IAnalyticsDailySignups } from '@bike4mind/database';
 import { buildCohorts, cohortSignupCount, cohortWeekStarts, type CohortDailyRow } from './analyticsCohorts';
-import { shiftDay } from './analyticsRollup';
+import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 // 2026-06-15 is a Monday.
 const MONDAY = '2026-06-15';

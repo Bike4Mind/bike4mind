@@ -30,6 +30,7 @@ export const socialHolders = {
   },
   // Free text of a report; shares its _id with the owning Feedback and expires after 90 days.
   FeedbackText: { kind: 'viaParent', parent: 'Feedback', foreignKey: '_id' },
+  FeedbackAi: { kind: 'viaParent', parent: 'Feedback', foreignKey: 'feedbackId', secretPaths: ['vector'] },
   FeedbackNote: {
     kind: 'holder',
     secretPaths: ['body'],

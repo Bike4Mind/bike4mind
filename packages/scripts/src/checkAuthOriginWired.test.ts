@@ -14,7 +14,7 @@ import path from 'node:path';
  * quest-start body. This catches what typecheck cannot: a door whose deps object is `any` (the
  * CLI's), or a new file that reaches tools some other way. File-level on purpose - the argument is
  * often a variable built further up - so a door file must name `authOrigin` or derive it through
- * `requestTurnAuth` / `executionTurnAuth` (apps/client/server/auth/turnAuth.ts).
+ * `requestTurnAuth` / `executionTurnAuth` (packages/server-utils/src/auth/turnAuth.ts).
  *
  * `packages/premium/*` is excluded for the same reason as checkToolAvailabilityWired.test.ts: those
  * overlays are hydrated private checkouts that exist only on a developer box.

@@ -34,7 +34,7 @@ vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: (usd: number) => Math.round(usd * 1000),
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {
     findByAnthropicBatchId: async () => m.batch,

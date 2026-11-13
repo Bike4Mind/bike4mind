@@ -30,7 +30,7 @@ vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: h.deleteF
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
   adminBypassLakeIds: vi.fn(async () => []),
   grantingLakes: vi.fn(),
   resolveAccessibleLakes: vi.fn(),

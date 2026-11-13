@@ -92,6 +92,8 @@ every scope involved. Containment is checked literally: \`admin:*\` is not treat
 superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
 holding scopes it doesn't literally list.
 
+Keys minted for a connected app reach only routes that declare their scopes.
+
 ### Rate Limits
 
 | Limit | Default |

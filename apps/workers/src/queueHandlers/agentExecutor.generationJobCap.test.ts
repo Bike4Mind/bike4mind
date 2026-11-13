@@ -30,7 +30,7 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getMusicJobDeps: vi.fn(),
   getCreateMusicJobDeps: vi.fn(),
   getVideoJobDeps: vi.fn(),

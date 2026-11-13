@@ -10,7 +10,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { DEFAULT_LOOP_STAGES, ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
-import { getOrCreateSession } from '@server/managers/sessionCrud';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionCrud';
 import {
   assertLoopsEnabled,
   LOOP_RATE_LIMIT,

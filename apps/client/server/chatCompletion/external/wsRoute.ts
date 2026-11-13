@@ -34,7 +34,7 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
@@ -130,7 +130,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
       // Authenticate - API key first, then JWT (mirrors the SSE route).
       try {
-        apiKeyInfo = await verifyApiKey(headers);
+        apiKeyInfo = await verifyApiKey(headers, { allowExchangeKeys: true });
         userId = apiKeyInfo.userId;
         logger.info('[CLI_WS_HTTP] Authenticated via API key', { keyId: apiKeyInfo.keyId });
         await logApiKeyUsageOnResponse({

@@ -2,7 +2,7 @@ import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
@@ -86,11 +86,12 @@ const handler = baseApi()
           type: OrganizationEvents.ADD_ORG_MEMBER,
           metadata: {
             organizationId,
+            userId: newMember.id,
             memberEmail: newMember.email || '',
             memberLevel: newMember.level,
           },
         },
-        { ability: req.ability }
+        { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
       );
 
       return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
@@ -143,7 +144,7 @@ const handler = baseApi()
           organizationId: organization.id,
         },
       },
-      { ability: req.ability }
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
     );
 
     return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));

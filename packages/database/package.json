@@ -69,7 +69,7 @@
     "@casl/mongoose": "^8.0.5",
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.23",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "mongoose-lean-virtuals": "^2.1.0",
     "sst": "4.17.1",
     "typescript": "^5.9.3"

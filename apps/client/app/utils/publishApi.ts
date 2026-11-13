@@ -9,9 +9,13 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } from '@bike4mind/common';
+import {
+  ArtifactTypeSchema,
+  ELISION_PUBLISH_BODY,
+  SCOPE_URL_PREFIX,
+  deriveArtifactPublishSlug,
+} from '@bike4mind/common';
 import { detectElidedSafe } from '@bike4mind/server-utils/app/utils/artifactParser';
-import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 import { encodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
 import { SLUG_OWNED_BY_OTHER } from '@server/services/publish/slugOwnership';
@@ -504,9 +508,10 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
   const { data } = await api.get<SourceArtifactResponse>(
     `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
   );
-  const type = data.artifact?.type;
+  const parsedType = ArtifactTypeSchema.safeParse(data.artifact?.type);
   const content = data.content?.content;
-  if (!type) throw new Error('The source artifact could not be read');
+  if (!parsedType.success) throw new Error('The source artifact could not be read');
+  const type = parsedType.data;
   if (!content?.trim()) throw new Error('The source artifact has no content to publish');
   const siblings = type === 'react' ? (a.source.reactSiblings ?? []) : [];
   const reactFiles = siblings.length ? await loadReactSiblingSources(data.artifact?.sessionId, siblings) : undefined;
@@ -530,14 +535,13 @@ export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<Pu
  * Publish an artifact as a hosted static bundle (/p/u/{userId}/{slug}) via the
  * 3-step flow: request presigned upload -> PUT index.html to S3 -> finalize.
  *
- * The artifact is rendered to a single static index.html. `html`/`svg` artifacts
- * become real pages; other types render their source in a <pre> (interactive JS
- * artifacts are static-only until the sandbox-origin work lands, so inline scripts
- * are stripped at serve time).
+ * The RAW artifact content is uploaded as index.html with `source.artifactType` set, and
+ * finalize renders the published page server-side (`renderArtifactIndexHtml`, or the React
+ * transpiler for `react`), so every publish surface emits the same bytes.
  */
 export async function publishArtifactBundle(input: {
   artifactId: string;
-  type: string;
+  type: ArtifactType;
   content: string;
   title: string;
   /**
@@ -588,14 +592,11 @@ export async function publishArtifactBundle(input: {
   const scopeId = input.scopeId ?? input.userId;
   if (!scopeId) throw new Error('publishArtifactBundle needs either scopeId or userId to resolve the scope');
 
-  // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
-  // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
-  // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
-  const isReact = input.type === 'react';
-  const reactSiblings = isReact && input.reactFiles ? Object.keys(input.reactFiles) : [];
-  const indexHtml = !isReact
-    ? buildArtifactIndexHtml(input.type, input.content, input.title)
-    : reactSiblings.length && input.reactFiles
+  // Upload the untrimmed content: the published page embeds it verbatim, so trimming here would
+  // change the bytes of every re-published page. A multi-file React entry travels as one JSON upload.
+  const reactSiblings = input.type === 'react' && input.reactFiles ? Object.keys(input.reactFiles) : [];
+  const indexHtml =
+    reactSiblings.length && input.reactFiles
       ? encodeReactPublishUpload({ entry: input.content, files: input.reactFiles })
       : input.content;
   const size = new TextEncoder().encode(indexHtml).length;
@@ -623,7 +624,7 @@ export async function publishArtifactBundle(input: {
       source: {
         kind: 'bundle',
         artifactId: input.artifactId,
-        ...(isReact ? { artifactType: 'react' as const } : {}),
+        artifactType: input.type,
         ...(reactSiblings.length ? { reactSiblings } : {}),
       },
       files: [{ path: 'index.html', size, mimeType: 'text/html' }],
@@ -683,7 +684,7 @@ export interface ArtifactPublishOpts {
  */
 export function artifactBundlePublisher(input: {
   artifactId: string;
-  type: string;
+  type: ArtifactType;
   content: string;
   title: string;
   userId: string;
@@ -762,15 +763,6 @@ export function buildArtifactPublishWiring(input: {
   };
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function isSlugOwnedByOther(err: unknown): boolean {
   return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === SLUG_OWNED_BY_OTHER;
 }
@@ -788,36 +780,6 @@ function uniqueSlugDiscriminator(): string {
     .toString(36)
     .padStart(3, '0');
   return `${time}${rand}`;
-}
-
-/**
- * Render an artifact to a single static index.html based on its type.
- *
- * Exported so the server renderer's byte-parity tests can pin their output to this
- * (`apps/client/server/services/publish/renderArtifactHtml.ts`). The server copy is the
- * permanent home; this client pre-render is removed once the raw-upload switch lands (#1492).
- */
-export function buildArtifactIndexHtml(type: string, content: string, title: string): string {
-  const t = escapeHtml(title || 'Shared artifact');
-  // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
-  // </body> (fall back to appending) so every published page is branded.
-  if (type === 'html' && /<html[\s>]/i.test(content)) {
-    const footer = buildShareFooterHtml({ source: 'artifact' });
-    return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
-  }
-
-  const gate = buildSignupGateHtml();
-  const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta property="og:title" content="${t}"><title>${t}</title>
-<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate.styles}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate.html}</body></html>`;
-
-  if (type === 'html') return PAGE(content); // HTML fragment
-  if (type === 'svg') return PAGE(content); // inline SVG markup
-  // Source-bearing types (code/python/react/recharts/mermaid/json/...) -> code view.
-  return PAGE(`<pre><code>${escapeHtml(content)}</code></pre>`);
 }
 
 /** Absolute, shareable URL for a publish result (e.g. https://app.example.com/p/r/abc123). */

@@ -13,8 +13,8 @@ import {
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
-import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { creditService, organizationService } from '@bike4mind/services';
 import {
   canAdministerOrganization,

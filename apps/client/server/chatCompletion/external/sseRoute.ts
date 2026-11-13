@@ -55,8 +55,8 @@ import {
   completionRunRepository,
 } from '@bike4mind/database';
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
-import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
-import { resolveContractAuth } from '@server/cli/resolveContractAuth';
+import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
+import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
 import { resolveLoopRunTag } from '@server/utils/loopRunner';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -321,7 +321,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       let authResult;
       try {
-        authResult = await resolveContractAuth(headers, createCompletionContract);
+        authResult = await resolveContractAuth(headers, createCompletionContract, { allowExchangeKeys: true });
       } catch (authError) {
         logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
         // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.

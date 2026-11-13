@@ -135,6 +135,10 @@ import {
   getSourceQueueUrl,
   getDlqUrl,
   missingQueueHelp,
+  entityAt,
+  firstEntity,
+  noEntity,
+  describeDlqMessage,
 } from './dlqRegistry';
 
 describe('dlqRegistry', () => {
@@ -285,5 +289,38 @@ describe('dlqUrls Linkable', () => {
         .map(entry => entry.label)
         .sort()
     );
+  });
+});
+
+describe('dead-letter message describe', () => {
+  it('every core entry describes its messages', () => {
+    const undescribed = coreDlqDescriptors()
+      .filter(entry => typeof entry.describe !== 'function')
+      .map(entry => entry.label);
+    expect(undescribed).toEqual([]);
+  });
+
+  it('entityAt reads the first dotted path that holds a string or number', () => {
+    const describe = entityAt('Quest', 'payload.questId', 'questId');
+    expect(describe({ payload: { questId: 'q1' } })).toEqual({ type: 'Quest', id: 'q1' });
+    expect(describe({ questId: 42 })).toEqual({ type: 'Quest', id: '42' });
+    expect(entityAt('Notebook', 'sessionIds.0')({ sessionIds: ['s1', 's2'] })).toEqual({ type: 'Notebook', id: 's1' });
+    expect(describe({ payload: {} })).toBeNull();
+    expect(describe('not an object')).toBeNull();
+  });
+
+  it('firstEntity falls through to the next describer', () => {
+    const describe = firstEntity(entityAt('Invoice', 'invoiceId'), entityAt('Subscription', 'subscriptionId'));
+    expect(describe({ subscriptionId: 'sub_1' })).toEqual({ type: 'Subscription', id: 'sub_1' });
+    expect(describe({})).toBeNull();
+    expect(noEntity({ anything: 'x' })).toBeNull();
+  });
+
+  it('describeDlqMessage parses the body and tolerates non-JSON or a missing describe', () => {
+    const entry = getDlqByLabel('fab-file-vectorize')!;
+    expect(describeDlqMessage(entry, '{"fabFileId":"f1"}')).toEqual({ type: 'File', id: 'f1' });
+    expect(describeDlqMessage(entry, 'not json')).toBeNull();
+    expect(describeDlqMessage(entry, undefined)).toBeNull();
+    expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
   });
 });
