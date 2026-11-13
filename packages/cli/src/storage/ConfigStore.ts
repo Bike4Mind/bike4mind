@@ -414,17 +414,36 @@ function migrateApiConfig(raw: { apiConfig?: unknown }): void {
   raw.apiConfig = environment === 'custom' && customUrl ? { customUrl } : {};
 }
 
+/**
+ * The default model every config was born with before 0.3.0. It is deprecated, so each
+ * chat on it was served by its successor anyway and counted as a deprecated-model request.
+ */
+const LEGACY_DEFAULT_MODEL = ChatModels.CLAUDE_4_5_SONNET;
+
 /** The one-time upgrade of a file not yet at CONFIG_SCHEMA_VERSION, in place. */
-function upgradeConfig(raw: { preferences?: unknown; version?: unknown }): void {
+function upgradeConfig(raw: { preferences?: unknown; version?: unknown; defaultModel?: unknown }): void {
   // Clear the legacy pinned output budget. Every config written before maxTokens
   // became optional carries this exact value from the old DEFAULT_CONFIG, not from
   // a user decision - and leaving it pinned keeps starving adaptive reasoning models
   // on machines that have merely *run* an older CLI. Only the untouched legacy value
   // is cleared, so a budget the user actually chose (any other number) survives.
+  // A 0.2.0 file already had this step, so it must not re-run against a 4096 the user
+  // set after it.
   const preferences = raw.preferences as { maxTokens?: unknown } | null | undefined;
-  if (typeof preferences === 'object' && preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
+  if (
+    raw.version !== '0.2.0' &&
+    typeof preferences === 'object' &&
+    preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS
+  ) {
     delete preferences.maxTokens;
   }
+
+  // Move the old default model to the current one (its successor). Runs once, like the
+  // step above, so a user who picks the old model again afterwards keeps it.
+  if (raw.defaultModel === LEGACY_DEFAULT_MODEL) {
+    raw.defaultModel = DEFAULT_CONFIG.defaultModel;
+  }
+
   raw.version = CONFIG_SCHEMA_VERSION;
 }
 
@@ -601,7 +620,7 @@ interface GlobalWriteOptions {
  * rewritten at the current version; a file already at it is left alone. Bump this when
  * adding a migration, and gate the new step on the version it needs to run from.
  */
-const CONFIG_SCHEMA_VERSION = '0.2.0';
+const CONFIG_SCHEMA_VERSION = '0.3.0';
 
 /**
  * Default configuration
@@ -609,7 +628,7 @@ const CONFIG_SCHEMA_VERSION = '0.2.0';
 const DEFAULT_CONFIG: CliConfig = {
   version: CONFIG_SCHEMA_VERSION,
   userId: uuidv4(),
-  defaultModel: ChatModels.CLAUDE_4_5_SONNET,
+  defaultModel: ChatModels.CLAUDE_5_5_SONNET,
   toolApiKeys: {
     openweather: undefined,
     serper: undefined,
