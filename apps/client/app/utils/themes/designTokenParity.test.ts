@@ -27,11 +27,19 @@ describe('design token parity', () => {
     expect(emitted).toEqual(fixture);
   });
 
-  it('keeps the reference metric tokens equal to what the web theme resolves to', () => {
-    // These token categories are not emitted into the Joy config (the theme
-    // never overrode them), so they must keep matching what Joy resolves, or
-    // the tokens no longer describe what the web app renders.
+  it('emits metrics that resolve to Joy defaults (no visual change) and to the tokens', () => {
+    // The theme now sets these slots from the tokens. They were pinned to
+    // Joy's defaults, so the emitted theme must still equal a theme that sets
+    // none of them; and both must equal the tokens, or the tokens no longer
+    // describe what the web app renders.
     const theme = extendTheme(getThemeConfig() as Parameters<typeof extendTheme>[0]);
+    const joyDefaults = extendTheme({});
+    for (const slot of ['fontSize', 'fontWeight', 'lineHeight', 'radius', 'shadow'] as const) {
+      expect(theme[slot]).toEqual(joyDefaults[slot]);
+    }
+    for (const n of [0.5, 1, 2, 3, 4]) {
+      expect(theme.spacing(n)).toBe(joyDefaults.spacing(n));
+    }
     expect(theme.fontSize).toEqual(designTokens.typography.fontSize);
     expect(theme.fontWeight).toEqual(designTokens.typography.fontWeight);
     expect(theme.lineHeight).toEqual(designTokens.typography.lineHeight);
@@ -41,14 +49,11 @@ describe('design token parity', () => {
     expect(theme.radius).toEqual(
       Object.fromEntries(Object.entries(designTokens.radii).map(([name, px]) => [name, `${px}px`]))
     );
-    const joyShadowLayer = (layer: { offsetX: number; offsetY: number; blur: number; spread: number }): string =>
-      `${layer.offsetX}px ${layer.offsetY}px ${layer.blur}px ${layer.spread}px ` +
-      `rgba(var(--joy-shadowChannel, ${designTokens.shadows.channel}) / ` +
-      `var(--joy-shadowOpacity, ${designTokens.shadows.opacity}))`;
-    for (const [level, layers] of Object.entries(designTokens.shadows.levels)) {
-      expect(theme.shadow[level as keyof typeof theme.shadow]).toBe(
-        ['var(--joy-shadowRing, 0 0 #000)', ...layers.map(joyShadowLayer)].join(', ')
-      );
-    }
+    expect(Object.keys(theme.shadow)).toEqual(Object.keys(designTokens.shadows.levels));
+  });
+
+  it('passes the custom motion key through extendTheme', () => {
+    const theme = extendTheme(getThemeConfig() as Parameters<typeof extendTheme>[0]);
+    expect(theme.motion).toEqual(designTokens.motion);
   });
 });

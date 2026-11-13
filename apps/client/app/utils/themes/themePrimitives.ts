@@ -22,6 +22,14 @@ import {
 } from './components';
 
 declare module '@mui/joy/styles' {
+  interface Theme {
+    motion: { duration: { fast: number; standard: number; slow: number; slower: number } };
+  }
+
+  interface CssVarsThemeOptions {
+    motion?: { duration: { fast: number; standard: number; slow: number; slower: number } };
+  }
+
   interface PaletteBackground {
     panel?: string;
   }
@@ -146,6 +154,9 @@ export const colorSchemes = {
  */
 export const typography = {
   fontFamily: joyTokens.fontFamily,
+  fontSize: joyTokens.fontSize,
+  fontWeight: joyTokens.fontWeight,
+  lineHeight: joyTokens.lineHeight,
 };
 
 /**
@@ -153,6 +164,10 @@ export const typography = {
  */
 export const shape = {
   borderRadius: joyTokens.borderRadius,
+  spacing: joyTokens.spacing,
+  radius: joyTokens.radius,
+  shadow: joyTokens.shadow,
+  motion: joyTokens.motion,
 };
 
 /**

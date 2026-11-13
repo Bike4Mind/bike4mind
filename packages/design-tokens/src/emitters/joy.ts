@@ -25,7 +25,16 @@ export type JoyThemeFragment = {
     dark: { palette: JoyPaletteFragment };
   };
   fontFamily: DesignTokens['typography']['fontFamily'];
+  fontSize: DesignTokens['typography']['fontSize'];
+  fontWeight: DesignTokens['typography']['fontWeight'];
+  lineHeight: DesignTokens['typography']['lineHeight'];
   borderRadius: number;
+  /** Joy's spacing unit in px (`theme.spacing(n)` is `n * spacing` px). */
+  spacing: number;
+  radius: Record<keyof DesignTokens['radii'], string>;
+  shadow: Record<keyof DesignTokens['shadows']['levels'], string>;
+  /** Joy has no motion slot; this rides through `extendTheme` as a custom key. */
+  motion: DesignTokens['motion'];
 };
 
 /** Semantic interaction-tone names -> Joy palette variant names. */
@@ -78,14 +87,36 @@ const toJoyPalette = (scheme: SemanticColorScheme): JoyPaletteFragment => ({
   promptEnhancement: { ...scheme.promptEnhancement },
 });
 
+// Joy wraps every shadow in its ring var and shadow channel/opacity vars; the
+// fallbacks are the token defaults, so the output is Joy's own default string.
+const toJoyShadow = (shadows: DesignTokens['shadows'], layers: Array<DesignTokens['shadows']['levels']['xs'][number]>) =>
+  [
+    'var(--joy-shadowRing, 0 0 #000)',
+    ...layers.map(
+      l =>
+        `${l.offsetX}px ${l.offsetY}px ${l.blur}px ${l.spread}px ` +
+        `rgba(var(--joy-shadowChannel, ${shadows.channel}) / var(--joy-shadowOpacity, ${shadows.opacity}))`
+    ),
+  ].join(', ');
+
+const mapEntries = <K extends string, V, R>(record: Record<K, V>, fn: (value: V) => R) =>
+  Object.fromEntries(Object.entries<V>(record).map(([key, value]) => [key, fn(value)])) as Record<K, R>;
+
 export const emitJoyThemeFragment = (tokens: DesignTokens): JoyThemeFragment => ({
   colorSchemes: {
     light: { palette: toJoyPalette(tokens.color.schemes.light) },
     dark: { palette: toJoyPalette(tokens.color.schemes.dark) },
   },
   fontFamily: { ...tokens.typography.fontFamily },
+  fontSize: { ...tokens.typography.fontSize },
+  fontWeight: { ...tokens.typography.fontWeight },
+  lineHeight: { ...tokens.typography.lineHeight },
   // The theme's root borderRadius has always been 8px, which is radii.md.
   borderRadius: tokens.radii.md,
+  spacing: tokens.spacing.unit,
+  radius: mapEntries(tokens.radii, px => `${px}px`),
+  shadow: mapEntries(tokens.shadows.levels, layers => toJoyShadow(tokens.shadows, layers)),
+  motion: { duration: { ...tokens.motion.duration } },
 });
 
 export const joyEmitter: TokenEmitter<JoyThemeFragment> = {

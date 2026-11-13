@@ -52,4 +52,19 @@ describe('joy emitter', () => {
     expect(fragment.fontFamily.body).toContain('Libre Franklin');
     expect(fragment.borderRadius).toBe(8);
   });
+
+  it('emits the metric slots Joy reads, plus motion as a custom key', () => {
+    expect(fragment.fontSize).toEqual(designTokens.typography.fontSize);
+    expect(fragment.fontWeight).toEqual(designTokens.typography.fontWeight);
+    expect(fragment.lineHeight).toEqual(designTokens.typography.lineHeight);
+    expect(fragment.spacing).toBe(8);
+    expect(fragment.radius.md).toBe('8px');
+    expect(Object.keys(fragment.radius)).toEqual(Object.keys(designTokens.radii));
+    expect(fragment.shadow.xs).toBe(
+      'var(--joy-shadowRing, 0 0 #000), 0px 1px 2px 0px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))'
+    );
+    expect(fragment.shadow.sm.split('), ')).toHaveLength(3);
+    expect(Object.keys(fragment.shadow)).toEqual(Object.keys(designTokens.shadows.levels));
+    expect(fragment.motion).toEqual(designTokens.motion);
+  });
 });
