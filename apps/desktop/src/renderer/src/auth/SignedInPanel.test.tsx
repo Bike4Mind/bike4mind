@@ -1,10 +1,36 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import {
+  initialUpdateState,
+  reduceUpdate,
+  type UpdateBusyReport,
+  type UpdateInstallResult,
+  type UpdateState,
+} from '@shared/update';
 import { AccountMenu, SignedInPanel } from './SignedInPanel';
 
-/** Rendered to a string, like the other renderer tests: this package's vitest runs on `node`. */
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+/** Rendered to a string where nothing has to be clicked. */
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<CssVarsProvider>{node}</CssVarsProvider>);
 
 const signedIn: AuthState = {
@@ -76,5 +102,91 @@ describe('the account menu', () => {
     );
     expect(waiting).toContain('data-testid="account-settings-attention-chip"');
     expect(waiting).not.toContain('MuiChip-colorDanger');
+  });
+});
+
+describe('the account strip with an update waiting', () => {
+  const BUSY: UpdateBusyReport = { replying: 0, awaitingApproval: 0, background: 2 };
+  const available = reduceUpdate(initialUpdateState('0.1.10', true), { type: 'available', version: '0.2.0', at: 1 });
+  const ready = reduceUpdate(reduceUpdate(available, { type: 'download-started' }), {
+    type: 'downloaded',
+    version: '0.2.0',
+  });
+
+  let root: Root | null = null;
+  let host: HTMLElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+  });
+
+  function stubBridge(state: UpdateState, installResult: UpdateInstallResult = { ok: true }) {
+    const update = {
+      getState: vi.fn(async () => state),
+      onStateChanged: vi.fn(() => () => {}),
+      check: vi.fn(async () => {}),
+      download: vi.fn(async () => {}),
+      dismiss: vi.fn(async () => {}),
+      install: vi.fn(async (_force: boolean) => installResult),
+    };
+    (window as unknown as { b4m: unknown }).b4m = {
+      update,
+      shell: { openExternal: vi.fn() },
+      getAppInfo: () => new Promise(() => {}),
+    };
+    return update;
+  }
+
+  async function mount() {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <CssVarsProvider>
+          <SignedInPanel state={signedIn} />
+        </CssVarsProvider>
+      );
+    });
+  }
+
+  const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+  const clickChip = () => act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
+
+  it('starts the download when the Update label is clicked', async () => {
+    const update = stubBridge(available);
+    await mount();
+
+    expect(byTestId('account-attention-chip')?.textContent).toBe('Update');
+    await clickChip();
+    expect(update.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts from the Restart label, confirming in the notice when work is running', async () => {
+    const update = stubBridge(ready, { ok: false, reason: 'busy', busy: BUSY });
+    await mount();
+
+    expect(byTestId('account-attention-chip')?.textContent).toBe('Restart');
+    await clickChip();
+    expect(update.install).toHaveBeenCalledWith(false);
+    expect(byTestId('update-busy-alert')?.textContent).toContain('2 background processes are running.');
+
+    await act(async () => byTestId('update-force-install-btn')?.click());
+    expect(update.install).toHaveBeenLastCalledWith(true);
+  });
+
+  it('lays the notice out in the strip, above the open account menu rather than over it', async () => {
+    stubBridge(available);
+    await mount();
+    act(() => byTestId('account-menu-btn')?.click());
+
+    const notice = byTestId('update-notice') as HTMLElement;
+    const menu = byTestId('account-menu') as HTMLElement;
+    expect(getComputedStyle(notice).position).not.toBe('fixed');
+    expect(notice.contains(menu) || menu.contains(notice)).toBe(false);
+    expect(notice.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

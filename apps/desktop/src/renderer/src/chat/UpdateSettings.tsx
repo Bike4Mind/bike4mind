@@ -3,7 +3,7 @@ import Button from '@mui/joy/Button';
 import LinearProgress from '@mui/joy/LinearProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { describeBusy } from '@shared/update';
+import { describeBusy, type UpdateBusyReport } from '@shared/update';
 import type { AppUpdateController } from './useAppUpdate';
 
 function lastChecked(at: number | null): string {
@@ -72,16 +72,7 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
       <div data-testid="update-body">{body}</div>
 
       {blockedBy && (
-        <Alert color="warning" variant="soft" data-testid="update-busy-alert">
-          <Stack spacing={0.5}>
-            <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
-              {describeBusy(blockedBy)}
-            </Typography>
-            <Typography level="body-xs">
-              Restarting stops all of it. Anything a session has not finished writing is lost.
-            </Typography>
-          </Stack>
-        </Alert>
+        <UpdateRestartConfirm busy={blockedBy} onKeep={dismissBlock} onRestart={() => void install(true)} />
       )}
 
       <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
@@ -110,25 +101,43 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
             Restart and install
           </Button>
         )}
-
-        {blockedBy && (
-          <>
-            <Button size="sm" variant="plain" color="neutral" onClick={dismissBlock} data-testid="update-keep-btn">
-              Keep working
-            </Button>
-            {/* The user has now been told exactly what this ends, so it says so. */}
-            <Button
-              size="sm"
-              variant="solid"
-              color="danger"
-              onClick={() => void install(true)}
-              data-testid="update-force-install-btn"
-            >
-              Restart anyway
-            </Button>
-          </>
-        )}
       </Stack>
     </Stack>
+  );
+}
+
+/** What a restart would end, and the choice to go ahead anyway. Also used by the update notice. */
+export function UpdateRestartConfirm({
+  busy,
+  onKeep,
+  onRestart,
+}: {
+  busy: UpdateBusyReport;
+  onKeep: () => void;
+  onRestart: () => void;
+}) {
+  return (
+    <>
+      <Alert color="warning" variant="soft" data-testid="update-busy-alert">
+        <Stack spacing={0.5}>
+          <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
+            {describeBusy(busy)}
+          </Typography>
+          <Typography level="body-xs">
+            Restarting stops all of it. Anything a session has not finished writing is lost.
+          </Typography>
+        </Stack>
+      </Alert>
+      {/* Wraps in the narrow sidebar notice instead of overflowing it. */}
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
+        <Button size="sm" variant="plain" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
+          Keep working
+        </Button>
+        {/* The user has now been told exactly what this ends, so it says so. */}
+        <Button size="sm" variant="solid" color="danger" onClick={onRestart} data-testid="update-force-install-btn">
+          Restart anyway
+        </Button>
+      </Stack>
+    </>
   );
 }

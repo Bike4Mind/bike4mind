@@ -53,6 +53,7 @@ export function Home() {
               <SignedInPanel state={state} status={status} />
             ) : (
               <Stack spacing={1} sx={{ p: 1.5 }}>
+                <AppUpdateNotice placement="sidebar" />
                 <Button
                   variant="plain"
                   onClick={() => void navigate({ to: '/settings' })}
@@ -68,7 +69,6 @@ export function Home() {
           }
         />
         {state?.reauthRequired && <ReauthNotice state={state} />}
-        <AppUpdateNotice />
       </>
     );
   }
