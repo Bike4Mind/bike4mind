@@ -85,7 +85,9 @@ describe('POST /api/v1/agent-executions - untrusted owner quotas', () => {
     const req = request();
     req.validated = { session_id: 's1', message: 'hi' } as typeof req.validated;
     await captured.handler!(req, response());
-    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('admin-default', req.user, req.logger);
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('admin-default', req.user, req.logger, {
+      organizationId: null,
+    });
     expect(mockStartAgentExecution).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'allowlisted-model' }),
       req.logger

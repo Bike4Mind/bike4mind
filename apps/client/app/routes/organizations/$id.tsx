@@ -17,6 +17,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgModelPolicySection from '@client/app/components/organizations/OrgModelPolicySection';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
@@ -390,6 +391,9 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.settings')}
                 </Typography>
                 <OrganizationSettingsSection organization={organization} />
+                <Box sx={{ mt: 4 }}>
+                  <OrgModelPolicySection key={organization.id} organization={organization} />
+                </Box>
               </TabPanel>
             )}
           </Box>

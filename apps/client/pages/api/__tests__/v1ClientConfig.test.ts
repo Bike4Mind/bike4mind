@@ -142,7 +142,9 @@ describe('GET /api/v1/client-config', () => {
     expect(body.features.agents).toBe(true);
     expect(body.features.data_lakes).toBe(false);
     expect(body.limits.max_upload_size_mb).toBe(64);
-    expect(getCallerModelList).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, logger);
+    expect(getCallerModelList).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, logger, {
+      organizationId: undefined,
+    });
   });
 
   it('falls back to setting defaults when nothing is stored', async () => {
