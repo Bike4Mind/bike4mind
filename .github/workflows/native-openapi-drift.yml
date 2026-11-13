@@ -12,6 +12,8 @@ on:
       - 'apps/android/client/openapi.json'
       - 'scripts/check_native_openapi_drift.py'
       - 'scripts/check-no-overlay-literals.sh'
+      - 'apps/ios/Packages/B4MClient/Scripts/strip_overlay_literals.py'
+      - 'apps/android/client/scripts/strip_overlay_literals.py'
       - '.github/workflows/native-openapi-drift.yml'
 
 permissions:
