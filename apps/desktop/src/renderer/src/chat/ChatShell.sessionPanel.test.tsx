@@ -601,10 +601,10 @@ describe('the reply stats rail in the shell', () => {
     expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 
-  it('disables the toggle while no conversation is open', async () => {
+  it('disables the toggle on the unsent draft the shell opens on arrival', async () => {
     const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
     chat.listSessions = async () => [];
-    // The first conversation the shell makes on arrival never comes back, so none is open.
+    // The arrival draft has an id but is not saved until the first send, so none is open yet.
     chat.createSession = () => new Promise(() => undefined);
     paneWidth(1600);
     host = document.createElement('div');

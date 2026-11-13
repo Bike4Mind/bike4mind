@@ -1646,7 +1646,7 @@ export function ChatShell({
                   variant="soft"
                   placement="bottom-end"
                   title={
-                    !activeId
+                    !persistedId
                       ? 'Open a conversation to see reply stats.'
                       : statsRailFits
                         ? statsRailOn
@@ -1660,9 +1660,9 @@ export function ChatShell({
                   <Box component="span" sx={{ display: 'inline-flex' }}>
                     <IconButton
                       size="sm"
-                      variant={statsRailOn && activeId ? 'soft' : 'plain'}
+                      variant={statsRailOn && persistedId ? 'soft' : 'plain'}
                       color="neutral"
-                      disabled={!activeId}
+                      disabled={!persistedId}
                       aria-pressed={statsRailOn}
                       aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
                       onClick={() => setReplyStatsRail(!statsRailOn)}
