@@ -29,15 +29,15 @@ function renderTab() {
 }
 
 describe('SreAgentTab', () => {
-  // The admin shell frames every [role="tabpanel"] under it (AdminPage.tsx) unless the panel opts
-  // out, so a nested sub-tab panel without the attribute gets inset from the page title.
-  it('opts every nested sub-tab panel out of the admin shell framing', () => {
+  // The shell frames its direct child only; SRE keeps its nested panels flush with its header.
+  it('keeps nested sub-tab content flush with the page header', () => {
     renderTab();
 
     const panels = screen.getAllByRole('tabpanel', { hidden: true });
     expect(panels).toHaveLength(3);
     for (const panel of panels) {
-      expect(panel).toHaveAttribute('data-admin-self-framed');
+      expect(getComputedStyle(panel).paddingLeft).toBe('0px');
+      expect(getComputedStyle(panel).paddingRight).toBe('0px');
     }
   });
 });
