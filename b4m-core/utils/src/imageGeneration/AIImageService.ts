@@ -11,7 +11,7 @@ export interface AIImageGenerationOptions {
   width?: number;
   height?: number;
   n?: number;
-  /** Internal user id. Each provider service sends toProviderEndUserId(user), never the raw id. */
+  /** Internal user id. Services that forward an end-user id send toProviderEndUserId(user), never the raw id. */
   user?: string;
   model?: string;
   safety_tolerance?: number;
