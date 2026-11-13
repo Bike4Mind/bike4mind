@@ -26,22 +26,31 @@ export const FeedbackBulkSelectionSchema = z.discriminatedUnion('mode', [
   }),
   z.strictObject({
     mode: z.literal('allMatching'),
-    filters: z.strictObject({
-      userId: z.string().min(1).max(100).optional(),
-      sessionId: z.string().min(1).max(100).optional(),
-      questId: z.string().min(1).max(100).optional(),
-      organizationId: idSchema.optional(),
-      organization: z.array(z.string().max(200)).max(100).optional(),
-      status: z.array(z.enum(FeedbackStatus)).min(1).max(3).optional(),
-      type: z.array(z.enum(FeedbackType)).max(10).optional(),
-      resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
-      subject: z.enum(FEEDBACK_SUBJECTS).optional(),
-      area: z.enum(FEEDBACK_AI_AREAS).optional(),
-      severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
-      received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
-      search: z.string().min(1).max(200).optional(),
-      sort: z.enum(['asc', 'desc']).default('desc'),
-    }),
+    filters: z
+      .strictObject({
+        userId: z.string().min(1).max(100).optional(),
+        sessionId: z.string().min(1).max(100).optional(),
+        questId: z.string().min(1).max(100).optional(),
+        organizationId: idSchema.optional(),
+        organization: z.array(z.string().max(200)).max(100).optional(),
+        status: z.array(z.enum(FeedbackStatus)).min(1).max(3).optional(),
+        type: z.array(z.enum(FeedbackType)).max(10).optional(),
+        resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
+        subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+        area: z.enum(FEEDBACK_AI_AREAS).optional(),
+        severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
+        received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
+        // Same meaning as the list endpoint's params, so a bulk change reaches exactly the rows listed.
+        createdFrom: z.iso.datetime().optional(),
+        createdTo: z.iso.datetime().optional(),
+        hasComment: z.boolean().optional(),
+        search: z.string().min(1).max(200).optional(),
+        sort: z.enum(['asc', 'desc']).default('desc'),
+      })
+      .refine(f => !f.createdFrom || !f.createdTo || new Date(f.createdFrom) <= new Date(f.createdTo), {
+        error: 'createdFrom must not be after createdTo',
+        path: ['createdFrom'],
+      }),
   }),
 ]);
 export const FeedbackBulkChangeSchema = z.discriminatedUnion('action', [
