@@ -74,3 +74,30 @@ describe('every migration file on disk is registered', () => {
     expect(AvailableMigrations.map(m => m.id)).toContain(migration.id);
   });
 });
+
+/**
+ * Core id uniqueness straight from the files on disk, independent of the generated registry, so
+ * two PRs that each passed CI alone but collide once both land fail main's CI on push rather than
+ * the DatabaseMigrator at deploy. The filename prefix is what scripts/check-migration-ids.mjs
+ * validates, so the id inside each file must match it.
+ */
+describe('core migration ids are unique', () => {
+  const MIGRATION_FILE = /^(\d+)[-_].+\.ts$/;
+  const migrationFiles = readdirSync(new URL('.', import.meta.url)).filter(
+    f => MIGRATION_FILE.test(f) && !f.endsWith('.test.ts')
+  );
+  const prefixOf = (filename: string) => MIGRATION_FILE.exec(filename)![1];
+
+  it('no two migration files share an id prefix', () => {
+    const byPrefix = Map.groupBy(migrationFiles, prefixOf);
+    const collisions = [...byPrefix.values()].filter(files => files.length > 1);
+    expect(collisions).toEqual([]);
+  });
+
+  it.each(migrationFiles)('%s declares the id in its filename', async filename => {
+    const { default: migration } = (await import(`./${filename.replace(/\.ts$/, '')}`)) as {
+      default: MigrationFile;
+    };
+    expect(String(migration.id)).toBe(prefixOf(filename));
+  });
+});

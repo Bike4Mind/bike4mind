@@ -6,7 +6,7 @@ import { type IOrgMemberApiKeyView } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { listOrgMemberKeys, resolveHolderNames, toOrgMemberApiKeyView } from '@server/organizations/orgMemberApiKeys';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 
 const orgIdOf = (query: { id?: string }): string => (typeof query.id === 'string' ? query.id : '');
 

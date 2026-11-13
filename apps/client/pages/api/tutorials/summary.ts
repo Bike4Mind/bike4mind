@@ -1,6 +1,6 @@
 import { adminApi } from '@server/middlewares/adminApi';
-import { coreSummary, isCoreAdmin } from '@server/tutorials/core';
-import { summaryRoute } from '@server/tutorials/routes';
+import { coreSummary, isCoreAdmin } from '@bike4mind/server-utils/tutorials/core';
+import { summaryRoute } from '@bike4mind/server-utils/tutorials/routes/index';
 
 // Outside EnableCoreTutorials, so an admin can see what the switch would turn on.
 export default summaryRoute({

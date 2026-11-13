@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@server/files/browserFileSigner';
+import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
 
 /**
  * The files attached to one quest, with a fresh signed `fileUrl` on each serveable file. Shared by

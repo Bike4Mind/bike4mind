@@ -25,7 +25,7 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import {
   BadGatewayError,
   BadRequestError,
@@ -43,7 +43,7 @@ import {
   shouldReuseVoiceHold,
 } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';

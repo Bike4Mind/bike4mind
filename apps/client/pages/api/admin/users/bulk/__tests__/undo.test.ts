@@ -14,9 +14,11 @@ const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({ deps: true }) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({ deps: true }) }));
 const mockUndo = vi.fn();
-vi.mock('@server/admin/usersBulk/undo', () => ({ undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/undo', () => ({
+  undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a),
+}));
 
 const UNDO_RESULT = {
   restored: 2,

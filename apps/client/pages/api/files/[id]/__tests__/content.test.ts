@@ -34,7 +34,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),
 }));
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findById: h.findById } }));
-vi.mock('@server/files/browserFileSigner', () => ({ fileContentKey: () => h.key }));
+vi.mock('@bike4mind/server-utils/files/browserFileSigner', () => ({ fileContentKey: () => h.key }));
 
 import handler from '../content';
 

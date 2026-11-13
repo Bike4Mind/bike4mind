@@ -10,20 +10,23 @@ import {
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { sessionWillInjectAuthoredPrompt } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { Request } from 'express';
