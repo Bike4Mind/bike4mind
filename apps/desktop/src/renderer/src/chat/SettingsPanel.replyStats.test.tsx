@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 import { SettingsScreen } from './SettingsPanel';
 import { TurnStatus } from './TurnStatus';
+import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
 
 vi.mock('./PermissionsSettings', () => ({
   PermissionsSettings: () => null,
@@ -16,6 +17,11 @@ vi.mock('./LocalContextSettings', () => ({
   LocalContextSettings: () => null,
   localContextSummary: () => 'Auto',
   useLocalContextSetting: () => [null, () => undefined, null],
+}));
+vi.mock('./AutoFixAttemptsSettings', () => ({
+  AutoFixAttemptsSettings: () => null,
+  autoFixAttemptsSummary: () => 'Up to 5 attempts per pull request',
+  useAutoFixAttempts: () => [null, () => undefined, null],
 }));
 vi.mock('./ModelServersSettings', () => ({
   ModelServersSettings: () => null,
@@ -45,6 +51,14 @@ describe('the reply stats settings', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
+    // SettingsScreen's menu-bar switch reads its preference from main.
+    vi.stubGlobal('b4m', {
+      watch: {
+        getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        onPreferences: () => () => undefined,
+      },
+    });
     window.localStorage.clear();
     reloadReplyStatsPrefs();
     container = document.createElement('div');
