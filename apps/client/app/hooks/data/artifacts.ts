@@ -125,9 +125,7 @@ export const useSubscribeToArtifactVersions = (artifactId?: string) => {
       });
 
       if (val.artifactId) {
-        queryClient.invalidateQueries({ queryKey: ['artifact-versions', val.artifactId] });
-        // The version list and the artifact the open viewer syncs from are cached under these
-        // keys, not 'artifact-versions': without them an open viewer never sees a new version.
+        // The version list and the artifact an open viewer syncs from are cached under these keys.
         queryClient.invalidateQueries({ queryKey: ['artifactVersions', val.artifactId] });
         queryClient.invalidateQueries({ queryKey: ['artifact', val.artifactId] });
       }
