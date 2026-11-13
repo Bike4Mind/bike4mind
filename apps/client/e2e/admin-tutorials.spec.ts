@@ -24,9 +24,11 @@ test.describe('Admin - Tutorials tab', () => {
     const drafts = page.getByTestId('tutorial-drafts-card');
     await expect(drafts).toBeVisible();
     await expect(drafts.getByTestId('tutorial-capture-submit')).toBeVisible();
+    // The list is an empty Stack with no height while no draft exists, so Playwright reports it
+    // hidden: attached is the right bar for "the drafts read finished without an error".
     await expect(
       drafts.getByTestId('tutorial-drafts-list').or(drafts.getByTestId('tutorial-drafts-error'))
-    ).toBeVisible();
+    ).toBeAttached();
     await expect(drafts.getByTestId('tutorial-drafts-error')).toHaveCount(0);
 
     const toggle = page.getByTestId('tutorials-switch');
