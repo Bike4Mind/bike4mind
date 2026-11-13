@@ -3,6 +3,9 @@ import { connectDB } from '@bike4mind/database';
 import { Config } from '../utils/config';
 import { contextToLogs } from '../utils/logger';
 import { Context, S3Event } from 'aws-lambda';
+import { registerOrgAlertObserver } from '../organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /** Decode URL-encoded S3 event key (spaces are '+', special chars are %XX) */
 export const decodeS3Key = (key: string): string => decodeURIComponent(key.replace(/\+/g, ' '));

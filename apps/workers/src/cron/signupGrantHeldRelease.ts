@@ -17,6 +17,9 @@ import {
   sweepRiskReviewAutoApprovals,
   type RiskReviewAutoApprovalSweepResult,
 } from '@bike4mind/server-utils/security/riskReviewAutoApproval';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;
