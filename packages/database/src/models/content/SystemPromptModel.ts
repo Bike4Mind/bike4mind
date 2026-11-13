@@ -336,7 +336,11 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
       updateSet.content = newContent;
     }
 
-    const updated = await this.systemPromptModel.findOneAndUpdate({ promptId }, { $set: updateSet }, { new: true });
+    const updated = await this.systemPromptModel.findOneAndUpdate(
+      { promptId },
+      { $set: updateSet },
+      { new: true, runValidators: true }
+    );
 
     return updated?.toJSON() as IAdminSystemPrompt | null;
   }
@@ -439,7 +443,7 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
       updateData.variables = versionData.variables;
     }
 
-    await this.systemPromptModel.updateOne({ promptId }, { $set: updateData });
+    await this.systemPromptModel.updateOne({ promptId }, { $set: updateData }, { runValidators: true });
 
     return { version: newVersion, history };
   }
