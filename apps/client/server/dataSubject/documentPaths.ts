@@ -40,7 +40,8 @@ function remove(value: unknown, segments: readonly string[]): void {
   remove(value[head], rest);
 }
 
-export type ArrayMatch = { arrayPath: string; elements: unknown[] };
+/** `origins[i]` is the stored array element `elements[i]` came from (itself unless cut down). */
+export type ArrayMatch = { arrayPath: string; elements: unknown[]; origins: unknown[] };
 
 /**
  * For a path that reaches an array, the first array it addresses and only the elements whose value
@@ -61,8 +62,15 @@ export function matchingArrayElements(
     current = current[segments[index]];
     if (!Array.isArray(current)) continue;
     const elementPath = segments.slice(index + 1).join('.');
-    const elements = current.flatMap(element => matchingPart(element, elementPath, matches));
-    return { arrayPath: segments.slice(0, index + 1).join('.'), elements };
+    const elements: unknown[] = [];
+    const origins: unknown[] = [];
+    for (const element of current) {
+      for (const part of matchingPart(element, elementPath, matches)) {
+        elements.push(part);
+        origins.push(element);
+      }
+    }
+    return { arrayPath: segments.slice(0, index + 1).join('.'), elements, origins };
   }
   return null;
 }

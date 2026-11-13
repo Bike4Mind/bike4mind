@@ -221,4 +221,46 @@ describe('SubjectRecordExport over the real registry', () => {
     });
     expect(JSON.stringify(reviewerRecord)).not.toContain(reviewerB);
   });
+
+  it('exports one entry for an eval-set example whose owner also reviewed it', async () => {
+    const [both, reviewerB, creator] = Array.from({ length: 3 }, () => new mongoose.Types.ObjectId().toString());
+    const verdict = (reviewerId: string, reason: string) => ({
+      verdict: 'confirmed_abuse',
+      reason,
+      reviewerId: new mongoose.Types.ObjectId(reviewerId),
+      reviewedAt: new Date('2026-11-01T00:00:00Z'),
+    });
+    await mongoose.model('AbuseEvalSet').collection.insertOne({
+      name: 'eval set',
+      note: null,
+      createdBy: new mongoose.Types.ObjectId(creator),
+      examples: [
+        {
+          userId: new mongoose.Types.ObjectId(both),
+          kind: 'flagged',
+          detectionIds: [],
+          campaignKey: 'campaign-hash',
+          split: 'test',
+          cohorts: [],
+          signedUpAt: null,
+          frozenLabel: null,
+          verdicts: [verdict(both, 'own reason'), verdict(reviewerB, 'reason B')],
+          revision: 0,
+        },
+      ],
+      runs: [],
+    });
+    const records = [];
+    for await (const record of new SubjectRecordExport({ userId: both, email: null }).records('AbuseEvalSet')) {
+      records.push(JSON.parse(JSON.stringify(record)));
+    }
+
+    expect(records).toHaveLength(1);
+    expect(records[0].examples).toHaveLength(1);
+    expect(records[0].examples[0]).toEqual(
+      expect.objectContaining({ userId: both, verdicts: [expect.objectContaining({ reviewerId: both })] })
+    );
+    expect(JSON.stringify(records[0])).not.toContain(reviewerB);
+    expect(JSON.stringify(records[0])).not.toContain('reason B');
+  });
 });

@@ -84,6 +84,12 @@ const withheldPathsOf = (holder: DataHolder): readonly string[] => {
   return holder.kind === 'subject' || holder.kind === 'viaParent' ? (holder.secretPaths ?? []) : [];
 };
 
+/** Drops a cut-down part when its outer element is already kept whole (cut parts are fresh objects, so identity dedupe misses them). */
+function withoutShadowedParts(elements: readonly unknown[], origins: ReadonlyMap<unknown, unknown>): unknown[] {
+  const whole = new Set(elements.filter(element => origins.get(element) === element));
+  return elements.filter(element => origins.get(element) === element || !whole.has(origins.get(element)));
+}
+
 export class SubjectRecordExport {
   /** Exported models in an order that puts every `viaParent` child after its parent. */
   readonly models: readonly string[];
@@ -431,13 +437,17 @@ export class SubjectRecordExport {
   private withholdOthers(document: LeanDocument, references: readonly UserReference[]): ExportedRecord {
     const kept = new Map<string, Set<unknown>>();
     const throughArray = new Map<string, unknown[]>();
+    const origins = new Map<unknown, unknown>();
     for (const reference of references) {
       const isSubject = this.isSubject(reference);
       const match = matchingArrayElements(document, reference.path, isSubject);
       if (match) {
         throughArray.set(match.arrayPath, valuesAt(document, match.arrayPath));
         const elements = kept.get(match.arrayPath) ?? new Set<unknown>();
-        for (const element of match.elements) elements.add(element);
+        match.elements.forEach((element, index) => {
+          elements.add(element);
+          origins.set(element, match.origins[index]);
+        });
         kept.set(match.arrayPath, elements);
         continue;
       }
@@ -453,10 +463,11 @@ export class SubjectRecordExport {
     for (const [arrayPath, elements] of throughArray) {
       const mine = kept.get(arrayPath) ?? new Set<unknown>();
       // Whole elements in stored order, then the cut-down parts of a nested array match.
-      const ordered = [
-        ...elements.filter(element => mine.has(element)),
-        ...[...mine].filter(e => !elements.includes(e)),
-      ];
+      const stored = new Set(elements);
+      const ordered = withoutShadowedParts(
+        [...elements.filter(element => mine.has(element)), ...[...mine].filter(e => !stored.has(e))],
+        origins
+      );
       setPath(document, arrayPath, this.subjectElements(ordered, arrayPath, references));
     }
     return document;
@@ -500,6 +511,7 @@ export class SubjectRecordExport {
         .filter(path => !matchedPaths.has(path))
     );
     const arrayElements = new Map<string, unknown[]>();
+    const origins = new Map<unknown, unknown>();
     for (const path of paths) {
       if (othersPaths.has(path)) continue;
       const arrayMatches = matches.filter(({ reference, throughArray }) => throughArray && reference.path === path);
@@ -512,12 +524,17 @@ export class SubjectRecordExport {
         const match = matchingArrayElements(document, path, this.isSubject(reference));
         if (!match || match.elements.length === 0) continue;
         const kept = arrayElements.get(match.arrayPath) ?? [];
-        kept.push(...match.elements.filter(element => !kept.includes(element)));
+        const seen = new Set(kept);
+        match.elements.forEach((element, index) => {
+          if (seen.has(element)) return;
+          kept.push(element);
+          origins.set(element, match.origins[index]);
+        });
         arrayElements.set(match.arrayPath, kept);
       }
     }
     for (const [arrayPath, elements] of arrayElements) {
-      setPath(record, arrayPath, this.subjectElements(elements, arrayPath, references));
+      setPath(record, arrayPath, this.subjectElements(withoutShadowedParts(elements, origins), arrayPath, references));
     }
     return record;
   }
