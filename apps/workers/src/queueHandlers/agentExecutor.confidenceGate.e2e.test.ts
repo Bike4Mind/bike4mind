@@ -54,6 +54,11 @@ vi.mock('./agentExecutor.orchestrationProfile', async () => {
   };
 });
 
+// A loop run's reflection, stubbed: the pause test only needs to see whether it was asked for.
+const reflectLoopRun = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('./agentExecutor.loopReflection', () => ({ reflectLoopRun }));
+vi.mock('@server/utils/loopDispatch', () => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
     get: () => new Proxy({}, { get: (_, key) => (key === 'then' ? undefined : `mock-${String(key)}`) }),
@@ -187,7 +192,7 @@ afterAll(async () => {
   await server.stop();
 });
 
-async function seedRun(confidenceOverrides: number[]) {
+async function seedRun(confidenceOverrides: number[], extra: Record<string, unknown> = {}) {
   const { agentExecutionRepository, User, Session } = await import('@bike4mind/database');
   const userId = new mongoose.Types.ObjectId();
   const sessionId = new mongoose.Types.ObjectId();
@@ -216,6 +221,7 @@ async function seedRun(confidenceOverrides: number[]) {
     lambdaInvocationCount: 1,
     childExecutionIds: [],
     confidenceOverrides,
+    ...extra,
   });
   return { executionId: execution.id, userId: userId.toString(), sessionId: sessionId.toString() };
 }
@@ -290,10 +296,10 @@ describe('confidence gate, end to end', () => {
   });
 
   describe('a final answer after one low iteration', () => {
-    async function runToAnswer(confidence: number, maxIterations?: number, turns = 1) {
+    async function runToAnswer(confidence: number, maxIterations?: number, turns = 1, extra = {}) {
       const { handler } = await import('./agentExecutor');
       h.probeTurns = turns;
-      const run = await seedRun(Array(turns).fill(confidence));
+      const run = await seedRun(Array(turns).fill(confidence), extra);
       await handler(
         {
           executionId: run.executionId,
@@ -381,6 +387,20 @@ describe('confidence gate, end to end', () => {
         [{ type: 'probe_effect', payload: { ok: true } }],
         { attempted: true, outcome: 'hit', surfaces: [], dataLakeTags: [] }
       );
+    });
+
+    it('a loop run parked by block is not reflected on; the same run completing is', async () => {
+      const loopRun = { loopId: new mongoose.Types.ObjectId().toString() };
+      reflectLoopRun.mockClear();
+      h.lowConfidenceMode = 'block';
+      const parked = await runToAnswer(0.1, undefined, 1, loopRun);
+      expect(parked.execution?.status).toBe('paused');
+      expect(reflectLoopRun).not.toHaveBeenCalled();
+
+      h.lowConfidenceMode = 'annotate';
+      const completed = await runToAnswer(0.1, undefined, 1, loopRun);
+      expect(completed.execution?.status).toBe('completed');
+      expect(reflectLoopRun).toHaveBeenCalledTimes(1);
     });
 
     it('Stop and Continue racing on a held completion produce exactly one outcome', async () => {
