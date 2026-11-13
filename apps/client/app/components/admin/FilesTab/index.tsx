@@ -55,16 +55,19 @@ type AppFileRow = Omit<IAppFileGetAllApiResponse[number], 'userId'> & {
 
 const AdminFilesTab = () => {
   const appFiles = useGetReports();
+  const { refetch: refetchFiles } = appFiles;
   const { currentUser } = useUser();
   const setTargetEditTagFile = useEditAppFileTagModal(state => state.setTargetFile);
+  // The callback must stay stable: a new one re-runs the subscribe effect, and the resubscribe churn drops
+  // the update that marks a fresh upload Complete.
   useSubscribeCollection<IAppFileDocument>(
     'appfiles',
     useMemo(() => ({}), []),
     useCallback(
       (type: string) => {
-        if (type === 'update') appFiles.refetch();
+        if (type === 'update') void refetchFiles();
       },
-      [appFiles]
+      [refetchFiles]
     )
   );
 
@@ -211,7 +214,9 @@ const AdminFilesTab = () => {
               file: File,
               _metadata: unknown,
               load: (fileId: string | number) => void,
-              error: (message: string) => void
+              error: (message: string) => void,
+              _progress: unknown,
+              abort: () => void
             ) => {
               const abortController = new AbortController();
 
@@ -247,8 +252,13 @@ const AdminFilesTab = () => {
                   toast.error(errorMessage);
                 });
 
-              // FilePond calls this when the admin cancels an in-flight upload.
-              return { abort: () => abortController.abort() };
+              // FilePond calls this when the admin cancels an in-flight upload; calling its own `abort` clears the tile.
+              return {
+                abort: () => {
+                  abortController.abort();
+                  abort();
+                },
+              };
             },
           }}
           name="files"

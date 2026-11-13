@@ -11,15 +11,21 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
   setTargetFile: vi.fn(),
+  subscribe: vi.fn(),
+  upload: vi.fn(),
+  filePondProps: {} as Record<string, unknown>,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, delete: mocks.del } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'admin-1' } }) }));
-vi.mock('@client/app/utils/react-query', () => ({ useSubscribeCollection: vi.fn() }));
+vi.mock('@client/app/utils/react-query', () => ({ useSubscribeCollection: mocks.subscribe }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
-vi.mock('@client/app/utils/filesAPICalls', () => ({ createAppFileOnServerWithUpload: vi.fn() }));
+vi.mock('@client/app/utils/filesAPICalls', () => ({ createAppFileOnServerWithUpload: mocks.upload }));
 vi.mock('react-filepond', () => ({
-  FilePond: () => <div data-testid="filepond" />,
+  FilePond: (props: Record<string, unknown>) => {
+    mocks.filePondProps = props;
+    return <div data-testid="filepond" />;
+  },
   registerPlugin: vi.fn(),
 }));
 vi.mock('./EditTagModal', () => ({
@@ -182,6 +188,27 @@ describe('AdminFilesTab', () => {
       }
     }
   );
+
+  it('keeps the subscription callback stable once the list loads', async () => {
+    renderTab();
+    await screen.findByTestId('admin-files-row-f1');
+    const callbacks = mocks.subscribe.mock.calls.map(call => call[2]);
+    expect(callbacks.length).toBeGreaterThan(1);
+    expect(new Set(callbacks).size).toBe(1);
+  });
+
+  it('tells FilePond when an in-flight upload is cancelled', async () => {
+    mocks.upload.mockReturnValue(new Promise(() => undefined));
+    renderTab();
+    await screen.findByTestId('admin-files-row-f1');
+    type Process = (...args: unknown[]) => { abort: () => void };
+    const process = (mocks.filePondProps.server as { process: Process }).process;
+    const filePondAbort = vi.fn();
+    const handle = process('files', new File(['x'], 'a.pdf'), {}, vi.fn(), vi.fn(), vi.fn(), filePondAbort);
+    handle.abort();
+    expect(filePondAbort).toHaveBeenCalledTimes(1);
+    expect((mocks.upload.mock.calls[0][2] as AbortSignal).aborted).toBe(true);
+  });
 
   it('shows an empty state when there are no files', async () => {
     mocks.get.mockResolvedValue({ data: [] });
