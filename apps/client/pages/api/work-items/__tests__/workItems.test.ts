@@ -167,6 +167,16 @@ describe('POST /api/work-items', () => {
     expect(verifyOrgPermission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'org1', 'manageContent');
   });
 
+  it('does not create an org-scoped item when manageContent is refused', async () => {
+    const denied = new Error('Organization not found');
+    verifyOrgPermission.mockRejectedValueOnce(denied);
+
+    await expect(
+      call('collection', 'post', { body: { title: 'Ship it', organizationId: 'org1' } }).result
+    ).rejects.toBe(denied);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('requires a title', async () => {
     await expect(call('collection', 'post', { body: {} }).result).rejects.toThrow(/title is required/);
   });
@@ -271,6 +281,26 @@ describe('PATCH /api/work-items/:id', () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
     expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+  });
+
+  it('gates a supplied organizationId on manageContent before updating', async () => {
+    await call('item', 'patch', { query: { id: OID_A }, body: { organizationId: 'org1' } }).result;
+
+    expect(verifyOrgPermission).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, 'org1', 'manageContent');
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { organizationId: 'org1' });
+  });
+
+  it('does not update when manageContent on the supplied organizationId is refused', async () => {
+    const denied = new Error('Organization not found');
+    verifyOrgPermission.mockRejectedValueOnce(denied);
+
+    await expect(
+      call('item', 'patch', {
+        query: { id: OID_A },
+        body: { organizationId: 'org1', title: 'Renamed' },
+      }).result
+    ).rejects.toBe(denied);
+    expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
   // '' and null are the clearing signal; the repository turns a null into $unset.
