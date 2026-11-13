@@ -1,32 +1,30 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { LLMModelConfig, MODEL_ACCESS_REVISION_HEADER, ModelInfo } from '@bike4mind/common';
+import { LLMModelConfig, ModelInfo, MODEL_ACCESS_REVISION_HEADER } from '@bike4mind/common';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from './modelAccessRevision';
+import {
+  ModelConfigurationsResponseSchema,
+  loadedAccessEntry,
+  type LoadedModelConfiguration,
+  type ModelConfigurationsRead,
+} from './modelAccessDraft';
 import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
-
-export const LLM_MODEL_CONFIGURATIONS_QUERY_KEY = ['llm-model-configurations'] as const;
-
-/** The access entries plus the access revision they were read under (modelAccessRevision.ts compares it). */
-export type LLMModelConfigurationsData = { configurations: LLMModelConfig[]; revision: string | null };
 
 /** Model access entries. Writes go through the per-model and bulk access endpoints (hooks/data/adminModels.ts). */
 export function useLLMModelConfigurations() {
   return useQuery({
-    queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY,
-    queryFn: async (): Promise<LLMModelConfigurationsData> => {
-      try {
-        const response = await api.get<{ settingValue: LLMModelConfig[] }>(`/api/admin/llm-models/configurations`);
-        const revision = response.headers?.[MODEL_ACCESS_REVISION_HEADER];
-        return {
-          configurations: response.data?.settingValue || [],
-          revision: typeof revision === 'string' && revision.length > 0 ? revision : null,
-        };
-      } catch (error) {
-        // If setting doesn't exist yet, return empty array
-        return { configurations: [], revision: null };
-      }
+    queryKey: MODEL_CONFIGURATIONS_QUERY_KEY,
+    queryFn: async (): Promise<ModelConfigurationsRead> => {
+      const response = await api.get<unknown>('/api/admin/llm-models/configurations');
+      const parsed = ModelConfigurationsResponseSchema.parse(response.data);
+      const revision: unknown = response.headers?.[MODEL_ACCESS_REVISION_HEADER];
+      return {
+        configurations: parsed.settingValue,
+        revision: typeof revision === 'string' && revision.length > 0 ? revision : null,
+      };
     },
-    select: (data: LLMModelConfigurationsData) => data.configurations,
+    select: (read: ModelConfigurationsRead) => read.configurations,
     staleTime: 1000 * 30, // 30 seconds - reduced from 5 minutes for quicker updates
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
@@ -40,30 +38,32 @@ export function useLLMModelConfigurations() {
  * missing data reports a failed fetch as loading forever, hiding the no-models warning.
  */
 export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[], modelInfosPending = !modelInfos) {
-  const { data: savedConfigurations, isLoading } = useLLMModelConfigurations();
+  const { data: savedConfigurations, isLoading, error, refetch } = useLLMModelConfigurations();
 
   const configurations = useMemo(() => {
-    if (!modelInfos || isLoading) {
+    if (!modelInfos || isLoading || (error && savedConfigurations === undefined)) {
       return [];
     }
 
     // Merge saved configurations with model info, preferring saved configurations
-    return modelInfos.map(modelInfo => {
+    return modelInfos.map((modelInfo): LoadedModelConfiguration => {
       const savedConfig = savedConfigurations?.find(config => config.id === modelInfo.id);
 
       if (savedConfig) {
         return {
           ...modelInfo,
           ...savedConfig,
+          id: modelInfo.id,
+          accessEntry: loadedAccessEntry(savedConfig),
         };
       }
 
       // Create default configuration for new models
-      return getDefaultModelConfig(modelInfo);
+      return { ...getDefaultModelConfig(modelInfo), accessEntry: null };
     });
-  }, [modelInfos, savedConfigurations, isLoading]);
+  }, [modelInfos, savedConfigurations, isLoading, error]);
 
-  return { data: configurations, isLoading: modelInfosPending || isLoading };
+  return { data: configurations, isLoading: modelInfosPending || isLoading, error, refetch };
 }
 
 // Default model configuration logic

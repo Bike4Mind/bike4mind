@@ -3,6 +3,8 @@ import { userService } from '@bike4mind/services';
 import {
   ACCOUNT_DISPUTE_PENDING_MESSAGE,
   ACCOUNT_SUSPENDED_MESSAGE,
+  PERSONA_EXPIRED_MESSAGE,
+  isPersonaExpired,
 } from '@bike4mind/services/userService/accountState';
 import { ForbiddenError } from '../utils/errors';
 
@@ -15,6 +17,7 @@ export function assertAccountStateUsable(user: Parameters<typeof userService.acc
     case 'suspended':
       throw new ForbiddenError(ACCOUNT_SUSPENDED_MESSAGE);
     default:
-      return;
+      break;
   }
+  if (isPersonaExpired(user)) throw new ForbiddenError(PERSONA_EXPIRED_MESSAGE);
 }

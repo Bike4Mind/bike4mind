@@ -1,6 +1,8 @@
 import { hashKey, type QueryClient } from '@tanstack/react-query';
 import { settingsMap } from '@bike4mind/common';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY, type LLMModelConfigurationsData } from './llmModelConfig';
+import type { ModelConfigurationsRead } from './modelAccessDraft';
+
+export const MODEL_CONFIGURATIONS_QUERY_KEY = ['llm-model-configurations'] as const;
 
 /**
  * Spreads the refetch one access write sets off across every connected tab. No server process caches access
@@ -29,7 +31,7 @@ function watchOf(queryClient: QueryClient): RevisionWatch {
 
 /** undefined: no entries read yet; null: read before the first access write ever bumped the revision. */
 const readRevision = (queryClient: QueryClient) =>
-  queryClient.getQueryData<LLMModelConfigurationsData>(LLM_MODEL_CONFIGURATIONS_QUERY_KEY)?.revision;
+  queryClient.getQueryData<ModelConfigurationsRead>(MODEL_CONFIGURATIONS_QUERY_KEY)?.revision;
 
 /**
  * Refetch the access entries when they were read under a revision other than the last one pushed (written by
@@ -49,15 +51,21 @@ function reconcile(queryClient: QueryClient, random: () => number): void {
     // Another path (this tab's own write, an admission refusal) may have refetched during the wait.
     const target = watch.pushed;
     if (!target || readRevision(queryClient) === target) return;
+    // A read in flight is checked again when it lands.
+    if (queryClient.getQueryState(MODEL_CONFIGURATIONS_QUERY_KEY)?.fetchStatus === 'fetching') return;
     watch.refetchedFor = target;
-    void queryClient.invalidateQueries({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY }).then(() => {
-      // A failed refetch has not used up the revision: the next push or landing tries again. useLLMModelConfigurations
-      // turns a failed read into entries with no revision, which a read after a push never legitimately has.
-      const failed =
-        queryClient.getQueryState(LLM_MODEL_CONFIGURATIONS_QUERY_KEY)?.status === 'error' ||
-        readRevision(queryClient) === null;
-      if (failed) watch.refetchedFor = undefined;
-    });
+    // Inactive queries too: a closed picker that stays mounted would otherwise show the old access when reopened.
+    void queryClient
+      .invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY, refetchType: 'all' }, { throwOnError: true })
+      .then(
+        () => readRevision(queryClient) !== null,
+        () => false
+      )
+      .then(succeeded => {
+        // A failed refetch has not used up the revision: the next push or landing tries again. A read after a
+        // push never legitimately lacks a revision, so one without it counts as failed too.
+        if (!succeeded && watch.refetchedFor === target) watch.refetchedFor = undefined;
+      });
   }, random() * MODEL_ACCESS_REFETCH_JITTER_MS);
 }
 
@@ -75,7 +83,7 @@ export function handleModelAccessRevisionSetting(
 
 /** Re-checks the pushed revision each time the access entries land. Returns the unsubscribe, which also drops a pending refetch. */
 export function watchModelAccessArrivals(queryClient: QueryClient, random: () => number = Math.random): () => void {
-  const entriesHash = hashKey(LLM_MODEL_CONFIGURATIONS_QUERY_KEY);
+  const entriesHash = hashKey(MODEL_CONFIGURATIONS_QUERY_KEY);
   const unsubscribe = queryClient.getQueryCache().subscribe(event => {
     if (event.type !== 'updated' || event.action.type !== 'success') return;
     if (event.query.queryHash !== entriesHash) return;

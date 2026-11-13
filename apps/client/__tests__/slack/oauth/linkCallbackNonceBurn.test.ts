@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));

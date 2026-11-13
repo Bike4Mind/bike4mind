@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY } from './llmModelConfig';
 import {
   MODEL_ACCESS_REFETCH_JITTER_MS,
+  MODEL_CONFIGURATIONS_QUERY_KEY,
   handleModelAccessRevisionSetting,
   watchModelAccessArrivals,
 } from './modelAccessRevision';
@@ -11,6 +11,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
 
 const entriesAt = (revision: string | null) => ({ configurations: [], revision });
 const pushed = (settingValue: unknown, settingName = 'modelAccessRevision') => ({ settingName, settingValue });
+const REFETCH_ALL = [{ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY, refetchType: 'all' }, { throwOnError: true }] as const;
 
 describe('handleModelAccessRevisionSetting', () => {
   let queryClient: QueryClient;
@@ -24,21 +25,22 @@ describe('handleModelAccessRevisionSetting', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    queryClient.clear();
   });
 
   it('refetches entries read under a different revision within the jitter window', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0.5);
     vi.advanceTimersByTime(MODEL_ACCESS_REFETCH_JITTER_MS / 2 - 1);
     expect(invalidate).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY });
+    expect(invalidate).toHaveBeenCalledWith(...REFETCH_ALL);
   });
 
   it('refetches entries read before the first bump once a revision arrives', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt(null));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt(null));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-1'), () => 0);
     vi.runAllTimers();
@@ -47,7 +49,7 @@ describe('handleModelAccessRevisionSetting', () => {
   });
 
   it('leaves entries alone that already match the replayed revision', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-1'), () => 0);
     vi.runAllTimers();
@@ -56,7 +58,7 @@ describe('handleModelAccessRevisionSetting', () => {
   });
 
   it('ignores other settings and empty values', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2', 'modelListRevision'), () => 0);
     handleModelAccessRevisionSetting(queryClient, pushed(''), () => 0);
@@ -66,21 +68,24 @@ describe('handleModelAccessRevisionSetting', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('refetches once per revision, however often it is pushed', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+  it('refetches once per revision, however often it is pushed, and again for a newer one', () => {
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
     vi.runAllTimers();
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
     vi.runAllTimers();
-
     expect(invalidate).toHaveBeenCalledTimes(1);
+
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-3'), () => 0);
+    vi.runAllTimers();
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it('tries the revision again after a refetch that came back with no revision', async () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
     invalidate.mockImplementation(async () => {
-      queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt(null));
+      queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt(null));
     });
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
@@ -91,11 +96,23 @@ describe('handleModelAccessRevisionSetting', () => {
     expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
+  it('tries the revision again after a refetch that failed', async () => {
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    invalidate.mockRejectedValueOnce(new Error('Offline'));
+
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
+    await vi.runAllTimersAsync();
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
+    await vi.runAllTimersAsync();
+
+    expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
   it('skips the refetch when the entries caught up during the wait', () => {
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0.5);
-    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-2'));
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-2'));
     vi.runAllTimers();
 
     expect(invalidate).not.toHaveBeenCalled();
@@ -113,12 +130,43 @@ describe('watchModelAccessArrivals', () => {
 
     handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
     await queryClient.fetchQuery({
-      queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY,
+      queryKey: MODEL_CONFIGURATIONS_QUERY_KEY,
       queryFn: async () => entriesAt('acc-1'),
     });
     vi.runAllTimers();
 
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY });
+    expect(invalidate).toHaveBeenCalledWith(...REFETCH_ALL);
     stop();
+    queryClient.clear();
+  });
+
+  it('drops a pending refetch and stops observing arrivals once unsubscribed', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+    const stop = watchModelAccessArrivals(queryClient, () => 0.5);
+    queryClient.setQueryData(MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0.5);
+    stop();
+    vi.runAllTimers();
+
+    expect(invalidate).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it('refetches a picker query no mounted observer is watching', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const stop = watchModelAccessArrivals(queryClient, () => 0);
+    const queryFn = vi.fn().mockResolvedValueOnce(entriesAt('acc-1')).mockResolvedValue(entriesAt('acc-2'));
+    await queryClient.fetchQuery({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY, queryFn });
+    expect(queryClient.getQueryCache().find({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY })?.isActive()).toBe(false);
+
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
+    await vi.runAllTimersAsync();
+
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(MODEL_CONFIGURATIONS_QUERY_KEY)).toEqual(entriesAt('acc-2'));
+    stop();
+    queryClient.clear();
   });
 });

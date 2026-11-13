@@ -58,6 +58,8 @@ export interface ValidationResult {
   currentSpend?: number;
   /** The admin who provisioned the key for its owner (admin generate-api-key route only). */
   createdByUserId?: string;
+  /** When the key was minted; rotation keeps it. Decides legacy status for grandfathered scope gates. */
+  createdAt?: Date;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -122,6 +124,7 @@ function finalizeApiKeyValidation(
     spendCap: apiKey.spendCap,
     currentSpend: apiKey.usage?.totalSpendCredits,
     createdByUserId: apiKey.metadata?.createdByUserId,
+    createdAt: apiKey.createdAt,
   };
 }
 

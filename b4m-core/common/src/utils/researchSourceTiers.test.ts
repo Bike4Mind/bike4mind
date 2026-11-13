@@ -127,3 +127,24 @@ describe('upgradeLegacyResearchLevers - mismatch rule', () => {
     expect(upgradeLegacyResearchLevers(once)).toEqual(once);
   });
 });
+
+describe('upgradeLegacyResearchLevers auto-admit defaults', () => {
+  it('reads absent levers as off with the default cap', () => {
+    expect(upgradeLegacyResearchLevers(base)).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
+    expect(upgradeLegacyResearchLevers({ ...base, allowedDomains: ['a.com'] })).toMatchObject({
+      autoAdmitTrusted: false,
+      maxAutoAdmits: 3,
+    });
+    expect(upgradeLegacyResearchLevers({ ...base, unlistedSources: 'review' })).toMatchObject({
+      autoAdmitTrusted: false,
+      maxAutoAdmits: 3,
+    });
+  });
+
+  it('keeps stored values', () => {
+    expect(upgradeLegacyResearchLevers({ ...base, autoAdmitTrusted: true, maxAutoAdmits: 9 })).toMatchObject({
+      autoAdmitTrusted: true,
+      maxAutoAdmits: 9,
+    });
+  });
+});

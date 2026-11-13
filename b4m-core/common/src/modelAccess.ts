@@ -71,6 +71,32 @@ export const ModelAccessPatchRequestSchema = z
   .strict();
 export type ModelAccessPatchRequest = z.infer<typeof ModelAccessPatchRequestSchema>;
 
+/** Atomic compatibility Save for the current dashboard; unversioned whole-array writes are refused. */
+export const ModelAccessSaveRequestSchema = z
+  .object({
+    changes: z
+      .array(
+        z
+          .object({
+            id: ModelIdSchema,
+            change: ModelAccessChangeSchema,
+            expectedUpdatedAt: StampSchema.nullable(),
+          })
+          .strict()
+      )
+      .max(MODEL_ACCESS_BULK_MAX_IDS)
+      .refine(changes => new Set(changes.map(change => change.id)).size === changes.length, 'Model ids must be unique'),
+    reason: AdminActionReasonSchema,
+    confirmAdminOnly: z.boolean().optional(),
+  })
+  .strict();
+export type ModelAccessSaveRequest = z.infer<typeof ModelAccessSaveRequestSchema>;
+export type ModelAccessSaveResult = {
+  entries: { id: string; entry: ModelAccessEntry | null }[];
+  changed: number;
+  revision: string | null;
+};
+
 export type ModelAccessPatchResult = {
   entry: ModelAccessEntry | null;
   /** False when the change matched the stored access; nothing was written, audited or bumped. */

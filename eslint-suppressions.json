@@ -1215,11 +1215,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/llm-models/configurations.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 8
@@ -1322,11 +1317,6 @@
     },
     "b4m/no-raw-entity-response": {
       "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/rapid-reply/test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/pages/api/admin/rate-limits.ts": {
@@ -1533,11 +1523,6 @@
   "apps/client/pages/api/ai/optimize-input.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/ai/rapid-reply.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
     }
   },
   "apps/client/pages/api/ai/tavern-conversation.ts": {

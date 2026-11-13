@@ -49,8 +49,8 @@ describe('preview gate duplicate-run collapse', () => {
   it('keys the group on the PR, so one PR can never cancel another', () => {
     const group = block.match(/^ {2}group: (.+)$/m)?.[1] ?? '';
     expect(group).toContain('github.event.pull_request.number');
-    // merge_group carries no PR number. Without the fallback the key collapses to a
-    // constant and every queue entry cancels the one before it.
+    // Without the fallback the key collapses to a constant for any event that carries no PR
+    // number, and one run would cancel the next.
     expect(group).toContain('github.ref');
   });
 

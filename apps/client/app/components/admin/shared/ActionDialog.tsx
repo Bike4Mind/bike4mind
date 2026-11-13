@@ -32,6 +32,7 @@ export type ActionDialogProps = {
   reasonAudited?: boolean;
   /** For an endpoint whose own note rule is looser than the shared admin reason; see isAdminReasonComplete. */
   reasonMinLength?: number;
+  reasonRequired?: boolean;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -93,6 +94,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   reasonPresets,
   reasonAudited = true,
   reasonMinLength,
+  reasonRequired = true,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
@@ -114,7 +116,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
   const hint =
     blockedReason ??
-    (!isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
+    (reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
@@ -146,14 +148,16 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </Typography>
         )}
         {children}
-        <ReasonPicker
-          presets={reasonPresets}
-          value={reason}
-          onChange={setReason}
-          audited={reasonAudited}
-          minLength={reasonMinLength}
-          data-testid={testIds.reason ?? `${testId}-reason-input`}
-        />
+        {reasonRequired && (
+          <ReasonPicker
+            presets={reasonPresets}
+            value={reason}
+            onChange={setReason}
+            audited={reasonAudited}
+            minLength={reasonMinLength}
+            data-testid={testIds.reason ?? `${testId}-reason-input`}
+          />
+        )}
         {typedConfirm && (
           <FormControl required>
             {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and

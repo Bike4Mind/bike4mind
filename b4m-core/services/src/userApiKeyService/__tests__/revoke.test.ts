@@ -30,8 +30,9 @@ function makeSyncedRepo() {
     revokeIfNotDisabled: vi.fn().mockImplementation((_id: string, revokedBy: string, revokedReason?: string) => {
       if (stored && stored.status !== ApiKeyStatus.DISABLED) {
         Object.assign(stored, { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason });
+        return Promise.resolve(true);
       }
-      return Promise.resolve();
+      return Promise.resolve(false);
     }),
   };
   return { repo, getStored: () => stored };
@@ -87,7 +88,8 @@ describe('revokeUserApiKey', () => {
     const before = Date.now();
     const result = await revokeUserApiKey('user1', { keyId: 'key-1', reason: 'Leaked in a build log' }, adapters);
 
-    expect(result.name).toBe('CI key');
+    expect(result).toMatchObject({ name: 'CI key', holderUserId: 'user1', didRevoke: true });
+    expect(result.organizationId).toBeUndefined();
     expect(getStored()!.revokedBy).toBe('user1');
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
     expect(getStored()!.revokedAt!.getTime()).toBeGreaterThanOrEqual(before);

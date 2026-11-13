@@ -8,7 +8,6 @@ const componentsByFile = {
   'AdminSystemHealthTab.tsx': ['Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
   'CreateSlackAppModal.tsx': ['Modal'],
-  'DlqReplayTab.tsx': ['Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
   'EventMetrics/components/OverviewTab.tsx': ['Card'],
   'EventMetrics/components/RawDataTab.tsx': ['Table'],

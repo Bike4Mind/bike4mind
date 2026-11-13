@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 const h = vi.hoisted(() => ({
   append: vi.fn(),
   findById: vi.fn(),
+  organizationAudit: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -10,6 +11,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
+vi.mock('./organizationAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('./organizationAudit')>()),
+  recordOrganizationAuditEvent: h.organizationAudit,
+}));
 
 import {
   ADMIN_ACTION_REASON_MISSING_MESSAGE,
@@ -122,6 +127,32 @@ describe('recordAdminActionFromRequest', () => {
       impersonatedUserId: 'customer-1',
     });
   });
+
+  it.each([true, false])(
+    'keeps the real admin on an organization event when platform auditing fails (lookup %s)',
+    async found => {
+      h.findById.mockResolvedValue(
+        found ? { id: 'real-admin', username: 'real', name: 'Real Admin', isAdmin: true } : null
+      );
+      h.append.mockRejectedValueOnce(new Error('platform audit unavailable'));
+      const req = buildRequest({
+        user: { id: 'member', username: 'member', name: 'Member', isAdmin: false, impersonatedBy: 'real-admin' },
+      });
+      const entry = await recordAdminActionFromRequest(req, {
+        action: 'org.admins.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'org', displayName: 'Team' },
+        summary: 'Updated managers',
+      });
+      expect(entry).toBeNull();
+      expect(h.findById).toHaveBeenCalledExactlyOnceWith('real-admin');
+      expect(h.organizationAudit).toHaveBeenCalledExactlyOnceWith({
+        organizationId: 'org',
+        actorUserId: 'real-admin',
+        action: 'member.role_changed',
+      });
+    }
+  );
 
   it('falls back to an unknown admin when the impersonator cannot be found', async () => {
     h.findById.mockResolvedValue(null);

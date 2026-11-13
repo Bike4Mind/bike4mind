@@ -164,6 +164,12 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [],
   },
   {
+    value: ApiKeyScope.PERSONAS_MINT,
+    label: 'Test personas: Mint',
+    description: 'Create and delete throwaway test-persona accounts for QA bots (admins and developers only)',
+    endpoints: [],
+  },
+  {
     value: ApiKeyScope.OPTIHASHI_READ,
     label: 'OptiHashi: Read',
     description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
@@ -424,7 +430,7 @@ export interface ApiKeyScopeAccess {
   entitlements: ReadonlySet<string>;
 }
 
-type ProductAccessFlag = 'hasOptiAccess' | 'hasOverwatchAccess' | 'hearthEnabled';
+type ProductAccessFlag = 'hasOptiAccess' | 'hasOverwatchAccess' | 'hearthEnabled' | 'bypass';
 
 /**
  * Product scopes offered only when the matching ApiKeyScopeAccess flag holds; see isApiKeyScopeOffered.
@@ -439,6 +445,8 @@ export const GATED_API_KEY_SCOPES: Readonly<Partial<Record<ApiKeyScope, ProductA
   [ApiKeyScope.MARKETING_REPORTS_WRITE]: 'hasOverwatchAccess',
   [ApiKeyScope.HEARTH_READ]: 'hearthEnabled',
   [ApiKeyScope.HEARTH_WRITE]: 'hearthEnabled',
+  // Admin or developer only; the persona routes re-check the key owner on every call (canMintPersonas).
+  [ApiKeyScope.PERSONAS_MINT]: 'bypass',
 };
 
 const REQUIRED_ENTITLEMENT_BY_SCOPE: ReadonlyMap<string, string> = new Map(
@@ -457,6 +465,18 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
   return !required || access.bypass || access.entitlements.has(required);
 };
 
+/**
+ * The scopes an org-owned key may carry (pages/api/organizations/[id]/api-keys, OrgApiKeysSection's
+ * picker): the generic built-in scopes with no product or entitlement gate. Such a key is held by the
+ * org's service account, which has no subscription or entitlements, so a gated or contributed scope
+ * would be refused at use however it was minted.
+ */
+export const ORG_API_KEY_SCOPES: readonly ApiKeyScopeOption[] = GENERIC_MODAL_API_KEY_SCOPES.filter(
+  s => isBuiltInApiKeyScope(s.value) && !GATED_API_KEY_SCOPES[s.value] && !s.requiredEntitlement
+);
+
+export const isOrgApiKeyScope = (value: string): boolean => ORG_API_KEY_SCOPES.some(s => s.value === value);
+
 // One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
 // selection when the identity changes).
 const genericScopesCache = new Map<string, ApiKeyScopeOption[]>();
@@ -466,7 +486,7 @@ export const genericApiKeyScopesFor = (access: ApiKeyScopeAccess): ApiKeyScopeOp
   // Only the entitlements some contributed row requires can change the result, so the key holds
   // exactly those; keying on the whole set would grow the cache per distinct viewer.
   const heldRequired = REQUIRED_ENTITLEMENTS.filter(key => access.bypass || access.entitlements.has(key));
-  const cacheKey = `${access.hasOptiAccess}:${access.hasOverwatchAccess}:${access.hearthEnabled}:${heldRequired.join(',')}`;
+  const cacheKey = `${access.bypass}:${access.hasOptiAccess}:${access.hasOverwatchAccess}:${access.hearthEnabled}:${heldRequired.join(',')}`;
   let scopes = genericScopesCache.get(cacheKey);
   if (!scopes) {
     const offered = GENERIC_MODAL_API_KEY_SCOPES.filter(s => isApiKeyScopeOffered(s.value, access));

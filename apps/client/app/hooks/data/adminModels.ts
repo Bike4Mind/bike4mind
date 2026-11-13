@@ -7,8 +7,8 @@ import type {
   AdminModelRow,
   AdminModelSort,
   AuditEntry,
+  AdminModelAccessEntry,
   AuditLogPage,
-  LLMModelConfig,
   ModelAccessBulkDryRun,
   ModelAccessBulkRequestInput,
   ModelAccessBulkResult,
@@ -18,7 +18,8 @@ import type {
   ModelUserTagCount,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY } from './llmModelConfig';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from './modelAccessRevision';
+import { ModelConfigurationsResponseSchema } from './modelAccessDraft';
 import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 
 /**
@@ -126,16 +127,14 @@ export const useAdminUserTags = (enabled = true) =>
     enabled,
   });
 
-/**
- * The tags access entries name. Its own read because useLLMModelConfigurations resolves a failed fetch to no entries,
- * which would pass for "no entry tags" here.
- */
+/** The tags access entries name, under ADMIN_MODELS_QUERY_KEY so an access write refreshes it with the console. */
 const useAccessEntryTags = (enabled: boolean) =>
   useQuery({
     queryKey: [...ADMIN_MODELS_QUERY_KEY, 'entry-tags'],
     queryFn: async () => {
-      const response = await api.get<{ settingValue?: LLMModelConfig[] }>('/api/admin/llm-models/configurations');
-      return [...new Set((response.data?.settingValue ?? []).flatMap(entry => entry.allowedUserTags ?? []))];
+      const response = await api.get<unknown>('/api/admin/llm-models/configurations');
+      const { settingValue } = ModelConfigurationsResponseSchema.parse(response.data);
+      return [...new Set(settingValue.flatMap(entry => entry.allowedUserTags))];
     },
     staleTime: 60_000,
     enabled,
@@ -169,12 +168,27 @@ export const useInvalidateModelAccess = () => {
   return () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY }),
-      queryClient.invalidateQueries({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY }),
+      // Inactive too: a closed picker that stays mounted would otherwise reopen on the old access.
+      queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY, refetchType: 'all' }),
     ]);
 };
 
-export const patchModelAccess = async (id: string, body: ModelAccessPatchRequest): Promise<ModelAccessPatchResult> =>
-  (await api.patch<ModelAccessPatchResult>('/api/admin/models/access', body, { params: { id } })).data;
+/**
+ * The write is conditional on `loaded`, the entry as this view read it (null when the model had none): its
+ * `updatedAt` goes out as `expectedUpdatedAt`, never a stamp re-read just before the write.
+ */
+export const patchModelAccess = async (
+  id: string,
+  loaded: AdminModelAccessEntry | ModelAccessEntry | null,
+  body: Omit<ModelAccessPatchRequest, 'expectedUpdatedAt'>
+): Promise<ModelAccessPatchResult> =>
+  (
+    await api.patch<ModelAccessPatchResult>(
+      '/api/admin/models/access',
+      { ...body, expectedUpdatedAt: loaded?.updatedAt ?? null },
+      { params: { id } }
+    )
+  ).data;
 
 export const postModelAccessBulk = async <T extends ModelAccessBulkDryRun | ModelAccessBulkResult>(
   body: ModelAccessBulkRequestInput

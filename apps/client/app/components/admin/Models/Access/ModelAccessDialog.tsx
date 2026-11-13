@@ -62,10 +62,9 @@ export function ModelAccessDialog({
   const write = useMutation({
     mutationFn: ({ reason }: { reason: string }) => {
       if (!target || !change) throw new Error('No change to save');
-      return patchModelAccess(target.id, {
+      return patchModelAccess(target.id, target.access.entry, {
         change,
         reason,
-        expectedUpdatedAt: target.access.entry?.updatedAt ?? null,
         ...(adminOnlyConfirmed ? { confirmAdminOnly: true } : {}),
       });
     },
@@ -107,10 +106,9 @@ export function ModelAccessDialog({
       showUndo({
         message: `${confirmLabel}: ${name}. ${MODEL_PICKER_FRESHNESS}`,
         onUndo: async () => {
-          await patchModelAccess(target.id, {
+          await patchModelAccess(target.id, result.entry, {
             change: undo,
             reason: undoAdminReason(reason),
-            expectedUpdatedAt: result.entry?.updatedAt ?? null,
             confirmAdminOnly: true,
           });
           await invalidate();

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserSettingsProvider, useUserSettings } from './UserSettingsContext';
@@ -732,5 +732,32 @@ describe('UserSettingsContext - model-list revision wiring', () => {
 
     unmount();
     expect(mockStopWatching).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('UserSettingsContext - model access revision wiring', () => {
+  it('refreshes the actual picker query for a non-admin subscription write', async () => {
+    resetStores();
+    vi.mocked(useSubscribeCollection).mockClear();
+    const actual = await vi.importActual<typeof import('@client/app/hooks/data/modelAccessRevision')>(
+      '@client/app/hooks/data/modelAccessRevision'
+    );
+    mockHandleAccessRevision.mockImplementationOnce((queryClient: QueryClient, setting: Record<string, unknown>) =>
+      actual.handleModelAccessRevisionSetting(queryClient, setting, () => 0)
+    );
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    client.setQueryData(['llm-model-configurations'], { configurations: [], revision: 'access-1' });
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
+    const callback = call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
+    act(() => callback('update', { settingName: 'modelAccessRevision', settingValue: 'access-2' }));
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith(
+        { queryKey: ['llm-model-configurations'], refetchType: 'all' },
+        { throwOnError: true }
+      )
+    );
+    unmount();
   });
 });

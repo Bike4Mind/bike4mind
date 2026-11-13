@@ -19,7 +19,13 @@ struct NewConversationView: View {
   var body: some View {
     VStack(spacing: Tokens.Spacing.m) {
       Spacer(minLength: 0)
-      if model.draft.isEmpty {
+      if model.isSending {
+        // The server creates the session before it answers, which takes a few seconds on a cold start.
+        ProgressView("Starting your chat...")
+          .font(Tokens.Typography.caption)
+          .foregroundStyle(Tokens.Palette.secondaryText)
+          .accessibilityIdentifier("new-conversation-sending")
+      } else if model.draft.isEmpty {
         greeting
         chips
       }
@@ -83,16 +89,22 @@ struct NewConversationView: View {
     .accessibilityIdentifier("home-profile-btn")
   }
 
+  /// Web NotebookSplash on a phone: the 48pt brand mark over an h3 greeting.
   private var greeting: some View {
-    VStack(spacing: Tokens.Spacing.xs) {
+    VStack(spacing: Tokens.Spacing.s + Tokens.Spacing.xs) {
+      Image("LaunchMark")
+        .resizable()
+        .scaledToFit()
+        .frame(width: Tokens.Spacing.xxl, height: Tokens.Spacing.xxl)
+        .accessibilityHidden(true)
       Text(StartGreeting.headline(at: Date(), firstName: profile?.firstName))
-        .font(Tokens.Typography.wordmark)
+        .font(Tokens.Typography.greeting)
         .foregroundStyle(Tokens.Palette.primaryText)
         .multilineTextAlignment(.center)
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("new-conversation-greeting")
       Text(StartGreeting.subline)
-        .font(Tokens.Typography.tagline)
+        .font(Tokens.Typography.caption)
         .foregroundStyle(Tokens.Palette.secondaryText)
         .multilineTextAlignment(.center)
     }
@@ -112,8 +124,11 @@ struct NewConversationView: View {
             .padding(.horizontal, Tokens.Spacing.m)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(Tokens.Palette.groupedBackground)
-            .clipShape(Capsule())
-            .overlay { Capsule().strokeBorder(Tokens.Palette.divider, lineWidth: 1) }
+            .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
+                .strokeBorder(Tokens.Palette.borderSoft, lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(chip.title)
@@ -157,11 +172,11 @@ struct NewConversationView: View {
 
   private func send() {
     guard model.canSend else { return }
+    focused = false
     Task {
       // The model clears the draft on success, so back from the new session lands on the greeting again.
       guard let sessionID = await model.send() else { return }
-      focused = false
-      services.navigator.apply(.session(id: sessionID))
+      services.navigator.openNewConversation(sessionID: sessionID, firstTurn: model.startedTurn)
     }
   }
 }

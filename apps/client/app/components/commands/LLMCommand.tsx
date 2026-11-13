@@ -24,7 +24,7 @@ import { createOptimisticSessionId } from '@client/app/utils/llm';
 import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/llmModelConfig';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/modelAccessRevision';
 
 // modelAdmission's refusal of a model the caller's access entry does not admit (b4m-core/services/src/llm/modelAdmission.ts).
 const MODEL_ACCESS_REFUSAL = /^Model ".+" is not accessible\b/;
@@ -408,7 +408,7 @@ export async function handleLLMCommand(
       } else if (status === 403 && isModelAccessRefusal(error.response?.data)) {
         // An admin turned the model off after this picker loaded; refetch access so the picker drops it now
         // rather than when the access revision reaches this tab.
-        void args.queryClient.invalidateQueries({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY });
+        void args.queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY });
         toast.error(i18n.t('session.errors.modelUnavailable'));
       } else if (status === 401 || status === 403) {
         toast.error(i18n.t('session.errors.noPermission'));

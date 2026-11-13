@@ -63,9 +63,9 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:mod
     {
       userId: req.user.id,
       type: OrganizationEvents.ADD_ORG_MEMBER,
-      metadata: { organizationId, memberEmail: added.email || '', memberLevel: added.level },
+      metadata: { organizationId, userId: added.id, memberEmail: added.email || '', memberLevel: added.level },
     },
-    { ability: req.ability },
+    { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id },
     req.logger,
     organizationId
   );

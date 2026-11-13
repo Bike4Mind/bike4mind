@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1114 routes: 91 contracted, 11 aliases of another route, 277 with no static caller in `apps/client/app`.
+1135 routes: 94 contracted, 11 aliases of another route, 282 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 326 | 0 | 202 | 117 | 0 | 7 | 58 |
+| admin | 333 | 0 | 202 | 124 | 0 | 7 | 58 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -53,7 +53,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
 | artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| artifacts | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
+| artifacts | 7 | 0 | 6 | 1 | 0 | 0 | 1 |
 | auth | 35 | 0 | 7 | 18 | 0 | 10 | 5 |
 | blog | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -108,10 +108,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
-| organizations | 41 | 0 | 35 | 6 | 0 | 0 | 1 |
+| organizations | 48 | 0 | 35 | 13 | 0 | 0 | 1 |
 | otc | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | overwatch | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | partners | 3 | 0 | 1 | 2 | 0 | 0 | 1 |
+| personas | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | preference-arena | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -137,7 +138,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | slack | 15 | 0 | 7 | 1 | 0 | 7 | 7 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
-| studio | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| studio | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | subscribers | 5 | 0 | 4 | 0 | 0 | 1 | 0 |
 | subscriptions | 9 | 0 | 6 | 3 | 0 | 0 | 2 |
 | system-prompts | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -145,12 +146,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | tools | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | transforms | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | turnstile | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| tutorials | 5 | 0 | 0 | 5 | 0 | 0 | 5 |
+| tutorials | 6 | 0 | 0 | 6 | 0 | 0 | 6 |
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 89 | 85 | 82 | 1 | 0 | 6 | 78 |
+| v1 | 92 | 88 | 85 | 1 | 0 | 6 | 81 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -232,6 +233,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/context-telemetry/test-config` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useContextTelemetry.ts` |
 | `/api/admin/create-user` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/Users/CreateUserModal.tsx` |
 | `/api/admin/credit-adjustments` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/CreditAnalysis/hooks/useCreditAdjustmentsLog.ts` |
+| `/api/admin/credit-economy` | GET | jwt | - | GET: ? | no | - | 1: `components/admin/CreditAnalysis/components/CreditEconomy.tsx` |
 | `/api/admin/dlq/discard` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/history` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
 | `/api/admin/dlq/messages` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
@@ -260,6 +262,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/emergency-login` | POST | handler | - | - | no | - | 1: `routes/admin-emergency.tsx` |
 | `/api/admin/event-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/EventMetrics/hooks/useEventMetrics.ts` |
 | `/api/admin/feedback-trends` | GET | jwt | - | GET: `support:read` | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/admin/feedback/[id]/ai` | GET, PATCH | jwt | - | GET: `support:read` or `users:moderate`; PATCH: `users:moderate` | no | - | 1: `components/admin/Feedback/FeedbackAiPanel.tsx` |
+| `/api/admin/feedback/[id]/history` | GET, POST | jwt | - | GET: `users:moderate`; POST: `users:moderate` | no | - | 1: `utils/feedbackAPICalls.ts` |
 | `/api/admin/feedback/[id]/status` | PATCH | jwt | - | PATCH: `users:moderate` | no | - | 1: `utils/feedbackAPICalls.ts` |
 | `/api/admin/gears` | GET, PUT | jwt+key | `admin:*` | GET: ?; PUT: `settings:manage` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
 | `/api/admin/gears/[key]` | DELETE | jwt+key | `admin:*` | DELETE: `settings:manage` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
@@ -323,6 +327,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/partner-signup-rules` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
 | `/api/admin/partner-signup-rules/[id]` | PUT, DELETE | jwt+key | `admin:*` | PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
 | `/api/admin/partner-signup-rules/backfill` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/admin/payments` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
+| `/api/admin/payments/export` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
+| `/api/admin/payments/summary` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
 | `/api/admin/platform-usage` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/hooks/usePlatformUsage.ts` |
 | `/api/admin/platform-usage/endpoints` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/hooks/useEndpointUsage.ts` |
 | `/api/admin/pr-report/generate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/prReport.ts` |
@@ -423,6 +430,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/subscriptions/by-stripe/[stripeSubscriptionId]` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
 | `/api/admin/subscriptions/export` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
 | `/api/admin/subscriptions/summary` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
+| `/api/admin/subscriptions/usage` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/SubscriptionUsageSummary.tsx` |
 | `/api/admin/system-health` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
 | `/api/admin/system-health/integration-health` | GET, POST, PUT | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage`; PUT: `settings:manage` | no | - | 3: `components/admin/AdminSystemHealthTab.tsx`, `components/admin/IntegrationHealth/hooks/useCircuitBreakerOverride.ts`, `components/admin/IntegrationHealth/hooks/useIntegrationHistory.ts` |
 | `/api/admin/system-health/test-database` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
@@ -614,6 +622,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/artifacts/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
 | `/api/artifacts/[id]/versions` | GET, POST | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 1: `hooks/data/artifacts.ts` |
 | `/api/artifacts/[id]/versions/[version]` | GET | jwt+key | - | - | no | - | 3: `components/Knowledge/PythonArtifactViewer.tsx`, `components/Knowledge/ReactArtifactViewer.tsx`, `hooks/data/artifacts.ts` |
+| `/api/artifacts/by-identifier` | GET | jwt | - | - | no | - | 1: `utils/artifactPersistence.ts` |
 | `/api/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 0 |
 | `/api/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 3: `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` |
 
@@ -1212,6 +1221,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 3: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx`, `utils/partnerSignupRuleAPICalls.ts` |
 | `/api/organizations/[id]/addUser` | POST | jwt+key | - | - | no | - | 0 |
 | `/api/organizations/[id]/admins` | PUT | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/api-keys` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/[keyId]/revoke` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/[keyId]/rotate` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/members` | GET | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/members/[keyId]/revoke` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/audit` | GET | jwt | - | - | no | - | 1: `components/organizations/OrganizationAuditSection.tsx` |
 | `/api/organizations/[id]/custom-mcp/connections` | GET | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
 | `/api/organizations/[id]/custom-mcp/policy` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
 | `/api/organizations/[id]/feedback-report` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
@@ -1236,6 +1251,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]/members/[userId]` | DELETE | jwt+key | `datalake:share` | - | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/[id]/members/[userId]/credit-budget` | PUT | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/[id]/members/[userId]/manager` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/members/[userId]/offboarding` | GET | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/[id]/pendingUsers` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/organizations/[id]/storage-usage` | GET | jwt | - | - | no | - | 1: `hooks/data/useOrgStorageUsage.ts` |
 | `/api/organizations/[id]/transfer-ownership` | POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
@@ -1272,6 +1288,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/partners/bedrocknews/claims/preview` | POST | jwt | - | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
 | `/api/partners/bedrocknews/claims/redeem` | POST | jwt | - | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
 | `/api/partners/rewards/grant` | POST | jwt+key | `rewards:grant` | - | no | - | 0 |
+
+### personas
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/personas/redeem` | GET, POST | handler | - | - | no | - | 0 |
 
 ### ping
 
@@ -1487,9 +1509,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/skills` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/skills.ts` |
-| `/api/skills/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/skills.ts` |
-| `/api/skills/[id]/share` | PUT | jwt+key | - | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills` | GET, POST | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/[id]` | GET, PUT, DELETE | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/[id]/share` | PUT | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
 | `/api/skills/market` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]` | GET, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/import` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
@@ -1568,6 +1590,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
 | `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 
 ### subscribers
@@ -1636,6 +1659,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/tutorials/drafts` | any | jwt | - | GET: `settings:manage`; POST: `settings:manage` | no | - | 0 |
 | `/api/tutorials/overrides` | any | jwt | - | GET: `settings:manage`; PUT: `settings:manage` | no | - | 0 |
 | `/api/tutorials/owners` | GET | jwt | - | GET: `settings:manage` | no | - | 0 |
 | `/api/tutorials/run` | any | jwt | - | - | no | - | 0 |
@@ -1730,6 +1754,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
+| `/api/v1/completion-runs` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | - | yes | - | 0 |
 | `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
@@ -1757,6 +1782,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/music-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
+| `/api/v1/personas` | POST | jwt+key | `personas:mint` | - | yes | - | 0 |
+| `/api/v1/personas/[id]` | DELETE | jwt+key | `personas:mint` | - | yes | - | 0 |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |
 | `/api/v1/projects/[id]` | GET, PATCH, DELETE | jwt+key | GET: `projects:read`, `projects:write`; PATCH, DELETE: `projects:write` | - | yes | - | 0 |
 | `/api/v1/projects/[id]/files` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |

@@ -15,7 +15,8 @@ import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
-// Stamped on the job as deadlineAt at create; covers the queue wait plus one provider call.
+// Stamped on the job as deadlineAt at create; covers the queue wait plus one provider call, or an async provider's
+// task from submit through its last poll.
 export const IMAGE_JOB_MAX_WALL_CLOCK_MS = 10 * 60_000;
 
 // Most jobs one "make N" request creates.

@@ -8,6 +8,9 @@ import {
   Organization,
   Session,
   User,
+  FeedbackModel,
+  FeedbackAiModel,
+  FeedbackNoteModel,
   erasureRecordRepository,
   realtimeConnectionRepository,
 } from '@bike4mind/database';
@@ -85,8 +88,43 @@ beforeEach(async () => {
 async function seedAccount() {
   const userId = new mongoose.Types.ObjectId();
   const orgId = new mongoose.Types.ObjectId();
+  const reportId = new mongoose.Types.ObjectId();
+  const createdAt = new Date();
+  const expiresAt = new Date(Date.now() + 86400000);
   const insertRows = async () => {
     await raw(User).insertOne({ _id: userId, username: `u-${userId}`, email: `u-${userId}@example.test` });
+    await raw(FeedbackModel).updateOne(
+      { _id: reportId },
+      { $set: { userId: String(userId), username: 'Reporter', status: 'New', createdAt } },
+      { upsert: true }
+    );
+    await raw(FeedbackAiModel).updateOne(
+      { feedbackId: String(reportId) },
+      {
+        $set: {
+          inputHash: 'hash',
+          model: 'test-embedding',
+          vector: [1],
+          similar: [],
+          reportCreatedAt: createdAt,
+          expiresAt,
+        },
+      },
+      { upsert: true }
+    );
+    await raw(FeedbackNoteModel).updateOne(
+      { feedbackId: String(reportId) },
+      {
+        $set: {
+          userId: String(userId),
+          author: { id: 'moderator', name: 'Moderator' },
+          body: 'Private note',
+          createdAt,
+          expiresAt,
+        },
+      },
+      { upsert: true }
+    );
     await raw(Organization).insertOne({ _id: orgId, name: 'Personal', userId: String(userId), personal: true });
     await raw(Session).insertOne({
       _id: new mongoose.Types.ObjectId(),
@@ -137,6 +175,8 @@ describe('reapplyErasure after a simulated restore', () => {
     const result = await reapplyErasure(id, { record: record!, logger });
 
     expect(result.ownedOrganizationIds).toEqual([]);
+    expect(await FeedbackAiModel.countDocuments()).toBe(1);
+    expect(await FeedbackNoteModel.countDocuments()).toBe(1);
     expect((await raw(Connection).findOne({ connectionId: 'erased-connection' }))?.endedAt).toBeInstanceOf(Date);
     expect((await raw(Connection).findOne({ connectionId: 'bystander-connection' }))?.endedAt).toBeUndefined();
     expect((await raw(QuerySubscription).findOne({ queryId: 'restored-query' }))?.subscribers).toEqual([
