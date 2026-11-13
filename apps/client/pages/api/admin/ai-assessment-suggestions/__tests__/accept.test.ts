@@ -25,9 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-const db = vi.hoisted(() => ({ findAdminTargetsByIds: vi.fn(), committed: vi.fn() }));
+const db = vi.hoisted(() => ({ findAdminTargetsByIds: vi.fn(), findById: vi.fn(), committed: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findAdminTargetsByIds: db.findAdminTargetsByIds },
+  userRepository: { findAdminTargetsByIds: db.findAdminTargetsByIds, findById: db.findById },
   withTransaction: async (work: () => Promise<unknown>) => {
     const result = await work();
     db.committed();
@@ -70,6 +70,10 @@ const run = async (payload: unknown, user: Record<string, unknown> = { isAdmin: 
 beforeEach(() => {
   db.findAdminTargetsByIds.mockReset().mockResolvedValue([]);
   db.committed.mockReset();
+  db.findById.mockReset().mockResolvedValue({
+    riskScore: { reviewState: 'pending' },
+    signupGrantHeldReason: 'budget_exhausted',
+  });
   audit.record.mockReset();
   audit.deny.mockReset().mockRejectedValue(Object.assign(new Error('own account'), { statusCode: 403 }));
   ai.suggestion.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
@@ -124,6 +128,24 @@ describe('POST /api/admin/ai-assessment-suggestions/accept', () => {
     const res = await run(body(), { adminPermissions: ['users:moderate'] });
 
     expect(res.statusCode).toBe(403);
+    expect(ai.suggestion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['signupRiskReview', { riskScore: { reviewState: 'approved' }, signupGrantHeldReason: 'budget_exhausted' }],
+    ['heldSignupGrant', { riskScore: { reviewState: 'pending' }, signupGrantHeldReason: null }],
+  ])('is a 409 on %s once the account has left that queue, recording nothing', async (surface, account) => {
+    db.findById.mockResolvedValue(account);
+
+    expect((await run(body(surface))).statusCode).toBe(409);
+    expect(ai.suggestion).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('is a 404 for an unknown account', async () => {
+    db.findById.mockResolvedValue(null);
+
+    expect((await run(body())).statusCode).toBe(404);
     expect(ai.suggestion).not.toHaveBeenCalled();
   });
 

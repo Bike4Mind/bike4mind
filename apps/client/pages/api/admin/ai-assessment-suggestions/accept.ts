@@ -1,7 +1,12 @@
-import { ApiKeyScope, assertCanActOnAdminTarget, assessmentSuggestionAcceptSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  assertCanActOnAdminTarget,
+  assessmentSuggestionAcceptSchema,
+  type IUser,
+} from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { BadRequestError, ConflictError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -27,6 +32,12 @@ const SURFACE_SELF_DENIAL = {
   signupRiskReview: { action: 'user.signup_risk.denied', target: 'review the signup of' },
   heldSignupGrant: { action: 'user.credits.denied', target: 'release signup credits for' },
 } as const;
+
+/** Accepting means "leave it as it is", so the account must still be waiting on that queue. */
+const STILL_QUEUED: Record<keyof typeof SURFACE_PERMISSION, (user: IUser) => boolean> = {
+  signupRiskReview: user => user.riskScore?.reviewState === 'pending',
+  heldSignupGrant: user => typeof user.signupGrantHeldReason === 'string',
+};
 
 const SURFACE_LABEL = {
   signupRiskReview: 'signup risk review',
@@ -61,6 +72,10 @@ const handler = adminApi({
       }
       for (const account of await userRepository.findAdminTargetsByIds([userId]))
         assertCanActOnAdminTarget(req.user, account, SURFACE_SELF_DENIAL[surface].target);
+      const account = await userRepository.findById(userId);
+      if (!account) throw new NotFoundError('Account not found');
+      if (!STILL_QUEUED[surface](account))
+        throw new ConflictError(`This account is no longer in the ${SURFACE_LABEL[surface]} queue`);
 
       const suggestion = await userAssessmentSuggestion(surface, userId, assessmentId);
       // The strict audit entry rides in the same transaction, so an unrecorded accept rolls back.
