@@ -12,6 +12,7 @@ import {
   orgAdminNotificationPrefRepository,
   orgAlertNotificationRepository,
   organizationRepository,
+  runAfterCommit,
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -149,28 +150,20 @@ async function releaseQuietly(id: string | undefined): Promise<void> {
   }
 }
 
-type AmbientSession = {
-  inTransaction(): boolean;
-  transaction: { state: string };
-  once(event: 'ended', listener: () => void): unknown;
-};
 type TransactionStorage = {
   exit<R>(callback: () => R): R;
-  getStore(): { session?: AmbientSession } | undefined;
+  getStore(): { session?: mongoose.mongo.ClientSession } | undefined;
 };
 
 /** Refusals report a write the transaction is about to abort, so they must not wait for its commit. */
 const firesOnAbort = (event: OrgEvent): boolean =>
   event.type === 'seat_limit' || (event.type === 'member_cap_check' && event.refused === true);
 
-const COMMITTED_STATES = new Set(['TRANSACTION_COMMITTED', 'TRANSACTION_COMMITTED_EMPTY']);
-const deferredBySession = new WeakMap<AmbientSession, Map<string, OrgEvent>>();
-
 /**
  * Maps an org event to its alert, always outside any ambient transaction (joining it would roll back
  * the claim and Inbox write on abort while the email still went out). A refusal is routed at once;
- * any other event raised inside a transaction waits for its commit, so the evaluators read the
- * committed write and nothing is sent for a rolled-back one.
+ * any other event raised inside a transaction is queued on db-core's withTransaction, which awaits it
+ * after commit, so the evaluators read the committed write and nothing is sent for a rolled-back one.
  */
 export function handleOrgEvent(event: OrgEvent): Promise<void> {
   const storage = (mongoose as unknown as { transactionAsyncLocalStorage?: TransactionStorage })
@@ -178,33 +171,18 @@ export function handleOrgEvent(event: OrgEvent): Promise<void> {
   if (!storage) return routeOrgEvent(event);
   const session = storage.getStore()?.session;
   if (session?.inTransaction() && !firesOnAbort(event)) {
-    deferUntilCommit(storage, session, event);
-    return Promise.resolve();
+    // Latest wins per subject: one transaction can raise the same event more than once.
+    const subject = 'userId' in event ? event.userId : '';
+    const queued = runAfterCommit(session, `orgAlert|${event.type}|${event.organizationId}|${subject}`, () =>
+      storage
+        .exit(() => routeOrgEvent(event))
+        .catch(error => {
+          log().warn('Deferred org alert failed', { organizationId: event.organizationId, error });
+        })
+    );
+    if (queued) return Promise.resolve();
   }
   return storage.exit(() => routeOrgEvent(event));
-}
-
-function deferUntilCommit(storage: TransactionStorage, session: AmbientSession, event: OrgEvent): void {
-  let pending = deferredBySession.get(session);
-  if (!pending) {
-    pending = new Map();
-    deferredBySession.set(session, pending);
-    const events = pending;
-    // Mongoose's connection.transaction ends the session once the commit or abort settles.
-    session.once('ended', () => {
-      if (!COMMITTED_STATES.has(session.transaction.state)) return;
-      for (const deferred of events.values()) {
-        void storage
-          .exit(() => routeOrgEvent(deferred))
-          .catch(error => {
-            log().warn('Deferred org alert failed', { organizationId: deferred.organizationId, error });
-          });
-      }
-    });
-  }
-  // Latest wins per subject: a driver-retried callback re-raises the same event in one session.
-  const subject = 'userId' in event ? event.userId : '';
-  pending.set(`${event.type}|${event.organizationId}|${subject}`, event);
 }
 
 /** Threshold kinds are evaluated by their own modules, which dispatch. */

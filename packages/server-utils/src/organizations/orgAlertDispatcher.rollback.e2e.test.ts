@@ -90,16 +90,21 @@ describe('handleOrgEvent inside an aborted transaction', () => {
     expect(await OrgAlertNotificationModel.countDocuments({ kind: 'member_joined' })).toBe(0);
   });
 
-  it('evaluates a usage event after commit, so it counts the write that raised it', async () => {
+  it('evaluates a usage event after commit and before withTransaction returns', async () => {
     const organizationId = cappedOrgId.toHexString();
+    let emailed = false;
+    publish.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      emailed = true;
+    });
 
     await withTransaction(async () => {
       await Organization.updateOne({ _id: cappedOrgId }, { $set: { 'userDetails.0.usedCredits': 100 } });
       await handleOrgEvent({ type: 'member_cap_check', organizationId, userId: 'm1' });
     });
 
-    await vi.waitFor(async () => {
-      expect(await OrgAlertNotificationModel.countDocuments({ organizationId, kind: 'member_cap' })).toBe(1);
-    });
+    // No wait: a Lambda may freeze as soon as the handler's transaction returns.
+    expect(emailed).toBe(true);
+    expect(await OrgAlertNotificationModel.countDocuments({ organizationId, kind: 'member_cap' })).toBe(1);
   });
 });
