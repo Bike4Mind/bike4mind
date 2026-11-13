@@ -43,6 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  artifactRepository: { findOne: vi.fn(async () => null) },
   PublishedArtifact: {
     findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),

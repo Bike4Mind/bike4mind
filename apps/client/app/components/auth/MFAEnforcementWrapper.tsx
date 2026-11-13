@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
+import { describePasskeyError, useEnrollPasskeyFactor } from '@client/app/hooks/data/passkeys';
 import { useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
@@ -47,6 +48,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
   const [enrollmentRefused, setEnrollmentRefused] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  // Backup codes from a passkey enrolled as the factor, shown until the user continues.
+  const [passkeyBackupCodes, setPasskeyBackupCodes] = useState<string[] | null>(null);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -89,6 +92,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Dismissing the verification prompt is a choice, not a failure: offer to continue instead.
   const setupVerificationCancelled = setupMFAIsError && isStepUpCancelled(setupMFAError);
   const verifyMFASetup = useVerifyMFASetup();
+  const enrollPasskey = useEnrollPasskeyFactor();
   const { mutate: logout, isPending: logoutIsPending } = useUserLogout();
 
   // Shared by the auto-start effect and the manual retry button (see the enforced-block
@@ -205,23 +209,46 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     enrollmentRefused,
   ]);
 
+  const completeEnrollment = () => {
+    setShowMFASetup(false);
+    setPasskeyBackupCodes(null);
+    toast.success('MFA setup completed successfully');
+
+    // Refresh all relevant data
+    mfaStatusQuery.refetch();
+    queryClient.invalidateQueries({ queryKey: ['user'] });
+    queryClient.invalidateQueries({ queryKey: ['auth', 'identify'] });
+
+    // Force re-evaluation by triggering useEffect
+    setIsLoading(true);
+  };
+
+  const handlePasskeyEnroll = () => {
+    setVerifyError(null);
+    enrollPasskey.mutate(undefined, {
+      onSuccess: registration => {
+        // Only a first factor answers with a session: anything else means this tab's status was stale.
+        if (!registration.backupCodes) {
+          completeEnrollment();
+          return;
+        }
+        // The server revoked every session and minted this one; hold it while the codes are shown.
+        useAccessToken.getState().setVerifiedSession(registration.accessToken);
+        setPasskeyBackupCodes(registration.backupCodes);
+      },
+      onError: (error: unknown) => {
+        if (isStepUpCancelled(error)) return;
+        setVerifyError(describePasskeyError(error, 'Could not set up the passkey'));
+      },
+    });
+  };
+
   const handleMFAVerification = (token: string) => {
     setVerifyError(null);
     verifyMFASetup.mutate(
       { token },
       {
-        onSuccess: () => {
-          setShowMFASetup(false);
-          toast.success('MFA setup completed successfully');
-
-          // Refresh all relevant data
-          mfaStatusQuery.refetch();
-          queryClient.invalidateQueries({ queryKey: ['user'] });
-          queryClient.invalidateQueries({ queryKey: ['auth', 'identify'] });
-
-          // Force re-evaluation by triggering useEffect
-          setIsLoading(true);
-        },
+        onSuccess: completeEnrollment,
         onError: (error: any) => {
           const errorData = error.response?.data;
 
@@ -388,6 +415,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             isEnforced={true} // This will hide the close button
             onSignOut={signOut}
             signOutLoading={logoutIsPending}
+            onPasskeyEnroll={handlePasskeyEnroll}
+            passkeyLoading={enrollPasskey.isPending}
+            passkeyBackupCodes={passkeyBackupCodes ?? undefined}
+            onPasskeyEnrollDone={completeEnrollment}
           />
         )}
       </Box>

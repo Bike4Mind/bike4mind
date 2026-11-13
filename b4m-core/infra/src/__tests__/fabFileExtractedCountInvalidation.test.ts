@@ -58,7 +58,7 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/lakeIngestShared.ts',
   'apps/workers/src/queueHandlers/notebookCuration.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
-  'apps/client/server/s3/notebookImportComplete.ts',
+  'packages/server-utils/src/s3/notebookImportComplete.ts',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts',

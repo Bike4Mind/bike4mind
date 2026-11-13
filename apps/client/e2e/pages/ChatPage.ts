@@ -1,12 +1,15 @@
-import { expect } from '@playwright/test';
+import { expect, type Response } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
 import {
   describeStall,
   hasFirstAnswerText,
   isStreamComplete,
+  parseCompletionResponse,
   StreamingTimeoutError,
   TurnTimer,
+  type CompletionRecorder,
+  type QuestProvenance,
   type StreamSnapshot,
 } from '../ai-latency-budget';
 
@@ -59,6 +62,64 @@ export class ChatPage extends BasePage {
       .catch(() => '');
   }
 
+  /**
+   * Feeds `recorder` every `POST /api/ai/llm` this page answers until the returned function is
+   * awaited, which also waits for bodies still being read. Scoped to this page, so other cells
+   * cannot reach it. Capture never throws: an unreadable body is just not recorded.
+   */
+  private captureCompletions(recorder?: CompletionRecorder): () => Promise<void> {
+    if (!recorder) return async () => undefined;
+    const pending: Promise<void>[] = [];
+    const onResponse = (response: Response) => {
+      const request = response.request();
+      if (request.method() !== 'POST' || !new URL(response.url()).pathname.endsWith('/api/ai/llm')) return;
+      const receivedAt = new Date().toISOString();
+      pending.push(
+        response
+          .json()
+          .catch(() => null)
+          .then(body =>
+            recorder.record(
+              parseCompletionResponse(body, response.headers(), receivedAt),
+              request.headers()['authorization']
+            )
+          )
+          .catch(() => undefined)
+      );
+    };
+    this.page.on('response', onResponse);
+    return async () => {
+      this.page.off('response', onResponse);
+      // Bounded: this runs inside the timed window's tail and must not stall a row.
+      await Promise.race([Promise.allSettled(pending), new Promise(resolve => setTimeout(resolve, 2_000))]);
+    };
+  }
+
+  /**
+   * Reads the quest's fallback with the bearer the page itself sent. Never throws: any failure
+   * yields 'unknown', since correlation must not fail a latency cell. A timeout of 0 or less skips
+   * the read.
+   */
+  async readQuestProvenance(recorder: CompletionRecorder, timeoutMs = 10_000): Promise<QuestProvenance> {
+    const unknown: QuestProvenance = { fallback: 'unknown' };
+    const refs = recorder.snapshot();
+    const authorization = recorder.authorization();
+    if (refs.length !== 1 || !authorization || timeoutMs <= 0) return unknown;
+    try {
+      const response = await this.page.request.get(`/api/quests/${encodeURIComponent(refs[0].questId)}`, {
+        headers: { Authorization: authorization },
+        timeout: timeoutMs,
+      });
+      if (!response.ok()) return unknown;
+      const body = (await response.json()) as { type?: string; fallbackInfo?: Record<string, unknown> | null };
+      // The poll body drops fallbackInfo on an errored quest, so absence there does not mean none.
+      if (body.type === 'error') return unknown;
+      return { fallback: body.fallbackInfo ?? null };
+    } catch {
+      return unknown;
+    }
+  }
+
   async sendMessage(text: string) {
     await this.typeAndWaitForSendReady(text);
     await this.page.keyboard.press('Enter');
@@ -93,7 +154,22 @@ export class ChatPage extends BasePage {
    * `timer`, when given, is marked at Enter and at the first answer text (see TurnTimer for how
    * the resend below is timed).
    */
-  async sendMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.AI_RESPONSE, timer?: TurnTimer) {
+  async sendMessageAndWaitForResponse(
+    text: string,
+    timeout: number = TIMEOUTS.AI_RESPONSE,
+    timer?: TurnTimer,
+    recorder?: CompletionRecorder
+  ) {
+    // One listener around the whole resend loop, so a resend's second completion is recorded too.
+    const stopCapture = this.captureCompletions(recorder);
+    try {
+      return await this.sendAndWait(text, timeout, timer);
+    } finally {
+      await stopCapture();
+    }
+  }
+
+  private async sendAndWait(text: string, timeout: number, timer?: TurnTimer) {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Never anchor on a pre-send index. ChatHistory renders the reply list through
@@ -250,7 +326,8 @@ export class ChatPage extends BasePage {
   async sendImageMessageAndWaitForResponse(
     text: string,
     timeout: number = TIMEOUTS.IMAGE_GENERATION,
-    timer?: TurnTimer
+    timer?: TurnTimer,
+    recorder?: CompletionRecorder
   ) {
     // Baseline the newest reply before sending: when the stop button flashes by unseen,
     // waitForStreamingComplete accepts any reply that differs from this, so without it
@@ -260,9 +337,14 @@ export class ChatPage extends BasePage {
     await this.typeAndWaitForSendReady(text);
     const previousResponse = await this.newestResponseText();
     const previousAnswerText = await this.newestAnswerText();
-    await this.page.keyboard.press('Enter');
-    timer?.markSent();
-    await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
+    const stopCapture = this.captureCompletions(recorder);
+    try {
+      await this.page.keyboard.press('Enter');
+      timer?.markSent();
+      await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
+    } finally {
+      await stopCapture();
+    }
   }
 
   /**

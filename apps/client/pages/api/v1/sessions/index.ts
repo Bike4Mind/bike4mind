@@ -63,6 +63,10 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
+  if (body.organizationId) {
+    const { resolveActiveOrg } = await import('@bike4mind/server-utils/utils/resolveActiveOrg');
+    body.organizationId = await resolveActiveOrg(req, body.organizationId);
+  }
 
   // The route gate admits ai:generate so a generate-only key can open a bare session. Anything
   // beyond that needs notebooks:write; a JWT caller has no apiKeyInfo and is unaffected.

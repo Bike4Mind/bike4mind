@@ -87,6 +87,7 @@ describe('HeldSignupGrantsTab', () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', {
         userIds: [rows[0].id, rows[1].id],
+        reason: expect.stringContaining('Goodwill grant'),
       })
     );
   });
@@ -102,7 +103,10 @@ describe('HeldSignupGrantsTab', () => {
     await selectRow(rows[0].id);
     await confirmRelease();
     await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[0].id] })
+      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', {
+        userIds: [rows[0].id],
+        reason: expect.stringContaining('Goodwill grant'),
+      })
     );
 
     await selectRow(rows[1].id);
@@ -137,6 +141,18 @@ describe('HeldSignupGrantsTab', () => {
     await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(expect.any(String), { params: {} }));
   });
 
+  it('keeps release blocked until a reason is entered', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    const confirm = await screen.findByTestId('held-signup-grants-release-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(postMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-dialog-reason-input-preset-0'));
+    expect(confirm).not.toBeDisabled();
+  });
+
   it('releases the selected grants, then revokes that batch', async () => {
     postMock
       .mockResolvedValueOnce({
@@ -152,7 +168,10 @@ describe('HeldSignupGrantsTab', () => {
     await selectRow(rows[1].id);
     await confirmRelease();
     await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[1].id] })
+      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', {
+        userIds: [rows[1].id],
+        reason: expect.stringContaining('Goodwill grant'),
+      })
     );
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
@@ -231,7 +250,12 @@ describe('HeldSignupGrantsTab', () => {
     const invalidate = renderTab();
     await selectRow(rows[1].id);
     await confirmRelease();
-    expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
+    expect(await screen.findByTestId('held-signup-grants-release-dialog-error')).toHaveTextContent(
+      'Request interrupted'
+    );
+    expect(screen.getByTestId('held-signup-grants-release-dialog')).toContainElement(
+      screen.getByTestId('held-signup-grants-release-dialog-error')
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });

@@ -53,9 +53,10 @@ export default function HeldSignupGrantsTab() {
       ).data,
   });
   const release = useMutation({
-    mutationFn: async (userIds: string[]) => (await api.post<ReleaseResult>(`${ENDPOINT}/release`, { userIds })).data,
+    mutationFn: async (body: { userIds: string[]; reason: string }) =>
+      (await api.post<ReleaseResult>(`${ENDPOINT}/release`, body)).data,
     // Rows ticked while the release was in flight stay selected.
-    onSuccess: (_result, userIds) =>
+    onSuccess: (_result, { userIds }) =>
       setSelection(current =>
         current.mode === 'explicit'
           ? { mode: 'explicit', ids: current.ids.filter(id => !userIds.includes(id)) }
@@ -81,6 +82,7 @@ export default function HeldSignupGrantsTab() {
   });
   const [confirmRelease, setConfirmRelease] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
   const rows = query.data?.data ?? [];
   const busy = release.isPending || revoke.isPending;
   const selectedIds = selection.mode === 'explicit' ? selection.ids : [];
@@ -129,7 +131,7 @@ export default function HeldSignupGrantsTab() {
           </>
         }
       />
-      {release.error && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
+      {release.error && !confirmRelease && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
       {revoke.error && <Alert color="danger">{getErrorMessage(revoke.error)}</Alert>}
       {release.data && (
         <Alert color="success" data-testid="held-signup-grants-release-result">
@@ -180,15 +182,22 @@ export default function HeldSignupGrantsTab() {
         onClose={() => setConfirmRelease(false)}
         title="Release held grants"
         description={`Pay ${selectedIds.length} held grant${selectedIds.length === 1 ? '' : 's'} without drawing the daily budget.`}
-        reasonPresets={ADMIN_REASON_PRESETS.heldSignupGrantRelease}
-        reasonAudited={false}
+        reasonPresets={ADMIN_REASON_PRESETS.signupGrantRelease}
+        pending={release.isPending}
         confirmLabel={`Release ${selectedIds.length} grant${selectedIds.length === 1 ? '' : 's'}`}
-        onConfirm={() => {
+        onConfirm={async reason => {
+          await release.mutateAsync({ userIds: [...selectedIds], reason });
           setConfirmRelease(false);
-          release.mutate([...selectedIds]);
         }}
         data-testid="held-signup-grants-release-dialog"
-      />
+      >
+        {/* The dialog stays open on failure, so the error has to show inside it. */}
+        {release.error && (
+          <Alert color="danger" data-testid="held-signup-grants-release-dialog-error">
+            {getErrorMessage(release.error)}
+          </Alert>
+        )}
+      </ActionDialog>
       <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
         <FilterChip
           id="reason"
@@ -281,7 +290,11 @@ export default function HeldSignupGrantsTab() {
               data-testid="held-signup-grants-release-btn"
               disabled={missingPermission || busy}
               loading={release.isPending}
-              onClick={() => setConfirmRelease(true)}
+              onClick={() => {
+                // A failure from the previous attempt would otherwise reappear inside the fresh dialog.
+                if (release.error) release.reset();
+                setConfirmRelease(true);
+              }}
             >
               Release grants
             </Button>

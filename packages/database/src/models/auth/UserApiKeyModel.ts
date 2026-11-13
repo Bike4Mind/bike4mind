@@ -12,6 +12,7 @@ import {
   IUserApiKeyRepository,
   LegacyApiKeyCandidatePage,
   LegacyApiKeyCandidateQuery,
+  OrgApiKeyGrant,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -538,10 +539,26 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
-    // Org-owned key (see IUserApiKey.orgOwned). Set on insert only.
+    // Org-owned key (see IUserApiKey.orgOwned). `createdByUserId` is set on insert only; `grants`
+    // is the key's reach, edited by pages/api/organizations/[id]/api-keys/[keyId]/index.ts.
     orgOwned: {
-      type: new mongoose.Schema<{ createdByUserId: string }>(
-        { createdByUserId: { type: String, required: true } },
+      type: new mongoose.Schema<{ createdByUserId: string; grants?: OrgApiKeyGrant[] }>(
+        {
+          createdByUserId: { type: String, required: true },
+          grants: {
+            type: [
+              new mongoose.Schema<OrgApiKeyGrant>(
+                {
+                  resourceType: { type: String, enum: ['organization', 'group'], required: true },
+                  resourceId: { type: String, required: true },
+                  permission: { type: String, enum: ['read'], required: true },
+                },
+                { _id: false }
+              ),
+            ],
+            default: undefined,
+          },
+        },
         { _id: false }
       ),
       default: undefined,
