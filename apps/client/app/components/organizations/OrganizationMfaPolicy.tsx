@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { isOrgOwnerOrCurrentAdmin, type IOrganizationDocument } from '@bike4mind/common';
+import { hasOrgPermission, type IOrganizationDocument } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +8,8 @@ import { toast } from 'sonner';
 
 export default function OrganizationMfaPolicy({ organization }: { organization: IOrganizationDocument }) {
   const { currentUser } = useUser();
-  const canManage = !!currentUser && !organization.personal && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  const canManage =
+    !!currentUser && !organization.personal && hasOrgPermission(currentUser, organization, 'managePolicies');
   const queryClient = useQueryClient();
   const saveInFlight = useRef(false);
   const [required, setRequired] = useState(organization.mfaPolicy?.required ?? false);
