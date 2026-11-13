@@ -34,6 +34,33 @@ const renderForm = (fields: CapabilityField[], overrides: Partial<Parameters<typ
 };
 
 describe('CapabilityForm', () => {
+  it('toggles chips: picks a value, clears the selected one, and skips a disabled one', () => {
+    const onChange = vi.fn();
+    renderForm([
+      {
+        kind: 'chips',
+        id: 'look',
+        label: 'Look',
+        value: 'a',
+        options: [
+          { value: 'a', label: 'A', swatch: { from: '#000000', to: '#ffffff' } },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C', disabled: true },
+        ],
+        onChange,
+      },
+    ]);
+
+    expect(screen.getByTestId('demo-form-look-chips')).toBeInTheDocument();
+    expect(screen.getByTestId('demo-form-look-a-chip')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('demo-form-look-b-chip')).toHaveAccessibleName('B');
+    fireEvent.click(screen.getByTestId('demo-form-look-b-chip'));
+    expect(onChange).toHaveBeenLastCalledWith('b');
+    fireEvent.click(screen.getByTestId('demo-form-look-a-chip'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    expect(screen.getByTestId('demo-form-look-c-chip')).toBeDisabled();
+  });
+
   it('renders each field kind under the prefix and reports changes through its own handler', () => {
     const onText = vi.fn();
     const onSegment = vi.fn();

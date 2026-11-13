@@ -192,6 +192,10 @@ describe('FeedbackTab', () => {
     screen.getByTestId('feedback-row-one').focus();
     await userEvent.keyboard('j');
     expect(screen.getByTestId('feedback-row-two')).toHaveFocus();
+    await userEvent.keyboard('x');
+    expect(screen.getByTestId('feedback-row-two')).toHaveAttribute('aria-selected', 'true');
+    await userEvent.keyboard('x');
+    expect(screen.getByTestId('feedback-row-two')).toHaveAttribute('aria-selected', 'false');
     await userEvent.keyboard('ic');
     expect(operations.handleStatusChange).toHaveBeenCalledWith(two, FeedbackStatus.InProgress);
     expect(operations.handleStatusChange).toHaveBeenCalledWith(two, FeedbackStatus.Closed);
@@ -758,13 +762,13 @@ describe('FeedbackTab', () => {
       expect(navigate).not.toHaveBeenCalled();
     });
 
-    it('opens from ?feedbackId= and marks the row as the open one', () => {
+    it('opens from ?feedbackId= without adding a bulk selection', () => {
       mocks.useSearch.mockReturnValue({ feedbackId: 'fb-1' });
 
       renderFeedbackTab();
 
       expect(screen.getByTestId('feedback-detail-drawer-stub')).toHaveAttribute('data-feedback-id', 'fb-1');
-      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'false');
     });
 
     it('clears ?feedbackId= on close and returns focus to the row', async () => {
