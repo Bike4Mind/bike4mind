@@ -16,7 +16,12 @@ import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { createImageJobs } from './createImageJobs';
 import { createImageJobHandler } from './imageJobHandler';
-import { IMAGE_JOB_BATCH_MAX, IMAGE_JOB_OUTPUT_BYTES_ESTIMATE, type CreateImageJobsDeps } from './types';
+import {
+  IMAGE_JOB_BATCH_MAX,
+  IMAGE_JOB_OUTPUT_BYTES_ESTIMATE,
+  type CreateImageJobsDeps,
+  type CreateImageJobsInput,
+} from './types';
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -83,8 +88,11 @@ const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
 
 const user = { id: 'u1', organizationId: null };
 const validRequest = { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt: 'a red bicycle' };
-const run = (deps: CreateImageJobsDeps, request: unknown, extra: { count?: number; idempotencyKey?: string } = {}) =>
-  createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
+const run = (
+  deps: CreateImageJobsDeps,
+  request: unknown,
+  extra: { count?: number; idempotencyKey?: string; delivery?: CreateImageJobsInput['delivery'] } = {}
+) => createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
 
 describe('createImageJobs', () => {
   beforeEach(() => {
@@ -231,6 +239,29 @@ describe('createImageJobs', () => {
       expect(holdCredits).toHaveBeenCalledTimes(3);
       expect(deps.enqueue).toHaveBeenCalledTimes(3);
       expect(repository.jobs.size).toBe(3);
+    });
+
+    it('persists the delivery target on every job of the batch', async () => {
+      const { deps } = makeDeps();
+      const delivery = { kind: 'slack' as const, workspaceId: 'w1', channelId: 'C1', threadTs: '1700000000.000100' };
+      const result = await run(deps, validRequest, { count: 3, delivery });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs).toHaveLength(3);
+      for (const job of result.jobs) expect(job.delivery).toEqual(delivery);
+    });
+
+    it('stores no delivery field when the input names none', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 2 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job).not.toHaveProperty('delivery');
+    });
+
+    it('records the batch size on every job so the group completes only when all members are in', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 3 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job.payload.groupSize).toBe(3);
     });
 
     it.each(['low', 'high', 'auto'] as const)('stores an explicit %s quality as asked', async quality => {

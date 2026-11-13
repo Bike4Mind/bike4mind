@@ -17,7 +17,11 @@ export { isPushDeliveryConfigured };
  * when APP_URL is set; otherwise path-only, and sendPush resolves it against its own APP_URL.
  */
 export function sessionDeepLink(sessionId: string): string {
-  const path = `/notebooks/${encodeURIComponent(sessionId)}`;
+  return appPathDeepLink(`/notebooks/${encodeURIComponent(sessionId)}`);
+}
+
+/** An app-relative path (e.g. a Studio page) as a deep link, resolved the same way as sessionDeepLink. */
+export function appPathDeepLink(path: string): string {
   const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
   return base ? `${base}${path}` : path;
 }

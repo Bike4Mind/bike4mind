@@ -237,6 +237,7 @@ async function persistBatch(
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
           source: input.source,
+          ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
           payload: { request, providerId, groupId, groupSize: input.count },
           pollCount: 0,

@@ -1,4 +1,4 @@
-import type { ImageInputRole, ImageModels, ImageProviderId, StoredImageRequest } from '@bike4mind/common';
+import type { ImageInputRole, ImageJobModelId, ImageProviderId, StoredImageRequest } from '@bike4mind/common';
 import type {
   AsyncGenerationProvider,
   ResolvedInputImage,
@@ -13,13 +13,13 @@ export type ResolvedImageInput = ResolvedInputImage<ImageInputRole>;
 
 export type SyncImageProvider = SyncGenerationProvider<
   ImageProviderId,
-  ImageModels,
+  ImageJobModelId,
   StoredImageRequest,
   ImageInputRole
 >;
 export type AsyncImageProvider = AsyncGenerationProvider<
   ImageProviderId,
-  ImageModels,
+  ImageJobModelId,
   StoredImageRequest,
   ImageInputRole
 >;

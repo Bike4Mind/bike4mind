@@ -72,6 +72,30 @@ describe('ImageJobRequestSchema', () => {
   });
 });
 
+describe('ImageJobRequestSchema job-only models and edit regions', () => {
+  const region = { prompt: 'make it blue', bbox: [0.1, 0.2, 0.8, 0.9] };
+
+  it.each(['test-image', 'local-image/sdxl', 'local-image/models/v1.5:fp16'])('accepts the model %s', model => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, model }).success).toBe(true);
+  });
+
+  it.each(['local-image/', 'local-image/   ', 'local-image'])('rejects the model %j', model => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, model }).success).toBe(false);
+  });
+
+  it('accepts editRegions and keeps them', () => {
+    const request = { ...valid, mode: 'edit', editRegions: [region] };
+    expect(ImageJobRequestSchema.parse(request)).toEqual(request);
+  });
+
+  it('rejects an empty editRegions array and a malformed region', () => {
+    expect(ImageJobRequestSchema.safeParse({ ...valid, editRegions: [] }).success).toBe(false);
+    expect(ImageJobRequestSchema.safeParse({ ...valid, editRegions: [{ prompt: 'x', bbox: [0, 0, 1] }] }).success).toBe(
+      false
+    );
+  });
+});
+
 describe('imageJobInputs', () => {
   it('returns an empty list when the request has no inputs', () => {
     expect(imageJobInputs({})).toEqual([]);

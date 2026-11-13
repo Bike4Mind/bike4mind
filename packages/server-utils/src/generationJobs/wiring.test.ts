@@ -47,6 +47,15 @@ vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
 }));
 vi.mock('./slackJobDelivery', () => ({
   deliverJobToSlack: notifications.deliverToSlack,
+  imageGroupSlackSubscriber: vi.fn(() => ({ name: 'slack', wants: () => false, deliver: async () => {} })),
+}));
+vi.mock('./imageGroupPush', () => ({
+  imageGroupPushSubscriber: vi.fn(() => ({ name: 'push', wants: () => false, deliver: async () => {} })),
+}));
+vi.mock('../utils/pushNotifications', () => ({
+  appPathDeepLink: (path: string) => path,
+  appRootDeepLink: () => '/',
+  publishPushNotification: vi.fn(async () => undefined),
 }));
 vi.mock('./slackJobDeliveryDeps', () => ({ createSlackJobDeliveryDeps: () => notifications.slackDeps }));
 
@@ -267,7 +276,7 @@ describe('music provider key selection', () => {
 });
 
 describe('image provider key selection', () => {
-  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key' } as never;
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key', imageGen: 'http://sd.local' } as never;
 
   it('maps each provider to the key the chat image paths use', () => {
     expect(selectImageProviderKey('openai', keys)).toBe('o-key');
@@ -275,6 +284,15 @@ describe('image provider key selection', () => {
     expect(selectImageProviderKey('bfl', keys)).toBe('b-key');
     expect(selectImageProviderKey('xai', keys)).toBe('x-key');
     expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
+  });
+
+  it('gives the test provider a fixed key without consulting stored keys', () => {
+    expect(selectImageProviderKey('test', {} as never)).toBe('test-key');
+  });
+
+  it('maps local to the self-hosted image server URL, and to nothing when it is unset', () => {
+    expect(selectImageProviderKey('local', keys)).toBe('http://sd.local');
+    expect(selectImageProviderKey('local', {} as never)).toBeUndefined();
   });
 
   it('throws for a provider id with no mapping', () => {
@@ -447,9 +465,31 @@ describe('buildProviders', () => {
 });
 
 describe('buildImageProviders', () => {
-  it('registers the OpenAI, Gemini, BFL and xAI adapters, which the catalog accepts', () => {
-    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai']);
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_IMAGE_PROVIDER;
+  });
+
+  it('registers the OpenAI, Gemini, BFL, xAI and local adapters, which the catalog accepts', () => {
+    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai', 'local']);
     expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_IMAGE_PROVIDER = 'true';
+    expect(buildImageProviders().map(provider => provider.id)).toEqual([
+      'openai',
+      'gemini',
+      'bfl',
+      'xai',
+      'local',
+      'test',
+    ]);
+    expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
+  });
+
+  it('does not add the test provider for any other value of the flag', () => {
+    process.env.ENABLE_TEST_IMAGE_PROVIDER = '1';
+    expect(buildImageProviders().map(provider => provider.id)).not.toContain('test');
   });
 });
 

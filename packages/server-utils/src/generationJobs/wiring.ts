@@ -30,7 +30,11 @@ import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendC
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { GenerationJobEngine, emitStudioJobCompletion } from '@bike4mind/services/generationJobs';
+import {
+  GenerationJobEngine,
+  announceGroupCompletion,
+  studioCompletionSubscriber,
+} from '@bike4mind/services/generationJobs';
 import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
@@ -56,6 +60,8 @@ import {
   GeminiImageProvider,
   OpenAIImageProvider,
   XaiImageProvider,
+  LocalImageProvider,
+  TestImageProvider,
   type ImageProvider,
 } from '@bike4mind/utils/imageProviders';
 import {
@@ -78,7 +84,9 @@ import { isValidObjectId } from '../utils/objectId';
 import { getSourceQueueUrl } from '../utils/dlqRegistry';
 import { sendToQueue } from '../utils/sqs';
 import { saveGeneratedAssetToFiles } from '../utils/saveGeneratedAssetToFiles';
-import { deliverJobToSlack } from './slackJobDelivery';
+import { deliverJobToSlack, imageGroupSlackSubscriber } from './slackJobDelivery';
+import { imageGroupPushSubscriber } from './imageGroupPush';
+import { appPathDeepLink, appRootDeepLink, publishPushNotification } from '../utils/pushNotifications';
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
@@ -161,6 +169,11 @@ export const selectImageProviderKey = (
       return keys.bfl;
     case 'xai':
       return keys.xai;
+    case 'test':
+      return 'test-key';
+    // The self-hosted server's base URL rides in the key slot, as on the chat path; null off self-host.
+    case 'local':
+      return keys.imageGen;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for image provider '${String(unhandled)}'`);
@@ -221,12 +234,17 @@ const imageProcessorLambdaName = (): string | undefined => {
 };
 
 // Only the adapters that exist; a model whose provider is not registered is refused at create.
-export const buildImageProviders = (): ImageProvider[] => [
-  new OpenAIImageProvider({ imageProcessorLambdaName }),
-  new GeminiImageProvider(),
-  new BflImageProvider(),
-  new XaiImageProvider(),
-];
+export const buildImageProviders = (): ImageProvider[] => {
+  const providers: ImageProvider[] = [
+    new OpenAIImageProvider({ imageProcessorLambdaName }),
+    new GeminiImageProvider(),
+    new BflImageProvider(),
+    new XaiImageProvider(),
+    new LocalImageProvider(),
+  ];
+  if (process.env.ENABLE_TEST_IMAGE_PROVIDER === 'true') providers.push(new TestImageProvider());
+  return providers;
+};
 
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
 // proxy throws on an unlinked key, hence the try.
@@ -507,20 +525,26 @@ const notify = async (job: IGenerationJobDocument): Promise<void> => {
   }
 };
 
-// Fans out through EventBridge so every surface (web toast today, native notifications later) shares one event.
-const announceStudioCompletion = async (job: IGenerationJobDocument): Promise<void> => {
-  await emitStudioJobCompletion(job, {
+// The one group completion decision, with each channel a subscriber: "make N" announces once per batch on every
+// channel. The Studio event fans out through EventBridge to the web toast.
+const announceCompletion = async (job: IGenerationJobDocument): Promise<void> => {
+  await announceGroupCompletion(job, {
     repository: generationJobRepository,
-    publish: async event => {
-      try {
+    subscribers: [
+      studioCompletionSubscriber(async event => {
         await StudioEvents.JobCompleted.publish(event);
-      } catch (error) {
-        // The group is already claimed, so this notification is lost; the log is the only trace of it.
-        logger.error('studio job completion publish failed', { jobId: job.id, groupId: event.groupId, error });
-        throw error;
-      }
-    },
+      }),
+      imageGroupPushSubscriber({
+        connections: Connection,
+        appPathDeepLink,
+        appRootDeepLink,
+        publish: event => publishPushNotification(event, logger),
+        logger,
+      }),
+      imageGroupSlackSubscriber(createSlackJobDeliveryDeps(logger)),
+    ],
     now: () => new Date(),
+    logger,
   });
 };
 
@@ -630,7 +654,7 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
     ],
     enqueue: enqueueGenerationJob,
     notify,
-    onTerminalHandled: announceStudioCompletion,
+    onTerminalHandled: announceCompletion,
     now: () => new Date(),
     logger,
     leaseMs: LEASE_MS,
