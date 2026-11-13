@@ -6,22 +6,21 @@ import path from 'node:path';
 /**
  * Guard: the SST / infra preview gate collapses duplicate runs per PR, and only per PR.
  *
- * The gate listens on `labeled` and `unlabeled` because those are what re-evaluate it the
- * moment a preview lands or is torn down. A label swap - one label removed and another added
- * in the same instant - emits both events together, so GitHub starts two identical runs on
- * the same SHA. Nothing errors and both runs reach the same verdict, so the only visible
- * symptom is the runner bill and a doubled entry in the checks list. Any bot that moves a PR
- * between mutually exclusive states (review, QA) produces the swap.
+ * A reopen on the heels of a push, or a relay re-run (checkPreviewGateLabelRelay.test.ts)
+ * landing beside a fresh push run, puts two runs on the same PR at once. Nothing errors and
+ * both reach the same verdict, so the only visible symptom is the runner bill and a doubled
+ * entry in the checks list.
  *
  * The fix has a worse failure mode than the bug. A concurrency key that is not per-PR makes
  * every PR cancel every other PR's gate run, and a cancelled check is not a passing one, so a
  * required gate would flap red across the whole fleet while reading, in the workflow file,
  * like ordinary hygiene. Hence the second assertion here, which is the one worth having.
  *
- * There is also a tempting fix that does not work, recorded so nobody reaches for it: filtering
- * `labeled` / `unlabeled` by label name in a job-level `if`. A job skipped by an `if` still
- * publishes a check run whose conclusion is `skipped`, and branch protection counts skipped as
- * passing - so the gate would report green on a PR it had never evaluated.
+ * There is also a tempting fix that does not work, recorded so nobody reaches for it: putting
+ * `labeled` / `unlabeled` back on this workflow and filtering by label name in a job-level
+ * `if`. A job skipped by an `if` still publishes a check run whose conclusion is `skipped`,
+ * and branch protection counts skipped as passing - so the gate would report green on a PR
+ * it had never evaluated. Label reactivity lives in the relay for that reason.
  *
  * Text-matched rather than YAML-parsed, matching the sibling guards: the repo carries no YAML
  * parser dependency and adding one for a workflow assertion is not worth the supply chain.
@@ -58,7 +57,7 @@ describe('preview gate duplicate-run collapse', () => {
   // and would actually notice its removal.
   it('is reading the real gate workflow', () => {
     expect(src).toContain('name: SST / infra preview gate');
-    expect(src).toMatch(/^ {4}types: \[.*labeled.*\]$/m);
+    expect(src).toMatch(/^ {4}types: \[opened, synchronize, reopened\]$/m);
     expect(concurrencyBlock(src.replace(/^concurrency:\n(?: {2}.*\n)+/m, ''))).toBe('');
   });
 });

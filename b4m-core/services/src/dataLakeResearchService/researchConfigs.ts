@@ -13,7 +13,12 @@ import {
   upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { researchConfigChange } from '../dataLakeService/diffLakeConfig';
+import { isPublicSuffixEntry } from '@bike4mind/utils/registrableDomain';
+import {
+  researchAutoAdmitChange,
+  researchConfigChange,
+  researchTrustedSitesChange,
+} from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 import {
   recordLakeConfigChange,
@@ -94,9 +99,24 @@ const assertSourcesReachable = (levers: ResearchRunLevers): void => {
   }
 };
 
+/**
+ * An entry that is itself a public suffix (`com`, `github.io`) would let auto-admit trust every site
+ * anyone can create under it. Checked on the merged levers so a toggle-only edit cannot enable a
+ * stored list that already holds one.
+ */
+const assertAutoAdmitEntriesSafe = (levers: ResearchRunLevers): void => {
+  if (!levers.autoAdmitTrusted) return;
+  const unsafe = levers.trustedDomains.find(isPublicSuffixEntry);
+  if (unsafe) {
+    throw new BadRequestError(
+      `"${unsafe}" covers every site under it, so it cannot be a trusted site while trusted results are added automatically. List a specific site instead.`
+    );
+  }
+};
+
 /** An input that names the tiers is the new shape; its legacy `allowedDomains`, if any, is ignored. */
 const usesTierFields = (input: ResearchLeversDraft): boolean =>
-  input.unlistedSources !== undefined || input.reviewDomains !== undefined;
+  input.unlistedSources !== undefined || input.reviewDomains !== undefined || input.trustedDomains !== undefined;
 
 const withoutAllowedDomains = ({ allowedDomains: _ignored, ...rest }: ResearchLeversDraft): ResearchLeversDraft => rest;
 
@@ -135,6 +155,7 @@ export async function createResearchConfig(
   const firstRunAt = firstResearchRunAt(cadence, now());
   const levers = normalizeResearchLevers(usesTierFields(input) ? withoutAllowedDomains(input) : input);
   assertSourcesReachable(levers);
+  assertAutoAdmitEntriesSafe(levers);
   const created = await db.dataLakeResearchConfigs.createConfig({
     dataLakeId: lake.id,
     name,
@@ -151,7 +172,16 @@ export async function createResearchConfig(
   // the gate and the recorded manage rung must agree on the same grant set, the same reasoning
   // reviewDataLakeProposal's resolveReviewable applies to its own reused grants.
   await recordLakeConfigChange(
-    { actor, lake, grants, action: 'create-research-config', changes: [researchConfigChange(name, 'created')] },
+    {
+      actor,
+      lake,
+      grants,
+      action: 'create-research-config',
+      changes: [
+        researchConfigChange(name, 'created'),
+        ...(levers.autoAdmitTrusted ? [researchAutoAdmitChange(name, true)] : []),
+      ],
+    },
     { db, logger }
   );
 
@@ -181,12 +211,20 @@ const LEVER_EQUALITY: {
   trustedDomains: sameStringSet,
   reviewDomains: sameStringSet,
   unlistedSources: sameValue,
+  autoAdmitTrusted: sameValue,
+  maxAutoAdmits: sameValue,
   // Derived from the three fields above, so it can never be the reason a config moved.
   allowedDomains: () => true,
   blockedDomains: sameStringSet,
   minRelevance: sameValue,
   costCeilingMicroUsd: sameValue,
   proposedTags: sameStringSet,
+};
+
+const trustedSiteChanges = (name: string, before: readonly string[], after: readonly string[]) => {
+  const added = after.filter(entry => !before.includes(entry));
+  const removed = before.filter(entry => !after.includes(entry));
+  return added.length > 0 || removed.length > 0 ? [researchTrustedSitesChange(name, added, removed)] : [];
 };
 
 const leversMoved = (next: ResearchRunLevers, current: ResearchRunLevers) =>
@@ -239,6 +277,7 @@ export async function updateResearchConfig(
   const { allowedDomains: _derived, ...stored } = existing;
   const merged = normalizeResearchLevers({ ...stored, ...resolveLegacyAllowedInput(input, existing) });
   assertSourcesReachable(merged);
+  assertAutoAdmitEntriesSafe(merged);
   // Compared per lever via LEVER_EQUALITY, not a JSON.stringify of two object literals:
   // `normalizeResearchLevers` omits `model`/`recencyDays` when unset, so key order differs between
   // `merged` and a hand-built object and a byte-identical default-config resubmit would read as changed.
@@ -274,7 +313,13 @@ export async function updateResearchConfig(
         action: 'update-research-config',
         // The UPDATED document's own name, not the input: an edit that never touched `name` still
         // reads by its current name here rather than by whatever this caller happened to submit.
-        changes: [researchConfigChange(updated.name, 'updated')],
+        changes: [
+          researchConfigChange(updated.name, 'updated'),
+          ...(merged.autoAdmitTrusted !== (existing.autoAdmitTrusted === true)
+            ? [researchAutoAdmitChange(updated.name, merged.autoAdmitTrusted)]
+            : []),
+          ...trustedSiteChanges(updated.name, existing.trustedDomains ?? [], merged.trustedDomains),
+        ],
       },
       { db, logger }
     );

@@ -65,7 +65,7 @@ Five tones with one meaning each, used everywhere. They differ in lightness as w
 | ------- | ----------------------- | ------------------------------------- | --------------------- | --------------------- |
 | good    | Healthy, allowed        | Active, Verified, Success             | `#166534` / `#E7F5EC` | `#BBF7D0` / `#14532D` |
 | info    | New or neutral-notable  | New, Pro                              | `#3730A3` / `#E8EEFF` | `#C7D2FE` / `#312E81` |
-| warn    | Needs a look            | Medium risk                           | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
+| warn    | Scan: needs a look      | Medium risk                           | `#8A4B00` / `#FFF1DE` | `#FED7AA` / `#7C2D12` |
 | bad     | Blocked or failing      | Suspended, High risk, Blocked sign-in | `#9F1C12` / `#FDECEA` | `#FECACA` / `#7F1D1D` |
 | neutral | Inactive, informational | Revoked, Free, Low risk               | `#52525B` / `#F1F1EE` | `#E4E4E7` / `#3F3F46` |
 

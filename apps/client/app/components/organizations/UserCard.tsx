@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
+import { useResendOrganizationInvite } from '@client/app/hooks/data/organizations';
 import { getAppFileUrl } from '@client/app/utils/s3';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import {
@@ -93,6 +94,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const { id: organizationId } = organization;
   const queryClient = useQueryClient();
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
+  const resendInvite = useResendOrganizationInvite(organizationId);
   const { mutateAsync: cancelInvite } = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId, 'pending'] });
@@ -270,7 +272,17 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             {isManager ? 'Remove manager' : 'Make manager'}
           </MenuItem>
         )}
-        {canCancelInvite && (
+        {!isOwner && canCancelInvite && (
+          <MenuItem
+            onClick={() => resendInvite.mutate({ userId: user.id })}
+            disabled={resendInvite.isPending}
+            data-testid="organization-user-card-resend-invite"
+            aria-label={`Resend invitation to ${user.name || user.username || user.id}`}
+          >
+            Resend Invite
+          </MenuItem>
+        )}
+        {!isOwner && canCancelInvite && (
           <MenuItem onClick={handleCancelInvite} data-testid="organization-user-card-cancel-invite">
             Cancel invite
           </MenuItem>

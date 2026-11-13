@@ -57,7 +57,7 @@
     "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "nodemailer": "^10.2.1",
     "openai": "^6.46.0",
     "sst": "4.17.1",

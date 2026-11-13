@@ -7,6 +7,8 @@ import {
   isOrgMember,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
+  ORG_INVITE_ROLES,
+  OrgInviteRole,
   Permission,
 } from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
@@ -19,15 +21,24 @@ import { Box, Button, Card, Chip, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import debounce from 'lodash/debounce';
 import AddIcon from '@mui/icons-material/Add';
+import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import { FC, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { OrganizationRosterRow } from './UserCard';
+import BulkInviteModal from './BulkInviteModal';
+import InviteLinksPanel from './InviteLinksPanel';
+import OrgInviteRoleSelect from './OrgInviteRoleSelect';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 import MemberRoster from './MemberRoster';
 import { getMemberCreditUsage } from './memberCreditBudget';
 import { getMemberRole } from './memberRosterView';
-import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
+import {
+  useOrganizationInvites,
+  useOrganizationSeats,
+  useResendOrganizationInvite,
+} from '@client/app/hooks/data/organizations';
 
 import { z } from 'zod';
 
@@ -67,10 +78,10 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   );
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
-  const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
-    value: [Permission.read],
-    error: null,
-  });
+  const [role, setRole] = useState<OrgInviteRole>('viewer');
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
+  // Mirrors the server gate in sharingService.createInvite: only the owner tier may invite an admin.
+  const canGrantAdmin = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   const shareDocument = useShareDocument({
     onSuccess: () => {
@@ -86,6 +97,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
     },
   });
 
+  const resendEmailInvite = useResendOrganizationInvite(organization.id);
   const cancelEmailInvite = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
@@ -109,10 +121,23 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         creditUsage: showUsage ? getMemberCreditUsage(organization, u.id) : null,
       };
     });
-    // An invite cannot make someone the owner or a manager, so a pending row is a plain member.
     const pending = (pendingUsers ?? [])
       .filter(user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id)))
-      .map(u => ({ ...u, status: 'pending' as const, permissions: [], role: 'member' as const, creditUsage: null }));
+      .map(user => {
+        const email = user.email?.toLowerCase();
+        const invite = pendingInvites?.find(candidate =>
+          candidate.recipients?.pending?.some(
+            recipient => recipient === user.id || (!!email && recipient.toLowerCase() === email)
+          )
+        );
+        return {
+          ...user,
+          status: 'pending' as const,
+          permissions: invite && 'permissions' in invite ? invite.permissions : [],
+          role: 'member' as const,
+          creditUsage: null,
+        };
+      });
     return [...accepted, ...pending];
   }, [users, pendingUsers, pendingInvites, organization, currentUser]);
 
@@ -150,11 +175,11 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
           recipients: [id],
           id: organization.id,
           type: InviteType.Organization,
-          permissions: permissions.value,
+          permissions: [...ORG_INVITE_ROLES[role]],
         });
       });
     },
-    [organization.id, permissions.value, shareDocument]
+    [organization.id, role, shareDocument]
   );
 
   const pendingEmails = useMemo(
@@ -189,7 +214,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                   recipients: [email],
                   id: organization.id,
                   type: InviteType.Organization,
-                  permissions: permissions.value,
+                  permissions: [...ORG_INVITE_ROLES[role]],
                 })
               }
             >
@@ -208,7 +233,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       hasAvailableSeats,
       shareDocument,
       organization.id,
-      permissions.value,
+      role,
     ]
   );
   const pendingEmailInvites = (pendingInvites ?? []).flatMap(invite =>
@@ -360,6 +385,10 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       )}
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+      <OrganizationMfaPolicy
+        key={`${organization.id}:${organization.mfaPolicy?.required}:${organization.mfaPolicy?.graceEndsAt}`}
+        organization={organization}
+      />
 
       {/* Add members */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
@@ -396,6 +425,14 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 renderNoResults={renderNoResults}
                 isLoadingMore={isFetching}
                 showButtonBadge={false}
+                leftGridContent={
+                  <OrgInviteRoleSelect
+                    value={role}
+                    onChange={setRole}
+                    canGrantAdmin={canGrantAdmin}
+                    testId="organization-members-role-select"
+                  />
+                }
               />
             ) : (
               <Button
@@ -413,8 +450,29 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 {t('organizations.modals.members.button_label', 'Add Member')}
               </Button>
             ))}
+          {canInviteMembers && hasAvailableSeats && (
+            <Button
+              data-testid="organization-members-bulk-invite-btn"
+              size="sm"
+              variant="outlined"
+              startDecorator={<GroupAddIcon />}
+              onClick={() => setBulkInviteOpen(true)}
+            >
+              {t('organizations.modals.bulk_invite.button_label', 'Bulk invite')}
+            </Button>
+          )}
+          {bulkInviteOpen && (
+            <BulkInviteModal
+              organizationId={organization.id}
+              availableSeats={availableSeats}
+              canGrantAdmin={canGrantAdmin}
+              onDone={() => setBulkInviteOpen(false)}
+            />
+          )}
         </Box>
       </Stack>
+
+      {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
 
       {pendingInvitesError && (
         <Typography color="danger" data-testid="organization-pending-invites-error">
@@ -440,6 +498,18 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                   Cancel invitation
                 </Button>
               )}
+              {canInviteMembers && !email.includes('*') && (
+                <Button
+                  size="sm"
+                  variant="plain"
+                  data-testid="organization-resend-email-invite-btn"
+                  aria-label={`Resend invitation to ${email}`}
+                  disabled={resendEmailInvite.isPending}
+                  onClick={() => resendEmailInvite.mutate({ email })}
+                >
+                  Resend
+                </Button>
+              )}
             </Stack>
           ))}
         </Stack>
@@ -461,8 +531,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   );
 };
 
-const OrganizationMembers: FC<OrganizationMembersProps> = props => (
-  <OrganizationMembersView key={props.organization.id} {...props} />
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => (
+  <OrganizationMembersView key={organization.id} organization={organization} />
 );
 
 export default OrganizationMembers;

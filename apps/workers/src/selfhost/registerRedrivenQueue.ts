@@ -3,10 +3,10 @@ import type { SelfHostWorker } from './selfHostWorker';
 
 // Receive count and visibility must match notebookCurationQueue, questExportQueue and accountDataExportQueue in
 // elasticmq.conf.
-const MAX_RECEIVE_COUNT = 3;
-const VISIBILITY_TIMEOUT_SECONDS = 900;
+export const MAX_RECEIVE_COUNT = 3;
+export const VISIBILITY_TIMEOUT_SECONDS = 900;
 const RENEWAL_INTERVAL_MS = 60000;
-const RUN_BUDGET_MS = 600000;
+export const RUN_BUDGET_MS = 600000;
 
 type Registration = Parameters<SelfHostWorker['registerQueueHandler']>;
 interface RedrivenQueueOptions {

@@ -214,10 +214,28 @@ export function useDeleteOrganization() {
       await api.delete(`/api/organizations/${orgId}`);
       return orgId;
     },
-    onSuccess: orgId => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      queryClient.removeQueries({ queryKey: ['organizations', orgId] });
-      toast.success('Organization deleted successfully');
+    onSuccess: async orgId => {
+      // Org-scoped queries (detail, invites) 401 or 404 once the org is gone, and a 401 is read as an
+      // expired session. Two things can still fire them: the settings page, which stays mounted until the caller
+      // navigates, and the Teams list, whose cards mount per cached org. So the org leaves every cached list
+      // synchronously, before the caller navigates, and its own queries are neither refetched nor removed
+      // (removing a mounted query makes it refetch); they garbage-collect after the page unmounts.
+      await queryClient.cancelQueries({ queryKey: ['organizations', orgId] });
+      updateAllQueryData(
+        queryClient,
+        'organizations',
+        'delete',
+        { id: orgId },
+        {
+          keysAllowedToCreate: [],
+          synchronous: true,
+        }
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ['organizations'],
+        predicate: query => query.queryKey[1] !== orgId,
+      });
+      toast.success('Team deleted successfully');
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error));
@@ -618,3 +636,109 @@ export const useOrganizationSeats = (organizationId?: string): OrganizationSeats
     [maxSeats, pendingSeats, currentSeats, availableSeats]
   );
 };
+
+// Mirrors OrgInviteRow in b4m-core/services/src/sharingService/classifyOrgInviteRows.ts.
+export type BulkInviteRowStatus =
+  'invite' | 'already_member' | 'already_pending' | 'invalid' | 'duplicate' | 'seat_limit';
+
+export interface BulkInviteRow {
+  email: string;
+  raw: string;
+  status: BulkInviteRowStatus;
+}
+
+export interface BulkInviteResult {
+  rows: BulkInviteRow[];
+  invitedCount: number;
+  inviteId: string | null;
+}
+
+export function useBulkInviteOrganization() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      emails,
+      permissions,
+    }: {
+      organizationId: string;
+      emails: string[];
+      permissions: string[];
+    }) => {
+      const response = await api.post<BulkInviteResult>(`/api/organizations/${organizationId}/bulk-invite`, {
+        emails,
+        permissions,
+      });
+      return response.data;
+    },
+    onSuccess: (_result, { organizationId }) => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId] });
+    },
+  });
+}
+
+// Mirrors OrgInviteLinkView in apps/client/server/organizations/orgInviteLinks.ts.
+export interface OrgInviteLink {
+  id: string;
+  link: string | null;
+  permissions: string[];
+  expiresAt: string | null;
+  remaining: number;
+  accepted: number;
+  allowedDomains: string[];
+  revokedAt: string | null;
+}
+
+const inviteLinksKey = (organizationId: string) => ['organizations', organizationId, 'invite-links'];
+
+export function useOrganizationInviteLinks(organizationId: string, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: inviteLinksKey(organizationId),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const response = await api.get<OrgInviteLink[]>(`/api/organizations/${organizationId}/invite-links`, {
+        params: pageParam ? { after: pageParam } : undefined,
+      });
+      const nextCursor: unknown = response.headers['x-next-cursor'];
+      return { links: response.data, nextCursor: typeof nextCursor === 'string' ? nextCursor : undefined };
+    },
+    getNextPageParam: page => page.nextCursor,
+    select: data => data.pages.flatMap(page => page.links),
+    enabled: enabled && !!organizationId,
+  });
+}
+
+export function useCreateOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      permissions: string[];
+      expiresAt: string;
+      available?: number;
+      allowedDomains?: string[];
+    }) => (await api.post<{ link: string }>(`/api/organizations/${organizationId}/invite-links`, body)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+export function useRevokeOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (inviteId: string) =>
+      (await api.delete<OrgInviteLink>(`/api/organizations/${organizationId}/invite-links/${inviteId}`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+export function useResendOrganizationInvite(organizationId: string) {
+  return useMutation({
+    mutationFn: async (recipient: { email: string } | { userId: string }) =>
+      (await api.post<{ resent: boolean }>(`/api/organizations/${organizationId}/invite-resend`, recipient)).data,
+    onSuccess: () => toast.success('Invitation resent'),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}

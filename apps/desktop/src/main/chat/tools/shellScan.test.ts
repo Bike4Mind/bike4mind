@@ -514,6 +514,22 @@ describe('scanShell', () => {
     ])('does not only read: %s', async command => {
       expect((await scan(command)).readOnly).toBe(false);
     });
+
+    it.each(['git show --format= HEAD', 'git log --pretty= -1', 'git show --format= --remerge-diff HEAD'])(
+      'reads an empty option value as naming nothing: %s',
+      async command => {
+        const result = await scan(command);
+        expect(result.unread).toBeUndefined();
+        expect(result.readOnly).toBe(true);
+      }
+    );
+
+    it.each(['git log --format={,} -1', 'git show --format={x}a,b} HEAD', 'grep foo /etc/x=', 'sed -n 1p /etc/x='])(
+      'still leaves braces it cannot expand, or an operand ending in =, unread: %s',
+      async command => {
+        expect((await scan(command)).unread).toBe(true);
+      }
+    );
   });
 
   describe('commands contained to this computer and read-only GitHub calls', () => {

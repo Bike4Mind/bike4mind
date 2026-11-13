@@ -9,7 +9,8 @@ import {
   type AdminPermissionId,
   type AccountDeletionSource,
   type ClientSurface,
-  type ILoginRecord,
+  type UserSignIn,
+  type UserSignInsPage,
   type IUserDocument,
   type OrganizationMemberRole,
 } from '@bike4mind/common';
@@ -118,10 +119,9 @@ export const LEVEL_LABELS: Readonly<Record<string, string>> = {
   AdminUser: 'Admin',
 };
 
-/** The most recent sign-in; records are appended, but sort anyway since nothing guarantees it. */
-export const latestSignIn = (user: Pick<AdminUserListItem, 'loginRecords'>): ILoginRecord | null =>
-  [...(user.loginRecords ?? [])].sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime())[0] ??
-  null;
+/** The newest successful sign-in among the loaded sign-in pages (each newest first), or null. */
+export const latestSignIn = (pages: readonly UserSignInsPage[]): UserSignIn | null =>
+  pages.flatMap(page => page.entries).find(entry => entry.event === 'login_success') ?? null;
 
 export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
   web: 'Web',
@@ -145,6 +145,7 @@ export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string;
   'users:impersonate': { label: 'Impersonate', description: 'Sign in as another user.' },
   'keys:revoke': { label: 'Revoke keys', description: 'Revoke API and embed keys.' },
   'users:delete': { label: 'Delete users', description: 'Schedule and run account deletion.' },
+  'users:export': { label: 'Export user data', description: "Download a user's data subject export." },
   'settings:manage': { label: 'Manage settings', description: 'Change admin settings, tags and product access.' },
   'models:curate': { label: 'Curate models', description: 'Change which models are offered.' },
 };

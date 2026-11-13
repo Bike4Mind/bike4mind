@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   switchReads: 0,
   progressReads: 0,
   updates: [] as Record<string, unknown>[],
+  draft: null as Record<string, unknown> | null,
 }));
 
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
@@ -38,6 +39,9 @@ vi.mock('../models', async importOriginal => ({
     OverrideChange: {},
     Draft: {},
   }),
+}));
+vi.mock('../coreDrafts', () => ({
+  coreDraftStore: { servableById: async (id: string) => (state.draft?.id === id ? state.draft.served : null) },
 }));
 vi.mock('../coreDeps', () => ({ coreTutorialDepsFor: () => ({}) }));
 vi.mock('@bike4mind/database', async importOriginal => ({
@@ -104,6 +108,7 @@ beforeEach(() => {
   state.switchReads = 0;
   state.progressReads = 0;
   state.updates = [];
+  state.draft = null;
   walk('sess-1');
 });
 
@@ -160,5 +165,51 @@ describe('core scripted turns on a marked session', () => {
       await respondFromCoreTutorial({ user: USER, session: MARKED, quest: quest('x'), logger: { warn } }, hook)
     ).toBeNull();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('core scripted turns on a marked core draft', () => {
+  const DRAFT_MARKED = { id: 'sess-1', tutorial: { owner: 'core' as const, moduleId: 'my-draft' } };
+  const draftServed = async (visibility: unknown) => {
+    const { FIXTURE_CONTENT } = await import('./fixture');
+    const { intro, steps, transcript, version, enabled } = FIXTURE_CONTENT;
+    const served = {
+      ...intro,
+      id: 'my-draft',
+      steps: [...steps],
+      transcript: [...transcript],
+      version,
+      enabled,
+      revision: 0,
+    };
+    return { module: served, row: { visibility } };
+  };
+
+  beforeEach(() => {
+    state.progress.set('u1', {
+      'my-draft': {
+        status: 'in_progress',
+        sessionId: 'sess-1',
+        turn: -1,
+        moduleVersion: 1,
+        moduleRevision: 0,
+        turnClaimedAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+    });
+  });
+
+  it('answers the scripted turn for a holder', async () => {
+    state.draft = { id: 'my-draft', served: await draftServed({ entitlement: 'fixture:feature' }) };
+    expect((await respond(USER, DRAFT_MARKED as never, 'Hello fixture'))?.replies).toEqual(['Hi there.']);
+  });
+
+  it('falls through once the entitlement is revoked', async () => {
+    state.draft = { id: 'my-draft', served: await draftServed({ entitlement: 'fixture:feature' }) };
+    expect(await respond({ ...USER, entitlements: [] }, DRAFT_MARKED as never, 'Hello fixture')).toBeNull();
+  });
+
+  it('falls through when the draft is no longer served', async () => {
+    expect(await respond(USER, DRAFT_MARKED as never, 'Hello fixture')).toBeNull();
   });
 });

@@ -9,9 +9,12 @@ import { fabFileKeys } from './fabFileKeys';
 import { dataLakeKeys } from './dataLakeKeys';
 import {
   removedMembersMessage,
+  useDeleteOrganization,
   useGetOrganization,
+  useOrganizationInviteLinks,
   useGetUserOrganizations,
   useMemberOffboardingInventory,
+  useOrganizationInvites,
   useRemoveMemberFromOrganization,
   useSearchOrganizations,
   useSearchUserOrganizations,
@@ -266,6 +269,130 @@ describe('member removal', () => {
   });
 });
 
+describe('useDeleteOrganization', () => {
+  const get = api.get as unknown as Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    del.mockResolvedValue({ data: {} });
+    get.mockResolvedValue({ data: [] });
+  });
+
+  it('does not refetch org-scoped queries of the deleted org while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const view = renderHook(() => ({ invites: useOrganizationInvites('org1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.invites.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('Team deleted successfully');
+  });
+
+  it('does not refetch the deleted org detail either while its page is still mounted', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValue({ data: { id: 'org1' } });
+    const view = renderHook(() => ({ org: useGetOrganization('org1'), remove: useDeleteOrganization() }), { wrapper });
+    await waitFor(() => expect(view.result.current.org.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an in-flight fetch of the deleted org detail', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    let fetchSignal: AbortSignal | undefined;
+    const pending = queryClient
+      .fetchQuery({
+        queryKey: ['organizations', 'org1'],
+        queryFn: ({ signal }) => {
+          fetchSignal = signal;
+          return new Promise(() => undefined);
+        },
+      })
+      .catch(() => undefined);
+    await waitFor(() => expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('fetching'));
+    const view = renderHook(() => useDeleteOrganization(), { wrapper });
+
+    await act(async () => {
+      await view.result.current.mutateAsync('org1');
+    });
+    await pending;
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(queryClient.getQueryState(['organizations', 'org1'])?.fetchStatus).toBe('idle');
+  });
+
+  it('drops the deleted org from the cached org list before any refetch lands', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({
+      data: {
+        data: [
+          { id: 'org1', name: 'One' },
+          { id: 'org2', name: 'Two' },
+        ],
+        hasMore: false,
+        total: 2,
+      },
+    });
+    get.mockImplementation(() => new Promise(() => undefined));
+    const view = renderHook(() => ({ list: useGetUserOrganizations('u1'), remove: useDeleteOrganization() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(view.result.current.list.isSuccess).toBe(true));
+
+    await act(async () => {
+      await view.result.current.remove.mutateAsync('org1');
+    });
+
+    expect(queryClient.getQueryData<{ id: string }[]>(['organizations', 'user', 'u1'])?.map(o => o.id)).toEqual([
+      'org2',
+    ]);
+  });
+
+  it('still refetches other organization queries', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(useDeleteOrganization, { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync('org1');
+    });
+
+    const { predicate } = invalidateSpy.mock.calls[0][0] as { predicate: (q: { queryKey: unknown[] }) => boolean };
+    expect(predicate({ queryKey: ['organizations'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org2', 'invites'] })).toBe(true);
+    expect(predicate({ queryKey: ['organizations', 'org1', 'invites'] })).toBe(false);
+  });
+});
+
 describe('member offboarding ownership caches', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -411,5 +538,24 @@ describe('member offboarding inventory after removal', () => {
       queryClient.clear();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('organization invite link pages', () => {
+  it('loads the next cursor and keeps earlier rows', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({ data: [{ id: 'link-a' }], headers: { 'x-next-cursor': '000000000000000000000001' } });
+    const { result } = renderWithClient(() => useOrganizationInviteLinks('org-pages'));
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }]));
+    expect(result.current.hasNextPage).toBe(true);
+    get.mockResolvedValueOnce({ data: [{ id: 'link-b' }], headers: {} });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await waitFor(() => expect(result.current.data).toEqual([{ id: 'link-a' }, { id: 'link-b' }]));
+    expect(get).toHaveBeenLastCalledWith('/api/organizations/org-pages/invite-links', {
+      params: { after: '000000000000000000000001' },
+    });
+    expect(result.current.hasNextPage).toBe(false);
   });
 });

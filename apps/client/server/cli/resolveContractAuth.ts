@@ -23,7 +23,8 @@ export type ContractAuthResult =
  */
 export async function resolveContractAuth(
   headers: Record<string, string | undefined>,
-  contract: EndpointContract
+  contract: EndpointContract,
+  options: { allowExchangeKeys?: boolean } = {}
 ): Promise<ContractAuthResult> {
   const bearer = headers.authorization?.replace('Bearer ', '');
 
@@ -39,6 +40,7 @@ export async function resolveContractAuth(
       // default completion scopes.
       const apiKeyInfo = await verifyApiKey(headers, {
         requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
+        allowExchangeKeys: options.allowExchangeKeys,
       });
       return { method: 'apiKey', userId: apiKeyInfo.userId, apiKeyInfo };
     } catch (keyError) {

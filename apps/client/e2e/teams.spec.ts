@@ -184,7 +184,7 @@ test.describe('Teams', () => {
 
     await teamsPage.openMemberMenu(invitee.userId);
     await page.getByTestId('organization-user-card-remove-member').click();
-    await teamsPage.confirmOffboarding();
+    await teamsPage.confirmOffboard();
 
     await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
   });
