@@ -38,7 +38,7 @@ async function loadManagedOrg(req: Req): Promise<IOrganizationDocument> {
   return organization;
 }
 
-// `admin:*` only, like member-credit-budget: alert thresholds are org billing policy.
+// Browser sessions only (no API keys): alert thresholds are org billing policy.
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {

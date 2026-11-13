@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
   getForUser: vi.fn(),
   upsertForUser: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -18,7 +19,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     };
   }
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mocks.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: mocks.findById } }));
 vi.mock('@bike4mind/database', () => ({
@@ -52,6 +58,10 @@ describe('/api/organizations/[id]/my-notification-prefs', () => {
     vi.clearAllMocks();
     mocks.findById.mockResolvedValue(org);
     mocks.getForUser.mockResolvedValue(null);
+  });
+
+  it('accepts browser sessions only, never API keys', () => {
+    expect(mocks.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it('reports role defaults: the owner is opted in, a manager opted out', async () => {
