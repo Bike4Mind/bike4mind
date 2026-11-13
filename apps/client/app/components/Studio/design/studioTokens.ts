@@ -131,7 +131,7 @@ export type StudioRadius = keyof typeof STUDIO_RADII;
 
 // Both faces are already loaded app-wide by next/font in app/layout.tsx; Libre Franklin is the html font.
 export const STUDIO_FONTS = {
-  ui: '"Libre Franklin", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  ui: 'var(--font-reading-sans), "Libre Franklin", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   mono: 'var(--font-reading-mono), "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
 } as const;
 

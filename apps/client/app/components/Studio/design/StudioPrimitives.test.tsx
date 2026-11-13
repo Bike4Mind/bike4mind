@@ -140,6 +140,32 @@ describe('StudioSegmentedControl', () => {
     fireEvent.keyDown(group, { key: 'Enter' });
     expect(onChange).toHaveBeenCalledTimes(2);
   });
+
+  it('as tabs, moves focus with the arrows and Home/End without activating', () => {
+    const onChange = vi.fn();
+    renderInStudio(
+      <StudioSegmentedControl
+        aria-label="Areas"
+        semantics="tabs"
+        options={options}
+        value="square"
+        onChange={onChange}
+      />
+    );
+    const tablist = screen.getByRole('tablist');
+    screen.getByTestId('studio-segmented-control-square').focus();
+    fireEvent.keyDown(tablist, { key: 'ArrowRight' });
+    expect(screen.getByTestId('studio-segmented-control-portrait')).toHaveFocus();
+    fireEvent.keyDown(tablist, { key: 'ArrowRight' });
+    expect(screen.getByTestId('studio-segmented-control-wide')).toHaveFocus();
+    fireEvent.keyDown(tablist, { key: 'Home' });
+    expect(screen.getByTestId('studio-segmented-control-square')).toHaveFocus();
+    fireEvent.keyDown(tablist, { key: 'End' });
+    expect(screen.getByTestId('studio-segmented-control-wide')).toHaveFocus();
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('studio-segmented-control-wide'));
+    expect(onChange).toHaveBeenCalledWith('wide');
+  });
 });
 
 describe('StudioPrimaryAction', () => {
@@ -189,10 +215,15 @@ describe('StudioCostPill', () => {
     expect(pill).toHaveAttribute('data-tone', 'low');
     expect(pill).toHaveAttribute('data-variant', 'pill');
   });
+
+  it('turns to the danger tone when nothing is left', () => {
+    renderInStudio(<StudioCostPill amount={0} unit="credits" tone="empty" variant="pill" />);
+    expect(screen.getByTestId('studio-cost-pill')).toHaveAttribute('data-tone', 'empty');
+  });
 });
 
 describe('StudioTakeTile', () => {
-  it('shows the media, title and mono meta, with actions in a labelled toolbar', () => {
+  it('shows the media, title and mono meta, with actions in a labelled group', () => {
     const onStar = vi.fn();
     renderInStudio(
       <StudioTakeTile
@@ -208,16 +239,16 @@ describe('StudioTakeTile', () => {
     expect(screen.getByTestId('studio-take-tile-media')).toHaveStyle({ aspectRatio: '4 / 5' });
     expect(screen.getByAltText('Take 3')).toBeInTheDocument();
     expect(screen.getByTestId('studio-take-tile-meta')).toHaveTextContent('seed 1186');
-    expect(screen.getByRole('toolbar', { name: 'Take actions' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Take actions' })).toBeInTheDocument();
     const star = screen.getByRole('button', { name: 'Star' });
     expect(star).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(star);
     expect(onStar).toHaveBeenCalledTimes(1);
   });
 
-  it('has no toolbar when there are no actions', () => {
+  it('has no action group when there are no actions', () => {
     renderInStudio(<StudioTakeTile media={<span>Developing</span>} title="Take 4" />);
-    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group')).not.toBeInTheDocument();
     expect(screen.queryByTestId('studio-take-tile-meta')).not.toBeInTheDocument();
   });
 });

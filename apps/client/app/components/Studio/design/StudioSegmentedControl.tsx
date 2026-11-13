@@ -57,7 +57,16 @@ type StudioSegmentedControlProps<Value extends string> = {
 
 const NEXT_KEYS: Record<string, 1 | -1> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
-/** A pill track of mutually exclusive options; arrow keys move between them (roving tabindex). */
+const focusedIndex = (segments: (HTMLButtonElement | null)[], fallback: number): number => {
+  const index = segments.findIndex(segment => segment !== null && segment === document.activeElement);
+  return index === -1 ? fallback : index;
+};
+
+/**
+ * A pill track of mutually exclusive options with a roving tabindex. As radios, arrows select (the
+ * radio-group pattern); as tabs, arrows and Home/End only move focus and Enter/Space activates,
+ * because activating a tab here navigates.
+ */
 const StudioSegmentedControl = <Value extends string>({
   options,
   value,
@@ -69,17 +78,27 @@ const StudioSegmentedControl = <Value extends string>({
   const segmentRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const isTabs = semantics === 'tabs';
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step = NEXT_KEYS[event.key];
-    if (!step || options.length === 0) return;
-    event.preventDefault();
-    const current = Math.max(
+  const targetIndex = (key: string): number | null => {
+    const count = options.length;
+    if (count === 0) return null;
+    if (isTabs && key === 'Home') return 0;
+    if (isTabs && key === 'End') return count - 1;
+    const step = NEXT_KEYS[key];
+    if (!step) return null;
+    const selected = Math.max(
       0,
       options.findIndex(option => option.value === value)
     );
-    const next = options[(current + step + options.length) % options.length];
-    onChange(next.value);
-    segmentRefs.current[options.indexOf(next)]?.focus();
+    const from = isTabs ? focusedIndex(segmentRefs.current, selected) : selected;
+    return (from + step + count) % count;
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = targetIndex(event.key);
+    if (next === null) return;
+    event.preventDefault();
+    if (!isTabs) onChange(options[next].value);
+    segmentRefs.current[next]?.focus();
   };
 
   return (

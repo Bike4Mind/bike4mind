@@ -26,7 +26,7 @@ import { trackUpsell } from '@client/app/utils/funnelEvents';
 import { BILLING_PLANS_SURFACE } from './billingUpsell';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
-export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
+export type BillingEntry = 'credits_chip' | 'credits_cta' | 'studio_header' | 'deep_link' | 'profile_menu' | 'unknown';
 
 interface BillingModalProps {
   open: boolean;

@@ -45,7 +45,7 @@ describe('StudioCreditsBalance', () => {
     expect(screen.getByTestId('studio-credits-balance-amount')).toHaveTextContent('2,310 credits');
     expect(screen.getByTestId('studio-credits-balance-amount')).toHaveAttribute('data-tone', 'default');
     fireEvent.click(screen.getByTestId('studio-credits-balance'));
-    expect(screen.getByTestId('billing-modal-stub')).toHaveAttribute('data-entry', 'credits_chip');
+    expect(screen.getByTestId('billing-modal-stub')).toHaveAttribute('data-entry', 'studio_header');
     expect(h.logEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -53,6 +53,13 @@ describe('StudioCreditsBalance', () => {
     h.credits = 40;
     render(<StudioCreditsBalance />, { wrapper: Wrapper });
     expect(screen.getByTestId('studio-credits-balance-amount')).toHaveAttribute('data-tone', 'low');
+  });
+
+  it('turns to the danger tone and says so once the balance is spent', () => {
+    h.credits = 0;
+    render(<StudioCreditsBalance />, { wrapper: Wrapper });
+    expect(screen.getByTestId('studio-credits-balance-amount')).toHaveAttribute('data-tone', 'empty');
+    expect(screen.getByTestId('studio-credits-balance')).toHaveAccessibleName('No credits left. See plans and top up');
   });
 
   it('renders nothing while credits are not enforced', () => {

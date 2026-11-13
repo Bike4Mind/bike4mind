@@ -3,7 +3,7 @@ import { styled } from '@mui/system';
 import { useNavigate } from '@tanstack/react-router';
 import StudioSegmentedControl, { type StudioSegmentOption } from '../design/StudioSegmentedControl';
 import StudioThemeScope from '../design/StudioThemeScope';
-import { studioColor } from '../design/studioTokens';
+import { studioColor, studioRadius } from '../design/studioTokens';
 import { useStudioFeature } from '../useStudioFeature';
 import StudioCreditsBalance from './StudioCreditsBalance';
 
@@ -12,9 +12,12 @@ export type StudioArea = 'create' | 'productions' | 'library';
 const PHONE = '@media (max-width: 599.95px)';
 const DESKTOP = '@media (min-width: 900px)';
 
-// Full bleed, unlike PageFrame's inset card: Studio is its own space. The app shell's page area is
-// fixed-height, so the stage owns the scroll (as PageFrame does).
+// A dark card inside NotebookLayout's 8px gutter (which it drops on phones), so Studio reads as its
+// own space. The app shell's page area is fixed-height, so the stage owns the scroll.
 const Stage = styled(StudioThemeScope)({
+  borderRadius: studioRadius('xl'),
+  border: `1px solid ${studioColor('hairline')}`,
+  [PHONE]: { borderRadius: 0, border: 0 },
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
@@ -62,9 +65,12 @@ const Body = styled('div')({
   [DESKTOP]: { flexDirection: 'row' },
 });
 
-const Main = styled('main')({
+// A div, not <main>: NotebookLayout already renders the page's main landmark.
+const Main = styled('div')({
   flex: 1,
   minWidth: 0,
+  width: '100%',
+  maxWidth: '1600px',
   display: 'flex',
   flexDirection: 'column',
   gap: '20px',

@@ -107,10 +107,10 @@ export const StudioTakeTile = ({
   <TileRoot data-selected={selected} data-testid={testId}>
     <Media style={{ aspectRatio }} data-testid={`${testId}-media`}>
       {media}
-      {actions && (
+      {actions != null && (
         <ActionBar
           className={ACTION_BAR_CLASS}
-          role="toolbar"
+          role="group"
           aria-label="Take actions"
           data-testid={`${testId}-actions`}
         >
@@ -120,7 +120,7 @@ export const StudioTakeTile = ({
     </Media>
     <Caption>
       <Title>{title}</Title>
-      {meta && <Meta data-testid={`${testId}-meta`}>{meta}</Meta>}
+      {meta != null && <Meta data-testid={`${testId}-meta`}>{meta}</Meta>}
     </Caption>
   </TileRoot>
 );

@@ -22,7 +22,7 @@ const BalanceButton = styled('button')({
 /**
  * The Studio header's credit balance; opens the credits modal, like the composer's CreditBalanceChip
  * (Session/CreditButton.tsx), whose rules it follows: nothing while `enforceCredits` is off, the
- * display (not live) balance, warm once it runs low.
+ * display (not live) balance, warm once it runs low, danger once it is spent.
  */
 const StudioCreditsBalance = () => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
@@ -33,11 +33,14 @@ const StudioCreditsBalance = () => {
 
   if (!enforceCredits) return null;
 
+  const isEmpty = credits <= 0;
+  const tone = isEmpty ? 'empty' : credits < lowCreditsThreshold ? 'low' : 'default';
+
   return (
     <>
       <BalanceButton
         type="button"
-        aria-label={`${formatCreditBalance(credits)}. See plans and top up`}
+        aria-label={`${isEmpty ? 'No credits left' : formatCreditBalance(credits)}. See plans and top up`}
         onClick={() => {
           logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
           setIsOpen(true);
@@ -48,11 +51,11 @@ const StudioCreditsBalance = () => {
           amount={credits}
           unit="credits"
           variant="pill"
-          tone={credits < lowCreditsThreshold ? 'low' : 'default'}
+          tone={tone}
           testId="studio-credits-balance-amount"
         />
       </BalanceButton>
-      <BillingModal open={isOpen} entry="credits_chip" onClose={() => setIsOpen(false)} />
+      <BillingModal open={isOpen} entry="studio_header" onClose={() => setIsOpen(false)} />
     </>
   );
 };
