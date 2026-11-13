@@ -69,6 +69,8 @@ export interface ApiKeyInfo {
   ownerUntrusted?: boolean;
   /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
   createdByUserId?: string;
+  /** OAuth client that minted this key, present only for a federated exchange key. */
+  oauthExchangeClientId?: string;
 }
 
 /**
@@ -191,6 +193,9 @@ export interface VerifyApiKeyOptions {
   /** Whether this check is a use of the key (stamps `lastUsedAt`). Defaults to true; false for
    *  connecting and for first-party telemetry. */
   recordUse?: boolean;
+  /** Accept a key minted by the federated AI-token exchange. Off by default: such a key is
+   *  confined to the routes that explicitly opt in. */
+  allowExchangeKeys?: boolean;
 }
 
 /**
@@ -222,6 +227,7 @@ function toApiKeyInfo(v: {
   spendCap?: number;
   currentSpend?: number;
   createdByUserId?: string;
+  oauthExchangeClientId?: string;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -237,6 +243,7 @@ function toApiKeyInfo(v: {
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
     createdByUserId: v.createdByUserId,
+    oauthExchangeClientId: v.oauthExchangeClientId,
   };
 }
 
@@ -301,7 +308,7 @@ export async function verifyApiKey(
     const validation = await userApiKeyService.validateUserApiKey(
       apiKey,
       { db: { userApiKeys: userApiKeyRepository } },
-      { recordUse: options?.recordUse }
+      { recordUse: false }
     );
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
@@ -310,6 +317,15 @@ export async function verifyApiKey(
       throw new UnauthorizedError(
         validation.reason ? `Invalid API key: ${validation.reason}` : 'Invalid or expired API key'
       );
+    }
+
+    if (validation.oauthExchangeClientId && !options?.allowExchangeKeys) {
+      throw new ForbiddenError('This key cannot be used for this endpoint');
+    }
+
+    // Deferred past the exchange refusal so a refused key is never stamped as used.
+    if (options?.recordUse !== false) {
+      userApiKeyService.recordUserApiKeyUse(validation.keyId, { userApiKeys: userApiKeyRepository });
     }
 
     const requiredScopes = options?.requiredScopes ?? DEFAULT_COMPLETION_SCOPES;

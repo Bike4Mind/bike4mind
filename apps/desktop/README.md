@@ -841,8 +841,12 @@ If a configured model disappears, becomes unavailable or lacks required capabili
 role-routed work blocks before starting; no more expensive or hosted replacement is selected.
 Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
 run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
-model picker for that task. Device-local tasks cannot switch to a hosted model. Settings read/save
-failures and blocked task evidence remain visible; retry the operation after repairing access.
+model picker for that task. In a connected app, explicitly picking a hosted model there authorizes
+moving that worker's future turns off its local model; approving a task escalation alone does not.
+For a conversation with history, the picker first asks "Send this conversation to Bike4Mind?".
+A local parent cannot start a hosted worker until you explicitly pick a hosted model for the parent
+conversation. A device-local app permits only local models until you sign in to use hosted models.
+Settings read/save failures and blocked task evidence remain visible; retry after repairing access.
 
 ## Authentication
 
@@ -923,6 +927,46 @@ accepts unsigned payloads is a remote code execution path.
 
 Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
 packaging config once it lands.
+
+### Signed update manifests
+
+`B4M_UPDATE_PUBLIC_KEYS` is baked in exactly like `B4M_UPDATE_FEED_URL`: a comma-separated list
+of base64 Ed25519 public keys (SPKI DER). Unset, the app reads the feed's manifests as before.
+Set, it fetches `<manifest>.sig` beside `latest.yml`, `latest-mac.yml` or `latest-linux.yml` and
+offers an update only if that signature verifies under one of the listed keys; a missing or bad
+signature is a failed check, logged and not shown. A downloaded payload must also match the
+signed manifest's SHA-512 before Restart is offered. If any listed key does not parse, the build
+switches updates off and logs why. The logic is in `src/main/update/manifestSignature.ts` and
+`signedFeed.ts`.
+
+A `.sig` file is the standard base64 of a 64-byte Ed25519 signature plus a newline. The signed
+message is `b4m-desktop-update-manifest-v1\n`, then the manifest's file name and `\n`, then the
+manifest bytes exactly as published. `scripts/sign-update-manifests.mjs` produces and checks
+them; run it with no arguments for usage.
+
+In CI, the `sign` job in `desktop-release.yml` signs the manifests `validate` produced, in the
+`desktop-update-signing` environment, and `publish` refuses to release without those signatures
+while keys are configured. Every build bakes the source repository variable
+`DESKTOP_UPDATE_PUBLIC_KEYS` and fails if it did not reach the main bundle. To enable it:
+
+1. Generate a key pair with Node 24 and keep the private key out of the repository:
+
+   ```bash
+   (umask 077 && node -e "process.stdout.write(require('node:crypto').generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))" > desktop-update-signing.pem)
+   node -e "console.log(require('node:crypto').createPublicKey(require('node:fs').readFileSync('desktop-update-signing.pem')).export({ type: 'spki', format: 'der' }).toString('base64'))"
+   ```
+
+2. Create the `desktop-update-signing` environment, limited to the `main` branch, and add the
+   PEM file's contents as its secret `DESKTOP_UPDATE_SIGNING_KEY`.
+3. Only then set the repository variable `DESKTOP_UPDATE_PUBLIC_KEYS` to the printed public
+   key. Define it once at repository level, not on the environment, so builds and the signer
+   read the same value.
+
+Installed builds trust only the keys they were built with. To rotate, append the new public
+key to the list and release; once installs have taken that release, switch the secret to the
+new private key and release again, then drop the old key from the list. An install that never
+took the transition release, or any keyed install after the variable is unset, cannot verify
+later releases and needs a manual install.
 
 ## App icon
 

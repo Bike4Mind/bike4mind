@@ -6,6 +6,6 @@ Report deletion and account erasure remove derived feedback AI records. Final tr
 
 The AI operations console displays durable call attempts, known costs and explicitly unknown costs. Replay counts and artifact references are supplied by an administrator; the console does not verify that artifact. Online evidence is currently connected to feedback label reviews. Demotion is evaluated when readiness refreshes and has no minimum sample requirement. Registered reversible apply/Undo handlers remain required for Act; this feature does not add a general autonomous executor.
 
-Attempt metadata keeps its existing retention policy. This change adds no automatic deletion deadline for call counts, costs or outcomes. A run interrupted before settlement can remain marked running; it must not be interpreted as a completed call.
+Attempt metadata (call counts, costs and outcomes) expires 400 days after `startedAt`, including interrupted runs. The database TTL worker deletes expired records asynchronously. Migration `20260921241039` installs the TTL index on existing databases; older records become eligible for deletion when it runs. A run interrupted before settlement can remain marked running; it must not be interpreted as a completed call.
 
 Verification uses injected providers and a disposable local Mongo replica set. Live provider calls, deployed browser checks, responsive visual QA and production DocumentDB verification remain separate checks.

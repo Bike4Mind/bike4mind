@@ -4,7 +4,6 @@ import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection'
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
-  MfaEnrollmentEvents,
   HTTPError,
   buildSuspensionNotice,
   InternalServerError,
@@ -52,8 +51,6 @@ import {
   reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
-import { recordMfaEnrollmentEvent } from '@server/auth/mfaEnrollmentFunnel';
-import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
@@ -699,15 +696,21 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
-    // A new account has no factor, so under enforceMFA this session opens on the enforcement
-    // screen (MFAEnforcementWrapper) rather than the app. Best-effort, like the analytics above.
-    if (await readEnforceMfa({ skipCache: false }).catch(() => false)) {
-      await recordMfaEnrollmentEvent(
-        newUser.id,
-        MfaEnrollmentEvents.REQUIRED,
-        { surface: 'session', source: 'otc-registration', strategy: 'otc' },
-        req.logger
-      );
+    // Domain grants may have just joined an MFA-required organization. Resolve only after
+    // those memberships commit, before minting any full session or refresh cookie.
+    const secondFactor = await resolveSecondFactor(req, newUser, {
+      origin: { strategy: 'otc', createdVia: 'otc-registration' },
+    });
+    if (secondFactor.kind === 'challenge') {
+      return res.status(200).json({
+        mfaRequired: true,
+        passkeyAvailable: secondFactor.passkeyAvailable,
+        userId: newUser.id,
+        accessToken: secondFactor.mfaToken,
+      });
+    }
+    if (secondFactor.kind === 'enroll') {
+      return res.status(200).json({ mfaSetupRequired: true, userId: newUser.id, accessToken: secondFactor.mfaToken });
     }
 
     const registrationSession = await issueSessionForRequest(req, newUser.id, {

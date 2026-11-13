@@ -43,7 +43,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     const results: BulkInviteResult[] = [];
     for (const id of ids) {
       try {
-        const invite = action === 'accept' ? await acceptInviteForUser(req, id) : await refuseInviteForUser(req, id);
+        const invite =
+          action === 'accept' ? (await acceptInviteForUser(req, id)).invite : await refuseInviteForUser(req, id);
         if (!invite) {
           results.push({ id, ok: false, error: 'Invite not found' });
           continue;

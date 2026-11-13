@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -16,7 +17,7 @@ interface InitResponse {
   fileKey: string;
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE], grandfatherLegacyKeys: true }).post(
   asyncHandler<unknown, InitResponse>(async (req, res) => {
     const parsed = InitRequestSchema.safeParse(req.body);
     if (!parsed.success) {
