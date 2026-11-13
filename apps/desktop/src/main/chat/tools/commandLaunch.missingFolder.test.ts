@@ -73,6 +73,15 @@ describe.skipIf(process.platform === 'win32')('a command launched in a working f
     expect(started).not.toMatch(/ENOTDIR|spawn/);
   });
 
+  it('says the same when a parent of the working folder is a file', async () => {
+    const file = join(base, 'notes.txt');
+    await writeFile(file, 'x');
+    const nested = join(file, 'sub');
+
+    expect(await foreground(nested)).toContain(`The working folder ${nested} is not a directory`);
+    expect(await background(nested)).toContain(`failed: The working folder ${nested} is not a directory`);
+  });
+
   it('still blames the shell when the folder is there and the shell is not', async () => {
     const shell = join(base, 'no-such-shell');
     const missingShell = { executable: shell, args: [], cleanup: async () => undefined };
