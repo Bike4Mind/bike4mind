@@ -2,6 +2,9 @@ import mongoose from 'mongoose';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import {
+  OWNER_MIRROR_COVERAGE,
+  OWNER_MIRROR_COVERAGE_COMPLETE,
+  OWNER_MIRROR_UNINSTRUMENTED_RECORDS,
   OwnerMutationCoverageError,
   OwnerMutationCursorError,
   OwnerMutationHead,
@@ -49,6 +52,15 @@ afterEach(async () => {
 
 describe('owner mutation outbox', () => {
   it('does not expose the feed while direct writers are uninstrumented', async () => {
+    expect(OWNER_MIRROR_COVERAGE).toEqual({
+      databasePrivilegesEnforced: false,
+      accountSnapshotFenced: false,
+      immutableByteReferencesFenced: false,
+      includedWritersInstrumented: false,
+    });
+    expect(OWNER_MIRROR_UNINSTRUMENTED_RECORDS).toContain('FabFile');
+    expect(OWNER_MIRROR_UNINSTRUMENTED_RECORDS).toContain('Session');
+    expect(OWNER_MIRROR_COVERAGE_COMPLETE).toBe(false);
     await expect(readOwnerMutations('alice', 10)).rejects.toBeInstanceOf(OwnerMutationCoverageError);
   });
 

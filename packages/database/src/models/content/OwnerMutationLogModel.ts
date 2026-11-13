@@ -2,7 +2,66 @@ import { createHash } from 'node:crypto';
 import mongoose, { Schema, type ClientSession } from 'mongoose';
 import { withTransaction } from '@bike4mind/db-core';
 
-export const OWNER_MIRROR_COVERAGE_COMPLETE = false;
+export const OWNER_MIRROR_COVERAGE = {
+  databasePrivilegesEnforced: false,
+  accountSnapshotFenced: false,
+  immutableByteReferencesFenced: false,
+  includedWritersInstrumented: false,
+} as const;
+
+export const OWNER_MIRROR_UNINSTRUMENTED_RECORDS: readonly string[] = [
+  'User',
+  'Session',
+  'Quest',
+  'FabFile',
+  'Artifact',
+  'ArtifactContent',
+  'Agent',
+  'Project',
+  'MemoryLedgerEvent',
+  'ToolModel',
+  'Memento',
+  'ResearchAgent',
+  'ResearchTask',
+  'WorkItem',
+  'AgentExecution',
+  'Favorite',
+  'Tag',
+  'BriefcasePrompt',
+  'ImageGenerationTemplate',
+  'ResearchData',
+  'StockPortfolio',
+  'StockTrade',
+  'TavernQuest',
+  'QuestMasterPlan',
+  'QuestExternalLink',
+  'GearStamp',
+  'AuthSession',
+  'TrustedDevice',
+  'PasskeyCredential',
+  'OAuthGrant',
+  'OAuthRefreshToken',
+  'OAuthAuthorizationCode',
+  'UserApiKey',
+  'ApiKey',
+  'PushToken',
+  'DeviceAuthorization',
+  'CcBridgeDevice',
+  'CcBridgePairingToken',
+  'WsConnectTicket',
+  'PasskeyChallenge',
+  'UserActivityCounter',
+  'UserUsagePatternSignals',
+  'AdminUserNote',
+  'AdminUserNoteRevision',
+  'ActiveCodeAgent',
+  'CodeAgentEvent',
+  'SessionAgentConfig',
+  'SessionToolApproval',
+];
+
+export const OWNER_MIRROR_COVERAGE_COMPLETE =
+  Object.values(OWNER_MIRROR_COVERAGE).every(Boolean) && OWNER_MIRROR_UNINSTRUMENTED_RECORDS.length === 0;
 
 type MutationKind = 'upsert' | 'delete';
 type OwnerMutation = {
