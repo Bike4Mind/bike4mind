@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
 import { reserveEmailSendBudget } from '@server/utils/emailSendLimits';
+import { reserveRecipientSendBudget } from '@server/utils/recipientSendLimits';
 import { accountBlockReasons, isAiAccessRevoked } from '@bike4mind/services/userService/accountState';
 
 const handler = baseApi().post(outboundActionGate(), async (req, res) => {
@@ -55,6 +56,15 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
       return res.status(429).json({
         success: false,
         message: `Email limit reached. Try again in ${refused.retryAfter} seconds.`,
+      });
+    }
+
+    const recipientRefused = await reserveRecipientSendBudget(recipients);
+    if (recipientRefused) {
+      res.setHeader('Retry-After', recipientRefused.retryAfter);
+      return res.status(429).json({
+        success: false,
+        message: `Email limit reached. Try again in ${recipientRefused.retryAfter} seconds.`,
       });
     }
 

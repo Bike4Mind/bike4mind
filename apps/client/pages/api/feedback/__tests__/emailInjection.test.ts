@@ -18,6 +18,7 @@ vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: () => chain,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
