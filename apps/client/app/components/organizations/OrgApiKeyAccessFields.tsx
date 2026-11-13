@@ -1,4 +1,4 @@
-import { FC, useEffect, useState } from 'react';
+import { FC, useState } from 'react';
 import {
   Alert,
   Box,
@@ -184,10 +184,14 @@ export const EditOrgApiKeyAccessModal: FC<{
 }> = ({ organizationId, apiKey, onClose }) => {
   const updateKey = useUpdateOrgApiKey(organizationId);
   const [value, setValue] = useState<OrgApiKeyAccessValue>(() => accessValueOf([], []));
+  const [seededFrom, setSeededFrom] = useState<IOrgApiKeyView | null>(null);
 
-  useEffect(() => {
+  // Seeded during render, not in an effect: OrgApiKeyAccessFields captures its remembered group
+  // picks on mount, so it must mount with this key's value rather than the previous key's.
+  if (apiKey !== seededFrom) {
+    setSeededFrom(apiKey);
     if (apiKey) setValue(accessValueOf(apiKey.scopes, apiKey.grants));
-  }, [apiKey]);
+  }
 
   const submit = async () => {
     if (!apiKey) return;

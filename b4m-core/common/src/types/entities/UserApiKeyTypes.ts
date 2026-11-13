@@ -338,10 +338,6 @@ export const isExchangeKeyMetadata = (
 ): metadata is IUserApiKeyMetadata & { createdFrom: 'oauth-exchange' } => metadata?.createdFrom === 'oauth-exchange';
 
 /**
- * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
- * A projection, never the stored document: no secret material and no minter location metadata.
- */
-/**
  * One unit of an org-owned key's reach, read-only. Resolved on every request
  * (apps/client/server/organizations/orgApiKeyReach.ts), so it never outlives the share it rides on:
  * - `organization`: everything shared with any of the org's groups, plus the org's data lakes.
@@ -352,6 +348,10 @@ export type OrgApiKeyGrant =
   | { resourceType: 'organization'; resourceId: string; permission: 'read' }
   | { resourceType: 'group'; resourceId: string; permission: 'read' };
 
+/**
+ * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
+ * A projection, never the stored document: no secret material and no minter location metadata.
+ */
 export interface IOrgApiKeyView {
   id: string;
   name: string;

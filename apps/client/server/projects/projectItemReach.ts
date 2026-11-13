@@ -11,14 +11,14 @@ type ShareableRepository = {
   };
 };
 
+type ProjectReader = Pick<IUserDocument, 'id' | 'groups' | 'serviceAccountOrganizationId'>;
+
 /**
  * The project items (`fileIds` / `sessionIds`) the caller may list. A member is listed every item on
  * the strength of the project read alone, as before. An org-owned key is not: a member's personal
  * file or notebook attached to an org-shared project must stay out of its reach, so each item is
  * re-checked against the key's own read arms (owner, org-key grants). Order is preserved.
  */
-type ProjectReader = Pick<IUserDocument, 'id' | 'groups' | 'serviceAccountOrganizationId'>;
-
 export async function projectItemIdsReadableBy(
   user: ProjectReader,
   ids: string[],
