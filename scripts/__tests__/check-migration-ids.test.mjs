@@ -160,6 +160,18 @@ describe('checkMigrationIds (real git repo)', () => {
     ]);
   });
 
+  it('checks an added id that main gained after the fork point, rather than reading it as a rename', () => {
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+    writeFileSync(join(migrationsPath(), '20260921241031_landed.ts'), 'export default {};\n');
+    commit('other PR lands', '2026-11-12T08:30:00Z');
+    execFileSync('git', ['checkout', '-q', 'feature'], { cwd: repo });
+    addMigration('20260921241031');
+    commit('add migration', '2026-11-12T09:00:00Z');
+    expect(checkMigrationIds({ cwd: repo, base: 'main', nowMs: NOW })).toEqual([
+      expect.stringContaining('not a valid UTC timestamp'),
+    ]);
+  });
+
   it('keeps an id fresh when it was generated before a rebase onto a newer base', () => {
     const generatedAt = Date.UTC(2026, 10, 1, 10, 0, 0);
     addMigration(formatId(generatedAt));

@@ -12,8 +12,10 @@
 // collided before. Squeezing below the max buys nothing anyway: MigrationManager.up() runs every
 // id not yet applied, not only ids above the highest applied one.
 //
-// Only files the change ADDS are checked: present in <head>'s migrations directory but not in
-// <base>'s. Existing files are grandfathered, and renaming an existing file's slug (same id) is not
+// Only files the change ADDS are checked: present in <head>'s migrations directory but not at the
+// fork point (merge-base of <base> and <head>). Comparing with the base tip instead would read a
+// file main gained after the fork as a slug rename of the head's file with the same id, and skip
+// it. Existing files are grandfathered, and renaming an existing file's slug (same id) is not
 // an addition. An added file that reuses an id another file still holds always fails, even when
 // that id is on the base already. Uniqueness across the whole directory is enforced separately by
 // packages/scripts/migrate/migrations/index.test.ts, which runs on every push to main.
@@ -156,7 +158,7 @@ function floorFor(cwd, forkPoint, head, filename) {
 export function checkMigrationIds({ cwd, base, head = 'HEAD', nowMs = Date.now() }) {
   const forkPoint = git(cwd, ['merge-base', base, head]);
   const { added, problems } = classifyAdded(
-    migrationFilesIn(listMigrationFiles(cwd, base)),
+    migrationFilesIn(listMigrationFiles(cwd, forkPoint)),
     migrationFilesIn(listMigrationFiles(cwd, head))
   );
   const withFloors = added.map(file => ({ ...file, floorMs: floorFor(cwd, forkPoint, head, file.filename) }));
