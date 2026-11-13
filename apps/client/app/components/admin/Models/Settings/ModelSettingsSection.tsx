@@ -1,8 +1,10 @@
 import { useMemo, type ReactNode } from 'react';
-import { Alert, Stack, Typography } from '@mui/joy';
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import { Stack, Typography } from '@mui/joy';
 import { settingsMap, type SettingKey } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { fullAdminOnlySettingNote } from '../../adminSettingLock';
+import { useModelWriteBlock } from '../ModelWriteAction';
 import AdminSettingInputField from '../../AdminSettingInputField';
 import AdminStringListSettingField from '../../AdminStringListSettingField';
 import { AdminGenerationModelsSetting } from '../../AdminGenerationModelsSetting';
@@ -16,7 +18,6 @@ import {
   SettingsSection,
   useMissingAdminPermission,
 } from '../../shared';
-import { useModelWriteBlock } from '../ModelWriteAction';
 import { ModelSettingChoiceField } from './ModelSettingChoiceField';
 import {
   leavesModelSettings,
@@ -68,7 +69,8 @@ export function ModelSettingsSection() {
 
 function ModelSettingsFields() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
-  const blocked = useModelWriteBlock();
+  const { currentUser } = useUser();
+  const operationsBlock = useModelWriteBlock();
 
   const storedByKey = useMemo(() => {
     const map = new Map<string, unknown>();
@@ -105,6 +107,7 @@ function ModelSettingsFields() {
         index={index}
         setting={setting}
         defaultValue={stored ?? setting.defaultValue}
+        lockedNote={fullAdminOnlySettingNote(currentUser, key)}
       />
     );
   };
@@ -126,24 +129,7 @@ function ModelSettingsFields() {
   return (
     <SettingsDraftProvider isLeaving={leavesModelSettings}>
       <Stack gap={3} data-testid="models-settings">
-        {blocked && (
-          <Alert
-            color="neutral"
-            variant="soft"
-            startDecorator={<LockOutlinedIcon />}
-            data-testid="models-settings-blocked"
-          >
-            {blocked}
-          </Alert>
-        )}
-        {/* A disabled fieldset disables every native control inside it, so a blocked admin sees the values but cannot stage an edit. */}
-        <Stack
-          component="fieldset"
-          disabled={Boolean(blocked)}
-          inert={blocked ? true : undefined}
-          gap={3}
-          sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}
-        >
+        <Stack gap={3}>
           <Group
             id="discovery"
             title="Discovery"
@@ -159,7 +145,26 @@ function ModelSettingsFields() {
           >
             {renderCard('defaults', ['DefaultAPIModel'])}
             <AdminRecommendedModelsSetting />
-            <AdminOperationsModelSetting />
+            {/* PUT /api/admin/operations-model requires a full admin, so a delegate sees the card read-only. */}
+            <Stack
+              component="fieldset"
+              disabled={Boolean(operationsBlock)}
+              inert={operationsBlock ? true : undefined}
+              gap={1}
+              sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}
+              data-testid="models-settings-operations-fieldset"
+            >
+              {operationsBlock && (
+                <Typography
+                  level="body-sm"
+                  sx={{ color: 'admin.inkMuted' }}
+                  data-testid="models-settings-operations-blocked"
+                >
+                  {operationsBlock}
+                </Typography>
+              )}
+              <AdminOperationsModelSetting />
+            </Stack>
           </Group>
 
           <Group id="free-tier" title="Free tier" description="Which models accounts without a paid plan may call.">

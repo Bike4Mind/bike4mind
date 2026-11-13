@@ -1,8 +1,6 @@
 import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
-  FULL_ADMIN_SETTING_KEYS,
   isBlankSettingValue,
-  isFullAdmin,
   allSettingDefinitions,
   resolveSettingDefinition,
   settingsMap,
@@ -53,6 +51,7 @@ import { useOpenSettingHome } from './useOpenSettingHome';
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useUser } from '@client/app/contexts/UserContext';
+import { fullAdminOnlySettingNote } from './adminSettingLock';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SettingsSection } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminTabStrip } from './shared/adminStyles';
@@ -175,8 +174,6 @@ const AdminSettingsTab: React.FC = () => {
   const { openSection } = useModelsNavigation();
   const serverConfig = useConfig();
   const { currentUser } = useUser();
-  // The server refuses these keys to a delegate (settings/update.ts), so lock them up front.
-  const fullAdminOnlyNote = isFullAdmin(currentUser) ? undefined : 'Only full administrators can change this setting.';
 
   // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
   const hiddenSettingKeys = useMemo(() => {
@@ -502,7 +499,7 @@ const AdminSettingsTab: React.FC = () => {
                       : (settingValueByName.get(setting.key) ?? setting.defaultValue)
                   }
                   subSettings={subSettings as ComponentProps<typeof AdminSettingInputField>['subSettings']}
-                  lockedNote={FULL_ADMIN_SETTING_KEYS.has(setting.key) ? fullAdminOnlyNote : undefined}
+                  lockedNote={fullAdminOnlySettingNote(currentUser, setting.key)}
                 />
               );
             })}

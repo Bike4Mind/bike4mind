@@ -44,7 +44,7 @@ export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
       'The Status column gives the reason a model is hidden or waiting, with a fix action such as Turn on, Add price, Run discovery or Review suggestion.',
       'Select a row to open the model page: Overview, Access (turn on or off, tags and entitlements, rank and fallback) and Admin log. Each change asks for a reason and offers Undo.',
       'Tick rows for bulk Turn on, Turn off, Add or Remove tag and Add or Remove entitlement. The dialog previews the change and who it reaches before it applies, and asks for a reason.',
-      'Only full administrators can change models; a delegated admin sees the page read-only.',
+      'Only full administrators can change models; a delegated admin sees the page read-only. The Settings section is the exception: a delegate with settings:manage can edit and save it, except the operations models and settings only a full administrator can change.',
     ],
     keywords: [
       'llm dashboard',

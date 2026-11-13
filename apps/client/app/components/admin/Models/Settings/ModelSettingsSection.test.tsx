@@ -13,6 +13,12 @@ const state = vi.hoisted(() => ({
   fetches: 0,
   mutateAsync: vi.fn(async (_vars: { key: string; value: unknown }) => ({})),
   user: { isAdmin: true, adminPermissions: [] as string[] } as { isAdmin: boolean; adminPermissions?: string[] },
+  lockedKeys: [] as string[],
+}));
+
+vi.mock('../../adminSettingLock', () => ({
+  fullAdminOnlySettingNote: (_user: unknown, key: string) =>
+    state.lockedKeys.includes(key) ? 'locked-by-helper' : undefined,
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -65,6 +71,7 @@ beforeEach(() => {
   state.user = { isAdmin: true, adminPermissions: [] };
   state.mutateAsync.mockClear();
   state.fetches = 0;
+  state.lockedKeys = [];
 });
 
 describe('ModelSettingsSection', () => {
@@ -172,15 +179,41 @@ describe('ModelSettingsSection', () => {
     expect(state.fetches).toBe(0);
   });
 
-  it('blocks a settings:manage delegate who is not a full administrator, whose save would reach PUT /api/settings/update', async () => {
+  it('lets a settings:manage delegate who is not a full administrator edit and save', async () => {
     state.user = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
     renderSection();
 
-    expect(screen.getByTestId('models-settings-blocked')).toHaveTextContent('Only full administrators');
-    expect(screen.getByTestId('models-settings-modelDiscoveryMode-write')).toBeDisabled();
+    expect(screen.queryByTestId('models-settings-blocked')).toBeNull();
+    expect(screen.getByTestId('models-settings-modelDiscoveryMode-write')).toBeEnabled();
     await userEvent.click(screen.getByTestId('models-settings-modelDiscoveryMode-write'));
-    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
-    expect(state.mutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledWith({ key: 'modelDiscoveryMode', value: 'write' }));
+  });
+
+  it('keeps the operations models card read-only for a delegate, because its route needs a full admin', () => {
+    state.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    renderSection();
+
+    expect(screen.getByTestId('models-settings-operations-blocked')).toHaveTextContent('Only full administrators');
+    expect(screen.getByTestId('models-settings-operations-fieldset')).toBeDisabled();
+  });
+
+  it('leaves the operations models card editable for a full admin', () => {
+    renderSection();
+
+    expect(screen.queryByTestId('models-settings-operations-blocked')).toBeNull();
+    expect(screen.getByTestId('models-settings-operations-fieldset')).toBeEnabled();
+  });
+
+  it('locks a full-admin-only key for a delegate through the shared helper', () => {
+    state.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.lockedKeys = ['DefaultAPIModel'];
+    renderSection();
+
+    expect(screen.getByTestId('admin-setting-DefaultAPIModel-helper')).toHaveTextContent('locked-by-helper');
+    expect(screen.getByTestId('admin-setting-modelDiscoveryAllowEgress-helper')).not.toHaveTextContent(
+      'locked-by-helper'
+    );
   });
 
   it('hides the gate scope and allowed models while the gate is off, and shows them when on', () => {

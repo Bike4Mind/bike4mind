@@ -7,8 +7,8 @@ import { useMissingAdminPermission } from '../shared';
 export const FULL_ADMIN_ONLY_MESSAGE = 'Only full administrators can manage models';
 
 /**
- * Why the signed-in admin cannot make model writes, or null. Every write in this area needs `settings:manage` and a
- * full admin, because adminApi admits a delegate holding the permission.
+ * Why the signed-in admin cannot make model writes, or null. Every write in this area except the Settings section
+ * needs `settings:manage` and a full admin, because adminApi admits a delegate holding the permission.
  */
 export function useModelWriteBlock(): string | null {
   const { currentUser } = useUser();
