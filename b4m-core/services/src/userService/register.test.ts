@@ -620,9 +620,9 @@ describe('registerUser', () => {
         { userId: 'newUserId', usedAt: expect.any(Date) },
         { userId: 'newUserId', usedAt: expect.any(Date) },
       ],
-      status: RegInviteStatusType.open,
     });
     expect(mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[1]).toEqual({ unset: ['used', 'usedbyId'] });
+    expect(mockAdapters.db.registrationInvites.reopenUnlessClosed).toHaveBeenCalledWith('invite-1');
     expect(updatedUnlimitedInvite?.usageHistory?.length).toBe(2);
   });
 
