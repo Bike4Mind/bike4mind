@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { GENERATED_ASSET_LINEAGE_ROLES } from '../../generatedAsset';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   BulkDeleteFilesRequestSchema,
@@ -423,8 +424,9 @@ export const getFileLineageContract = defineEndpoint({
   description:
     'Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, ' +
     'walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, ' +
-    'newest first), with one `edges` entry per link naming the `role` the parent played (`first_frame`, ' +
-    '`last_frame`, `reference`, `style`, `extend_of`, `variation_of`, `edit_source`, `mask`). An ancestor you ' +
+    'newest first), with one `edges` entry per link naming the `role` the parent played (' +
+    GENERATED_ASSET_LINEAGE_ROLES.map(role => `\`${role}\``).join(', ') +
+    '). An ancestor you ' +
     'cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. ' +
     '`request` on a node is the stored generation request, for re-running it with different settings. ' +
     'Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. ' +
