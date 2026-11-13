@@ -12,8 +12,11 @@ export const PERSONA_NAME_PATTERN = /^[a-z0-9]{1,24}$/;
 /** `errorCode` on the 404 a stage answers while PersonaMintEnabled is off. */
 export const PERSONA_ENDPOINT_OFF_CODE = 'persona_endpoint_off';
 
-/** Path a browser opens with `?code=` to land signed in as the persona; POST it `{ code }` for tokens. */
+/** API route the login code is POSTed to: `{ code }` for tokens, `{ code, session: 'browser' }` for a cookie. */
 export const PERSONA_REDEEM_PATH = '/api/personas/redeem';
+
+/** SPA page a browser opens with `#code=` to land signed in as the persona (`login_path`). Must match the route in apps/client/app/router.tsx. */
+export const PERSONA_LOGIN_PAGE_PATH = '/personas/redeem';
 
 export const MintPersonaRequestSchema = z.strictObject({
   name: z.string().regex(PERSONA_NAME_PATTERN).describe('1 to 24 lowercase letters or digits.'),
@@ -35,7 +38,9 @@ export const MintPersonaResponseSchema = z.object({
   login_code_expires_at: z.string().describe('When `login_code` stops working, as an ISO 8601 timestamp.'),
   login_path: z
     .string()
-    .describe('Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code`.'),
+    .describe(
+      'Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code` in the URL fragment.'
+    ),
 });
 
 export const PersonaErrorSchema = ApiErrorSchema.extend({
