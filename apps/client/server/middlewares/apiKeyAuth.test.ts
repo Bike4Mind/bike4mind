@@ -8,7 +8,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { LEGACY_SCOPE_PASS_LOG, SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
@@ -109,33 +109,6 @@ describe('apiKeyAuth scope gate', () => {
     expect((error as ForbiddenError).additionalInfo).toEqual({ required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE] });
   });
 
-  it('default-denies service principals on ordinary routes even with matching scopes', async () => {
-    validateUserApiKeyMock.mockResolvedValue({
-      isValid: true,
-      keyId: 'service-key',
-      userId: 'service',
-      serviceAccount: true,
-      organizationId: 'org',
-      billingOwnerType: CreditHolderType.Organization,
-      scopes: [ApiKeyScope.AI_CHAT],
-      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-    });
-    findByIdMock.mockResolvedValue({
-      id: 'service',
-      isSystem: true,
-      isAdmin: false,
-      orgServiceAccount: {
-        organizationId: 'org',
-        createdByUserId: 'deleted',
-        grants: [{ resourceType: 'organization', resourceId: 'org', permission: 'compute' }],
-      },
-    });
-    const result = await run([ApiKeyScope.AI_CHAT], makeReq());
-    expect(result.passed).toBe(false);
-    expect(result.error).toBeInstanceOf(ForbiddenError);
-    expect(result.error?.message).toBe('Service account resource grant required');
-  });
-
   it('admits a key that holds a required scope', async () => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
@@ -168,6 +141,36 @@ describe('apiKeyAuth scope gate', () => {
       'Ignoring unstageable or unknown API key scopes in staging list',
       expect.objectContaining({ rejected: [ApiKeyScope.ADMIN] })
     );
+  });
+
+  it('admits and logs a legacy key on a route that grandfathers legacy keys', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00Z');
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      createdAt,
+    });
+    const req = makeReq();
+    const next = vi.fn() as unknown as NextFunction;
+
+    await apiKeyAuth([ApiKeyScope.ME_READ], undefined, { grandfatherLegacyKeys: true })(req, makeRes(), next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.logger.info).toHaveBeenCalledWith(
+      LEGACY_SCOPE_PASS_LOG,
+      expect.objectContaining({ keyId: 'key-1', requiredScopes: [ApiKeyScope.ME_READ] })
+    );
+    // In-handler checks read the creation date from here to grandfather per method.
+    expect(req.apiKeyInfo?.createdAt).toBe(createdAt);
+  });
+
+  it('403s the same key on a route that does not grandfather legacy keys', async () => {
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(false);
+    expect(req.logger.info).not.toHaveBeenCalledWith(LEGACY_SCOPE_PASS_LOG, expect.anything());
   });
 
   it('leaves a scope-less route open to an ordinary key', async () => {

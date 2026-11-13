@@ -1,4 +1,10 @@
-import { erasureRecordRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  deleteFeedbackAiForUser,
+  FeedbackNoteModel,
+  erasureRecordRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
@@ -109,9 +115,11 @@ export async function hardDeleteUser<T>(
         subscriptionCancellation = cancellation;
         let result: Awaited<ReturnType<typeof userRepository.delete>>;
         try {
-          result = await withTransaction(async () => {
+          result = await withTransaction(async session => {
             await context.assertInTransaction?.();
+            await deleteFeedbackAiForUser(id, { session });
             const deleted = await userRepository.delete(id);
+            await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });
             // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
             await erasureRecordRepository.record({
               idHash: erasureIdHash(id),

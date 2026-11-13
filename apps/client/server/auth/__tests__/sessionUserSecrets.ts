@@ -13,7 +13,6 @@ const SECRET_VALUE = 'session-user-secret-sentinel';
  */
 export function secretUserFields() {
   return {
-    orgServiceAccount: { organizationId: SECRET_VALUE, createdByUserId: SECRET_VALUE, grants: [] },
     password: SECRET_VALUE,
     passwordHash: SECRET_VALUE,
     oauthCredentials: { github: SECRET_VALUE },
@@ -65,6 +64,8 @@ export function secretUserFields() {
     riskSignals: [{ type: 'signup_honeypot', at: new Date('2026-01-01'), futureField: SECRET_VALUE }],
     signupLanding: { notebookOwnerId: SECRET_VALUE, capturedAt: new Date('2026-01-01') },
     stripeCustomerId: SECRET_VALUE,
+    personaLoginCodeHash: SECRET_VALUE,
+    personaLoginCodeExpiresAt: new Date('2026-01-01'),
     accountDataExportLease: { id: SECRET_VALUE, expiresAt: new Date('2026-01-01') },
     providerEndUserId: SECRET_VALUE,
     riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },

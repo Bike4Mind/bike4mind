@@ -15,7 +15,6 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
-      serviceAccount?: boolean;
       scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
       /** Owner trust before API key scopes can withhold the admin role. */
@@ -34,6 +33,8 @@ declare global {
        * the underlying user could otherwise manage that lake.
        */
       preauthorizedLakeIds?: string[];
+      /** When the key was minted; decides legacy status for grandfathered scope checks. */
+      createdAt?: Date;
     }
 
     interface ApiKeyUsageInfo {

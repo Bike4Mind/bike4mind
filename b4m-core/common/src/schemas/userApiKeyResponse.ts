@@ -14,7 +14,6 @@ export const USER_API_KEY_WITHHELD_FIELDS = ['keyHash', 'keyDigest', 'callbackSi
 const USER_API_KEY_RESPONSE_FIELDS = {
   id: true,
   userId: true,
-  serviceAccount: true,
   name: true,
   keyPrefix: true,
   scopes: true,
@@ -37,6 +36,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   allowedOrigins: true,
   identifiedClientIds: true,
   preauthorizedLakeIds: true,
+  orgOwned: true,
   branding: true,
   spendCap: true,
   ownerHasWhitelabel: true,

@@ -1,7 +1,6 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership, canAdministerOrganization } from '@bike4mind/common';
-import OrganizationServiceKeys from './OrganizationServiceKeys';
+import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
 import {
   useDeleteOrganization,
   useTransferOrganizationOwnership,
@@ -89,8 +88,8 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     setConfirmationModal({
       open: true,
       type: 'danger',
-      title: 'Delete Organization',
-      description: 'Are you sure you want to delete this organization? This action cannot be undone.',
+      title: 'Delete Team',
+      description: 'Are you sure you want to delete this team? This action cannot be undone.',
       okLabel: 'Delete',
       onOk: async () => {
         await deleteOrganization.mutateAsync(organization.id);
@@ -102,9 +101,6 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   return (
     <Stack spacing={3} className="organization-settings-container">
       <OrganizationSharingSettings organization={organization} />
-      {currentUser && canAdministerOrganization(currentUser, organization) && (
-        <OrganizationServiceKeys key={organization.id} organizationId={organization.id} />
-      )}
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -112,7 +108,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
           <FormControl>
-            <FormLabel>Organization-wide AI Context</FormLabel>
+            <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
               onChange={e => handleSystemPromptChange(e.target.value)}
@@ -194,7 +190,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
                 className="organization-settings-delete-button"
                 data-testid="organization-settings-delete-btn"
               >
-                Delete Organization
+                Delete Team
               </Button>
             </Box>
           </Stack>

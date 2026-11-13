@@ -15,7 +15,8 @@ export function accountCreationWindow(time: string) {
 }
 
 export function accountCreationQueries(since: Date, until: Date) {
-  const externalAccount = { isSynthetic: { $ne: true }, isSystem: { $ne: true } };
+  // Test personas are synthetic but anyone holding the mint key can create them, so they still count.
+  const externalAccount = { $or: [{ isSynthetic: { $ne: true } }, { isPersona: true }], isSystem: { $ne: true } };
   return {
     signups: { ...externalAccount, createdAt: { $gte: since, $lt: until } },
     keys: [
@@ -32,7 +33,7 @@ export function accountCreationQueries(since: Date, until: Date) {
       { $unwind: '$owner' },
       {
         $match: {
-          'owner.isSynthetic': { $ne: true },
+          $or: [{ 'owner.isSynthetic': { $ne: true } }, { 'owner.isPersona': true }],
           'owner.isSystem': { $ne: true },
           'owner.createdAt': { $type: 'date' },
           $expr: {

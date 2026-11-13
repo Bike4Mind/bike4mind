@@ -346,10 +346,9 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
   });
 
-  it('rejects JWT login for a non-human system account', async () => {
+  it('accepts a system account regardless of acceptance (service users never attest)', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ isSystem: true, aupAcceptedVersion: undefined }));
-    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found');
-    expect(assertCliSessionAllowedMock).not.toHaveBeenCalled();
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
   });
 
   it('rejects a first-factor-only (mfaPending) token before hitting the DB', async () => {

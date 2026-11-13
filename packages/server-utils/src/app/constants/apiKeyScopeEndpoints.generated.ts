@@ -101,6 +101,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agent-executions',
     'GET /api/v1/agent-executions/:id',
     'GET /api/v1/client-config',
+    'POST /api/v1/completion-runs',
     'GET /api/v1/credits',
     'GET /api/v1/decision-models',
     'POST /api/v1/decisions',
@@ -141,6 +142,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agent-executions',
     'GET /api/v1/agent-executions/:id',
     'GET /api/v1/client-config',
+    'POST /api/v1/completion-runs',
     'GET /api/v1/credits',
     'GET /api/v1/models',
     'GET /api/v1/quests/:id',
@@ -210,6 +212,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/credits/transactions',
     'GET /api/v1/me',
   ],
+  [ApiKeyScope.PERSONAS_MINT]: ['POST /api/v1/personas', 'DELETE /api/v1/personas/:id'],
   [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events', 'POST /api/overwatch/v1/hops'],
   [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [
@@ -380,6 +383,9 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/skills/market/listings/:id',
   ],
   [ApiKeyScope.SKILLS_WRITE]: [
+    'GET|POST /api/skills',
+    'GET|PUT|DELETE /api/skills/:id',
+    'PUT /api/skills/:id/share',
     'POST /api/v1/skills',
     'GET|PUT /api/v1/skills/:id',
     'GET|POST /api/v1/skills/market/listings',

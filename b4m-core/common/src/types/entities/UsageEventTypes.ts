@@ -4,6 +4,7 @@ import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
 
 /**
  * Which product surface generated the provider call.
@@ -135,6 +136,23 @@ export const UsageEventRequestMeta = z.object({
 export type IUsageEventRequestMeta = z.infer<typeof UsageEventRequestMeta>;
 
 /**
+ * The verified run a completion was attributed to (CompletionRunAttributionSchema, as sent).
+ * Stored as sent: an absent `purpose` reads as `turn`. Absent on rows not attributed to a run.
+ */
+export const UsageEventRun = z.object({
+  runId: z.string(),
+  role: z.enum(COMPLETION_RUN_ROLES),
+  purpose: z.enum(COMPLETION_RUN_PURPOSES).optional(),
+  taskId: z.string().optional(),
+  attemptId: z.string().optional(),
+  parentSessionId: z.string().optional(),
+  // The caller's untrusted, display-only session id; never an authorization input.
+  sessionId: z.string().max(128).optional(),
+});
+
+export type IUsageEventRun = z.infer<typeof UsageEventRun>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
@@ -149,6 +167,8 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /** Explicit project context validated against access and billing ownership at execution time. */
+  projectId: z.string().optional(),
   /**
    * Data lake this call is 1:1 attributable to (ingestion embeds and research-run judge calls -
    * a query embedding can span multiple lakes and is never attributed here). Unset for
@@ -251,6 +271,8 @@ export const UsageEvent = z.object({
   cacheWrite1hTokens: z.number().optional(),
   /** How the request ran, for the admin usage receipt (see UsageEventRequestMeta). */
   requestMeta: UsageEventRequestMeta.optional(),
+  /** The completion run this call's spend belongs to (see UsageEventRun). */
+  run: UsageEventRun.optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -358,6 +380,11 @@ export interface IOwnerSpendMember extends IUsageSpendBucket {
   userId: string;
 }
 
+export interface IOwnerSpendProject extends IUsageSpendBucket {
+  /** Null means historical, missing or ambiguous attribution; never inferred from session membership. */
+  projectId: string | null;
+}
+
 /** Owner spend for one provider/model pair. */
 export interface IOwnerSpendModel extends IUsageSpendBucket {
   provider: string;
@@ -384,6 +411,7 @@ export interface IOwnerSpendFeature extends IUsageSpendBucket {
 export interface IOwnerUsageSummary {
   overTime: IOwnerSpendDay[];
   byMember: IOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   totals: IUsageSpendBucket;
@@ -394,7 +422,7 @@ export interface IOwnerUsageSummary {
  * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
  * to any owner/curator/org-admin who can view a lake's spend.
  */
-export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember' | 'byProject'>;
 
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
@@ -463,6 +491,7 @@ export interface IUsageDashboardResponse {
   days: number;
   overTime: IOwnerSpendDay[];
   byMember: NamedOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   /** API-token spend grouped by key (from the ledger; only completion_api_usage and decision_usage carry a key). */

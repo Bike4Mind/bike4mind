@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifySource, hostMatchesDomain, isQueueableVerdict, sourceHostname } from './sourceFilter';
+import { classifySource, hostMatchesDomain, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
 
 const levers = (
   overrides: Partial<Parameters<typeof classifySource>[1]> = {}
@@ -163,5 +163,34 @@ describe('isQueueableVerdict', () => {
     expect(isQueueableVerdict('review')).toBe(true);
     expect(isQueueableVerdict('blocked')).toBe(false);
     expect(isQueueableVerdict('unlisted_dropped')).toBe(false);
+  });
+});
+
+describe('matchSource', () => {
+  it('returns the most specific trusted entry', () => {
+    const config = levers({ trustedDomains: ['example.com', 'docs.example.com'] });
+    expect(matchSource('https://a.docs.example.com/x', config)).toEqual({
+      verdict: 'trusted',
+      entry: 'docs.example.com',
+    });
+    expect(matchSource('https://example.com/x', config)).toEqual({ verdict: 'trusted', entry: 'example.com' });
+  });
+
+  it('returns no entry for a review tie, a blocked hit or an unlisted one', () => {
+    expect(
+      matchSource('https://example.com/x', levers({ trustedDomains: ['example.com'], reviewDomains: ['example.com'] }))
+    ).toEqual({
+      verdict: 'review',
+    });
+    expect(
+      matchSource('https://example.com/x', levers({ trustedDomains: ['example.com'], blockedDomains: ['example.com'] }))
+    ).toEqual({
+      verdict: 'blocked',
+    });
+    expect(
+      matchSource('https://other.net/x', levers({ trustedDomains: ['example.com'], unlistedSources: 'drop' }))
+    ).toEqual({
+      verdict: 'unlisted_dropped',
+    });
   });
 });

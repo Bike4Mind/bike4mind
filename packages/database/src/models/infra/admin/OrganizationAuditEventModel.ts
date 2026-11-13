@@ -10,7 +10,6 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'policy.updated',
   'billing.updated',
   'api_key.created',
-  'api_key.rotated',
   'api_key.revoked',
   'connector.connected',
   'connector.disconnected',

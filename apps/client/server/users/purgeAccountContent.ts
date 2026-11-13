@@ -18,6 +18,7 @@ import {
   shadowDetectionRepository,
   campaignWatchRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -57,7 +58,10 @@ function collectionFor(modelName: string) {
   return database.collection<PurgeRecord>(mongoose.model<Record<string, unknown>>(modelName).collection.name);
 }
 
-const ownerFilter = (userId: string) => ({ userId: { $in: [userId, new mongoose.Types.ObjectId(userId)] } });
+const ownerFilter = (userId: string) => {
+  const objectId = new mongoose.Types.ObjectId(userId);
+  return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
+};
 const personalFilter = (userId: string, personalOrganizationIds: readonly string[]) => ({
   $or: [
     { ...ownerFilter(userId), organizationId: { $in: [null, ''] } },
@@ -469,6 +473,7 @@ async function purgePersonalMemory(
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
+  await deleteFeedbackAiForUser(userId, { assertLease });
   const workspaces = await collectionFor('Organization')
     .find({ ...ownerFilter(userId), personal: true }, { projection: { _id: 1 } })
     .toArray();
@@ -536,6 +541,7 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     'UserUsagePatternSignals',
     'AdminUserNote',
     'AdminUserNoteRevision',
+    'FeedbackNote',
   ]) {
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));

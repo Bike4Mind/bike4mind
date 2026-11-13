@@ -7,7 +7,11 @@ const { connect, find, limit, lean, update } = vi.hoisted(() => ({
   lean: vi.fn(),
   update: vi.fn(),
 }));
-vi.mock('@bike4mind/database', () => ({ connectDB: connect, Quest: { find, updateMany: update } }));
+vi.mock('@bike4mind/database', () => ({
+  connectDB: connect,
+  Quest: { find, updateMany: update },
+  scrubLegacyFeedbackNotes: vi.fn(async () => ({ scanned: 0, migrated: 0, retired: 0 })),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 import { handler, runTelemetryCleanup } from './telemetryCleanup';

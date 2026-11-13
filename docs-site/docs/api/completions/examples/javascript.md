@@ -256,10 +256,14 @@ interface CompletionOptions {
 }
 
 interface SSEEvent {
-  type: 'meta' | 'content' | 'tool_use' | 'provider_block';
+  type: 'meta' | 'content' | 'tool_use' | 'provider_block' | 'settled';
   text?: string;
   tools?: { id?: string; name: string; arguments?: string }[];
   usage?: { inputTokens?: number; outputTokens?: number };
+  requestId?: string;
+  creditsCharged?: number;
+  usdCost?: number;
+  runId?: string;
 }
 
 export class B4MCompletionClient {

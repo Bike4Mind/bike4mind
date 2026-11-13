@@ -60,7 +60,8 @@ public final class ChatViewModel {
     now: @escaping @Sendable () -> Date = Date.init,
     title: String = "",
     activities: (any QuestActivityTracking)? = nil,
-    agentRuns: (any AgentRunStarting)? = nil
+    agentRuns: (any AgentRunStarting)? = nil,
+    firstTurn: QuestTurn? = nil
   ) {
     self.sessionID = sessionID
     self.title = title
@@ -72,6 +73,8 @@ public final class ChatViewModel {
     self.sleep = sleep
     self.now = now
     transcript = TranscriptViewModel(sessionID: sessionID, api: api)
+    // A conversation this device just started: its prompt shows at once, not after the transcript round trip.
+    if let firstTurn { liveTurns = [firstTurn] }
   }
 
   // MARK: - Reading
@@ -203,7 +206,7 @@ public final class ChatViewModel {
           liveTurns[streamedIndex] = QuestTurn(
             id: streamed.id, prompt: prompt, reply: streamed.reply, status: streamed.status, kind: streamed.kind,
             errorCode: streamed.errorCode, createdAt: streamed.createdAt, creditsUsed: streamed.creditsUsed,
-            pendingAction: streamed.pendingAction)
+            pendingAction: streamed.pendingAction, rawReplyLength: streamed.rawReplyLength)
         }
         liveTurns.remove(at: localIndex)
       } else {
@@ -436,6 +439,6 @@ extension QuestTurn {
     QuestTurn(
       id: id ?? self.id, prompt: prompt, reply: reply ?? self.reply, status: status ?? self.status,
       kind: kind ?? self.kind, errorCode: errorCode ?? self.errorCode, createdAt: createdAt,
-      creditsUsed: creditsUsed, pendingAction: pendingAction)
+      creditsUsed: creditsUsed, pendingAction: pendingAction, rawReplyLength: reply == nil ? rawReplyLength : nil)
   }
 }

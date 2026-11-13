@@ -21,6 +21,10 @@ Policy siblings (MFA and sharing defaults) use `policy.updated`; service-key sib
 
 Existing post-commit lifecycle hooks use `recordOrganizationAuditEventSafe` because an audit outage cannot roll back an already-completed mutation. It awaits and logs failures without turning success into a retryable error. New transactional mutations should use the strict writer instead.
 
+Membership analytics producers pass `organizationAuditActorUserId` from the trusted request principal. Under impersonation this names the real admin, while the analytics `userId` continues to identify the account whose counters are updated. Both add-member routes include the resolved member ID for the audit target. The client telemetry endpoint refuses organization membership event types.
+
+The personal-data registry retains actor references under `AUDIT_LOG`. It treats `targetId` as a user reference only for `member.added` and `member.removed`; invitation, connector and policy identifiers keep their entity meanings. The append-only model is preserved.
+
 ## Reads and export
 
 `GET /api/organizations/:id/audit` is session-only. The owner or a manager with a current membership row may read; unrelated platform staff and ordinary members cannot. The API returns only time, actor ID, action, target ID and event ID. Filters are `actor`, `action`, `from`, `to`; dates are inclusive UTC calendar dates. JSON uses bounded cursor pages. `format=csv` requires both dates and exports all matching records, independent of the visible page. Exports over 10,000 records fail explicitly; narrow the date range rather than receiving a truncated file. CSV cells are quoted and spreadsheet-formula prefixes neutralized.

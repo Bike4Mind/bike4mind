@@ -1,4 +1,5 @@
 import {
+  AdminAiStoredConfigSchema,
   IAdminSettings,
   IAdminSettingsRepository,
   IScopedSettingsRepository,
@@ -98,7 +99,7 @@ export function getSettingsValue<K extends SettingKey>(
   }
 
   const rawValue = settings[key];
-  const parsed = settingConfig.schema.safeParse(rawValue);
+  const parsed = (key === 'adminAiConfig' ? AdminAiStoredConfigSchema : settingConfig.schema).safeParse(rawValue);
 
   if (parsed.success) {
     // A cleared string setting is stored as '' which passes `z.string()`, so without this a blank

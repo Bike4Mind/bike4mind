@@ -13,7 +13,13 @@ import { z } from 'zod';
 // Triage fields belong to the admin status route (admin/feedback/[id]/status.ts). A `status` equal
 // to the stored one is the whole-report echo older clients send and is ignored; a different one is
 // rejected rather than stripped, so the caller learns the change did not apply.
-const ADMIN_ONLY_FIELDS = ['handledBy', 'handledAt'] as const;
+const ADMIN_ONLY_FIELDS = [
+  'handledBy',
+  'handledAt',
+  'handledAuditEntryId',
+  'resolution',
+  'resolutionDuplicateId',
+] as const;
 
 const UpdateFeedbackRequestSchema = z.object({
   userId: z.string(),
@@ -36,9 +42,8 @@ const handler = baseApi().put(
     }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (ADMIN_ONLY_FIELDS.some(field => body[field] !== undefined)) {
-      throw new BadRequestError('handledBy and handledAt cannot be set on a report.');
-    }
+    const adminOnly = ADMIN_ONLY_FIELDS.find(field => body[field] !== undefined);
+    if (adminOnly) throw new BadRequestError(`${adminOnly} cannot be set on a report.`);
     const updateData = UpdateFeedbackRequestSchema.parse(body);
 
     const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
