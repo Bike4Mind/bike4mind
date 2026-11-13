@@ -37,7 +37,7 @@ const handler = adminApi({
     const { user, auditTarget } = await findErasureTarget(req.user, req.query.userId);
     if (user.id === req.user.id) throw new ForbiddenError('You cannot erase your own account.');
 
-    // Refused requests are not audited as requested; requestAdminErasure re-checks both atomically.
+    // Refused requests are not audited as requested; requestAdminErasure re-checks both (the pending one atomically).
     const current = await readAdminErasureState(user.id);
     if (current.state !== 'none') throw new ConflictError('This account already has a deletion pending.');
     if (current.ownedOrganizations.length > 0) {
