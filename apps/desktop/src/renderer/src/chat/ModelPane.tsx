@@ -18,6 +18,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import {
   useCallback,
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -84,6 +85,8 @@ type Props = {
    * note tying it to the picked parts, and a close-up of them. Resolves false when it was refused.
    */
   onSendEdit: (edit: PartEditTurn) => Promise<boolean>;
+  /** True while this pane's conversation has a turn open; a sent edit is spent once its turn ends. */
+  replying?: boolean;
   /** The column the pane trades width with; it bounds how wide a drag may take the pane. */
   conversation?: RefObject<HTMLElement | null>;
 };
@@ -213,7 +216,15 @@ function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
 
-export function ModelPane({ engine, dark, onClose, onExamplePrompt, onSendEdit, conversation }: Props) {
+export function ModelPane({
+  engine,
+  dark,
+  onClose,
+  onExamplePrompt,
+  onSendEdit,
+  replying = false,
+  conversation,
+}: Props) {
   const [width, setWidth] = useState(readModelPaneWidth);
   const [dragging, setDragging] = useState(false);
   const [limit, setLimit] = useState(() => modelPaneMaxWidth(window.innerWidth, Number.POSITIVE_INFINITY));
@@ -269,6 +280,17 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onSendEdit, 
   // Parts a sent edit is waiting on, so the rebuild that changes them gets its moment.
   const [editing, setEditing] = useState<{ path: string | null; names: string[] } | null>(null);
   const editingNames = editing && editing.path === state.path ? editing.names : NO_PARTS;
+  // A turn that ends without rebuilding the parts spends the request too, so a later unrelated
+  // rebuild of them does not flash. Only a turn seen open after the edit was sent counts.
+  const turnSeen = useRef(false);
+  useEffect(() => {
+    if (!editing) {
+      turnSeen.current = false;
+      return;
+    }
+    if (replying) turnSeen.current = true;
+    else if (turnSeen.current) setEditing(null);
+  }, [editing, replying]);
   // Keyed to the file like `picked`, so another file opens at rest.
   const [playing, setPlaying] = useState<{ path: string | null; clip: string } | null>(null);
   const playingClip = playing && playing.path === state.path && clips.includes(playing.clip) ? playing.clip : null;
@@ -341,13 +363,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onSendEdit, 
       setSending(false);
     }
   };
-  const onEditShown = useCallback((shown: string[]) => {
-    setEditing(current => {
-      if (!current) return current;
-      const left = current.names.filter(name => !shown.includes(name));
-      return left.length ? { ...current, names: left } : null;
-    });
-  }, []);
+  const onEditSettled = useCallback(() => setEditing(null), []);
   const [note, setNote] = useState<Note>(null);
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
@@ -550,7 +566,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onSendEdit, 
               picked={pickedNames}
               onPick={pickPart}
               editing={editingNames}
-              onEditShown={onEditShown}
+              onEditSettled={onEditSettled}
               clip={playingClip}
               handleRef={viewportHandle}
             />

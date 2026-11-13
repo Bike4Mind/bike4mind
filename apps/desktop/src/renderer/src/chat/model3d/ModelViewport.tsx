@@ -72,11 +72,12 @@ type Props = {
   /** A click (not an orbit drag) on a part, or on empty space (a null name). */
   onPick: (pick: ViewportPick) => void;
   /**
-   * Parts a point-and-edit turn is waiting on. When a rebuild changes any of them they get the
-   * before/after moment (editFlash.ts) and `onEditShown` hears which ones.
+   * Parts a point-and-edit turn is waiting on. The next rebuild settles the request: the ones it
+   * changed get the before/after moment (editFlash.ts), and `onEditSettled` fires either way, so a
+   * turn that never touched them does not leave a later, unrelated rebuild flashing.
    */
   editing: readonly string[];
-  onEditShown: (names: string[]) => void;
+  onEditSettled: () => void;
   /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
   clip: string | null;
   /** Filled with the viewport's handle while it is mounted. */
@@ -135,7 +136,7 @@ export function ModelViewport({
   picked,
   onPick,
   editing,
-  onEditShown,
+  onEditSettled,
   clip,
   handleRef,
 }: Props) {
@@ -158,8 +159,8 @@ export function ModelViewport({
   onPickRef.current = onPick;
   const editingRef = useRef(editing);
   editingRef.current = editing;
-  const onEditShownRef = useRef(onEditShown);
-  onEditShownRef.current = onEditShown;
+  const onEditSettledRef = useRef(onEditSettled);
+  onEditSettledRef.current = onEditSettled;
   const flash = useRef<{ frame: number; run: EditFlash } | null>(null);
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
@@ -440,10 +441,8 @@ export function ModelViewport({
       building.current = null;
       const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const build = names.size && !still ? startBuildIn(shown, names, start) : null;
-      const edited =
-        previous && previous !== object && editingRef.current.length
-          ? changedParts(previous, object, editingRef.current)
-          : [];
+      const settles = !!previous && previous !== object && editingRef.current.length > 0;
+      const edited = settles ? changedParts(previous, object, editingRef.current) : [];
       const run =
         previous && edited.length
           ? startEditFlash(current.content, shown, previous, edited, performance.now(), still)
@@ -458,7 +457,7 @@ export function ModelViewport({
           else if (flash.current === playing) flash.current = null;
         });
       }
-      if (edited.length) onEditShownRef.current(edited);
+      if (settles) onEditSettledRef.current();
       if (build) {
         building.current = { frameKey, names, start };
         buildFrame.current = requestAnimationFrame(function step(now) {

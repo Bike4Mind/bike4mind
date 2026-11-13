@@ -31,6 +31,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     lighting,
     pose,
     picked,
+    editing,
     onPick,
     clip,
     exploded,
@@ -40,6 +41,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     lighting: string;
     pose: Record<string, number>;
     picked: readonly string[];
+    editing: readonly string[];
     onPick: (pick: { name: string | null; additive: boolean; point: { x: number; y: number } }) => void;
     clip: string | null;
     exploded: boolean;
@@ -53,6 +55,7 @@ vi.mock('./model3d/ModelViewport', () => ({
         data-lighting={lighting}
         data-pose={JSON.stringify(pose)}
         data-picked={picked.join(',')}
+        data-editing={editing.join(',')}
         data-clip={clip ?? ''}
         data-exploded={String(exploded)}
       >
@@ -144,6 +147,7 @@ function render(
     onClose?: () => void;
     onExamplePrompt?: (text: string) => void;
     onSendEdit?: (edit: PartEditTurn) => Promise<boolean>;
+    replying?: boolean;
   } = {}
 ) {
   act(() =>
@@ -155,6 +159,7 @@ function render(
           onClose={props.onClose ?? (() => {})}
           onExamplePrompt={props.onExamplePrompt ?? (() => {})}
           onSendEdit={props.onSendEdit ?? (async () => true)}
+          replying={props.replying}
         />
       </CssVarsProvider>
     )
@@ -324,6 +329,23 @@ describe('ModelPane', () => {
     // Sent: the prompt and the selection clear.
     expect(byTestId('model-pane-edit-prompt')).toBeNull();
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
+  });
+
+  it('forgets a sent edit once its turn ends, so a later rebuild does not flash it', async () => {
+    render(engine(LANTERN));
+    act(() => byTestId('pick-lid')?.click());
+    const input = byTestId('model-pane-edit-input') as HTMLInputElement;
+    typeInto(input, 'make it brass');
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const editing = () => byTestId('model-pane-viewport')?.dataset.editing;
+    // Not yet: the turn has not been seen open.
+    expect(editing()).toBe('lid');
+    render(engine(LANTERN), { replying: true });
+    expect(editing()).toBe('lid');
+    render(engine(LANTERN), { replying: false });
+    expect(editing()).toBe('');
   });
 
   it('adds parts with shift-click, and Escape or empty space clears without sending', () => {

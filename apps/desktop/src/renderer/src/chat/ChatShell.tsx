@@ -856,18 +856,20 @@ export function ChatShell({
   const sendModelEdit = useCallback(
     async (edit: PartEditTurn): Promise<boolean> => {
       if (!modelSessionId || modelSessionId !== conversationId) return false;
-      const closeup = edit.closeup
-        ? (
-            await window.b4m.chat.addAttachments(modelSessionId, [
-              { source: 'bytes', name: edit.closeup.name, mediaType: 'image/png', data: edit.closeup.bytes },
-            ])
-          ).attachments
-        : [];
-      if (await sendToConversation(edit.text, closeup, [edit.note(closeup.length > 0)])) return true;
-      // Refused with the image (a model that cannot read one): the words and the note still go.
-      return closeup.length > 0 && sendToConversation(edit.text, [], [edit.note(false)]);
+      // Decided before sending, as the composer does: a refused send hands its text back to the
+      // composer, so retrying without the image would leave it there as well.
+      const readsImages = modelOption?.supportsVision !== false;
+      const closeup =
+        edit.closeup && readsImages
+          ? (
+              await window.b4m.chat.addAttachments(modelSessionId, [
+                { source: 'bytes', name: edit.closeup.name, mediaType: 'image/png', data: edit.closeup.bytes },
+              ])
+            ).attachments
+          : [];
+      return sendToConversation(edit.text, closeup, [edit.note(closeup.length > 0)]);
     },
-    [sendToConversation, modelSessionId, conversationId]
+    [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
   const innkeeperDesk = useMemo<InnkeeperDesk>(
@@ -2246,6 +2248,7 @@ export function ChatShell({
           onClose={toggleModel}
           onExamplePrompt={fillComposer}
           onSendEdit={sendModelEdit}
+          replying={turnOpen && modelSessionId === conversationId}
           conversation={conversationColumn}
         />
       )}
