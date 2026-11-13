@@ -20,13 +20,16 @@ describe('PrBindingStore auto-fix budget', () => {
     expect((await storeWith({ ...raw, autoFixMax: 5 }).get(SESSION))?.autoFixMax).toBe(5);
   });
 
+  it('keeps a saved budget above the current Settings maximum', async () => {
+    expect((await storeWith({ ...raw, autoFixMax: 21 }).get(SESSION))?.autoFixMax).toBe(21);
+  });
+
   it.each([
     ['a string', 'x'],
     ['zero', 0],
     ['a negative number', -1],
     ['a fraction', 2.5],
-    ['more than Settings can grant', 21],
-  ])('drops %s so the default applies', async (_label, autoFixMax) => {
+  ])('drops %s so the legacy fallback applies', async (_label, autoFixMax) => {
     expect((await storeWith({ ...raw, autoFixMax }).get(SESSION))?.autoFixMax).toBeUndefined();
   });
 });
