@@ -7,9 +7,9 @@ import {
 import { approvalAuditWriter } from '@server/admin/approvals/auditWriter';
 import type { ApprovalExecutor } from '@server/admin/approvals/executors';
 import { selfIdsOf } from './actor';
-import { usersBulkExecuteDepsFor } from './adapters';
+import { usersBulkExecuteDepsFor } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { assertCanRunUsersBulkAction } from './authorize';
-import { executeAdminUsersBulk } from './execute';
+import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 
 /**
  * Runs an approved bulk execute as the approver. Neither admin is ever acted on, and a cohort that

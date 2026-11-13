@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 
 // baseApi is stubbed (no auth chain) but errors go through the real errorHandler.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
 const mockCreateInstallProvider = vi.fn();
 const mockGetInstallUrlOptions = vi.fn();

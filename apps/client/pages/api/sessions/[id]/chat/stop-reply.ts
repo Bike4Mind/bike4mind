@@ -1,4 +1,4 @@
-import { stopReply } from '@server/managers/sessionManager';
+import { stopReply } from '@bike4mind/server-utils/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';

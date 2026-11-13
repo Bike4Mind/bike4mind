@@ -1,13 +1,16 @@
 /**
  * Hard-deletes the accounts whose self-serve deletion grace period has passed, oldest first, through
- * completeAccountDeletion (apps/client/server/users/completeAccountDeletion.ts).
+ * completeAccountDeletion (packages/server-utils/src/users/completeAccountDeletion.ts).
  * Schedule: daily (infra/cron.ts accountDeletionSweep). Self-host twin: apps/workers/src/selfhost/accountDeletionSweep.ts.
  */
 import { connectDB, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { completeAccountDeletion, type AccountDeletionSkipReason } from '@server/users/completeAccountDeletion';
+import {
+  completeAccountDeletion,
+  type AccountDeletionSkipReason,
+} from '@bike4mind/server-utils/users/completeAccountDeletion';
 
 const sweepLogger = new Logger({ metadata: { service: 'accountDeletionSweep' } });
 

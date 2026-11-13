@@ -174,7 +174,7 @@ export class IntegrationRequestRepository extends BaseRepository<IIntegrationReq
     return rows.map(r => r.integrationId);
   }
 
-  /** Account deletion: drop every request the user filed (apps/client/server/services/purgeDeletedUserData.ts). */
+  /** Account deletion: drop every request the user filed (packages/server-utils/src/services/purgeDeletedUserData.ts). */
   async deleteAllForUser(userId: string): Promise<number> {
     const result = await this.model.deleteMany({ userId });
     return result.deletedCount ?? 0;
