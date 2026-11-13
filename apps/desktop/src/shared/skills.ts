@@ -50,6 +50,14 @@ export interface SkillsState {
   untrustedProject: string | null;
 }
 
+/**
+ * Whose skills to list. A draft has no stored session yet, so it is named by the folder it will
+ * be created in: the chosen project for a Code draft (even when a worktree is ticked, since the
+ * worktree does not exist until the first send), or null for a Chat draft, which gets global
+ * skills only.
+ */
+export type SkillsScope = { sessionId: string } | { draftDirectory: string | null };
+
 /** The empty state, for a session that has none and for a failed read. */
 export const NO_SKILLS: SkillsState = { skills: [], projectDirectory: null, untrustedProject: null };
 

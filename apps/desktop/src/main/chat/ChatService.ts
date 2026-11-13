@@ -101,7 +101,7 @@ import type { ModelSettings } from '@shared/modelSettings';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
-import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { NO_SKILLS, type SkillsScope, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import {
@@ -2262,25 +2262,33 @@ export class ChatService {
    * Scoped the same way the tools are: a Chat session has no project binding at all, so it is
    * asked for global skills only and a repo skill is never OFFERED where it could not run. A
    * Code session passes its working directory - the worktree when it has one, which is the
-   * checkout whose `.claude/skills/` the turn would actually execute against.
+   * checkout whose `.claude/skills/` the turn would actually execute against. A draft passes the
+   * folder it will be created in (see SkillsScope).
    */
-  async listSkills(sessionId: string): Promise<SkillsState> {
+  async listSkills(scope: SkillsScope): Promise<SkillsState> {
     if (!this.deps.skills) return NO_SKILLS;
-    const session = await this.deps.store.get(sessionId);
-    if (!session) return NO_SKILLS;
-    return this.deps.skills.state(session.project?.workingDirectory ?? null);
+    const root = await this.skillsRoot(scope);
+    return root === undefined ? NO_SKILLS : this.deps.skills.state(root);
+  }
+
+  /** The project root a scope's skills come from: null for global only, undefined for no such session. */
+  private async skillsRoot(scope: SkillsScope): Promise<string | null | undefined> {
+    if ('draftDirectory' in scope) return scope.draftDirectory;
+    const session = await this.deps.store.get(scope.sessionId);
+    return session ? (session.project?.workingDirectory ?? null) : undefined;
   }
 
   /**
-   * Record that the user trusts (or no longer trusts) this session's project to contribute
-   * skills. Refused for a session with no project, so there is no path that can trust a
-   * directory the user has not bound a conversation to.
+   * Record that the user trusts (or no longer trusts) this session's or draft's project to
+   * contribute skills. Refused for a scope with no project, and for a draft folder that could not
+   * be bound as a project, so there is no path that can trust a directory the user has not
+   * chosen for a conversation.
    */
-  async setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState> {
+  async setProjectSkillsTrusted(scope: SkillsScope, trusted: boolean): Promise<SkillsState> {
     if (!this.deps.skills) return NO_SKILLS;
-    const session = await this.deps.store.get(sessionId);
-    const root = session?.project?.workingDirectory;
-    if (!root) return this.listSkills(sessionId);
+    const root = await this.skillsRoot(scope);
+    if (!root) return this.listSkills(scope);
+    if ('draftDirectory' in scope && (await this.workspaceBindingReason(root))) return this.listSkills(scope);
     await this.deps.skills.setTrusted(root, trusted);
     if (this.deps.capabilities) {
       if (trusted) {

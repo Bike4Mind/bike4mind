@@ -114,4 +114,37 @@ describe('the skill picker rows', () => {
     });
     expect(onBrowseMarket).toHaveBeenCalledTimes(1);
   });
+
+  it('tells "none installed" apart from "none match the filter"', () => {
+    const renderEmpty = (installedCount: number) =>
+      act(() =>
+        root.render(
+          <CssVarsProvider>
+            <SkillPicker
+              skills={[]}
+              installedCount={installedCount}
+              query="zzz"
+              activeIndex={0}
+              untrustedProject={null}
+              onPick={() => {}}
+              onTrustProject={() => {}}
+              onBrowseMarket={() => {}}
+            />
+          </CssVarsProvider>
+        )
+      );
+
+    renderEmpty(0);
+    expect(container.querySelector('[data-testid="skill-picker-empty-text"]')?.textContent).toContain(
+      'No skills found'
+    );
+    expect(container.querySelector('[data-testid="skill-picker-no-match-text"]')).toBeNull();
+
+    renderEmpty(30);
+    expect(container.querySelector('[data-testid="skill-picker-no-match-text"]')?.textContent).toBe(
+      'No skills match /zzz.'
+    );
+    expect(container.querySelector('[data-testid="skill-picker-empty-text"]')).toBeNull();
+    expect(container.querySelector('[data-testid="skill-picker-market-btn"]')).not.toBeNull();
+  });
 });
