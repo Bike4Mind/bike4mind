@@ -184,7 +184,7 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
   it('keeps the organization ledger permission-aware for its mixed audience', () => {
     const source = readFileSync(path.join(ROUTES_DIR, 'transactions.ts'), 'utf8');
     expect(source).toMatch(
-      /verifyOrg(?:Owner|Access)\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId\s*\)/
+      /verifyOrgPermission\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId,\s*'viewUsage'\s*\)/
     );
     expect(usesRawIsAdminGate(source)).toBe(false);
   });
