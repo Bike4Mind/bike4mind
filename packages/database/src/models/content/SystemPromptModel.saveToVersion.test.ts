@@ -63,6 +63,23 @@ describe('systemPromptRepository.saveToVersion content length', () => {
     expect((await systemPromptRepository.findByPromptId('len-over'))?.content).toBe('original');
   });
 
+  it('keeps the stored name, description and category when the editor sends them blank', async () => {
+    await seed('blank-fields');
+
+    await systemPromptRepository.saveToVersion(
+      'blank-fields',
+      1,
+      { content: 'edited', name: '', description: '', category: '' },
+      'admin-1',
+      'Admin'
+    );
+
+    const history = await systemPromptHistoryRepository.getVersion('blank-fields', 1);
+    expect(history).toMatchObject({ content: 'edited', name: 'Probe', category: 'general' });
+    expect(history?.description).toBe('A DB-only probe prompt');
+    expect((await systemPromptRepository.findByPromptId('blank-fields'))?.category).toBe('general');
+  });
+
   it('rejects a description over 2,000 characters and stores nothing', async () => {
     await seed('desc-over');
 
