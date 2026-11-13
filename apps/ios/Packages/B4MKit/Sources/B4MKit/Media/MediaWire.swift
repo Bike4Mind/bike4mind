@@ -122,6 +122,82 @@ enum MediaWire {
       prompt: file.sourceMetadata?.prompt.flatMap { $0.isEmpty ? nil : $0 })
   }
 
+  static func lineagePath(id: String) throws -> String {
+    try detailPath(id: id) + "/lineage"
+  }
+
+  /// `GET /api/v1/files/{id}/lineage` (public contract `getFileLineage`). Hand-decoded so an unknown role or
+  /// generator never fails the page.
+  private struct LineageBody: Decodable {
+    let fileID: String
+    let ancestors: [Node]
+    let children: [Node]
+    let edges: [Edge]
+    let truncated: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+      case fileID = "file_id"
+      case ancestors, children, edges, truncated
+    }
+
+    struct Node: Decodable {
+      let fileID: String
+      let redacted: Bool
+      let fileName: String?
+      let mimeType: String?
+      let generator: String?
+      let modelID: String?
+      let prompt: String?
+      let downloadURL: String?
+      let createdAt: String?
+      let request: JSONObject?
+
+      private enum CodingKeys: String, CodingKey {
+        case fileID = "file_id"
+        case redacted
+        case fileName = "file_name"
+        case mimeType = "mime_type"
+        case generator
+        case modelID = "model_id"
+        case prompt
+        case downloadURL = "download_url"
+        case createdAt = "created_at"
+        case request
+      }
+    }
+
+    struct Edge: Decodable {
+      let parentID: String
+      let childID: String
+      let role: String
+
+      private enum CodingKeys: String, CodingKey {
+        case parentID = "parent_id"
+        case childID = "child_id"
+        case role
+      }
+    }
+  }
+
+  static func lineage(status: Int, body: Data) throws -> FileLineage {
+    guard status == 200 else { throw APIError(status: status) }
+    let decoded = try decode(LineageBody.self, from: body)
+    func node(_ wire: LineageBody.Node) -> LineageNode {
+      LineageNode(
+        id: wire.fileID, isRedacted: wire.redacted, kind: wire.mimeType.flatMap(MediaKind.init(mimeType:)),
+        fileName: wire.fileName ?? "", mimeType: wire.mimeType ?? "", generator: wire.generator,
+        modelID: wire.modelID, prompt: wire.prompt.flatMap { $0.isEmpty ? nil : $0 },
+        url: wire.downloadURL.flatMap(URL.init(string:)), createdAt: wire.createdAt.flatMap(parseDate),
+        request: wire.request)
+    }
+    let edges = decoded.edges.map {
+      LineageEdge(parentID: $0.parentID, childID: $0.childID, role: LineageRole(wire: $0.role))
+    }
+    return FileLineage(
+      fileID: decoded.fileID, ancestors: decoded.ancestors.map(node), children: decoded.children.map(node),
+      edges: edges, truncated: decoded.truncated ?? false)
+  }
+
   private static func parseDate(_ string: String) -> Date? {
     if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(string) { return date }
     return try? Date.ISO8601FormatStyle().parse(string)
@@ -145,5 +221,10 @@ public struct MediaClient: MediaAPI {
   public func media(id: String) async throws -> MediaItem {
     let response = try await requester.send(method: "GET", path: try MediaWire.detailPath(id: id))
     return try MediaWire.item(status: response.status, body: response.body)
+  }
+
+  public func lineage(of id: String) async throws -> FileLineage {
+    let response = try await requester.send(method: "GET", path: try MediaWire.lineagePath(id: id))
+    return try MediaWire.lineage(status: response.status, body: response.body)
   }
 }
