@@ -441,10 +441,9 @@ final class VoiceConversationModelTests: XCTestCase {
     let quest: JSONObject = [
       "id": "quest-1", "sessionId": "s1", "type": "error", "status": "error", "reply": "The model hit a problem.",
     ]
-    await realtime.emit(
-      .frame(
-        ActionFrame(
-          action: "streamed_chat_completion", payload: ["action": "streamed_chat_completion", "quest": .object(quest)])))
+    let errorFrame = ActionFrame(
+      action: "streamed_chat_completion", payload: ["action": "streamed_chat_completion", "quest": .object(quest)])
+    await realtime.emit(.frame(errorFrame))
     await until { await speaker.spoken == ["The model hit a problem."] }
     await until { model.phase == .listening }
     await model.stop()
@@ -478,6 +477,26 @@ final class VoiceConversationModelTests: XCTestCase {
     let spoken = await speaker.spoken
     XCTAssertFalse(spoken.contains("That took too long. Please try again."))
     XCTAssertEqual(spoken.count, 30)
+    await model.stop()
+  }
+
+  func testSeparateSilentGapsDoNotAddUpToAStall() async throws {
+    let model = await startedModel(sleep: { _ in try await Task.sleep(for: .milliseconds(15)) })
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await until { model.phase == .sending }
+
+    // Each gap spans a couple of watchdog intervals; together they exceed the give-up limit.
+    var reply = ""
+    for index in 0..<6 {
+      reply += "Sentence number \(index) is long enough to be spoken. "
+      await realtime.emit(frame(reply: reply, status: .running))
+      try await Task.sleep(for: .milliseconds(40))
+    }
+    await realtime.emit(frame(reply: reply, status: .done))
+    await until { model.phase == .listening }
+    let spoken = await speaker.spoken
+    XCTAssertFalse(spoken.contains("That took too long. Please try again."))
     await model.stop()
   }
 

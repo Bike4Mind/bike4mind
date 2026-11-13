@@ -415,13 +415,14 @@ public final class VoiceConversationModel {
     watchdogTask = Task { [weak self, api, sleep, stallTimeout] in
       var lastSeen = -1
       var stalls = 0
-      // Only silent intervals count against the reply: a long answer that keeps streaming never times out.
+      // Only consecutive silent intervals count against the reply: a long answer that keeps streaming never times out.
       while stalls < 6 {
         do { try await sleep(stallTimeout) } catch { return }
         guard let self, self.turnIsCurrent(token), !self.replyFinished else { return }
         let count = self.frameCount
         guard count == lastSeen else {
           lastSeen = count
+          stalls = 0
           continue
         }
         stalls += 1
@@ -431,6 +432,8 @@ public final class VoiceConversationModel {
             questID: turn.id, sessionID: self.sessionID ?? "", reply: turn.reply, status: turn.status,
             kind: turn.kind, errorCode: turn.errorCode, creditsUsed: turn.creditsUsed,
             pendingAction: turn.pendingAction))
+        // Frames injected by this poll are not socket progress.
+        lastSeen = self.frameCount
       }
       self?.watchdogGaveUp(token: token)
     }
