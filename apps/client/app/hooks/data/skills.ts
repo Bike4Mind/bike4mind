@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { UserByEmail } from '@client/app/hooks/data/user';
 import { ISkill, ISkillMarketStatus, IUserShare, Permission } from '@bike4mind/common';
 
 /** Page size for the skills list. The API caps `limit` at 100; we page through. */
@@ -73,7 +74,15 @@ export const useGetSkill = (id: string | undefined) => {
 
 export type SkillFormInput = Pick<ISkill, 'name' | 'description' | 'body'> &
   Partial<
-    Pick<ISkill, 'argumentHint' | 'allowedTools' | 'claudeCodeAllowedTools' | 'disableModelInvocation' | 'files'>
+    Pick<
+      ISkill,
+      | 'argumentHint'
+      | 'allowedTools'
+      | 'claudeCodeAllowedTools'
+      | 'claudeCodeModel'
+      | 'disableModelInvocation'
+      | 'files'
+    >
   >;
 
 export const useCreateSkill = () => {
@@ -129,15 +138,12 @@ export const useUpdateSkillSharing = () => {
   });
 };
 
-/** Minimal user shape resolved by email for the share dialog. */
-export type ResolvedShareUser = { id: string; name?: string; email?: string };
-
 /**
  * Resolve a user by exact email so the share dialog can add them by address
  * (avoids exposing the full user directory in an autocomplete). Returns null
  * when no user matches.
  */
-export const lookupUserByEmail = async (email: string): Promise<ResolvedShareUser | null> => {
-  const response = await api.get<ResolvedShareUser | null>(`/api/users/by-email/${encodeURIComponent(email)}`);
+export const lookupUserByEmail = async (email: string): Promise<UserByEmail | null> => {
+  const response = await api.get<UserByEmail | null>(`/api/users/by-email/${encodeURIComponent(email)}`);
   return response.data ?? null;
 };

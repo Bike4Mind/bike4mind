@@ -96,6 +96,78 @@ describe('aggregateUsageByModel', () => {
 
     const total = Object.values(usage).reduce((sum, credits) => sum + credits, 0);
     expect(total).toBeCloseTo(transactions.reduce((sum, t) => sum + Math.abs(t.credits), 0));
-    expect(usage).toEqual({ 'Claude Sonnet 5.5': 153.5, 'GPT-5.4 Mini': 10, 'retired-model': 4, Unknown: 3 });
+    expect(usage).toEqual({
+      'Claude Sonnet 5.5': 153.5,
+      'GPT-5.4 Mini': 10,
+      'retired-model': 4,
+      'Unattributed charges': 3,
+    });
+  });
+
+  describe('app charges', () => {
+    const overlayLabels = { acme_security_scan: 'Security scan' };
+
+    it('labels a registered feature id, matching hyphens against underscores', () => {
+      const usage = aggregateUsageByModel(
+        [{ type: 'tool_usage', model: 'acme-security-scan', credits: -9 }],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'Security scan': 9 });
+    });
+
+    it('humanizes an unregistered feature id and drops its namespace prefix', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'generic_deduct', model: 'acme-custom-thing', credits: -2 },
+          { type: 'generic_deduct', metadata: { modelName: 'acme_custom_thing' }, credits: -3 },
+        ],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'Custom Thing': 5 });
+    });
+
+    it('keeps a tool_usage model id raw when no label is registered for it', () => {
+      const usage = aggregateUsageByModel(
+        [{ type: 'tool_usage', model: 'gpt-4o-mini-tts', credits: -4 }],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'gpt-4o-mini-tts': 4 });
+    });
+
+    it('does not let an older tool_usage or generic_deduct row relabel the model key for later rows', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'tool_usage', model: 'gpt-4o', credits: -5 },
+          { type: 'generic_deduct', model: 'acme-gpt-4o', credits: -1 },
+          { type: 'text_generation_usage', model: 'gpt-4o', credits: -100 },
+        ],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'gpt-4o': 105, 'Gpt 4o': 1 });
+    });
+
+    it('keeps text spend under the raw model id after a generic_deduct row with the same id', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'generic_deduct', model: 'gpt-4o', credits: -1 },
+          { type: 'text_generation_usage', model: 'gpt-4o', credits: -100 },
+        ],
+        [],
+        overlayLabels
+      );
+      expect(usage).toEqual({ '4o': 1, 'gpt-4o': 100 });
+    });
+
+    it('keeps an unknown id on a model-usage row as the model id', () => {
+      const usage = aggregateUsageByModel(
+        [{ type: 'text_generation_usage', model: 'acme-new-model', credits: -1 }],
+        models
+      );
+      expect(usage).toEqual({ 'acme-new-model': 1 });
+    });
   });
 });

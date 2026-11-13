@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Keep @bike4mind/common real so the sensitive/non-sensitive split comes from the actual
 // settingsMap. Mock only the infra + middleware seams.
 let stored: Record<string, unknown> | null = null;
+let storedRows: { settingName: string; settingValue: unknown }[] = [];
 const findOneAndUpdate = vi.fn();
 const deleteOne = vi.fn();
 const order = vi.hoisted(() => [] as string[]);
@@ -11,6 +12,7 @@ const order = vi.hoisted(() => [] as string[]);
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
+    find: () => ({ lean: () => Promise.resolve(storedRows) }),
     findOneAndUpdate: (...args: unknown[]) => {
       order.push('findOneAndUpdate');
       return findOneAndUpdate(...args);
@@ -48,7 +50,12 @@ vi.mock('@bike4mind/utils/security', () => ({
   isValidEncryptionKey: (k: unknown) => typeof k === 'string' && k.length === 64,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
+  baseApi: () => ({
+    use() {
+      return this;
+    },
+    put: (handler: (...a: unknown[]) => unknown) => handler,
+  }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
@@ -61,8 +68,13 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
   resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
 }));
 
-import handler from '../update';
-import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import handler, { FULL_ADMIN_SETTING_KEYS } from '../update';
+import {
+  formatUsdPerCredit,
+  MIN_PRICE_PER_CREDIT_USD,
+  SENSITIVE_SETTING_MASK,
+  resolveSettingDefinition,
+} from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { adminAuditService } from '@bike4mind/services';
 
@@ -75,17 +87,72 @@ const stageWriteResult = (settingName: string, settingValue: unknown) => {
   });
 };
 
-const runHandler = async (key: string, value: unknown, extra: Record<string, unknown> = {}) => {
+const runHandler = async (
+  key: string,
+  value: unknown,
+  extra: Record<string, unknown> = {},
+  user: object = { isAdmin: true }
+) => {
   const json = vi.fn((x: unknown) => x);
   const req = {
-    user: { isAdmin: true },
-    ability: { can: () => true },
+    user,
     body: { key, value, ...extra },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as { settingName: string; settingValue: unknown };
 };
+
+describe('settings/update settings that constrain delegated admins', () => {
+  const DELEGATE = { isAdmin: false, adminPermissions: ['settings:manage'] };
+
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it.each([...FULL_ADMIN_SETTING_KEYS])(
+    'refuses a settings:manage delegate changing %s before any write',
+    async key => {
+      await expect(runHandler(key, 0, {}, DELEGATE)).rejects.toThrow(
+        'Only full administrators can change this setting'
+      );
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+      expect(deleteOne).not.toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    }
+  );
+
+  it('protects approval, audit alerting and MFA policy settings', () => {
+    expect([...FULL_ADMIN_SETTING_KEYS]).toEqual(
+      expect.arrayContaining([
+        'AdminApprovalsEnabled',
+        'AdminApprovalBulkUserThreshold',
+        'AdminApprovalCreditThreshold',
+        'AdminApprovalExpiryHours',
+        'AdminAuditCriticalGrantCredits',
+        'AdminAuditDailyGrantCredits',
+        'SlackSecurityAlertsWebhookUrl',
+        'enforceMFA',
+        'allowTrustedDevices',
+        'signupGrantUnprotectedMaxCredits',
+      ])
+    );
+  });
+
+  it.each([...FULL_ADMIN_SETTING_KEYS])('lets a full admin change %s', async key => {
+    const value = resolveSettingDefinition(key)!.defaultValue;
+    stageWriteResult(key, value);
+    await runHandler(key, value, { confirmClear: true });
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a settings:manage delegate update an ordinary setting', async () => {
+    stageWriteResult('defaultEmbeddingModel', 'text-embedding-3-small');
+    await runHandler('defaultEmbeddingModel', 'text-embedding-3-small', {}, DELEGATE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('settings/update sensitive value handling', () => {
   beforeEach(() => {
@@ -609,5 +676,67 @@ describe('settings/update admin audit trail', () => {
     recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
 
     await expect(runHandler('tagLineMain', 'Welcome aboard')).rejects.toThrow('audit down');
+  });
+});
+
+describe('settings/update signup grant guard', () => {
+  const enabledPolicy = {
+    enabled: true,
+    version: 'v1',
+    rules: [{ signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 5, missing: 'score', missingWeight: 1 }],
+    reducedAt: 3,
+    reviewAt: 5,
+    reducedFraction: 0.5,
+  };
+
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    recordAdminActionFromRequest.mockReset();
+    vi.clearAllMocks();
+    stored = null;
+    storedRows = [];
+  });
+
+  it('refuses a large initial grant with 422 while the policy is off, before any write', async () => {
+    storedRows = [{ settingName: 'signupGrantRiskPolicy', settingValue: JSON.stringify({ enabled: false }) }];
+    const refusal = runHandler('signupGrantInitialCredits', 5000);
+    await expect(refusal).rejects.toMatchObject({ statusCode: 422 });
+    await expect(refusal).rejects.toThrow(
+      'Signup Grant Initial Credits above 1,000 credits needs a valid, enabled Signup Grant Assessment Policy'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('saves a large initial grant while a valid policy is enabled', async () => {
+    storedRows = [{ settingName: 'signupGrantRiskPolicy', settingValue: enabledPolicy }];
+    stageWriteResult('signupGrantInitialCredits', 5000);
+    const result = await runHandler('signupGrantInitialCredits', 5000);
+    expect(result.settingValue).toBe(5000);
+  });
+
+  it('refuses turning the policy off while a grant is above the limit', async () => {
+    storedRows = [{ settingName: 'signupGrantInitialCredits', settingValue: '5000' }];
+    await expect(runHandler('signupGrantRiskPolicy', { enabled: false })).rejects.toMatchObject({ statusCode: 422 });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an invalid policy on save', async () => {
+    await expect(runHandler('signupGrantRiskPolicy', { enabled: true })).rejects.toThrow(
+      'Signup Grant Assessment Policy is not valid.'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a full admin lowering the limit below a stored grant while the policy is off', async () => {
+    storedRows = [{ settingName: 'signupGrantInitialCredits', settingValue: '800' }];
+    await expect(runHandler('signupGrantUnprotectedMaxCredits', 500)).rejects.toMatchObject({ statusCode: 422 });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('honours a stored limit', async () => {
+    storedRows = [{ settingName: 'signupGrantUnprotectedMaxCredits', settingValue: 10000 }];
+    stageWriteResult('signupGrantInviteBonusCredits', 5000);
+    const result = await runHandler('signupGrantInviteBonusCredits', 5000);
+    expect(result.settingValue).toBe(5000);
   });
 });

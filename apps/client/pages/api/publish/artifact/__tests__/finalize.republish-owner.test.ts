@@ -3,6 +3,7 @@ vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
   assertOutboundActionAllowed: async () => undefined,
 }));
+vi.mock('@server/services/publish/organizationPolicy', () => ({ assertPublicationPublicLink: async () => undefined }));
 import { createMocks } from 'node-mocks-http';
 
 // Republishing an existing slug is limited to the artifact owner (or an admin); other callers get 403
@@ -62,7 +63,7 @@ vi.mock('@server/services/publish', async importOriginal => {
     buildPublishUrlPath: () => '/p/u/owner1/art',
     invalidatePublishCdn: mockInvalidate,
     toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
-    mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
+    mintDraftUploadUrl: () => Promise.resolve({ url: 'https://example.invalid/put' }),
     consumePublishAction: () => Promise.resolve({ refund: () => Promise.resolve() }),
   };
 });

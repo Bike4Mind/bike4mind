@@ -5,14 +5,18 @@ import type { IUser, ThrottleTier } from '@bike4mind/common';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
-/** Fields `PUT /api/users/[id]/update` accepts beyond the user document: audit reasons and credit moves. */
-export type AdminUserUpdate = Partial<IUser> & {
+/**
+ * Fields `PUT /api/users/[id]/update` accepts beyond the user document: audit reasons and credit moves.
+ * The route refuses `isAdmin`; the role goes through useAdminUserRoleUpdate.
+ */
+export type AdminUserUpdate = Omit<Partial<IUser>, 'isAdmin'> & {
   creditDelta?: number;
   creditReason?: string;
-  roleChangeReason?: string;
   throttleTier?: ThrottleTier;
   throttleReason?: string;
   statusChangeReason?: string;
+  /** Marks a reinstatement as the Undo of this admin's suspend: its detection grades are removed, not flipped to legitimate. */
+  undoSuspension?: boolean;
 };
 
 export const adminUpdateErrorMessage = (error: unknown, fallback: string): string => {

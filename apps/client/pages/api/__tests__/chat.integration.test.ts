@@ -38,6 +38,7 @@ const {
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
   mockOrgFindAccessibleById,
+  mockOrgFindById,
   mockSystemPromptText,
   mockTerminalError,
   mockCreateSession,
@@ -64,6 +65,7 @@ const {
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  mockOrgFindById: vi.fn(),
   // Fresh-session creation for API-key / newConversation callers (see resolveChatSessionId).
   mockCreateSession: vi.fn(),
   // The lastNotebookId write on the JWT most-recent fallback: asserted NOT to run for
@@ -89,7 +91,7 @@ const {
   fakeCustomMcpHost: { listConnections: () => [] },
 }));
 
-vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -112,7 +114,7 @@ const RATE_LIMIT_HEADERS = {
 
 // The Mongo-backed per-API-key rate-limit counter (buffers forever against a
 // stubbed connectDB otherwise). Overridable per-test.
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
@@ -134,7 +136,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 // limiter short-circuited before its counter, so no chat test - happy path included -
 // ever exercised the increment, and the whole rate-limit-vs-validation ordering was
 // untested. Individual tests override it.
-vi.mock('@server/utils/userRateTier', () => ({
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
   resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 
@@ -146,7 +148,7 @@ const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
   mockOptionsFindUser: vi.fn(),
   mockProcessOptions: vi.fn(),
 }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
@@ -178,8 +180,8 @@ vi.mock('@bike4mind/services', async orig => {
 
 const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
 
-vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
-  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
   createCompletionMeter: vi.fn(),
 }));
 
@@ -250,6 +252,8 @@ vi.mock('@bike4mind/database', async orig => {
     // memberships via this gate. Non-admin callers in these tests hit findAccessibleById.
     organizationRepository: {
       ...(actual.organizationRepository as object),
+      // apiKeyBillingOrg reads the key's billing org to check it still exists and holds the holder.
+      findById: (...a: unknown[]) => mockOrgFindById(...a),
       shareable: {
         ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
         findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
@@ -296,7 +300,7 @@ vi.mock('@server/utils/untrustedCompletionQuota', async orig => ({
 }));
 
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError, TooManyRequestsError } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -448,7 +452,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     };
     createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
 
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     expect(createCompletionMeter).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -597,7 +601,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     // Went the API-key route (not JWT): the key validator ran with the Bearer token.
-    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything());
+    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything(), { recordUse: true });
   });
 
   it('leaves a Bearer JWT (no b4m_ prefix) to JWT auth, not api-key auth', async () => {
@@ -860,6 +864,66 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    // An org-billed key bills the key's org whether or not the body names one (resolveRequestBillingOrgId).
+    // An org-owned key's holder is the org's service account, which is on no roster, so the
+    // session-caller membership check (resolveActiveOrg) must not be what decides it.
+    describe('with an org-billed API key', () => {
+      const orgId = new Types.ObjectId().toHexString();
+
+      beforeEach(() => {
+        mockValidate.mockResolvedValue({
+          isValid: true,
+          keyId: 'k1',
+          userId: 'user-1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+          billingOwnerType: CreditHolderType.Organization,
+          organizationId: orgId,
+        });
+        mockFindById.mockReturnValue(
+          Promise.resolve({
+            id: 'user-1',
+            _id: 'user-1',
+            isBanned: false,
+            disputePending: false,
+            isSystem: true,
+            serviceAccountOrganizationId: orgId,
+          })
+        );
+        mockOrgFindById.mockResolvedValue({ id: orgId, userId: 'owner-1', users: [] });
+      });
+
+      it.each([
+        ['omits an organizationId', { message: 'hi', sessionId: 'sess-1' }],
+        ['names the key org', { message: 'hi', sessionId: 'sess-1', organizationId: orgId }],
+      ])('bills the key org when the body %s', async (_label, body) => {
+        const { req, res } = fire({ body });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(invokedBody().body.organizationId).toBe(orgId);
+        expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      });
+
+      it('refuses a body that names a different org (403) before creating a quest', async () => {
+        const { req, res } = fire({
+          body: { message: 'hi', sessionId: 'sess-1', organizationId: new Types.ObjectId().toHexString() },
+        });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(403);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
+
+      it('refuses a holder who is no longer on the key org', async () => {
+        mockFindById.mockReturnValue(
+          Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
+        );
+        const { req, res } = fire();
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(400);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
     });
   });
 

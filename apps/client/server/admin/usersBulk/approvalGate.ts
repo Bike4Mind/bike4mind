@@ -1,7 +1,10 @@
-import { ForbiddenError, type AdminPermissionId } from '@bike4mind/common';
+import { ForbiddenError, isFullAdmin, type AdminPermissionId } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import type { Request } from 'express';
-import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
+import type {
+  AdminUsersBulkAction,
+  AdminUsersBulkExecuteRequest,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { getApprovalPolicy, requestApproval, type ApprovalPendingBody } from '@server/admin/approvals/service';
 import {
   creditGrantNeedsApproval,
@@ -10,9 +13,9 @@ import {
   type ReleaseWindow,
 } from '@server/admin/creditGrants/gate';
 import { selfIdsOf } from './actor';
-import { usersBulkResolveDeps } from './adapters';
-import { AUDIT_ACTION, confirmedCohort } from './execute';
-import { creditDeltaFor, type ResolveDeps } from './resolve';
+import { usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { AUDIT_ACTION, confirmedCohort } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { creditDeltaFor, type ResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 
 const GATED_TYPES: ReadonlySet<AdminUsersBulkAction['type']> = new Set(['suspend', 'contain', 'adjustCredits']);
 const GATED_AUDIT_ACTIONS = [...GATED_TYPES].map(type => AUDIT_ACTION[type]);
@@ -44,7 +47,12 @@ export async function requestUsersBulkApprovalIfNeeded(
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
   const actorId = req.user.id;
 
-  const users = await confirmedCohort(request, { id: actorId, selfIds: selfIdsOf(req.user) }, deps, new Date());
+  const users = await confirmedCohort(
+    request,
+    { id: actorId, selfIds: selfIdsOf(req.user), fullAdmin: isFullAdmin(req.user) },
+    deps,
+    new Date()
+  );
   const windowMs = policy.expiryHours * HOUR_MS;
   const since = new Date(Date.now() - windowMs);
   const releaseUsers = await reserveWithinWindow(

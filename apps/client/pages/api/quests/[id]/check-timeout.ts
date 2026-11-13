@@ -10,7 +10,8 @@ import {
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
-const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
+// Polled by the client while a reply looks stalled, so it is not an action.
+const handler = baseApi({ recordsActivity: false }).post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
   const { id: questId } = req.query;
   const userId = req.user?.id;
 

@@ -93,6 +93,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
       deletedAt: 1,
       isSynthetic: 1,
       'signupGrant.blocked': 1,
+      'signupGrant.unlockForfeited': 1,
     }).lean() as Promise<({ createdAt?: Date; emailVerified?: boolean } & creditService.RewardPartyFields) | null>,
   ]);
   // Mirrors accountCreatedMs in userApiKeyService/trust.ts.

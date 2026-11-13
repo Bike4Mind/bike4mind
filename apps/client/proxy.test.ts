@@ -222,6 +222,15 @@ describe('proxy CSP header', () => {
     expect(embed.headers.get('Referrer-Policy')).toBeNull();
   });
 
+  it('does NOT clobber Referrer-Policy on the signed file content route (the URL carries ?exp=&sig=)', () => {
+    const content = proxy(
+      makeRequest('https://app.bike4mind.com/api/files/0123456789abcdef01234567/content?exp=1&sig=x')
+    );
+    expect(content.headers.get('Referrer-Policy')).toBeNull();
+    const sibling = proxy(makeRequest('https://app.bike4mind.com/api/files/0123456789abcdef01234567'));
+    expect(sibling.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+  });
+
   it('serves a verified-hop landing with strict-origin, so the token never rides a Referer', () => {
     const landing = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x&b4m_hop=abc.123.def'));
     expect(landing.headers.get('Referrer-Policy')).toBe('strict-origin');
@@ -713,5 +722,42 @@ describe("proxy upstream What's New feed origin", () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
     expect(policy()).toBe(baseline);
+  });
+});
+
+describe('proxy [SECURITY] log lines redact share-link tokens', () => {
+  const token = 'synthetic-share-token-0123456789';
+  const warned = () => String(vi.mocked(console.warn).mock.calls);
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each([`/a/${token}`, `/p/a/${token}`, `/uc/a/${token}`, `/api/publish/serve/%61/${token}`])(
+    'redacts the direct-origin line for %s',
+    path => {
+      vi.stubEnv('ORIGIN_VERIFY_SECRET', 'a'.repeat(48));
+      expect(proxy(makeRequest(`https://app.bike4mind.com${path}`)).status).toBe(403);
+      expect(warned()).toContain('Blocked direct-origin request');
+      expect(warned()).toContain('[redacted]');
+      expect(warned()).not.toContain(token);
+    }
+  );
+
+  it('redacts the path traversal line', () => {
+    expect(proxy(makeRequest(`https://app.bike4mind.com/a/${token}/..%2fx`)).status).toBe(400);
+    expect(warned()).toContain('Blocked path traversal attempt');
+    expect(warned()).not.toContain(token);
+  });
+
+  it('redacts the malformed encoding line', () => {
+    expect(proxy(makeRequest(`https://app.bike4mind.com/a/${token}/%25zz`)).status).toBe(400);
+    expect(warned()).toContain('Blocked malformed URL encoding');
+    expect(warned()).not.toContain(token);
   });
 });

@@ -16,7 +16,7 @@ import { alertForReleasedReferralRewards } from '@bike4mind/server-utils/referra
 import {
   sweepRiskReviewAutoApprovals,
   type RiskReviewAutoApprovalSweepResult,
-} from '@server/security/riskReviewAutoApproval';
+} from '@bike4mind/server-utils/security/riskReviewAutoApproval';
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;
@@ -27,7 +27,7 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     riskReviewAutoApprovals: RiskReviewAutoApprovalSweepResult;
   }
 > {
-  // Queued gear/referral rewards go first: they are owed from the trickle pool before new drips.
+  // Queued gear/referral/arena rewards go first: they are owed from the trickle pool before new drips.
   // A failure here must not stall the held signup grants and unlocks below.
   try {
     const rewards = await creditService.releaseHeldCreditRewards(
@@ -40,7 +40,7 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     try {
       await alertForReleasedReferralRewards(
         rewards.paidRewards
-          .filter(paid => paid.source === 'referral_first_answer')
+          .filter(paid => paid.source === 'referral_first_answer' || paid.source === 'referral_subscription')
           .map(paid => paid.creditTransactionId)
       );
     } catch (error) {

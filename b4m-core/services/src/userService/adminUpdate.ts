@@ -21,6 +21,10 @@ import {
   IUserApiKeyRepository,
   IRealtimeConnectionRepository,
   type SignupRiskReviewState,
+  SuspensionReasonCategorySchema,
+  hasAdminPermission,
+  assertCanActOnAdminTarget,
+  NotFoundError,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -46,6 +50,9 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
   currentCredits: z.number().int().min(0).max(MAX_CREDIT_VALUE).optional(),
   isBanned: z.boolean().optional(),
+  // The reason the suspended user is told (a fixed category, never the detection signal). Cleared when
+  // `isBanned` goes false; see accountSuspensionCategories.ts.
+  suspensionReasonCategory: SuspensionReasonCategorySchema.nullable().optional(),
   isModerated: z.boolean().optional(),
   subscribedUntil: z.string().optional().nullable(),
   systemFiles: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })).optional(),
@@ -81,6 +88,25 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
+
+/**
+ * The fields a `users:moderate` delegate may write: suspend, restrict, moderation status and the
+ * limited tier. Every other field stays full-admin. The user update route checks the same set first,
+ * so a delegate gets a 403 naming the field rather than this function's generic refusal.
+ */
+export const MODERATION_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'isBanned',
+  'suspensionReasonCategory',
+  'isModerated',
+  'moderationStatus',
+  'statusChangeReason',
+  'throttleTier',
+  'throttleReason',
+]);
+
+const writesOnlyModerationFields = (params: Record<string, unknown>): boolean =>
+  Object.entries(params).every(([field, value]) => value === undefined || MODERATION_UPDATE_FIELDS.has(field));
 
 export interface AdminUpdateUserAdapters {
   db: {
@@ -151,14 +177,16 @@ export async function adminUpdateUser(
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
   const admin = await db.users.findById(userId);
-  if (!admin || !admin.isAdmin) {
+  const moderates = !!admin && hasAdminPermission(admin, 'users:moderate') && writesOnlyModerationFields(params);
+  if (!admin || !(admin.isAdmin || moderates)) {
     throw new ForbiddenError('Unauthorized');
   }
 
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
-    throw new Error('User not found');
+    throw new NotFoundError('User not found');
   }
+  assertCanActOnAdminTarget(admin, user, 'suspend or restrict');
   await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
@@ -232,9 +260,12 @@ export async function adminUpdateUser(
   // that was refunded or lost a dispute does not count, so a grant never re-confers what the reversal revoked.
   const restoresPurchaseStamp =
     creditDelta > 0 && (await db.creditTransactions.findUnreversedPurchase(params.id, CreditHolderType.User)) !== null;
+  // Reinstating clears the reason, so a later suspension without one cannot resurface a stale category.
+  const suspensionParams = params.isBanned === false ? { suspensionReasonCategory: null } : {};
   const builtParams = {
     ...baseParams,
     ...storageParams,
+    ...suspensionParams,
     ...(restoresPurchaseStamp ? { lastCreditsPurchasedAt: new Date() } : {}),
   };
   const builtUser = applyBaseUserUpdates(user, builtParams);

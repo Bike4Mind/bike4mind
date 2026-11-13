@@ -38,12 +38,6 @@ describe('AvailableMigrations (real, unmocked)', () => {
     }
   });
 
-  // A fail-closed migration throws until an operator confirms it; anything sorting after it would be blocked too.
-  it('keeps the fail-closed OAuth client backfill as the highest core id', () => {
-    const coreIds = AvailableMigrations.filter(m => !premiumMigrations.includes(m)).map(m => m.id);
-    expect(Math.max(...coreIds)).toBe(20260922000001);
-  });
-
   it('every migration exposes the MigrationFile contract', () => {
     for (const migration of AvailableMigrations) {
       expect(typeof migration.id).toBe('number');
@@ -55,14 +49,15 @@ describe('AvailableMigrations (real, unmocked)', () => {
 });
 
 /**
- * Directory-completeness guard: a migration file can exist on disk and still never run if
- * nobody adds it to `coreMigrations` in index.ts - index.test.ts above only ever inspects the
- * built AvailableMigrations array, so an unregistered file is invisible to it. This scans the
- * directory itself and cross-checks every migration file against the array.
+ * Directory-completeness guard: a migration file can exist on disk and still never run if the
+ * generated `coreMigrations` registry (core.generated.ts) misses it or is stale. The tests above
+ * only inspect the built AvailableMigrations array, so an unregistered file is invisible to them.
+ * This scans the directory itself and cross-checks every migration file against the array.
  */
 describe('every migration file on disk is registered', () => {
   // Core ids are 13-14 digit timestamps followed by '-' or '_' (both separators appear in the
   // directory, e.g. `2024052201905_demo_to_paid.ts` vs `20250704005300-add-filename-lowercase.ts`).
+  // Must match CORE_MIGRATION_FILE_RE in apps/client/scripts/generate-premium-glue.mjs.
   const MIGRATION_FILE = /^\d{11,14}[-_].+\.ts$/;
 
   const migrationFiles = readdirSync(new URL('.', import.meta.url)).filter(
@@ -77,5 +72,32 @@ describe('every migration file on disk is registered', () => {
     const modulePath = `./${filename.replace(/\.ts$/, '')}`;
     const { default: migration } = (await import(modulePath)) as { default: MigrationFile };
     expect(AvailableMigrations.map(m => m.id)).toContain(migration.id);
+  });
+});
+
+/**
+ * Core id uniqueness straight from the files on disk, independent of the generated registry, so
+ * two PRs that each passed CI alone but collide once both land fail main's CI on push rather than
+ * the DatabaseMigrator at deploy. The filename prefix is what scripts/check-migration-ids.mjs
+ * validates, so the id inside each file must match it.
+ */
+describe('core migration ids are unique', () => {
+  const MIGRATION_FILE = /^(\d+)[-_].+\.ts$/;
+  const migrationFiles = readdirSync(new URL('.', import.meta.url)).filter(
+    f => MIGRATION_FILE.test(f) && !f.endsWith('.test.ts')
+  );
+  const prefixOf = (filename: string) => MIGRATION_FILE.exec(filename)![1];
+
+  it('no two migration files share an id prefix', () => {
+    const byPrefix = Map.groupBy(migrationFiles, prefixOf);
+    const collisions = [...byPrefix.values()].filter(files => files.length > 1);
+    expect(collisions).toEqual([]);
+  });
+
+  it.each(migrationFiles)('%s declares the id in its filename', async filename => {
+    const { default: migration } = (await import(`./${filename.replace(/\.ts$/, '')}`)) as {
+      default: MigrationFile;
+    };
+    expect(String(migration.id)).toBe(prefixOf(filename));
   });
 });

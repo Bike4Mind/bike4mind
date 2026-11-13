@@ -48,7 +48,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const rewriteStorageDb = {
   fabFiles: fabFileRepository,
@@ -98,10 +98,10 @@ const handler = baseApi()
             const opsModelConfig = await OperationsModelService.getOperationsModelConfig();
             if (opsModelConfig?.modelId) {
               modelToUse = opsModelConfig.modelId;
-              console.log(`[Edit API] Using operations model: ${modelToUse}`);
+              req.logger.info('[Edit API] Using operations model', { model: modelToUse });
             }
           } catch (error) {
-            console.log(`[Edit API] Could not fetch operations model, using default`);
+            req.logger.info('[Edit API] Could not fetch operations model, using default', { error });
           }
         }
         // Default to Claude Sonnet if no model specified
@@ -124,7 +124,7 @@ const handler = baseApi()
             throw new BadRequestError('File has no content');
           }
 
-          console.log(`[Edit API] File details:`, {
+          req.logger.debug('[Edit API] File details', {
             fileId: file.id,
             fileName: file.fileName,
             filePath: file.filePath,
@@ -172,16 +172,19 @@ const handler = baseApi()
             expiresIn: 60,
           });
 
-          console.log(`[Edit API] Generated signed URL for S3 key: ${s3Key}`);
+          req.logger.debug('[Edit API] Generated signed URL', { s3Key });
 
           const contentResponse = await fetch(signedUrl);
 
           if (!contentResponse.ok) {
-            const errorText = await contentResponse.text();
-            console.error(`[Edit API] Failed to fetch file content:`, {
+            try {
+              await contentResponse.body?.cancel();
+            } catch (error) {
+              req.logger.warn('Failed to release file content response', { fileId: id, error });
+            }
+            req.logger.error('[Edit API] Failed to fetch file content', {
               status: contentResponse.status,
               statusText: contentResponse.statusText,
-              errorBody: errorText.substring(0, 500),
               filePath: file.filePath,
             });
             throw new BadRequestError('Failed to fetch file content from storage');
@@ -203,10 +206,9 @@ const handler = baseApi()
             originalContent = await contentResponse.text();
             // Check if content looks like an XML error
             if (originalContent.startsWith('<?xml') && originalContent.includes('Error')) {
-              console.error(
-                '[Edit API] S3 returned XML error instead of file content:',
-                originalContent.substring(0, 200)
-              );
+              req.logger.error('[Edit API] S3 returned XML error instead of file content', {
+                filePath: file.filePath,
+              });
               throw new BadRequestError('File content is not accessible. The file may have been moved or deleted.');
             }
           }
@@ -286,7 +288,7 @@ ${originalContent}
 
 Return only the edited content without any markdown code blocks or explanations.`;
 
-          console.log(`[Edit API] Invoking model: ${modelToUse} (${modelInfo.backend})`);
+          req.logger.debug('[Edit API] Invoking model', { model: modelToUse, backend: modelInfo.backend });
 
           const messages: IMessage[] = [
             { role: 'system', content: systemPrompt },
@@ -368,7 +370,7 @@ Return only the edited content without any markdown code blocks or explanations.
           });
 
           if (!editedContent) {
-            console.error('[Edit API] AI model returned empty response', {
+            req.logger.error('[Edit API] AI model returned empty response', {
               model: modelToUse,
               backend: modelInfo.backend,
               instructionLength: instruction.length,
@@ -472,9 +474,6 @@ Return only the edited content without any markdown code blocks or explanations.
                     versions,
                     updatedAt: now,
                     ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                    // The cached URL signs the old key, which deleteDroppedVersions may remove; force a re-sign.
-                    fileUrl: null,
-                    fileUrlExpireAt: null,
                   },
                 },
                 rewriteStorageDb
@@ -506,7 +505,7 @@ Return only the edited content without any markdown code blocks or explanations.
 
           return res.json(result);
         } catch (error) {
-          if (!isTerminalCreditRefusal(error)) console.error('Edit file error:', error);
+          if (!isTerminalCreditRefusal(error)) req.logger.error('Edit file error', { fileId: id, error });
           // The storage gate, a missing owner, model admission (403) and the credit reservation (422)
           // already carry their own status code; rethrow them instead of flattening every error to a 400.
           if (isStorageLimitError(error) || error instanceof HTTPError) throw error;

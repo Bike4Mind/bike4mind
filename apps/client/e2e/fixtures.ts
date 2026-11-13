@@ -19,6 +19,7 @@ import { TavernPage } from './pages/TavernPage';
 import { DataLakePage } from './pages/DataLakePage';
 import { SkillsPage } from './pages/SkillsPage';
 import { TeamsPage } from './pages/TeamsPage';
+import { StudioPage } from './pages/StudioPage';
 import { getTestUsers } from './helpers/test-users';
 import { installWafBypass } from './helpers/waf-bypass';
 import { bypassTurnstile } from './helpers/turnstile';
@@ -48,6 +49,7 @@ type TestFixtures = {
   dataLakePage: DataLakePage;
   skillsPage: SkillsPage;
   teamsPage: TeamsPage;
+  studioPage: StudioPage;
   loginAsAdmin: () => Promise<void>;
   loginAsUser: (user: SpecAuth) => Promise<void>;
   /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
@@ -240,6 +242,10 @@ export const test = base.extend<TestFixtures>({
 
   teamsPage: async ({ page }, use) => {
     await use(new TeamsPage(page));
+  },
+
+  studioPage: async ({ page }, use) => {
+    await use(new StudioPage(page));
   },
 
   loginAsAdmin: async ({ page, authState }, use) => {

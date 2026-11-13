@@ -16,7 +16,6 @@ import {
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import type { ActiveUserCounts, ActiveUsersDay, AnalyticsOverview } from '@client/app/utils/analyticsOverview';
 import { DataTable, SegmentedControl, type DataColumn } from '../shared';
-import { SIGNAL_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
 import { comparisonLine, formatCount, formatDayLabel } from './analyticsFormat';
 import { isIsolatedPoint } from './isolatedPoint';
@@ -107,7 +106,6 @@ type Props = {
 export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaultRange }: Props) {
   const theme = useTheme();
   const admin = theme.palette.admin;
-  const scheme = theme.palette.mode === 'dark' ? 'dark' : 'light';
   const [mode, setMode] = useState<ActiveUsersMode>('users');
 
   const days = useMemo(() => data?.activeUsers.days ?? [], [data]);
@@ -169,7 +167,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
   const sourceColor = (source: string) => {
     const slot = SOURCE_ORDER.indexOf(source);
-    const palette = SIGNAL_COLORS[scheme];
+    const palette = admin.chartSeries;
     return palette[(slot === -1 ? SOURCE_ORDER.length + sources.indexOf(source) : slot) % palette.length];
   };
 

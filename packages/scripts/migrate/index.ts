@@ -2,7 +2,9 @@ import { connectDB } from '@bike4mind/database';
 import yargs from 'yargs';
 import { AvailableMigrations } from './migrations';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import { MigrationManager, selectPending } from './migrationManager';
+import { findMigrationWithId, formatMigrationId } from './migrationId';
 import { Migration } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import path from 'path';
@@ -121,16 +123,13 @@ export class MigrationTool extends MigrationManager {
   }
 
   async generate(name: string): Promise<void> {
-    const now = new Date();
-    // Concatenate the zero-padded timestamp with the name
-    const id = [
-      now.getFullYear().toString(),
-      `0${now.getMonth() + 1}`.slice(-2),
-      `0${now.getDate()}`.slice(-2),
-      `0${now.getHours()}`.slice(-2),
-      `0${now.getMinutes()}`.slice(-2),
-      `0${now.getSeconds()}`.slice(-2),
-    ].join('');
+    const id = formatMigrationId(new Date());
+    const currentDirPath = path.dirname(fileURLToPath(import.meta.url));
+    const migrationsDir = path.join(currentDirPath, 'migrations');
+    const existing = findMigrationWithId(migrationsDir, id);
+    if (existing) {
+      throw new Error(`Migration id ${id} is already used by ${existing}; wait a second and rerun generate.`);
+    }
     const filename = `${id}_${name
       .replace(/[^a-z0-9]/gi, '-')
       .replace('--', '-')
@@ -150,13 +149,18 @@ const migration: MigrationFile = {
 
 export default migration;
 `;
-    const currentDirPath = path.dirname(fileURLToPath(import.meta.url));
-    const migrationsPath = path.join(currentDirPath, 'migrations', filename);
+    const migrationsPath = path.join(migrationsDir, filename);
     console.log(`Creating ./migrations/${filename}...`);
     fs.writeFileSync(migrationsPath, template);
-    console.log(
-      `\nDone.  Next write the up() and down() implementations and add the reference to ./migrations/index.ts`
+    // Registers the new file in migrations/core.generated.ts.
+    execFileSync(
+      process.execPath,
+      [path.join(currentDirPath, '../../../apps/client/scripts/generate-premium-glue.mjs')],
+      {
+        stdio: 'inherit',
+      }
     );
+    console.log(`\nDone.  Next write the up() and down() implementations.`);
   }
 }
 

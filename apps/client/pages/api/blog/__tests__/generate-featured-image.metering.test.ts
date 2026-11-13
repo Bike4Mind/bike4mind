@@ -29,7 +29,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (h: unknown) => h }),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: m.record },
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: m.assertAdmission }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [
     { id: 'gpt-image-1', type: 'image' },

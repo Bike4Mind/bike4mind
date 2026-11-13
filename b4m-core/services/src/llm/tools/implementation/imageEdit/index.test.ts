@@ -192,20 +192,14 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
     expect(context.storage.getSignedUrl).toHaveBeenCalledWith('clean.png');
   });
 
-  it('resolves an unsigned fileUrl fallback as untrusted', async () => {
+  it('ignores a stored fileUrl and reports a file without filePath as inaccessible', async () => {
     const context = createFakeContextWithFabFile({
       mimeType: 'image/png',
       moderationStatus: 'clean',
       fileUrl: 'https://external.example/already-hosted.png',
     });
 
-    const resolved = await getImageFromFileId(VALID_FILE_ID, context);
-
-    expect(resolved).toEqual({
-      url: 'https://external.example/already-hosted.png',
-      fabFileId: expect.any(String),
-      trustConfiguredStorageOrigin: false,
-    });
+    await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow(/no accessible URL/);
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
   });
 });

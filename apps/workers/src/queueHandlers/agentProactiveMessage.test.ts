@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ForbiddenError, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: h.getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: h.getUserEntitlements }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
@@ -61,13 +61,15 @@ vi.mock('@bike4mind/utils', () => ({
   },
 }));
 
-vi.mock('@server/utils/pushNotifications', () => ({
+vi.mock('@bike4mind/server-utils/utils/pushNotifications', () => ({
   publishPushNotification: h.publishPushNotification,
   sessionDeepLink: (sessionId: string) => `https://app.example.test/notebooks/${sessionId}`,
   truncateForPush: (text: string) => text,
 }));
 
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: h.createCompletionMeter,
+}));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),

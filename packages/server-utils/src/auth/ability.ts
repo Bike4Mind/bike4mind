@@ -74,10 +74,12 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     allow('read', ModalModel);
 
-    // Allow all users to read settings, but only admins can modify them
+    // Allow all users to read settings, but only admins can modify them. modelListRevision and
+    // modelAccessRevision are how an open tab learns its model list or model access changed: the
+    // adminsettings subscription is scoped by this rule.
     allow('read', AdminSettings, {
       settingName: {
-        $in: ['EnableQuestMaster', 'EnableMementos', 'EnableArtifacts'],
+        $in: ['EnableQuestMaster', 'EnableMementos', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'],
       },
     });
     if (user.isAdmin) {

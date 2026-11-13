@@ -10,9 +10,17 @@ import { deleteOrganization, deleteSchema } from './delete';
 import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
+import { getMemberOffboardingInventory } from './getMemberOffboardingInventory';
+import { reassignMemberContent } from './reassignMemberContent';
 import { leave } from './leave';
+import { transferOwnership } from './transferOwnership';
+import type { TransferOwnershipResult } from './transferOwnership';
+import { setOrganizationManager } from './setOrganizationManager';
+import type { OrganizationManagerChange } from './setOrganizationManager';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { createStandardGroup } from './createStandardGroup';
+import { shareGroupProject } from './shareGroupProject';
 import {
   assignUserToGroup,
   removeUserFromGroup,
@@ -52,9 +60,15 @@ export {
   listOwn,
   listPendingUsers,
   revokeAccess,
+  getMemberOffboardingInventory,
+  reassignMemberContent,
   leave,
+  transferOwnership,
+  setOrganizationManager,
   clearActiveOrganization,
   setOrganizationGroupTypes,
+  createStandardGroup,
+  shareGroupProject,
   assignUserToGroup,
   assertCanManageOrgGroups,
   removeUserFromGroup,
@@ -69,6 +83,8 @@ export {
 };
 
 export type { SearchParameters };
+export type { TransferOwnershipResult };
+export type { OrganizationManagerChange };
 export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
 export type { GetOrganizationStorageUsageAdapters };
 export type { GroupTypeResolutionOverride };

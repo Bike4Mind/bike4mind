@@ -41,7 +41,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   sessionRepository: { findById: vi.fn().mockResolvedValue({ id: 'sess-1', userId: 'user-1', knowledgeIds: [] }) },
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ prompt: 'hello', fabFileIds: [] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
@@ -76,8 +76,10 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   createModelAdmission: () => ({ admits: async () => true, assert: m.admissionAssert }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({ createAttachmentLakeAccess: () => async () => ({}) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: () => async () => ({}),
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 const MODEL = { id: 'gpt-4-test', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };

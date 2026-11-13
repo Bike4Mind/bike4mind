@@ -6,6 +6,7 @@ import {
   projectRepository,
   withTransaction,
   fabFileRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -37,6 +38,7 @@ const handler = baseApi().post(
               chatHistories: questRepository,
               projects: projectRepository,
               fabFiles: fabFileRepository,
+              organizations: organizationRepository,
               agents: agentRepository,
             },
             // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of
@@ -50,7 +52,9 @@ const handler = baseApi().post(
             // handful of reads inside the transaction this route opens. That is the intended trade - the
             // alternative is persisting an unreachable scope, which is permanent once non-empty.
             resolveLakeAccess: async () =>
-              (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+              (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(
+                req
+              ),
             resolveSurfaceAccess: copySurfaceAccessForRequest(req),
             workspaceSessionSettings: premiumWorkspaceSessionSettings,
           }

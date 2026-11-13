@@ -1,4 +1,4 @@
-import { RESEARCH_SCHEDULE_CADENCES } from '@bike4mind/common';
+import { RESEARCH_SCHEDULE_CADENCES, RESEARCH_UNLISTED_SOURCES } from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -21,7 +21,13 @@ export const ResearchLeversInput = z.object({
   // Nullable so a client can CLEAR the window. The normalizer reads 0 and null alike as "no
   // recency constraint", and null is what the UI sends when the field is emptied.
   recencyDays: z.number().nullable().optional(),
+  // Legacy: still sent by tabs opened before the tiers. Ignored when the tier fields are present.
   allowedDomains: z.array(z.string()).optional(),
+  trustedDomains: z.array(z.string()).optional(),
+  reviewDomains: z.array(z.string()).optional(),
+  unlistedSources: z.enum(RESEARCH_UNLISTED_SOURCES).optional(),
+  autoAdmitTrusted: z.boolean().optional(),
+  maxAutoAdmits: z.number().optional(),
   blockedDomains: z.array(z.string()).optional(),
   minRelevance: z.number().optional(),
   costCeilingMicroUsd: z.number().optional(),

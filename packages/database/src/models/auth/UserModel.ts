@@ -1,11 +1,14 @@
 import {
   THROTTLE_SOURCES,
+  SUSPENSION_REASON_CATEGORIES,
   ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
   ADMIN_PERMISSIONS,
   AuthStrategy,
@@ -42,7 +45,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
-import { NotFoundError } from '@bike4mind/utils';
+import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -344,6 +347,31 @@ export type UserSignupLinkFacts = {
   landingNotebookOwnerId: string | null;
 };
 
+/**
+ * The signup and two-factor facts an advisory abuse assessment reads per account
+ * (UserRepository.findAccountRiskProfiles). The caller reduces them to flags before anything leaves.
+ */
+export type UserAccountRiskProfile = {
+  id: string;
+  createdAt: Date | null;
+  email: string | null;
+  /** As findSignupLinkFacts reads it. */
+  signupMethod: string;
+  signupIp: string | null;
+  signupJa4: string | null;
+  signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
+  signupDatacenter: boolean | null;
+  signupWafAnonIp: boolean | null;
+  totpEnabled: boolean;
+  /** When TOTP setup began; enabling follows within the same setup flow. */
+  mfaSetupAt: Date | null;
+};
+
+/** An account that may share a signup trait with another (UserRepository.findSignupLinkCandidates). */
+export type UserSignupLinkCandidate = UserLinkState & { signupIp: string | null; signupJa4: string | null };
+
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
   id: string;
@@ -353,6 +381,7 @@ export type UserLinkState = {
   isBanned: boolean;
   disputePending: boolean;
   moderation: { status: UserModerationStatus } | null;
+  currentCredits: number;
 };
 
 // A held review tranche is paid only by the admin approve path, so automatic approval skips it.
@@ -535,12 +564,45 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
   }
 
-  async findByEmailVerificationToken(token: string) {
-    return this.model.findOne({ emailVerificationToken: token });
+  /** Rotate only the pending change that was read, preserving its original expiry. */
+  async rotatePendingEmailToken(
+    user: Pick<
+      IUserDocument,
+      'id' | 'pendingEmail' | 'pendingEmailToken' | 'pendingEmailSentAt' | 'pendingEmailExpires'
+    >,
+    tokenHash: string,
+    expiresAt: Date,
+    now: Date
+  ): Promise<boolean> {
+    if (expiresAt <= now) return false;
+    const query = this.model.updateOne(
+      {
+        _id: user.id,
+        pendingEmail: user.pendingEmail,
+        pendingEmailToken: user.pendingEmailToken,
+        pendingEmailSentAt: user.pendingEmailSentAt ?? null,
+        pendingEmailExpires: user.pendingEmailExpires ?? null,
+        pendingEmailUsed: { $ne: true },
+      },
+      { $set: { pendingEmailToken: tokenHash, pendingEmailSentAt: now, pendingEmailExpires: expiresAt } }
+    );
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return result.modifiedCount === 1;
   }
 
+  /** Takes the raw token from the email link; the stored value is its hash. */
+  async findByEmailVerificationToken(token: string) {
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ emailVerificationToken: { $in: values } });
+  }
+
+  /** Takes the raw token from the email link; the stored value is its hash. */
   async findByPendingEmailToken(token: string) {
-    return this.model.findOne({ pendingEmailToken: token });
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ pendingEmailToken: { $in: values } });
   }
 
   async findByIdWithPassword(id: string): Promise<IUserDocument | null> {
@@ -614,6 +676,25 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { $set: { totpLastStep: step } }
     );
     return result.modifiedCount === 1;
+  }
+
+  async restoreReleasedGrantState(
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        ...(input.creditsReleased === null
+          ? { signupGrant: { $exists: false } }
+          : { 'signupGrant.creditsReleased': input.creditsReleased }),
+      },
+      {
+        $set: input.set,
+        ...(input.unset.length ? { $unset: Object.fromEntries(input.unset.map(key => [key, ''])) } : {}),
+      }
+    );
+    return result.matchedCount === 1;
   }
 
   async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
@@ -832,13 +913,66 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => String(d._id));
   }
 
-  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
-  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+  /** Signup and two-factor facts per id; ids that are not users are absent. */
+  async findAccountRiskProfiles(ids: string[]): Promise<UserAccountRiskProfile[]> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email createdAt isBanned disputePending moderation.status')
+      .select(
+        'createdAt email signupMeta.ip signupMeta.ja4 signupMeta.asn signupMeta.isDatacenter signupMeta.wafAnonIp ' +
+          'acquisition.signupMethod authProviders.strategy mfa.totpEnabled mfa.setupAt'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      email: doc.email ?? null,
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupJa4: doc.signupMeta?.ja4 ?? null,
+      signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
+      totpEnabled: doc.mfa?.totpEnabled === true,
+      mfaSetupAt: doc.mfa?.setupAt ?? null,
+    }));
+  }
+
+  /**
+   * Accounts created in [from, to] that share the signup IP, the signup JA4, a mailbox (any
+   * `+tag` of `mailbox.local` at any of `mailbox.domains`, dots ignored for Gmail) or a mail domain with the caller's account. Each
+   * criterion is optional; with none, nothing is read. Bounded by `limit` and the createdAt range.
+   */
+  async findSignupLinkCandidates(input: {
+    excludeIds: string[];
+    from: Date;
+    to: Date;
+    ip: string | null;
+    ja4: string | null;
+    mailbox: { local: string; domains: string[]; ignoreDots: boolean } | null;
+    mailDomain: string | null;
+    limit: number;
+  }): Promise<UserSignupLinkCandidate[]> {
+    const criteria: Record<string, unknown>[] = [];
+    if (input.ip) criteria.push({ 'signupMeta.ip': input.ip });
+    if (input.ja4) criteria.push({ 'signupMeta.ja4': input.ja4 });
+    if (input.mailbox) {
+      const local = [...input.mailbox.local].map(escapeRegExp).join(input.mailbox.ignoreDots ? '\\.?' : '');
+      const domains = input.mailbox.domains.map(escapeRegExp).join('|');
+      criteria.push({ email: { $regex: `^${local}(\\+[^@]*)?@(${domains})$`, $options: 'i' } });
+    }
+    if (input.mailDomain) criteria.push({ email: { $regex: `@${escapeRegExp(input.mailDomain)}$`, $options: 'i' } });
+    if (criteria.length === 0) return [];
+    const excluded = convertIds(input.excludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)));
+    const docs = await this.model
+      .find({ createdAt: { $gte: input.from, $lte: input.to }, _id: { $nin: excluded }, $or: criteria })
+      .select(
+        'name email createdAt isBanned disputePending moderation.status signupMeta.ip signupMeta.ja4 currentCredits'
+      )
+      .limit(input.limit)
+      .maxTimeMS(2000)
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -848,6 +982,29 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       isBanned: d.isBanned ?? false,
       disputePending: d.disputePending ?? false,
       moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      signupIp: d.signupMeta?.ip ?? null,
+      signupJa4: d.signupMeta?.ja4 ?? null,
+      currentCredits: d.currentCredits ?? 0,
+    }));
+  }
+
+  /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
+  async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email createdAt isBanned disputePending moderation.status currentCredits')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      name: d.name ?? null,
+      email: d.email ?? null,
+      createdAt: d.createdAt ?? null,
+      isBanned: d.isBanned ?? false,
+      disputePending: d.disputePending ?? false,
+      moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      currentCredits: d.currentCredits ?? 0,
     }));
   }
 
@@ -959,6 +1116,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
@@ -1141,8 +1331,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .exec();
   }
 
-  async countPendingRiskReviews(): Promise<number> {
-    return this.model.countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }).exec();
+  async countPendingRiskReviews(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }, { limit: options.limit })
+      .exec();
   }
 
   async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
@@ -1398,6 +1590,8 @@ const UserAcquisitionSchema = new Schema(
     lastTouch: { type: AcquisitionTouchSchema, required: false },
     // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
     verifiedTouch: { type: VerifiedTouchSchema, required: false },
+    // The OAuth client the account was created to sign in to - see IUserAcquisition.oauthTouch.
+    oauthTouch: { type: AcquisitionTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -1468,6 +1662,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // working password. Gates the SSO auto-link local-email-verified requirement in
     // verifyCallback.ts / okta/callback.ts.
     hasUsablePassword: { type: Boolean, default: false },
+    // toProviderEndUserId(_id): the identifier LLM providers receive for this account, stored so an
+    // admin can resolve a provider safety notice back to the account. Set on create; backfilled by
+    // migration 20260921241030. Hidden from reads like any other internal-only field.
+    providerEndUserId: { type: String, select: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
@@ -1539,6 +1737,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
     isBanned: { type: Boolean, default: false },
+    // Told to the user on the suspension notice; cleared on reinstatement. See accountSuspensionCategories.ts.
+    suspensionReasonCategory: { type: String, enum: [...SUSPENSION_REASON_CATEGORIES, null], default: null },
     isModerated: { type: Boolean, default: false },
     apiKeyTrustApproved: { type: Boolean, default: false },
     newAccountSpendCapLifted: { type: Boolean, default: false },
@@ -1551,7 +1751,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     accountDataExportLease: {
       type: new Schema(
-        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        {
+          id: { type: String, required: true },
+          jobId: { type: String, required: false },
+          expiresAt: { type: Date, required: true },
+        },
         { _id: false }
       ),
       required: false,
@@ -1561,6 +1765,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -1618,6 +1824,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     aupAcceptedVersion: { type: String },
     aupAcceptedAt: { type: Date },
     ageAttestedAdult: { type: Boolean },
+    // Stamped by the Stripe webhook when the payer ticks Checkout's terms checkbox.
+    checkoutTermsAcceptedVersion: { type: String },
+    checkoutTermsAcceptedAt: { type: Date },
 
     // email verification
     emailVerified: { type: Boolean, default: false, index: true },
@@ -1847,6 +2056,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -1893,8 +2109,25 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Derived from _id, so it never changes after create; insert paths that skip document middleware
+// (insertMany, bulkWrite) are covered by the backfill migration rather than this hook.
+UserSchema.pre('save', function (next) {
+  if (this.isNew && !this.providerEndUserId) this.providerEndUserId = toProviderEndUserId(String(this._id));
+  next();
+});
+
 // Stripe-customer resolution for business metrics.
 UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+// Admin lookup of the account behind a provider safety notice. Partial so accounts created before the
+// backfill are not indexed as null. Explicit name so migration 20260921241030 and autoIndex agree.
+UserSchema.index(
+  { providerEndUserId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { providerEndUserId: { $type: 'string' } },
+    name: 'user_providerEndUserId',
+  }
+);
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
@@ -1967,7 +2200,7 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
-// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// Serves the linked-account lookup by signup IP (packages/server-utils/src/billing/linkedAccounts.ts). Partial:
 // the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
 // 20260921236600 and autoIndex agree.
 UserSchema.index(
@@ -1979,7 +2212,7 @@ UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
 // Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
-// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// (packages/server-utils/src/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
 // adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
 // serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
 // by the ensure-user-admin-list-indexes migration.
@@ -1987,6 +2220,16 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.

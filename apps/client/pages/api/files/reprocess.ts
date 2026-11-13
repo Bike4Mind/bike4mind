@@ -1,8 +1,8 @@
 import { Permission, getFileMembershipArm, type IFabFileDocument } from '@bike4mind/common';
 import { dataLakeAccessGrantRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { getFabFileById } from '@bike4mind/server-utils/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';

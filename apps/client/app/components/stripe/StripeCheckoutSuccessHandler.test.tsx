@@ -1,23 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, waitFor } from '@testing-library/react';
 
-const { mockToastSuccess, mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState } = vi.hoisted(() => ({
-  mockToastSuccess: vi.fn(),
-  mockGet: vi.fn(),
-  mockTrackPurchaseConversion: vi.fn(),
-  mockBootstrapSession: vi.fn(),
-  tokenState: { accessToken: 'token' as string | null },
-}));
+const { mockToastSuccess, mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState, userState } =
+  vi.hoisted(() => ({
+    mockToastSuccess: vi.fn(),
+    mockGet: vi.fn(),
+    mockTrackPurchaseConversion: vi.fn(),
+    mockBootstrapSession: vi.fn(),
+    tokenState: { accessToken: 'token' as string | null },
+    userState: { currentUser: { id: 'buyer' } },
+  }));
 
 vi.mock('sonner', () => ({ toast: { success: mockToastSuccess } }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: { getState: () => userState } }));
 vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
 vi.mock('@client/app/utils/sessionBootstrap', () => ({ bootstrapSession: mockBootstrapSession }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: { getState: () => tokenState } }));
 
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
-import StripeCheckoutSuccessHandler, { checkoutConfirmation } from './StripeCheckoutSuccessHandler';
+import StripeCheckoutSuccessHandler, {
+  CHECKOUT_RETURN_DELAY_MS,
+  checkoutConfirmation,
+  checkoutReturnNavigator,
+} from './StripeCheckoutSuccessHandler';
 
 const SUMMARY = {
   transactionId: 'cs_test_1',
@@ -47,6 +55,7 @@ describe('StripeCheckoutSuccessHandler', () => {
     window.sessionStorage.clear();
     consumeBillingCheckoutReturn();
     tokenState.accessToken = 'token';
+    userState.currentUser = { id: 'buyer' };
     mockBootstrapSession.mockResolvedValue(undefined);
     mockGet.mockResolvedValue({ data: SUMMARY });
   });
@@ -135,6 +144,138 @@ describe('StripeCheckoutSuccessHandler', () => {
     expect(mockBootstrapSession).not.toHaveBeenCalled();
     expect(mockGet).not.toHaveBeenCalled();
   });
+
+  it('opens the newly created team after verified checkout', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/organizations/org1?team_created=true'));
+      expect(mockToastSuccess).toHaveBeenLastCalledWith('Team created successfully!', { id: 'cs_test_1' });
+    } finally {
+      replace.mockRestore();
+    }
+  });
+
+  it('keeps same-page team navigation and one conversion across StrictMode effect replay', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      window.history.replaceState({}, '', `/${CHECKOUT_RETURN}`);
+      render(
+        <StrictMode>
+          <StripeCheckoutSuccessHandler />
+        </StrictMode>
+      );
+      await waitFor(() => expect(replace).toHaveBeenCalledExactlyOnceWith('/organizations/org1?team_created=true'));
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith({
+        ...SUMMARY,
+        teamCheckout: true,
+        organizationId: 'org1',
+      });
+      expect(window.location.search).toBe('');
+    } finally {
+      replace.mockRestore();
+    }
+  });
+
+  it('waits for team provisioning without reporting the purchase twice', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet
+        .mockResolvedValueOnce({ data: { ...SUMMARY, teamCheckout: true } })
+        .mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      expect(replace).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(replace).toHaveBeenCalledWith('/organizations/org1?team_created=true');
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
+
+  it.each(['navigation', 'unmount', 'account switch'])(
+    'does not redirect after %s during a held provisioning lookup',
+    async change => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let resolveLookup!: (response: {
+          data: typeof SUMMARY & { teamCheckout: boolean; organizationId: string };
+        }) => void;
+        mockGet.mockResolvedValueOnce({ data: { ...SUMMARY, teamCheckout: true } }).mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              resolveLookup = resolve;
+            })
+        );
+        const view = returnTo(CHECKOUT_RETURN);
+        await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(mockGet).toHaveBeenCalledTimes(2);
+        if (change === 'navigation') window.history.pushState({}, '', '/notebooks/draft');
+        if (change === 'unmount') view.unmount();
+        if (change === 'account switch') userState.currentUser = { id: 'other-buyer' };
+        resolveLookup({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(replace).not.toHaveBeenCalled();
+        expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith({ ...SUMMARY, teamCheckout: true });
+        await vi.advanceTimersByTimeAsync(10000);
+        expect(mockGet).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+        replace.mockRestore();
+      }
+    }
+  );
+
+  it('retries provisioning once from the current page even if Check again is clicked twice', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(9000);
+      const options = mockToastSuccess.mock.lastCall?.[1] as { action: { onClick: () => void } };
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      options.action.onClick();
+      options.action.onClick();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGet).toHaveBeenCalledTimes(8);
+      expect(replace).toHaveBeenCalledExactlyOnceWith('/organizations/org1?team_created=true');
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
+
+  it('does not revive an obsolete check-again action after leaving the return page', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(9000);
+      const options = mockToastSuccess.mock.lastCall?.[1] as { action: { onClick: () => void } };
+      expect(options.action).toBeDefined();
+      window.history.pushState({}, '', '/notebooks/draft');
+      options.action.onClick();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(mockGet).toHaveBeenCalledTimes(7);
+      expect(replace).not.toHaveBeenCalled();
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
 });
 
 describe('checkoutConfirmation', () => {
@@ -144,5 +285,54 @@ describe('checkoutConfirmation', () => {
 
   it('falls back to the generic message without a plan name', () => {
     expect(checkoutConfirmation({ credits: 100 })).toBe('Subscription completed successfully!');
+  });
+
+  describe('a checkout another Bike4Mind app started', () => {
+    const PAINTBOX = 'https://paintbox.bike4mind.com/';
+    const back = `checkout_return_to=${encodeURIComponent(PAINTBOX)}`;
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      window.sessionStorage.clear();
+      tokenState.accessToken = 'token';
+      userState.currentUser = { id: 'buyer' };
+      mockBootstrapSession.mockResolvedValue(undefined);
+      mockGet.mockResolvedValue({ data: SUMMARY });
+    });
+
+    it('returns there only after the purchase is confirmed and reported', async () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        returnTo(`?${back}&subscription_success=true&checkout_session_id=cs_test_1`);
+        await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+        expect(replace).not.toHaveBeenCalled();
+        expect(window.location.search).toBe('');
+        await vi.advanceTimersByTimeAsync(CHECKOUT_RETURN_DELAY_MS);
+        expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+      } finally {
+        vi.useRealTimers();
+        replace.mockRestore();
+      }
+    });
+
+    it('returns there at once from a cancelled checkout', () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      returnTo(`?${back}`);
+      expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+      replace.mockRestore();
+    });
+
+    it('never follows a return target it does not allow', async () => {
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+      for (const target of ['https://evil.example/', 'http://paintbox.bike4mind.com/', 'javascript:alert(1)']) {
+        returnTo(`?checkout_return_to=${encodeURIComponent(target)}`);
+        returnTo(`?checkout_return_to=${encodeURIComponent(target)}&subscription_success=true`);
+      }
+      await settle();
+      expect(replace).not.toHaveBeenCalled();
+      replace.mockRestore();
+    });
   });
 });

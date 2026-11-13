@@ -1,4 +1,5 @@
 import type { DataHolderRegistry } from '../types';
+import { CATALOG_PUBLICATION } from './retention';
 
 export const aiHolders = {
   ActiveCodeAgent: {
@@ -32,7 +33,8 @@ export const aiHolders = {
         path: 'publishedBy',
         matchBy: 'userId',
         action: 'retain',
-        reason: 'Immutable record of which administrator published a catalog version, kept for accountability',
+        ...CATALOG_PUBLICATION,
+        exportScope: 'reference',
       },
     ],
   },

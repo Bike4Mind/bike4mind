@@ -16,8 +16,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
   moderateImportedKnowledgeFiles: h.moderate,
 }));
-vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: () => ({ marker: 'deps' }) }));
-vi.mock('@server/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: h.buildMeter }));
+vi.mock('@bike4mind/server-utils/s3/knowledgeModerationDeps', () => ({
+  buildKnowledgeModerationDeps: () => ({ marker: 'deps' }),
+}));
+vi.mock('@bike4mind/server-utils/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: h.buildMeter }));
 
 import { runModerationRescueSweep } from './moderationRescueSweep';
 

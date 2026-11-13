@@ -31,7 +31,7 @@ export const AuditEntryReviewSection: React.FC<AuditEntryReviewSectionProps> = (
             : `Reviewed by ${review.reviewer.name}, ${relativeTimeFormat(review.reviewedAt)}`}
         </Typography>
         {review.note && <Typography level="body-sm">{review.note}</Typography>}
-        {isMine && (
+        {isMine && !impersonating && isFullAdmin(currentUser) && (
           <Button
             variant="plain"
             size="sm"

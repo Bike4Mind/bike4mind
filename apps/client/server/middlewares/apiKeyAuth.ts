@@ -22,12 +22,16 @@ import { createHash } from 'crypto';
 import type { z } from 'zod';
 import {
   decideScopeGate,
+  isLegacyApiKey,
+  LEGACY_SCOPE_PASS_LOG,
   parseStagedScopes,
+  shouldLogLegacyPass,
   SCOPE_STAGING_ENV_VAR,
 } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
-import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
-import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
+import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
+import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
@@ -69,8 +73,17 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  *   of these scopes (AND / "all of" semantics), independent of how
  *   requiredScopes resolves. No staging grace period - see decideScopeGate's
  *   doc comment (apiKeyScopeGate.ts).
+ * @param options.recordUse - `false` for routes the app calls on its own (baseApi's
+ *   `recordsActivity: false`): the key's `lastUsedAt` is not stamped and no USED event is
+ *   counted. ApiKeyUsageLog still records the call, as it does every authenticated request.
+ * @param options.grandfatherLegacyKeys - Admit legacy keys that miss `requiredScopes`
+ *   (baseApi's `grandfatherLegacyKeys`); see LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts.
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScopes?: ApiKeyScopeValue[]) => {
+export const apiKeyAuth = (
+  requiredScopes?: ApiKeyScopeValue[],
+  alsoRequiredScopes?: ApiKeyScopeValue[],
+  { recordUse = true, grandfatherLegacyKeys = false }: { recordUse?: boolean; grandfatherLegacyKeys?: boolean } = {}
+) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -93,11 +106,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       const startTime = Date.now();
       const endpointPath = resolveRouteTemplate(req);
 
-      const validation = await userApiKeyService.validateUserApiKey(apiKey, {
-        db: {
-          userApiKeys: userApiKeyRepository,
-        },
-      });
+      const validation = await userApiKeyService.validateUserApiKey(
+        apiKey,
+        { db: { userApiKeys: userApiKeyRepository } },
+        { recordUse }
+      );
 
       if (!validation.isValid) {
         const failIp = getClientIp(req);
@@ -108,6 +121,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
           ip: failIp,
           userAgent: req.headers['user-agent'],
         });
+        if (validation.reason === 'not_found') await refuseIfSuspendedOwner(apiKey, req.logger);
         throw new UnauthorizedError('Invalid API key');
       }
 
@@ -130,7 +144,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
           });
         }
       }
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes);
+      const grandfathered = grandfatherLegacyKeys && isLegacyApiKey(validation.createdAt);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes, {
+        grandfathered,
+        exchangeKey: !!validation.oauthExchangeClientId,
+      });
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -147,6 +165,8 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
+        } else if (gate.outcome === 'legacyAllow') {
+          if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
           throw new ForbiddenError(
@@ -217,6 +237,8 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,
         preauthorizedLakeIds: validation.preauthorizedLakeIds,
+        createdAt: validation.createdAt,
+        oauthExchangeClientId: validation.oauthExchangeClientId,
       };
 
       // Create CASL ability for the user
@@ -234,7 +256,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
       // Log API key usage to analytics (fire and forget). Ingest keys are machine telemetry at
       // thousands of POSTs per hour, not user activity; ApiKeyUsageLog below still records them.
       // Note: keyPrefix is named for type compatibility but contains a hash for security
-      if (!validation.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
+      if (recordUse && !validation.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
         const responseTime = Date.now() - startTime;
         logEvent(
           {

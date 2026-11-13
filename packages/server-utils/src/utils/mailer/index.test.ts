@@ -208,6 +208,16 @@ describe('MailService', () => {
       expect(result).toBe(false);
     });
 
+    it('logs nothing extra for a plain error without an SMTP code', async () => {
+      mockSendMail.mockRejectedValue(new Error('Socket closed'));
+
+      const mailer = await createMailService();
+      await mailer.sendEmail('user@test.com', { subject: 'Test' });
+
+      const { Logger } = await import('@bike4mind/observability');
+      expect(Logger.error).toHaveBeenCalledWith(expect.stringContaining('Socket closed'), '', '', expect.any(String));
+    });
+
     it('handles SMTP error codes gracefully', async () => {
       const smtpError = Object.assign(new Error('Relay denied'), {
         code: '550',

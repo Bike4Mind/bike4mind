@@ -443,6 +443,8 @@ export function applyQuestStatusChanges(
 export interface BuildMcpToolsArgs {
   enableMCPServer: boolean;
   requestedMcpServers: string[] | undefined;
+  /** Custom connector slugs switched off in the composer (see ChatCompletionInvokeParamsSchema). */
+  disabledMcpConnections?: readonly string[];
   defaultAdminSettings: Record<string, string>;
   userMessage: string;
   logger: Logger;
@@ -856,6 +858,7 @@ export class ToolBuilder {
   async buildMcpTools({
     enableMCPServer,
     requestedMcpServers,
+    disabledMcpConnections,
     defaultAdminSettings: _defaultAdminSettings,
     userMessage: _userMessage,
     logger,
@@ -952,13 +955,16 @@ export class ToolBuilder {
       }
     }
 
-    // Custom connectors use their own enabled switch (the composer cannot name their slugs yet). A
-    // failure here drops custom tools only, never the built-ins above.
+    // Custom connectors follow their own enabled switch, narrowed by the composer's opt-out list;
+    // `requestedMcpServers` names built-in servers only. A failure here drops custom tools only,
+    // never the built-ins above.
     if (this.deps.customMcp && onPendingAction && !disableUserIntegrations) {
       try {
         const userId = this.deps.user.id;
+        const switchedOff = new Set(disabledMcpConnections ?? []);
         const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger);
         for (const connection of connections) {
+          if (switchedOff.has(connection.slug)) continue;
           const tools = generateCustomMcpTools(connection, {
             userId,
             host: this.deps.customMcp,

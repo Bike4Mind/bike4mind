@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest';
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
   USER_SECRET_FIELDS,
 } from '@bike4mind/common';
 import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
   questCollectionName: 'quests',
+  sessionCollectionName: 'sessions',
   organizationCollectionName: 'organizations',
   inviteCollectionName: 'invites',
   ...overrides,
@@ -57,6 +59,23 @@ describe('resolveFieldLimits', () => {
     const serverOnly = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
     expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toEqual(serverOnly);
     expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
+  });
+
+  it('excludes REST server-owned session fields and the creating key for every viewer', () => {
+    const expected = {
+      ...Object.fromEntries(SERVER_OWNED_SESSION_FIELDS.map(field => [field, false])),
+      'origin.apiKeyId': false,
+    };
+    expect(resolveFieldLimits('sessions', opts())).toEqual(expected);
+    expect(resolveFieldLimits('sessions', opts({ isQuestOwner: true }))).toEqual(expected);
+    expect(resolveFieldLimits('sessions_v2', opts({ sessionCollectionName: 'sessions_v2' }))).toEqual(expected);
+  });
+
+  it('refuses session filters that probe excluded fields while allowing display fields', () => {
+    const limits = resolveFieldLimits('sessions', opts());
+    expect(findWithheldFilterPaths({ 'origin.apiKeyId': { $exists: true } }, limits)).toEqual(['origin.apiKeyId']);
+    expect(findWithheldFilterPaths({ systemPromptText: 'x' }, limits)).toEqual(['systemPromptText']);
+    expect(findWithheldFilterPaths({ 'origin.channel': 'api' }, limits)).toEqual([]);
   });
 
   it('excludes password/stripeCustomerId/resetPasswordToken/throttle/riskSignals for the users collection', () => {
@@ -156,7 +175,35 @@ describe('resolveFieldLimits', () => {
       signupGrantUnlockCount: false,
       signupInviteBonusCount: false,
       billingContact: false,
+      'userDetails.usedCredits': false,
+      'userDetails.maxCredits': false,
+      'userDetails.lastCreditUsedAt': false,
+      'userDetails.periodStart': false,
     });
+  });
+
+  it('keeps credit details for a verified owner or manager on a single-org subscription', () => {
+    expect(resolveFieldLimits('organizations', opts({ isPrivilegedOrgSubscriber: true }))).toEqual({
+      stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
+      billingContact: false,
+    });
+  });
+
+  it('rejects filters probing withheld member credit paths', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(findWithheldFilterPaths({ userDetails: { $elemMatch: { usedCredits: { $gt: 0 } } } }, limits)).toEqual([
+      'userDetails',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.maxCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.maxCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.usedCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.0.usedCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual([]);
   });
 
   it('still excludes stripeCustomerId for a platform admin, who keeps billingContact', () => {
@@ -175,6 +222,10 @@ describe('resolveFieldLimits', () => {
       signupGrantUnlockCount: false,
       signupInviteBonusCount: false,
       billingContact: false,
+      'userDetails.usedCredits': false,
+      'userDetails.maxCredits': false,
+      'userDetails.lastCreditUsedAt': false,
+      'userDetails.periodStart': false,
     });
   });
 

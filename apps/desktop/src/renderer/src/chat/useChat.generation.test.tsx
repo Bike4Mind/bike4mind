@@ -205,6 +205,37 @@ describe('a conversation generation settings', () => {
   describe('across chats', () => {
     const { messages: _messages, generation: _generation, ...meta } = session;
 
+    it('shows a save that lands while its chat is being reopened, whose first read predates it', async () => {
+      const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
+      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      await act(async () => root.render(<Harness />));
+      let answer: (summary: ChatSessionSummary) => void = () => {};
+      setSessionGeneration.mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answer = resolve)));
+      let save: Promise<boolean> | undefined;
+      await act(async () => {
+        save = conversation.setGeneration({ topK: 20 });
+      });
+      await act(async () => root.render(<Harness id="s2" />));
+      let answerFirstRead: (value: ChatSession) => void = () => {};
+      let reads = 0;
+      window.b4m.chat.getSession = async (id: string) => {
+        if (id === 's2') return other;
+        reads++;
+        return reads === 1
+          ? new Promise<ChatSession>(resolve => (answerFirstRead = resolve))
+          : { ...session, generation: { topK: 20 } };
+      };
+      await act(async () => root.render(<Harness id="s1" />));
+      await act(async () => {
+        answer({ ...meta, generation: { topK: 20 }, messageCount: 0 });
+        await save;
+      });
+      await act(async () => answerFirstRead(session));
+      expect(reads).toBe(2);
+      expect(conversation.session?.id).toBe('s1');
+      expect(conversation.session?.generation).toEqual({ topK: 20 });
+    });
+
     it('tells only the chat it failed in, and leaves the open one as it was', async () => {
       const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
       window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);

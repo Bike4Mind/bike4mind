@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthStrategy,
   IUserDocument,
   clientIdFromAuthorizeRedirect,
@@ -35,6 +36,8 @@ interface LoginError {
   // with this one; reusing the original token fails the nonce check (a correct code would
   // then be rejected). Surfaced here so the login UI can swap it in before the next attempt.
   pendingToken?: string;
+  /** Set when sign-in was refused because an admin suspended the account; the stored reason category. */
+  suspensionCategory?: string;
 }
 
 // OTC login response: successful login, MFA required, MFA setup required, or, for an
@@ -138,6 +141,8 @@ export function useSendOTC() {
         };
       }
     },
+    // A form token is bound to the first email it is submitted with; a corrected email needs a fresh one.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['signupFormToken'] }),
   });
 }
 
@@ -270,6 +275,9 @@ export function useVerifyOTC() {
             // with it; dropping it here strands the user on a valid code (see LoginError).
             pendingToken: error.response.data.pendingToken,
             retryAfterSeconds: parseRetryAfter(error.response.headers?.['retry-after']),
+            ...(error.response.data.errorCode === ACCOUNT_SUSPENDED_ERROR_CODE && {
+              suspensionCategory: error.response.data.suspension?.reason_category ?? '',
+            }),
           };
         }
         throw {

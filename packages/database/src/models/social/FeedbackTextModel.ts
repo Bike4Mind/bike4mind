@@ -15,6 +15,7 @@ const feedbackTextSchema = new Schema<IFeedbackTextDocument>(
     // No explicit `_id` path - the create handler supplies it (see the shared-`_id` note above);
     // declaring it here would conflict with Schema<T>'s definition type.
     content: { type: String, required: true },
+    revision: { type: Number, default: 0 },
     contentTruncated: { type: Boolean, default: false },
     // immutable so an admin edit (apps/client/pages/api/feedback/[id]/update.ts) can extend
     // this row's content but never its retention window - swept text cannot be resurrected by

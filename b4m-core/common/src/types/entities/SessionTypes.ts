@@ -707,10 +707,17 @@ export type ListSessionsByUserQuery = {
   limit: number;
 };
 
+/** Set by the server on a session walking a core tutorial; no request schema carries it. */
+export interface SessionTutorialMarker {
+  owner: 'core';
+  moduleId: string;
+}
+
 export interface ISession {
   id: string;
   name: string;
   userId: string;
+  organizationId?: string;
   lastUpdated: Date;
   firstCreated: Date;
   language?: string;
@@ -887,6 +894,8 @@ export interface ISession {
    * Neutral default (unset) = only the core placeholder names apply.
    */
   autoNamePlaceholder?: string;
+  /** Null once the walk ends; the stored write is a $set, which drops undefined. */
+  tutorial?: SessionTutorialMarker | null;
   openaiConversationId?: string;
   claudeConversationId?: string;
   summary?: string;

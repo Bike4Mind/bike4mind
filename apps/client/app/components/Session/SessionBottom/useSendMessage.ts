@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
 import { withSubmitMutex } from './withSubmitMutex';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -230,6 +231,7 @@ export function useSendMessage({
     skipAutoOffers,
     thinking,
     enabledMcpServers,
+    disabledMcpConnections,
     deepResearchConfig,
     organizationId,
     agentMode,
@@ -257,6 +259,7 @@ export function useSendMessage({
       s.skipAutoOffers,
       s.thinking,
       s.enabledMcpServers,
+      s.disabledMcpConnections,
       s.deepResearchConfig,
       s.organizationId,
       s.agentMode,
@@ -747,6 +750,7 @@ export function useSendMessage({
     };
 
     const currentModelInfo = modelInfo?.find(m => m.id === model);
+    const sentThinking = thinkingForSend(thinking, currentModelInfo);
     // Tool-resolution ladder (model-capability gate -> Smart recommendations -> Fast ->
     // briefcase per-message override) extracted to useLLMSettingsAssembly.
     // A briefcase override requiring tools the model can't run REFUSES the send rather
@@ -833,7 +837,7 @@ export function useSendMessage({
           enableAgents: isAgentsEnabled,
           enableLattice: isLatticeEnabled,
           queryClient,
-          thinking,
+          thinking: sentThinking,
           tools: effectiveTools,
           projectId,
           organizationId,
@@ -850,6 +854,7 @@ export function useSendMessage({
           addMessageToSession,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
           // TODO: Remove this once. New one is in imageConfig
           size,
           quality,
@@ -882,7 +887,7 @@ export function useSendMessage({
           enableAgents: isAgentsEnabled,
           enableLattice: isLatticeEnabled,
           queryClient,
-          thinking,
+          thinking: sentThinking,
           tools: effectiveTools,
           projectId,
           organizationId,
@@ -895,6 +900,7 @@ export function useSendMessage({
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
           optimisticSessionId: optimisticTmpId ?? undefined,
           // Forward Agent-mode state for telemetry / future server-side
           // routing. The chat completion path doesn't branch on this -
@@ -1084,7 +1090,7 @@ export function useSendMessage({
           // `agent_execute` dispatch. Forward only when strictly positive so
           // the executor falls back to its built-in default instead.
           maxTokens: safeMaxTokens > 0 ? safeMaxTokens : undefined,
-          thinking: thinking?.enabled ? thinking : undefined,
+          thinking: sentThinking?.enabled ? sentThinking : undefined,
           // Image config (#agent-mode-image-gen). Forwarded only when an image
           // model is resolvable so the executor's image_generation / edit_image
           // tools get a model instead of short-circuiting with "Image model

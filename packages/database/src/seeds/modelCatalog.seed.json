@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-11-06T04:51:42.061Z",
-  "notice": "Fallback defaults last maintained on 2026-11-06. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-12T12:06:08.138Z",
+  "notice": "Fallback defaults last maintained on 2026-11-12. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -650,7 +650,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-11-30"
         },
         "description": "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",
@@ -728,6 +729,41 @@
         "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Sonnet 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Sonnet model. Combines speed and intelligence for coding and agentic work, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2026-06-01"
       }
     },
     {
@@ -2234,7 +2270,8 @@
         },
         "description": "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
         "logoFile": "Anthropic_logo.png",
-        "rank": 1
+        "rank": 1,
+        "trainingCutoff": "2026-06-01"
       }
     },
     {

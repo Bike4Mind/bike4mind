@@ -19,11 +19,14 @@ const output = {
   durationSeconds: 8,
 };
 
+const APP_LINK = 'https://app.example.test/api/file-links/token';
+
 const job = (overrides: Record<string, unknown> = {}) =>
   ({
     id: 'job1',
     kind: 'video',
     state: 'succeeded',
+    requestedBy: 'u1',
     delivery,
     payload: { output },
     ...overrides,
@@ -39,6 +42,7 @@ const build = (client: Partial<SlackPoster> | null = {}) => {
     getSlackClient: vi.fn().mockResolvedValue(client === null ? null : poster),
     downloadOutput: vi.fn().mockResolvedValue(Buffer.from('clip')),
     signOutputUrl: vi.fn().mockResolvedValue({ availability: 'ready', url: 'https://example.test/clip.mp4' }),
+    buildOutputLink: vi.fn().mockReturnValue(APP_LINK),
     sleep: vi.fn().mockResolvedValue(undefined),
     logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } as never,
   };
@@ -108,14 +112,25 @@ describe('deliverJobToSlack', () => {
     }
   );
 
-  it('uses a fresh gated URL after an upload failure', async () => {
+  it('posts the app link for the requester, never a storage URL, after an upload failure', async () => {
     const { poster, deps } = build({ uploadFile: vi.fn().mockResolvedValue({ success: false }) });
     vi.mocked(deps.signOutputUrl)
       .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/old.mp4' })
       .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/fresh.mp4' });
     await deliverJobToSlack(job(), deps);
+    expect(deps.buildOutputLink).toHaveBeenCalledWith(output, 'u1', SLACK_VIDEO_LINK_TTL_SECONDS);
     expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: expect.stringContaining('<https://example.test/fresh.mp4|') })
+      expect.objectContaining({ text: expect.stringContaining(`<${APP_LINK}|`) })
+    );
+    expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).not.toMatch(/old\.mp4|fresh\.mp4/);
+  });
+
+  it('says the clip could not be posted when no link can be built', async () => {
+    const { poster, deps } = build({ uploadFile: vi.fn().mockResolvedValue({ success: false }) });
+    vi.mocked(deps.buildOutputLink).mockReturnValue(null);
+    await deliverJobToSlack(job(), deps);
+    expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: expect.stringContaining('could not post it here') })
     );
   });
 
@@ -213,10 +228,11 @@ describe('deliverJobToSlack', () => {
     }
   );
 
-  it('does not promise a link lifetime', async () => {
+  it('states the link lifetime the app link is minted with', async () => {
     const { poster, deps } = build();
     await deliverJobToSlack(job({ payload: { output: { ...output, bytes: SLACK_VIDEO_UPLOAD_MAX_BYTES + 1 } } }), deps);
-    expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).not.toMatch(/\b7 days\b/);
+    expect(SLACK_VIDEO_LINK_TTL_SECONDS).toBe(7 * 86400);
+    expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).toMatch(/\b7 days\b/);
   });
 
   it('logs when Slack does not accept a notice, since nothing else will tell the user', async () => {

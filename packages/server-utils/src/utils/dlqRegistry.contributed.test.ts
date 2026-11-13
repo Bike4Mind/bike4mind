@@ -35,6 +35,12 @@ async function load(queues: unknown[], core?: CoreNames) {
   return import('./dlqRegistry');
 }
 
+// Each reload builds fresh `describe` closures and toEqual compares functions by reference, so
+// entries from two loads are compared on their data, with `describe` checked for presence only.
+function comparable<T extends { describe?: unknown }>({ describe: describer, ...rest }: T) {
+  return { ...rest, hasDescribe: typeof describer === 'function' };
+}
+
 const NO_CORE_NAMES: CoreNames = { coreResourceNames: null, coreEnvNames: null, coreDlqLabels: null };
 
 describe('contributed DLQ registry', () => {
@@ -42,7 +48,7 @@ describe('contributed DLQ registry', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
     baseline = (await load([])).getDlqRegistry().map(d => d.label);
     vi.resetModules();
   });
@@ -63,11 +69,20 @@ describe('contributed DLQ registry', () => {
       sourceQueue: 'exampleJobQueue',
     });
     expect(registry.getDlqUrl(entry!.label)).toBe(DLQ_URLS['example-job']);
-    expect(registry.getSourceQueueUrl(entry!.sourceQueue)).toBe(SOURCE_URLS.exampleJobQueue);
+    expect(registry.getSourceQueueUrl(registry.contributedSourceQueueName(entry!.sourceQueue!))).toBe(
+      SOURCE_URLS.exampleJobQueue
+    );
     expect(registry.getDlqUrl(registry.contributedDlqLabel('example-job'))).toBe(DLQ_URLS['example-job']);
     expect(registry.getSourceQueueUrl(registry.contributedSourceQueueName('exampleJobQueue'))).toBe(
       SOURCE_URLS.exampleJobQueue
     );
+  });
+
+  it('registers a contributed entry without queue help', async () => {
+    const entry = (await load([QUEUE])).getDlqByLabel('example-job');
+    expect(entry).toBeDefined();
+    expect(entry!.description).toBeUndefined();
+    expect(entry!.replay).toBeUndefined();
   });
 
   it('appends contributed entries and leaves the core labels and order alone', async () => {
@@ -91,10 +106,10 @@ describe('contributed DLQ registry', () => {
     const registry = await load(
       core.flatMap((d, i) => [
         { ...QUEUE, name: `redeclared${i}Queue`, label: d.label },
-        { ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` },
+        ...(d.sourceQueue ? [{ ...QUEUE, name: d.sourceQueue, label: `redeclared-${i}` }] : []),
       ])
     );
-    expect(registry.getDlqRegistry()).toEqual(core);
+    expect(registry.getDlqRegistry().map(comparable)).toEqual(core.map(comparable));
     for (const d of core) expect(() => registry.contributedDlqLabel(d.label)).toThrow('not registered');
     expect(() => registry.contributedDlqLabel('redeclared-0')).toThrow('not registered');
   });
@@ -109,7 +124,8 @@ describe('contributed DLQ registry', () => {
       coreDlqLabels: actual.coreDlqLabels!.filter(label => label !== first.label),
     });
     expect(registry.getDlqRegistry().map(d => d.label)).toEqual(baseline);
-    expect(registry.getDlqByLabel(first.label)).toEqual(first);
+    const found = registry.getDlqByLabel(first.label);
+    expect(found && comparable(found)).toEqual(comparable(first));
     expect(() => registry.contributedDlqLabel('example-job')).toThrow('not registered');
   });
 

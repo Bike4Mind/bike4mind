@@ -6,6 +6,8 @@ import { useSetupMFA, useVerifyMFA, useVerifyMFASetup, type MFASetupResponse } f
 import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
+import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
+import { MFA_SETUP_DESCRIPTION, MFA_SETUP_TITLE } from '@client/app/utils/mfaSetupCopy';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 
 export type MfaChallengeMode = 'verify' | 'setup';
@@ -34,9 +36,6 @@ type MfaChallengeOptions = {
 type MfaModalProps = ComponentProps<typeof MFAModal>;
 
 type ChallengeState = { userId: string; mode: MfaChallengeMode; passkeyAvailable: boolean };
-
-const MFA_SETUP_DESCRIPTION =
-  'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.';
 
 function toMfaLoginResult(data: unknown): MfaLoginResult {
   const result = data as Partial<MfaLoginResult> | null;
@@ -170,7 +169,11 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     }
   };
 
-  const handleCancel = () => endWithoutSession(challenge?.mode ?? 'verify');
+  const handleCancel = () => {
+    // Read before endWithoutSession drops the pending token the report must carry.
+    if (challenge?.mode === 'setup') reportMfaEnrollmentAbandoned(useAccessToken.getState().accessToken);
+    endWithoutSession(challenge?.mode ?? 'verify');
+  };
 
   const mode = challenge?.mode ?? 'verify';
   const passkeyAvailable = !!challenge?.passkeyAvailable;
@@ -183,7 +186,7 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     loading: verifyMFA.isPending || verifyMFASetup.isPending,
     error,
     mode,
-    title: mode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required',
+    title: mode === 'setup' ? MFA_SETUP_TITLE : 'Multi-Factor Authentication Required',
     description:
       mode === 'setup'
         ? MFA_SETUP_DESCRIPTION
@@ -197,6 +200,8 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     allowRememberDevice,
     onPasskeyVerify: passkeyAvailable ? handlePasskeyVerify : undefined,
     passkeyLoading: verifyPasskeyMFA.isPending,
+    // Leaving forced enrollment ends this sign-in, so it is offered as a labelled sign-out.
+    onSignOut: mode === 'setup' ? handleCancel : undefined,
   };
 
   return { begin, modalProps };

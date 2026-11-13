@@ -66,7 +66,7 @@ def verify_linux(folder):
 
 
 def assemble(folder, version, repository, source, mac_mode='signed'):
-    if mac_mode not in ('signed', 'adhoc'):
+    if mac_mode not in ('signed', 'selfsigned', 'adhoc'):
         raise ValueError('Invalid macOS release mode')
     feed_url(repository, source)
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-pr\.\d+\.\d+)?', version):
@@ -106,7 +106,7 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
                 files[-1]['blockMapSize'] = embedded_blockmap_size(payload)
         document = {'version': version, 'files': files, 'path': files[0]['url'], 'sha512': files[0]['sha512']}
         (folder / manifest).write_text(yaml.safe_dump(document, sort_keys=False))
-    checksummed = sorted(assets + ['latest-linux.yml', 'latest.yml'] + (['latest-mac.yml'] if mac_mode == 'signed' else []))
+    checksummed = sorted(assets + ['latest-linux.yml', 'latest.yml'] + ([] if mac_mode == 'adhoc' else ['latest-mac.yml']))
     (folder / 'SHA256SUMS.txt').write_text(''.join(
         f'{hashlib.sha256((folder / name).read_bytes()).hexdigest()}  {name}\n' for name in checksummed))
 
@@ -115,6 +115,8 @@ def prune(folder):
     """Drop build outputs that the assembled checksum list does not publish."""
     folder = Path(folder)
     keep = {line.split('  ', 1)[1] for line in (folder / 'SHA256SUMS.txt').read_text().splitlines() if line}
+    # A published manifest keeps its detached signature from the sign job; see sign-update-manifests.mjs.
+    keep |= {name + '.sig' for name in keep if name.endswith('.yml')}
     for path in folder.iterdir():
         if path.name != 'SHA256SUMS.txt' and path.name not in keep:
             path.unlink()

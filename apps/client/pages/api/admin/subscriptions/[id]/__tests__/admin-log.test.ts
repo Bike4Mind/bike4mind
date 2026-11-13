@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
       get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
@@ -49,12 +49,8 @@ describe('GET /api/admin/subscriptions/[id]/admin-log', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: CREDITS_PAGE_READ },
     });
-  });
-
-  it('refuses a non-admin', async () => {
-    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
-    expect(mockListForSubscription).not.toHaveBeenCalled();
   });
 
   it('404s for a missing subscription or a malformed id', async () => {

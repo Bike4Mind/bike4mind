@@ -63,7 +63,7 @@ describe('buildPublicSSEEvent', () => {
   });
 
   // The text is forwarded verbatim. Reasoning is kept off a public stream by admitting
-  // only models that cannot put it in the text channel (inlinesReasoningIntoText), never by
+  // only models that cannot put it in the text channel (reasoningChannelOf), never by
   // scanning content: on an admitted family `<think>` is ordinary prose, and truncating
   // there would bill the visitor for a reply they only partly received.
   it('forwards a literal <think> token an admitted model wrote as prose', () => {

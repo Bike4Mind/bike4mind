@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
-import { collectInlineAssets } from '@server/services/publish/collectInlineAssets';
+import { collectInlineAssets } from '@bike4mind/server-utils/services/publish/collectInlineAssets';
 import {
   isBundlePagePath,
   renderSandboxedBundle,
   resolveBundlePath,
 } from '@bike4mind/server-utils/services/publish/renderSandboxedBundle';
-import { isStreamedFile } from '@server/services/publish/signedFiles';
+import { isStreamedFile } from '@bike4mind/server-utils/services/publish/signedFiles';
 import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 
 /**

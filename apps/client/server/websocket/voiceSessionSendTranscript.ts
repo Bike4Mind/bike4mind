@@ -7,6 +7,7 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
+import { recordUserActivity } from '@server/users/recordUserActivity';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, transcript, type, conversationItemId, timestamp } = VoiceSessionSendTranscriptAction.parse(
@@ -51,6 +52,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     logger.warn(`voiceSessionSendTranscript: session ${sessionId} not found or not writable by ${userId}`);
     return { statusCode: 200 };
   }
+
+  // The user speaking is an action; the assistant's side of the call is not.
+  if (type === 'input') recordUserActivity(userId, logger);
 
   const turn =
     type === 'input'

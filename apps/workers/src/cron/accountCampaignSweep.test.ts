@@ -1,13 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
-const { loadCampaignScanAccounts, findSignupFingerprintClusters, recordCampaignGroup, getSettingsMap } = vi.hoisted(
-  () => ({
-    loadCampaignScanAccounts: vi.fn(),
-    findSignupFingerprintClusters: vi.fn(),
-    recordCampaignGroup: vi.fn(),
-    getSettingsMap: vi.fn(),
-  })
-);
+const {
+  loadCampaignScanAccounts,
+  findSignupFingerprintClusters,
+  recordCampaignGroup,
+  getSettingsMap,
+  sweepDeviceLinks,
+  gradeStaleSignupBursts,
+} = vi.hoisted(() => ({
+  sweepDeviceLinks: vi.fn(),
+  loadCampaignScanAccounts: vi.fn(),
+  findSignupFingerprintClusters: vi.fn(),
+  recordCampaignGroup: vi.fn(),
+  getSettingsMap: vi.fn(),
+  gradeStaleSignupBursts: vi.fn(),
+}));
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/database', () => ({
@@ -15,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn(async () => undefined),
   findSignupFingerprintClusters,
   loadCampaignScanAccounts,
+  loadRecentDeviceLinkAccounts: vi.fn(),
   // No userRepository: the sweep has no way to rescore, hold or change an account.
   shadowDetectionRepository: { recordCampaignGroup },
 }));
@@ -22,6 +31,16 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap,
 }));
+vi.mock('@workers/security/autoContainment/deviceLink', () => ({
+  sweepDeviceLinks,
+  liveDeviceLinkDeps: () => ({}),
+  DeviceLinkAssessError: class DeviceLinkAssessError extends Error {},
+}));
+vi.mock('@server/security/shadowDetectionAutoGrade', () => ({
+  gradeStaleSignupBursts,
+  liveStaleDetectionGradeDeps: (deps: unknown) => deps,
+}));
+vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: () => vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%' } }));
 
 import type { Context } from 'aws-lambda';
@@ -62,6 +81,8 @@ beforeEach(() => {
   findSignupFingerprintClusters.mockResolvedValue([]);
   recordCampaignGroup.mockResolvedValue('created');
   getSettingsMap.mockResolvedValue({});
+  sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 0 });
+  gradeStaleSignupBursts.mockReset().mockResolvedValue({ considered: 0 });
 });
 
 describe('toCampaignAccount', () => {
@@ -133,6 +154,41 @@ describe('handler', () => {
     await handler({}, context);
 
     expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
+    expect(sweepDeviceLinks).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the invocation when a device-link detection failed to record', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 2 });
+
+    await expect(handler({}, context)).rejects.toThrow('Device-link sweep failed to record 2 account(s)');
+  });
+
+  it('warns without failing when the device-link sweep stops with skipped accounts', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'stopped', skipped: 3, failed: 0, assessFailed: 0 });
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(handler({}, context)).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith('Device-link sweep stopped before recording all linked accounts', {
+        skipped: 3,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('fails the invocation when a device-link detection was recorded but failed to assess', async () => {
+    sweepDeviceLinks.mockResolvedValue({ status: 'done', failed: 0, assessFailed: 3 });
+
+    await expect(handler({}, context)).rejects.toThrow('Device-link sweep recorded but failed to assess 3 account(s)');
+  });
+
+  it('fails the invocation when the device-link pass cannot read, after campaign groups are recorded', async () => {
+    sweepDeviceLinks.mockRejectedValue(new Error('read down'));
+
+    await expect(handler({}, context)).rejects.toThrow('read down');
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
   });
 
   it('fails the invocation after the run when a group failed to record', async () => {
@@ -141,12 +197,31 @@ describe('handler', () => {
     await expect(handler({}, context)).rejects.toThrow('failed to record 1 group(s)');
   });
 
-  it('does nothing while shadow detection recording is off', async () => {
+  it('records nothing while shadow detection recording is off, but still auto-grades stale detections', async () => {
     getSettingsMap.mockResolvedValue({ shadowDetectionRecordingEnabled: 'false' });
 
     await handler({}, context);
 
     expect(loadCampaignScanAccounts).not.toHaveBeenCalled();
     expect(recordCampaignGroup).not.toHaveBeenCalled();
+    expect(sweepDeviceLinks).not.toHaveBeenCalled();
+    expect(gradeStaleSignupBursts).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-grades with the configured age, defaulting to 7 days', async () => {
+    await handler({}, context);
+    expect(gradeStaleSignupBursts).toHaveBeenLastCalledWith(expect.objectContaining({ afterDays: 7 }));
+
+    getSettingsMap.mockResolvedValue({ shadowDetectionAutoGradeAfterDays: 14 });
+    await handler({}, context);
+    expect(gradeStaleSignupBursts).toHaveBeenLastCalledWith(expect.objectContaining({ afterDays: 14 }));
+  });
+
+  it('still runs the campaign sweep when the auto-grade throws', async () => {
+    gradeStaleSignupBursts.mockRejectedValue(new Error('read failed'));
+
+    await handler({}, context);
+
+    expect(recordCampaignGroup).toHaveBeenCalledTimes(1);
   });
 });

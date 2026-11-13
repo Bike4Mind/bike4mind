@@ -8,12 +8,14 @@ import {
   type AdminSubscriptionsSortField,
 } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { Dash } from '../shared/Dash';
 import type { DataColumn } from '../shared/DataTable';
 import { formatMoney } from '../shared/formatMoney';
 import { InitialsAvatar } from '../shared/InitialsAvatar';
 import { InlineBar } from '../shared/InlineBar';
 import { StatusChip } from '../shared/StatusChip';
 import { isNewSince } from './subscriptionsLastSeen';
+import { SubscriptionUsageObservation } from './SubscriptionUsageSummary';
 import { COMPED_DISPLAY, OWNER_ALERT_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscriptionStatusTone';
 
 const DAY_MS = 86_400_000;
@@ -37,12 +39,6 @@ export function formatRelativeDay(value: string, now: Date): string {
 
 /** The exact time for a hover title, in UTC. */
 export const formatUtc = (value: string) => `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-
-const Dash = ({ title }: { title?: string }) => (
-  <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label={title ?? 'None'} title={title}>
-    {'\u2014'}
-  </Typography>
-);
 
 const Muted = ({ children, title }: { children: string; title?: string }) => (
   <Typography level="body-sm" component="span" title={title} sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
@@ -266,6 +262,12 @@ export function subscriptionsColumns({
       numeric: true,
       width: '5.5rem',
       render: row => <Mrr row={row} />,
+    },
+    {
+      id: 'usage',
+      label: 'Billed-owner usage (28 days)',
+      width: '26rem',
+      render: row => <SubscriptionUsageObservation usage={row.usage} compact />,
     },
     {
       id: 'seats',

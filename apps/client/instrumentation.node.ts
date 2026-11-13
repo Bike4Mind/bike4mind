@@ -10,9 +10,11 @@
  * each one is logged twice and network-class errors still reach error severity.
  */
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
+import { installConsoleRedaction } from '@bike4mind/observability';
 import { logExpiringModels, getAvailableModels } from '@bike4mind/llm-adapters';
 
 export function register() {
+  installConsoleRedaction();
   registerProcessErrorHandlers(undefined, 'NextServer');
 
   // Log any models approaching or past their deprecation date. This runs before the DB

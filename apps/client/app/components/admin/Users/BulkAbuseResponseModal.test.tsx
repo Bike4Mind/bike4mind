@@ -4,6 +4,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 
 type MutateOptions<T> = { onSuccess?: (data: T) => void; onError?: (error: Error) => void };
 const previewMutate = vi.fn();
@@ -169,6 +170,7 @@ describe('BulkAbuseResponseModal', () => {
   });
 
   beforeEach(() => {
+    useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
     previewMutate.mockReset();
     executeMutate.mockReset();
     mutationState.previewError = null;
@@ -286,6 +288,24 @@ describe('BulkAbuseResponseModal', () => {
 
     expect(previewMutate).toHaveBeenCalledWith(
       expect.objectContaining({ actions: expect.objectContaining({ ban: true, revokeApiKeys: true }) }),
+      expect.anything()
+    );
+  });
+
+  it('turns off and locks the actions a users:moderate delegate lacks the permission for', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['users:moderate'] } as never });
+    resolvePreviewWith(preview());
+    renderModal([USER_ID]);
+    const clawback = screen.getByTestId('bulk-abuse-action-clawbackFreeCredits-checkbox');
+
+    expect(clawback).not.toBeChecked();
+    expect(clawback).toBeDisabled();
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+
+    expect(previewMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actions: expect.objectContaining({ ban: true, revokeApiKeys: true, clawbackFreeCredits: false }),
+      }),
       expect.anything()
     );
   });

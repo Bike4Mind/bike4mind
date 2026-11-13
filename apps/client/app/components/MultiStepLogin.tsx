@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import {
   getLoginErrorMessage,
   isBlockedAccountLoginError,
   withSupportContact,
-} from '@client/app/utils/loginErrorMessages';
+} from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
+import { AccountSuspendedNotice } from './AccountSuspendedNotice';
 import {
   Box,
   Button,
@@ -36,6 +38,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
+import RedirectProductHint from './RedirectProductHint';
 import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
@@ -129,6 +132,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
+  // Non-null once sign-in is refused for an admin suspension; the stored reason category ('' if unknown).
+  const [suspendedCategory, setSuspendedCategory] = useState<string | null>(null);
   const mfaChallenge = useMfaChallenge({
     allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
     onComplete: ({ user }) => setCurrentUser(user),
@@ -138,9 +143,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // code."). Restart cleanly from the email step.
       handleBackToEmail();
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }
@@ -190,6 +193,14 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     const errorCode = url.searchParams.get('error');
     const baseMessage = getLoginErrorMessage(errorCode);
     if (!baseMessage) return;
+    // An admin suspension gets the persistent notice (category, policy, appeal) instead of a toast.
+    if (errorCode === 'account_suspended') {
+      setSuspendedCategory(url.searchParams.get('reason') ?? '');
+      url.searchParams.delete('error');
+      url.searchParams.delete('reason');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      return;
+    }
     const blocked = isBlockedAccountLoginError(errorCode);
     // A blocked-account notice names the support address from the public config, so wait for it;
     // a failed config fetch still shows the notice, just without the address.
@@ -233,6 +244,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     const trimmedEmail = email.trim();
     if (rateLimit.secondsLeft > 0) return;
     setEmailError(null);
+    setSuspendedCategory(null);
     if (!trimmedEmail) {
       setEmailError(t('auth.emailRequired'));
       return;
@@ -374,6 +386,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       if (reissuedToken) {
         setPendingToken(reissuedToken);
       }
+      const suspensionCategory = (error as { suspensionCategory?: string })?.suspensionCategory;
+      if (suspensionCategory !== undefined) {
+        setSuspendedCategory(suspensionCategory);
+        return;
+      }
       toast.error(errorMessage);
     }
   };
@@ -499,6 +516,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleBackToEmail = () => {
+    setSuspendedCategory(null);
     setCurrentStep('email');
     setEmail('');
     setOtcCode('');
@@ -565,6 +583,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   : t('auth.checkYourEmail')}
           </Typography>
 
+          {currentStep === 'email' && <RedirectProductHint mode="signIn" />}
+
           {currentStep === 'email' && (
             <Typography
               className="login-subtitle"
@@ -610,6 +630,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
               mx: 'auto',
             }}
           >
+            {suspendedCategory !== null && (
+              <AccountSuspendedNotice category={suspendedCategory} supportEmail={publicConfig?.supportEmail} />
+            )}
             {/* Email Step */}
             {currentStep === 'email' && (
               <form

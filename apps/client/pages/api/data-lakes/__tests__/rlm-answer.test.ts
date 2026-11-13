@@ -57,7 +57,10 @@ vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit:
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown) => undefined,
 }));
-vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes: mockResolveAccessibleLakes }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
+  resolveAccessibleLakes: mockResolveAccessibleLakes,
+}));
 // The seam under test: whatever credential the route resolves lands here.
 vi.mock('@server/tavern/rlm/tools', () => ({ buildDataLakeTools: mockBuildDataLakeTools }));
 vi.mock('@server/tavern/rlm/dataLakeReplPrompts', () => ({ REPL_TOOL_SYSTEM_PROMPT: 'repl-prompt' }));
@@ -105,7 +108,7 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'none'),
 }));
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
     admits: async (id: string) => !meter.denied.has(id),
     assert: async (id: string) => {

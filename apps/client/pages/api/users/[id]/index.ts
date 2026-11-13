@@ -1,4 +1,4 @@
-import { User } from '@bike4mind/database';
+import { Project, Session, User, organizationRepository, readAccessArms } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   IUserDocument,
@@ -8,21 +8,35 @@ import {
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
+import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
-function toPublicProfile(user: IUserDocument): PublicUserProfile {
+function toPublicProfile(user: IUserDocument, isColleague: boolean): PublicUserProfile {
   return {
     id: user.id,
     username: user.username,
     name: user.name,
     photoUrl: user.photoUrl,
-    level: user.level,
-    role: user.role,
-    team: user.team,
-    lastActiveAt: user.lastActiveAt,
-    isOnline: user.isOnline ?? false,
+    ...(isColleague && {
+      level: user.level,
+      role: user.role,
+      team: user.team,
+      lastActiveAt: user.lastActiveAt,
+      isOnline: user.isOnline ?? false,
+    }),
   };
+}
+
+async function sharesWorkspace(viewer: IUserDocument, subject: IUserDocument): Promise<boolean> {
+  const [viewerOrgIds, subjectOrgIds] = await Promise.all([
+    organizationRepository.findMembershipOrgIds(viewer.id),
+    organizationRepository.findMembershipOrgIds(subject.id),
+  ]);
+  if (viewerOrgIds.some(id => subjectOrgIds.includes(id))) return true;
+
+  const access = { $and: [{ $or: readAccessArms(viewer) }, { $or: readAccessArms(subject) }], deletedAt: null };
+  const [project, notebook] = await Promise.all([Project.exists(access), Session.exists(access)]);
+  return Boolean(project || notebook);
 }
 
 const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
@@ -61,7 +75,8 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     );
   }
 
-  return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));
+  const isColleague = await sharesWorkspace(req.user, user);
+  return respond(res, publicUserProfileResponseSchema, toPublicProfile(user, isColleague));
 });
 
 export const config = {

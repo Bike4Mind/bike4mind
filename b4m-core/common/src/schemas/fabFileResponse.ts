@@ -37,6 +37,7 @@ const FAB_FILE_RESPONSE_FIELDS = {
   chunkRebuildRequestedAt: true,
   chunkStallReason: true,
   noExtractableTextAt: true,
+  extractionRefusalReason: true,
   chunkPolicyConflict: true,
   isVectorizing: true,
   vectorized: true,

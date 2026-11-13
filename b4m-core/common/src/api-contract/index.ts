@@ -10,12 +10,14 @@ export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
+export { createCompletionRunContract } from './contracts/completionRuns.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
 export { getClientConfigContract } from './contracts/clientConfig.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
@@ -133,6 +135,12 @@ export {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './contracts/skillMarketWrite.contract';
+export {
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
+} from './contracts/skills.contract';
 export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,

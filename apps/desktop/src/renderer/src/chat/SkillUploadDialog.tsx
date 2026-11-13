@@ -83,6 +83,28 @@ function fieldErrors(fields: SkillUploadFields): Partial<Record<keyof SkillUploa
   };
 }
 
+const MAX_HOLD_CAUSES = 3;
+
+function heldBody(tier: string | undefined, findings: { severity: string; message: string }[]): string {
+  const severity = tier === 'high' ? 'high' : 'medium';
+  const messages = [
+    ...new Set(findings.filter(f => f.severity === severity).map(f => f.message.replace(/[.\s]+$/, ''))),
+  ];
+  const extra = messages.length - MAX_HOLD_CAUSES;
+  const causes =
+    messages.length === 0
+      ? ''
+      : `${messages.slice(0, MAX_HOLD_CAUSES).join('; ')}${extra > 0 ? `; and ${extra} more` : ''}`;
+  if (tier === 'high') {
+    return causes
+      ? `A reviewer must approve it first because of: ${causes}.`
+      : 'It has high-risk findings, so a reviewer must approve it first.';
+  }
+  return causes
+    ? `A person checks it before it goes live because of: ${causes}.`
+    : 'Listings with findings are checked by a person before they go live.';
+}
+
 /** A version's scan and review state in plain words; mirrors the web's ScanResult versionOutcome. */
 export function versionOutcome(
   version: SkillSubmittedVersion,
@@ -119,10 +141,7 @@ export function versionOutcome(
       return {
         color: 'warning',
         title: 'Waiting for a human reviewer',
-        body:
-          version.riskTier === 'high'
-            ? 'It declares tools that act outside the conversation, so a reviewer must approve it first.'
-            : 'Listings with findings are checked by a person before they go live.',
+        body: heldBody(version.riskTier, version.findings),
       };
     case 'rejected':
       return {
@@ -271,6 +290,12 @@ type Step =
   | { kind: 'publish'; skillId: string; message: string }
   | { kind: 'version'; listingId: string; message: string }
   | { kind: 'result'; result: Submitted };
+
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};
 
 /**
  * Upload a local SKILL.md: preview and edit what main parsed, save it to the account, and
@@ -691,7 +716,13 @@ export function SkillUploadDialog({
 
   return (
     <>
-      <Modal open onClose={onClose}>
+      <Modal
+        open
+        onClose={(event, reason) => {
+          if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+          onClose();
+        }}
+      >
         <ModalDialog
           sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
           data-testid="skill-upload-dialog"

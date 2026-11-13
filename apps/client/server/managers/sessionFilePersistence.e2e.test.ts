@@ -17,14 +17,14 @@ import { sessionService } from '@bike4mind/services';
 import { KnowledgeType, Permission, type IUserDocument } from '@bike4mind/common';
 import { configureSlackPackage, sendMessageToNotebookAndGetResponse } from '@bike4mind/slack';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
-import { getOrCreateSession, addMessageToSession } from '@server/managers/sessionManager';
+import { getOrCreateSession, addMessageToSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 // The session.created push needs a socket endpoint; nothing here listens.
-vi.mock('@server/managers/sessionSideEffects', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/managers/sessionSideEffects')>()),
+vi.mock('@bike4mind/server-utils/managers/sessionSideEffects', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/managers/sessionSideEffects')>()),
   notifySessionCreated: vi.fn().mockResolvedValue(undefined),
 }));
 // The agent path runs for real up to the executor hand-off, which has no deployment here.

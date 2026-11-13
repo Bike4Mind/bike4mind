@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { dataLakeService } from '@bike4mind/services';
@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/database';
 import { isLeaseHeld, ConflictError, UnprocessableEntityError, TooManyRequestsError } from '@bike4mind/common';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
@@ -82,7 +82,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, gateDeps);
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { ...gateDeps.db, settings: adminSettingsRepository },
+      logger: req.logger,
+    });
     const lakeMemory = await dataLakeService.computeLakeMemoryHealth(lake, {
       adminSettings: adminSettingsRepository,
       memoryLedger: memoryLedgerRepository,

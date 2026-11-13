@@ -16,12 +16,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ userService: { adminDeleteUser: vi.fn() } }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: mocks.hardDeleteUser }));
+vi.mock('@bike4mind/server-utils/services/hardDeleteUser', () => ({ hardDeleteUser: mocks.hardDeleteUser }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSelfOrImpersonator: (user: { id: string }, id: string) => user.id === id,
   recordAdminActionFromRequest: mocks.record,
 }));
-vi.mock('@server/billing/cancelAccountSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   subscriptionCancellationAudit: (cancellation: { canceled: string[] }) =>
     cancellation.canceled.length > 0
       ? { action: 'user.subscriptions.canceled', summary: 'canceled', details: { canceledSubscriptions: ['sub_1'] } }

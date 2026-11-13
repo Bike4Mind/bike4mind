@@ -1,8 +1,13 @@
 import type { DataHolderRegistry } from '../types';
+import { FINANCIAL_RECORD, PAYMENT_DISPUTE, SIGNUP_GRANT_CLAIM, expiresAfterTtl } from './retention';
 
-const FINANCIAL_RECORD_REASON = 'Financial record kept for accounting and tax obligations (GDPR Art. 17(3)(b))';
-const PAYMENT_DISPUTE_REASON =
-  'Payment dispute kept to establish and defend a legal claim against the chargeback (GDPR Art. 17(3)(e))';
+// Records the platform deletes on a short TTL are kept for operations, not under the statutory bookkeeping period.
+const PAYMENT_ATTEMPT_REASON =
+  'Checkout attempt kept for payment fraud screening and reconciliation (legitimate interest, GDPR Art. 6(1)(f))';
+const CREDIT_HOLD_REASON =
+  'Credit reservation kept until its charge settles, to reconcile the balance (legitimate interest, GDPR Art. 6(1)(f))';
+const SPEND_ROLLUP_REASON =
+  'Short-term spend bucket kept for spend alerts and cost reconciliation (legitimate interest, GDPR Art. 6(1)(f))';
 
 export const billingHolders = {
   // Mostly conversation content (query, checkpoint, result, tool inputs). Its charge is already on
@@ -13,6 +18,14 @@ export const billingHolders = {
     // DAG node ids of other executions, not users.
     unrelatedPaths: ['blockedBy'],
   },
+  // Attribution only (who minted a run id); the run's charges live on the ledger and usage events.
+  CompletionRun: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'ownerId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+    ],
+  },
   CreditGrantIdentityClaim: {
     kind: 'holder',
     // `ownerId` is immutable and uniquely indexed, so it cannot be cleared in place. The claim is what blocks a
@@ -22,8 +35,7 @@ export const billingHolders = {
         path: 'ownerId',
         matchBy: 'userId',
         action: 'retain',
-        reason:
-          'Abuse-prevention record that stops a repeat signup credit grant (legitimate interest, GDPR Art. 6(1)(f))',
+        ...SIGNUP_GRANT_CLAIM,
       },
     ],
   },
@@ -35,7 +47,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -47,24 +59,24 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       {
         path: 'recipientId',
         matchBy: 'userId',
         where: { recipientType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       {
         path: 'senderId',
         matchBy: 'userId',
         where: { senderType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       // Deprecated alias of ownerId, still present on older rows.
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      { path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
       // The admin who made a manual adjustment: attribution, not a party to the transaction.
       { path: 'metadata.actorId', matchBy: 'userId', action: 'anonymize' },
       // The invited friend on a referral reward: attribution, not a party to the transaction.
@@ -79,7 +91,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -112,12 +124,20 @@ export const billingHolders = {
   },
   PaymentAttempt: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: PAYMENT_ATTEMPT_REASON,
+        retention: expiresAfterTtl('createdAt', 90),
+      },
+    ],
     secretPaths: ['cardFingerprints'],
   },
   PaymentRiskAction: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD }],
   },
   PendingCreditHold: {
     kind: 'holder',
@@ -127,9 +147,16 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: CREDIT_HOLD_REASON,
+        retention: expiresAfterTtl('settledAt', 7),
       },
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: CREDIT_HOLD_REASON,
+        retention: expiresAfterTtl('settledAt', 7),
+      },
     ],
   },
   ProviderInvoice: {
@@ -139,8 +166,14 @@ export const billingHolders = {
   ReferralSubscriptionReward: {
     kind: 'holder',
     references: [
-      { path: 'payerId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
-      { path: 'inviterId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      {
+        path: 'payerId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...FINANCIAL_RECORD,
+        identifies: ['invoiceId', 'paymentIntentId'],
+      },
+      { path: 'inviterId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
     ],
   },
   RevenueSnapshot: {
@@ -156,7 +189,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { scopeType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       { path: 'acknowledgedBy', matchBy: 'userId', action: 'anonymize' },
     ],
@@ -174,7 +207,8 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { scopeType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: SPEND_ROLLUP_REASON,
+        retention: expiresAfterTtl('bucketStart', 35),
       },
     ],
   },
@@ -187,7 +221,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'user' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -209,7 +243,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { subject: 'user' },
         action: 'retain',
-        reason: PAYMENT_DISPUTE_REASON,
+        ...PAYMENT_DISPUTE,
       },
       { path: 'resolution.resolvedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'contain.undoneBy', matchBy: 'userId', action: 'anonymize' },
@@ -223,7 +257,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
         // Marketing attribution (UTM parameters, referrer) is not part of the billing record.
         alsoRedact: ['acquisition'],
       },
@@ -231,16 +265,21 @@ export const billingHolders = {
       { path: 'grantedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  // Mirrors `purgePersonalUsage` (packages/server-utils/src/users/purgeAccountContent.ts): the person's own usage goes,
+  // and an organization's rows keep their quantities and prices with the person's links severed. The
+  // charges themselves stay on the credit ledger (CreditTransaction). The purge also deletes the
+  // organization-owned rows of the person's personal workspaces, which no equality filter here can say.
   UsageEvent: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      { path: 'ownerId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', where: { ownerType: 'Agent' }, action: 'deleteDocument' },
       {
-        path: 'ownerId',
+        path: 'userId',
         matchBy: 'userId',
-        where: { ownerType: 'User' },
-        action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        action: 'anonymize',
+        alsoRedact: ['sessionId', 'dataLakeId', 'apiKeyId', 'requestId'],
       },
     ],
   },
@@ -250,6 +289,6 @@ export const billingHolders = {
   },
   UserSubscription: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD }],
   },
 } satisfies DataHolderRegistry;

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { MODEL_LIST_REVISION_MEMO_MS } from '@bike4mind/common';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
@@ -13,8 +15,11 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 import { DiscoveryStatusCard } from './DiscoveryStatusCard';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+let queryClient = new QueryClient();
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={queryClient}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 
 const CRON_RUN = {
@@ -147,6 +152,19 @@ describe('DiscoveryStatusCard', () => {
     expect(screen.getByTestId('discovery-status-changes')).toHaveTextContent('2 added, 1 promoted');
     expect(screen.queryByTestId('discovery-status-disabled-chip')).not.toBeInTheDocument();
     expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery');
+  });
+
+  it('loads status after StrictMode replays the mount effects', async () => {
+    render(
+      <React.StrictMode>
+        <TestWrapper>
+          <DiscoveryStatusCard />
+        </TestWrapper>
+      </React.StrictMode>
+    );
+
+    expect(await screen.findByTestId('discovery-status-last-run')).toHaveTextContent('cron on hosted');
+    expect(screen.queryByTestId('discovery-status-loading')).not.toBeInTheDocument();
   });
 
   it('names the skipped sources without folding them into the attempt tally', async () => {
@@ -352,6 +370,7 @@ const runNowButton = () => screen.getByTestId('model-lifecycle-run-now-btn');
 describe('DiscoveryStatusCard run now', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    queryClient = new QueryClient();
     vi.useFakeTimers();
     mockGet.mockResolvedValue({ data: STATUS });
     mockPost.mockResolvedValue({ data: { dispatched: 'lambda' } });
@@ -392,6 +411,55 @@ describe('DiscoveryStatusCard run now', () => {
     expect(screen.getByTestId('discovery-status-notice')).toHaveTextContent('Run finished: ok.');
     expect(screen.queryByTestId('discovery-status-waiting')).not.toBeInTheDocument();
     expect(runNowButton()).not.toHaveAttribute('disabled');
+  });
+
+  it('refetches the model list once the manual run reports, after the server memo, and not before', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const manualRunning = runLike({ startedAt: '2026-07-26T12:10:00.000Z', finishedAt: null, trigger: 'manual' });
+    mockGet
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: statusWith(manualRunning) })
+      .mockResolvedValue({
+        data: statusWith(runLike({ ...manualRunning, finishedAt: '2026-07-26T12:12:00.000Z', status: 'ok' })),
+      });
+
+    await mountAndDispatch();
+    await tick(POLL_INTERVAL_MS);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await tick(POLL_INTERVAL_MS);
+    // Held for the server-side revision memo, so a chat sent from the new list is accepted.
+    await tick(MODEL_LIST_REVISION_MEMO_MS - 1);
+    expect(invalidate).not.toHaveBeenCalled();
+    await tick(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['llm', 'models'] });
+  });
+
+  it('tells its parent once the manual run reports', async () => {
+    const onRunFinished = vi.fn();
+    const manualRunning = runLike({ startedAt: '2026-07-26T12:10:00.000Z', finishedAt: null, trigger: 'manual' });
+    mockGet
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: statusWith(manualRunning) })
+      .mockResolvedValue({
+        data: statusWith(runLike({ ...manualRunning, finishedAt: '2026-07-26T12:12:00.000Z', status: 'ok' })),
+      });
+    render(
+      <TestWrapper>
+        <DiscoveryStatusCard onRunFinished={onRunFinished} />
+      </TestWrapper>
+    );
+    await tick();
+    fireEvent.click(runNowButton());
+    await tick();
+
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).not.toHaveBeenCalled();
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).toHaveBeenCalledTimes(1);
   });
 
   it('stays disabled for the whole dispatch-and-wait window, not just the POST', async () => {
@@ -564,5 +632,96 @@ describe('DiscoveryStatusCard load failure', () => {
 
     await waitFor(() => expect(screen.getByTestId('discovery-status-error')).toBeInTheDocument());
     expect(screen.getByTestId('discovery-status-error')).toHaveTextContent('500');
+  });
+
+  it('says it is loading, not that discovery never ran, until the first status read returns', () => {
+    mockGet.mockReturnValue(new Promise(() => {}));
+    renderCard();
+
+    expect(screen.getByTestId('discovery-status-loading')).toHaveTextContent('Loading discovery status');
+    expect(screen.queryByTestId('discovery-status-never-run')).not.toBeInTheDocument();
+  });
+
+  it('shows a failed first read in place with Try again, which loads the status', async () => {
+    mockGet
+      .mockRejectedValueOnce({ message: 'Request failed with status code 500' })
+      .mockResolvedValue({ data: STATUS });
+    renderCard();
+
+    const error = await screen.findByTestId('discovery-status-error');
+    expect(within(error).getByTestId('admin-error-state')).toHaveTextContent('500');
+    expect(screen.queryByTestId('discovery-status-never-run')).not.toBeInTheDocument();
+
+    fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
+
+    expect(await screen.findByTestId('discovery-status-last-run')).toHaveTextContent('cron on hosted');
+    expect(screen.queryByTestId('discovery-status-error')).not.toBeInTheDocument();
+  });
+});
+
+describe('DiscoveryStatusCard layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is a titled section card whose short statuses are tone chips and whose long lists are plain text', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          skippedSources: [
+            { name: 'vertex', reason: 'not-configured' },
+            { name: 'openrouter-with-a-long-name', reason: 'egress-disabled' },
+          ],
+        }),
+        { mode: 'write', selfHost: true }
+      ),
+    });
+    renderCard();
+
+    const card = await screen.findByTestId('discovery-status-card');
+    expect(card.tagName).toBe('SECTION');
+    expect(screen.getByRole('heading', { name: 'Discovery' })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByTestId('discovery-status-mode-chip')).toHaveTextContent('write'));
+    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'warn');
+    expect(screen.getByTestId('discovery-status-autoenable-chip')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByTestId('discovery-status-selfhost-chip')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByTestId('discovery-status-run-chip')).toHaveAttribute('data-tone', 'warn');
+    // Chips keep their full label on one line and the row wraps whole pills instead.
+    expect(getComputedStyle(screen.getByTestId('discovery-status-autoenable-chip')).whiteSpace).toBe('nowrap');
+    expect(screen.getByTestId('discovery-status-chips')).toHaveStyle({ flexWrap: 'wrap' });
+
+    const skipped = screen.getByTestId('discovery-status-skipped');
+    expect(skipped).toHaveTextContent('2 skipped: vertex, openrouter-with-a-long-name');
+    expect(skipped.closest('[data-tone]')).toBeNull();
+    expect(getComputedStyle(skipped).whiteSpace).not.toBe('nowrap');
+    expect(screen.getByTestId('discovery-status-coverage-models.dev').closest('[data-tone]')).toBeNull();
+  });
+
+  it('marks the safe report mode neutral and a failed run bad', async () => {
+    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'failed' })) });
+    renderCard();
+
+    await waitFor(() => expect(screen.getByTestId('discovery-status-mode-chip')).toHaveTextContent('report'));
+    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByTestId('discovery-status-run-chip')).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('labels the wait for a dispatched run instead of showing a bare spinner', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGet.mockResolvedValue({ data: STATUS });
+      mockPost.mockResolvedValue({ data: { dispatched: 'lambda' } });
+      renderCard();
+      await tick();
+      fireEvent.click(runNowButton());
+      await tick();
+
+      const waiting = screen.getByTestId('discovery-status-waiting');
+      expect(waiting).toHaveAttribute('role', 'status');
+      expect(waiting).toHaveTextContent('Waiting for the run');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

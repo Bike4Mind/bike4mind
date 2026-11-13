@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/completions',
   },
+  createCompletionRun: {
+    method: 'POST',
+    path: '/api/v1/completion-runs',
+  },
   createDecision: {
     method: 'POST',
     path: '/api/v1/decisions',
@@ -80,6 +84,10 @@ export const operations = {
   createSession: {
     method: 'POST',
     path: '/api/v1/sessions',
+  },
+  createSkill: {
+    method: 'POST',
+    path: '/api/v1/skills',
   },
   createTextRefinement: {
     method: 'POST',
@@ -112,6 +120,10 @@ export const operations = {
   deleteFile: {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
+  },
+  deletePersona: {
+    method: 'DELETE',
+    path: '/api/v1/personas/{id}',
   },
   deleteProject: {
     method: 'DELETE',
@@ -241,6 +253,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
   },
+  getSkill: {
+    method: 'GET',
+    path: '/api/v1/skills/{id}',
+  },
   getSkillMarketListing: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/{id}',
@@ -309,6 +325,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
   },
+  listMySkills: {
+    method: 'GET',
+    path: '/api/v1/skills/mine',
+  },
   listProjectFiles: {
     method: 'GET',
     path: '/api/v1/projects/{id}/files',
@@ -364,6 +384,10 @@ export const operations = {
   listWhatsNew: {
     method: 'GET',
     path: '/api/v1/whats-new',
+  },
+  mintPersona: {
+    method: 'POST',
+    path: '/api/v1/personas',
   },
   postSlackMessage: {
     method: 'POST',
@@ -468,6 +492,10 @@ export const operations = {
   updateSessionMessage: {
     method: 'PUT',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  updateSkill: {
+    method: 'PUT',
+    path: '/api/v1/skills/{id}',
   },
   withdrawSkillMarketListing: {
     method: 'DELETE',

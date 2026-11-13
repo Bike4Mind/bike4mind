@@ -25,7 +25,7 @@ import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
  * (ToolContext), the forced-retrieval feature (ChatCompletionContext), and the app-layer
- * semantic-search route (via server/dataLakes/resolveRetrievalLakeScope) all satisfy this
+ * semantic-search route (via packages/server-utils/src/dataLakes/resolveRetrievalLakeScope) all satisfy this
  * structurally, so this is the ONE shared resolver - no per-call-site duplicate.
  *
  * Non-goal: this resolver has NO admin/developer bypass and must not grow one. A privileged
@@ -215,7 +215,7 @@ export interface ResolvedLakeAccess {
  * proves nothing and the discriminant #2216 added is the whole check. It is an ALLOW-list on
  * `owned` rather than `!== 'registry'` for that reason: a future third kind whose prefix arm is
  * likewise unanchored would ride a deny-list in silently, with no type error. Stays in step with
- * `dynamicMembershipScopesFor` (apps/client/server/dataLakes/index.ts), the same allow-list on the
+ * `dynamicMembershipScopesFor` (packages/server-utils/src/dataLakes/index.ts), the same allow-list on the
  * browse fan-out.
  *
  * Single-lake consumers do NOT filter: a query covering exactly one access-gated lake is where an

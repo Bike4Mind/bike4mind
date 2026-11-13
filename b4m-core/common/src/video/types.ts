@@ -16,7 +16,7 @@ export const RESOLUTION_TIERS = ['360p', '480p', '720p', '1080p', '4k'] as const
 export type ResolutionTier = (typeof RESOLUTION_TIERS)[number];
 
 // Each provider adapter PR appends its id here.
-export const VIDEO_PROVIDER_IDS = ['test', 'gemini-omni', 'xai', 'veo'] as const;
+export const VIDEO_PROVIDER_IDS = ['test', 'gemini-omni', 'xai', 'veo', 'bfl'] as const;
 export type VideoProviderId = (typeof VIDEO_PROVIDER_IDS)[number];
 
 export type ProviderJobHandle = GenerationProviderJobHandle<VideoProviderId>;

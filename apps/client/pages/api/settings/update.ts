@@ -11,8 +11,13 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  isFullAdmin,
   isRegisteredSettingKey,
   resolveSettingDefinition,
+  checkSignupGrantSave,
+  isSignupGrantGuardedSaveKey,
+  SIGNUP_GRANT_GUARD_SETTING_KEYS,
+  type SignupGrantGuardSettings,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -21,37 +26,63 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
+import { AdminAiConfigSchema } from '@bike4mind/common';
+import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
 let warnedSelfHostPlaintext = false;
 
+// These settings constrain delegated admins themselves, so settings:manage alone must not loosen them.
+export const FULL_ADMIN_SETTING_KEYS = new Set([
+  'AdminApprovalsEnabled',
+  'AdminApprovalBulkUserThreshold',
+  'AdminApprovalCreditThreshold',
+  'AdminApprovalExpiryHours',
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
+  'SlackSecurityAlertsWebhookUrl',
+  'enforceMFA',
+  'allowTrustedDevices',
+  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
+  'signupGrantUnprotectedMaxCredits',
+]);
+
+// The stored settings checkSignupGrantSave reads. This route is the admin write path the check guards;
+// migrations also write some of these keys, without the check.
+async function readSignupGrantGuardSettings(): Promise<SignupGrantGuardSettings> {
+  const rows = await AdminSettings.find({ settingName: { $in: [...SIGNUP_GRANT_GUARD_SETTING_KEYS] } }).lean();
+  return Object.fromEntries(rows.map(row => [row.settingName, row.settingValue]));
+}
+
 // Update Admin Setting
-const handler = baseApi().put(
+const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<
     unknown,
     unknown,
     { key: string; value: unknown; confirmClear?: boolean; confirmAboveMeasuredFloor?: boolean }
   >(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
-    // Authorize before any branch reads or returns stored setting data.
-    if (!req.ability) throw new NotFoundError('Ability not found');
-    if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
-
     // A contributed key is accepted once registered; anything else still fails SettingKeySchema (400).
     const key: string =
       typeof req.body.key === 'string' && isRegisteredSettingKey(req.body.key)
         ? req.body.key
         : SettingKeySchema.parse(req.body.key);
+    if (FULL_ADMIN_SETTING_KEYS.has(key) && !isFullAdmin(req.user)) {
+      throw new ForbiddenError('Only full administrators can change this setting');
+    }
     const definition = resolveSettingDefinition(key)!;
 
     // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
@@ -115,6 +146,11 @@ const handler = baseApi().put(
         );
       }
       value = valid;
+    }
+
+    if (isSignupGrantGuardedSaveKey(key)) {
+      const verdict = checkSignupGrantSave(key, value, await readSignupGrantGuardSettings());
+      if (!verdict.ok) throw new UnprocessableEntityError(verdict.reason);
     }
 
     const isSensitiveSetting = definition.isSensitive === true;
@@ -196,6 +232,7 @@ const handler = baseApi().put(
     // (B4M_SELF_HOST) degrades to plaintext at rest, so an admin can still save a local-only
     // sensitive setting such as ollamaBackend before running the openssl key step.
     let settingValueToStore: unknown = value;
+    if (key === 'adminAiConfig') await validateAdminAiConfigPromotion(AdminAiConfigSchema.parse(value));
     if (isSensitiveSetting && typeof value === 'string' && value !== '' && !isEncrypted(value)) {
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
       if (encryptionKey && isValidEncryptionKey(encryptionKey)) {

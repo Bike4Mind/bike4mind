@@ -10,7 +10,7 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
@@ -29,7 +29,7 @@ const handler = baseApi().post(async (req, res) => {
     .parse(req.body);
 
   const { text, voice } = validatedBody;
-  console.log('[DEBUG] Test Realtime Voice - Text:', text.substring(0, 50) + '...', 'Voice:', voice);
+  console.log('[DEBUG] Test Realtime Voice', { textLength: text.length, voice });
 
   // Get voice settings from admin settings
   const settings = await getSettingsMap(

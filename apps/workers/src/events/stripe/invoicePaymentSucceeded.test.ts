@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
@@ -11,7 +12,7 @@ import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEv
 import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { recordSubscriptionPaymentReward } from '@bike4mind/server-utils/referrals/subscriptionReward';
-import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { postNewPaidSubscriptionToSlack } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
@@ -46,7 +47,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 
-vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
   postNewPaidSubscriptionToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -233,7 +234,7 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
     );
 
     it('still reports the purchase when the lookup fails', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
       invoice();
       vi.mocked(stripe.checkout.sessions.list).mockRejectedValue(new Error('stripe down'));
 

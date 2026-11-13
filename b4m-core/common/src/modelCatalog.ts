@@ -1,6 +1,7 @@
 import { ModelBackend } from './models';
 import type { ModelInfo, ModelName } from './models';
-import type { ModelRecord } from './types/entities/ModelCatalogTypes';
+import { API_SURFACE_KEYS } from './types/entities/ModelCatalogTypes';
+import type { ApiSurface, ModelRecord } from './types/entities/ModelCatalogTypes';
 
 /**
  * Output cap used when a record does not declare maxOutputTokens. Under-requesting
@@ -118,6 +119,9 @@ export type ToModelInfoIsTotal = Expect<
  */
 export const DISCOVERY_VERDICT_PREFIX = 'discovered, ';
 
+/** The disable reason toModelInfo gives a record whose lifecycle says retired and that states no other reason. */
+export const RETIRED_BY_PROVIDER_REASON = 'retired by the provider';
+
 export const isDiscoveryVerdict = (reason: unknown): reason is string =>
   typeof reason === 'string' && reason.startsWith(DISCOVERY_VERDICT_PREFIX);
 
@@ -170,6 +174,8 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     // tables' behavior.
     adapterFamily: record.adapterFamily,
     dispatchProfile: record.dispatchProfile,
+    // Absent stays absent too: resolveApiSurface tells "no row said" apart from a stated false.
+    ...statedApiSurface(record),
     supportsVision: record.supportsVision,
     supportsTools: record.supportsTools,
     supportsImageVariation: record.supportsImageVariation ?? false,
@@ -178,7 +184,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     private: record.private ?? false,
     disabled,
     disabledReason:
-      record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
+      record.disabledReason ?? record.autoDisabledReason ?? (retired ? RETIRED_BY_PROVIDER_REASON : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
     isSuperseded: record.lifecycle?.isSuperseded,
     deprecationDate: record.lifecycle?.deprecationDate,
@@ -190,6 +196,16 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     description: record.description,
     isSlowModel: record.isSlowModel,
   };
+}
+
+/** The apiSurface flags a record or ModelInfo actually states, and no others. */
+export function statedApiSurface(source: Partial<Record<keyof ApiSurface, unknown>>): Partial<ApiSurface> {
+  const stated: Partial<ApiSurface> = {};
+  for (const key of API_SURFACE_KEYS) {
+    const value = source[key];
+    if (typeof value === 'boolean') stated[key] = value;
+  }
+  return stated;
 }
 
 /**
@@ -349,6 +365,7 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
           },
     adapterFamily: info.adapterFamily,
     dispatchProfile: info.dispatchProfile,
+    ...statedApiSurface(info),
     supportsVision: info.supportsVision,
     supportsTools: info.supportsTools,
     supportsImageVariation: info.supportsImageVariation,

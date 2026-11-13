@@ -70,12 +70,12 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { Summarize: { publish: mockPublishSummarize } },
 }));
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   filterSessionIdsByOperationalCredits: mockFilterCredits,
 }));
 vi.mock('@bike4mind/database', () => ({

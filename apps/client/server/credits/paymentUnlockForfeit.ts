@@ -10,8 +10,8 @@ import {
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
-import { reopenSettledPaymentApproval } from '@server/security/riskReviewAutoApproval';
+import { alertFraudBlock } from '@bike4mind/server-utils/billing/fraudBlockAlert';
+import { reopenSettledPaymentApproval } from '@bike4mind/server-utils/security/riskReviewAutoApproval';
 
 type ForfeitLogger = { info: (message: string, meta?: Record<string, unknown>) => void };
 

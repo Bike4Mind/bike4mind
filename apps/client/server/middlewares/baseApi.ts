@@ -13,12 +13,14 @@ import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { clientUsageMiddleware } from '@server/middlewares/clientUsage';
+import { userActivityMiddleware } from '@server/middlewares/userActivity';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
+import { requestLogUrl } from './requestLogUrl';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -52,6 +54,14 @@ interface BaseAPIOptions {
    * doc comment (apiKeyScopeGate.ts).
    */
   alsoRequiredScopes?: ApiKeyScopeValue[];
+  /**
+   * Keep admitting legacy API keys that miss `requiredScopes` until the legacy window ends
+   * (LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts). Only for a route keys could reach before it
+   * declared scopes; a route that already enforced them must never opt in, or old keys would
+   * gain access they lack today. Methods narrowed in the handler pass the same flag to
+   * `assertApiKeyScope`.
+   */
+  grandfatherLegacyKeys?: boolean;
   /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
@@ -94,6 +104,19 @@ interface BaseAPIOptions {
    * true; a route's own `rateLimit` still applies either way.
    */
   defaultWriteRateLimit?: boolean;
+  /**
+   * `false` marks this route's writes as ones a client or machine sends on its own (telemetry, socket
+   * tickets, polls, ingest), not actions the user took: they never stamp the user's `lastActiveAt`
+   * (userActivity.ts). Defaults to true.
+   */
+  recordsActivity?: boolean;
+  /**
+   * Whether an API-key call to this route is a use of the key: stamps its `lastUsedAt` and logs a USED
+   * event. Defaults to `recordsActivity`. Set `true` alongside `recordsActivity: false` for machine
+   * routes where the key is genuinely in use (ingest, partner calls, CLI polls), so the key does not
+   * read as unused; leave it to default `false` for first-party telemetry.
+   */
+  recordsKeyUse?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -175,6 +198,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
           connectMs: req.__connectMs ?? null,
           containerCold,
           aborted: !res.writableEnded, // true when the response never completed cleanly
+          // statusCode defaults to 200, so an aborted request is only a sent status when headersSent.
+          status: res.statusCode,
+          headersSent: res.headersSent,
+          ...(req.user ? { userId: req.user.id } : {}),
         })
         .info('req-timing');
     };
@@ -234,7 +261,12 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // Check API key authentication FIRST, before JWT
       // This allows API keys to work independently without requiring JWT/SST setup.
       // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
-      router.use(apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes));
+      router.use(
+        apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
+          recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
+          grandfatherLegacyKeys: resolvedOptions.grandfatherLegacyKeys,
+        })
+      );
 
       // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
       // This runs asynchronously and doesn't block requests
@@ -272,6 +304,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
     // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
     if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
+
+    // "Last active" means an action, so only writes stamp it, throttled per user. Last in the chain,
+    // so a write the gates above refuse is not counted.
+    if (resolvedOptions.recordsActivity !== false) router.use(userActivityMiddleware());
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local
@@ -280,7 +316,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
   router.use(async (req, res, next) => {
     if (!isDevelopment()) {
-      const path = (req.url ?? '').split('?')[0];
+      const path = requestLogUrl((req.url ?? '').split('?')[0]);
       req.logger.info(`API Request: ${req.method} ${path}`);
     }
     next();

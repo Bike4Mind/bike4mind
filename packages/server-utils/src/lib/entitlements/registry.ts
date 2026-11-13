@@ -18,6 +18,7 @@
  * at codegen and added to the built-in rows by `mergeContributedRows` (new territory only), so the
  * tag, implied, signup-credit and staff-domain maps below see both.
  */
+import { Logger } from '@bike4mind/observability';
 import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '../subscriptions/constants';
 import {
@@ -189,7 +190,7 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   { tag: 'meetings', entitlements: ['meetings:pro'] },
   // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster-pro` tag bridges to
   // `questmaster:pro`. No Stripe price. Every active paid subscription also grants it
-  // (SUBSCRIBER_ENTITLEMENT_KEYS in apps/client/server/entitlements/paidStanding.ts).
+  // (SUBSCRIBER_ENTITLEMENT_KEYS in packages/server-utils/src/entitlements/paidStanding.ts).
   // Listing it here puts the key in KNOWN_ENTITLEMENT_KEYS (admin Product Access + the
   // partner-rules write boundary).
   // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.
@@ -540,7 +541,7 @@ const REGISTRY_ROWS: ExtensibleRegistryRows = mergeContributedRows(BUILT_IN_ROWS
   onReject: reason => REJECTED_CONTRIBUTIONS.push(reason),
 });
 if (REJECTED_CONTRIBUTIONS.length > 0) {
-  console.warn(`[entitlements] dropped contributed registry rows: ${REJECTED_CONTRIBUTIONS.join('; ')}`);
+  Logger.warn(`[entitlements] dropped contributed registry rows: ${REJECTED_CONTRIBUTIONS.join('; ')}`);
 }
 
 const CONTRIBUTED_STAFF_KEYS = REGISTRY_ROWS.internalStaffEntitlements.filter(

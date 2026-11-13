@@ -1,10 +1,17 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument } from '@bike4mind/common';
-import { useDeleteOrganization, useUpdateOrganization } from '@client/app/hooks/data/organizations';
+import { IOrganizationDocument, orgAclRowConfersMembership, Permission } from '@bike4mind/common';
+import {
+  useDeleteOrganization,
+  useTransferOrganizationOwnership,
+  useUpdateOrganization,
+} from '@client/app/hooks/data/organizations';
+import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
+import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import { OrganizationSharingSettings } from './OrganizationSharingSettings';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -23,6 +30,47 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     return currentUser.isAdmin === true || currentUser.id === organization.userId;
   }, [currentUser, organization.userId]);
 
+  // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
+  // Settings tab is open to them); a personal org has no successor.
+  const canTransferOwnership = canDeleteOrg && !organization.personal;
+  const canEditProfile =
+    !!currentUser &&
+    (currentUser.isAdmin === true ||
+      currentUser.id === organization.userId ||
+      organization.users.some(
+        row =>
+          row.userId === currentUser.id &&
+          row.permissions.some(permission => permission === Permission.update || permission === Permission.share)
+      ));
+  const [transferOpen, setTransferOpen] = useState(false);
+  const transferOwnership = useTransferOrganizationOwnership();
+  const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
+    canTransferOwnership ? organization.id : null
+  );
+  const transferCandidates = useMemo<TransferCandidate[]>(() => {
+    const managerIds = new Set((organization.adminUserIds ?? []).map(String));
+    // The same eligibility transferOwnership enforces, so the list never offers a target it refuses.
+    const memberRows = new Map((organization.users ?? []).map(row => [String(row.userId), row]));
+    return (members ?? [])
+      .filter(member => {
+        const row = memberRows.get(member.id);
+        return (
+          member.id !== organization.userId &&
+          managerIds.has(member.id) &&
+          !member.isBanned &&
+          !!row &&
+          orgAclRowConfersMembership(row)
+        );
+      })
+      .map(member => ({ id: member.id, name: member.name, email: member.email }));
+  }, [members, organization.adminUserIds, organization.userId, organization.users]);
+
+  const handleTransfer = async (newOwnerId: string) => {
+    await transferOwnership.mutateAsync({ organizationId: organization.id, newOwnerId });
+    // Settings is not an owner-only tab, but Billing and this zone are; land where the former owner can now leave.
+    navigate({ to: '/organizations/$id', params: { id: organization.id }, search: { tab: 'members' }, replace: true });
+  };
+
   const [systemPrompt, setSystemPrompt] = useState(organization.systemPrompt || '');
   const [hasChanges, setHasChanges] = useState(false);
 
@@ -38,6 +86,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   };
 
   const handleSaveSystemPrompt = async () => {
+    if (!canEditProfile || updateOrganization.isPending) return;
     await updateOrganization.mutateAsync({
       orgId: organization.id,
       data: { systemPrompt },
@@ -49,8 +98,8 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     setConfirmationModal({
       open: true,
       type: 'danger',
-      title: 'Delete Organization',
-      description: 'Are you sure you want to delete this organization? This action cannot be undone.',
+      title: 'Delete Team',
+      description: 'Are you sure you want to delete this team? This action cannot be undone.',
       okLabel: 'Delete',
       onOk: async () => {
         await deleteOrganization.mutateAsync(organization.id);
@@ -61,16 +110,18 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
 
   return (
     <Stack spacing={3} className="organization-settings-container">
+      <OrganizationSharingSettings organization={organization} />
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
           Team System Prompt
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
-          <FormControl>
-            <FormLabel>Organization-wide AI Context</FormLabel>
+          <FormControl disabled={!canEditProfile || updateOrganization.isPending}>
+            <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
+              disabled={!canEditProfile || updateOrganization.isPending}
               onChange={e => handleSystemPromptChange(e.target.value)}
               placeholder="Enter custom context that will be included in all AI conversations for team members. For example: 'Our company specializes in lunar space elevators, not Earth-based ones. Always focus on lunar applications when discussing space elevator technology.'"
               minRows={4}
@@ -99,7 +150,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               color="primary"
               onClick={handleSaveSystemPrompt}
               loading={updateOrganization.isPending}
-              disabled={!hasChanges}
+              disabled={!canEditProfile || !hasChanges || updateOrganization.isPending}
               data-testid="organization-settings-system-prompt-save-btn"
             >
               Save System Prompt
@@ -114,19 +165,57 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
           <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
             Danger Zone
           </Typography>
-          <Box sx={{ p: 2 }} className="organization-settings-card-content">
-            <Button
-              color="danger"
-              variant="outlined"
-              onClick={handleDelete}
-              loading={deleteOrganization.isPending}
-              className="organization-settings-delete-button"
-              data-testid="organization-settings-delete-btn"
-            >
-              Delete Organization
-            </Button>
-          </Box>
+          <Stack spacing={2} sx={{ p: 2 }} className="organization-settings-card-content">
+            {canTransferOwnership && (
+              <Stack spacing={1} alignItems="flex-start">
+                <Typography level="body-sm">
+                  Hand this team, including its billing, to one of its managers. You stay on as a member and can then
+                  leave.
+                </Typography>
+                <Button
+                  color="danger"
+                  variant="outlined"
+                  onClick={() => setTransferOpen(true)}
+                  disabled={transferCandidates.length === 0}
+                  data-testid="organization-settings-transfer-btn"
+                >
+                  Transfer Ownership
+                </Button>
+                {membersLoaded && transferCandidates.length === 0 && (
+                  <Typography
+                    level="body-xs"
+                    sx={{ color: 'text.tertiary' }}
+                    data-testid="organization-settings-transfer-hint"
+                  >
+                    Make someone a manager from the Members tab first.
+                  </Typography>
+                )}
+              </Stack>
+            )}
+            <Box>
+              <Button
+                color="danger"
+                variant="outlined"
+                onClick={handleDelete}
+                loading={deleteOrganization.isPending}
+                className="organization-settings-delete-button"
+                data-testid="organization-settings-delete-btn"
+              >
+                Delete Team
+              </Button>
+            </Box>
+          </Stack>
         </Card>
+      )}
+      {canTransferOwnership && (
+        <TransferOwnershipModal
+          open={transferOpen}
+          organizationName={organization.name}
+          candidates={transferCandidates}
+          transferring={transferOwnership.isPending}
+          onClose={() => setTransferOpen(false)}
+          onTransfer={handleTransfer}
+        />
       )}
     </Stack>
   );

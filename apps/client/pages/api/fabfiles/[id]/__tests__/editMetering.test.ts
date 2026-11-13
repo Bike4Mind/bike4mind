@@ -78,7 +78,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModelConfig: async () => null },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async (_user: unknown, _models: unknown, systemModel?: boolean) => {
     m.admissionFlags.push(systemModel);
@@ -355,4 +355,21 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     expect(charge.costUsd).toBe(charge.usd);
     expect(charge.executed).toMatchObject({ id: 'premium' });
   });
+});
+
+it.each([false, true])('releases a failed storage response (cancellation rejects: %s)', async cancelFails => {
+  const response = new Response('private upstream payload', { status: 403 });
+  const cancel = vi.spyOn(response.body!, 'cancel');
+  if (cancelFails) cancel.mockRejectedValue(new Error('stream cancellation failed'));
+  const read = vi.spyOn(response, 'text');
+  vi.stubGlobal('fetch', async () => response);
+
+  await expect(call()).rejects.toMatchObject({
+    statusCode: 400,
+    message: 'Failed to fetch file content from storage',
+  });
+
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  expect(m.complete).not.toHaveBeenCalled();
 });

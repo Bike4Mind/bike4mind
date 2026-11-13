@@ -1,21 +1,15 @@
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { ApiKeyScope, IOrganizationDocument } from '@bike4mind/common';
+import { ApiKeyScope, IOrganizationDocument, CREDITS_PAGE_READ } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler(async (req, res) => {
-    // Check admin authorization
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId } = req.query as { userId: string };
 
     if (typeof userId !== 'string') {

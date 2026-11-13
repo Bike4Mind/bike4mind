@@ -39,6 +39,17 @@ export function appendStreamedChunk(replies: ReplySlots, text: string, index: nu
     return;
   }
 
+  // The same restart behind a thinking block that left no markers (display omitted, redacted,
+  // or withheld): its slot stays empty, so the next round's answer would render ahead of text
+  // an earlier round already streamed. It follows that text instead.
+  if (!replies[index]) {
+    const latest = Math.max(...Object.keys(replies).map(Number).filter(i => replies[i]));
+    if (latest > index) {
+      replies[latest] += text;
+      return;
+    }
+  }
+
   replies[index] += text;
 }
 

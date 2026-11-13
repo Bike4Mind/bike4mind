@@ -8,6 +8,7 @@ import {
 import type { PremiumApiKeyScope } from '@bike4mind/common';
 import { premiumApiKeyScopes } from '../../premium-generated/premiumApiKeyScopes.generated';
 import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from './apiKeyScopeEndpoints.generated';
+import { Logger } from '@bike4mind/observability';
 
 export interface ApiKeyScopeOption {
   value: ApiKeyScopeValue;
@@ -122,7 +123,7 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.SKILLS_WRITE,
     label: 'Skill Market: Write',
     description:
-      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
+      'Create, update and read your own skills from a SKILL.md, publish them to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
     endpoints: [],
   },
   {
@@ -160,6 +161,12 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.HEARTH_WRITE,
     label: 'Hearth: Write',
     description: 'Append Hearth events, create channels, and advance actor cursors',
+    endpoints: [],
+  },
+  {
+    value: ApiKeyScope.PERSONAS_MINT,
+    label: 'Test personas: Mint',
+    description: 'Create and delete throwaway test-persona accounts for QA bots (admins and developers only)',
     endpoints: [],
   },
   {
@@ -237,6 +244,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     // Confined, so it is minted from the organization's Slack integration settings, not the New-Key modals.
     description:
       'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting. Confined: a slack:post key carries no other scope and reaches no other API route',
+    endpoints: [],
+  },
+  {
+    value: ApiKeyScope.API_KEYS_MANAGE,
+    label: 'API keys: Manage',
+    description:
+      'List, create, edit, rotate and revoke your own API keys, and raise a key rate limit. A key created or rotated with it can carry only the scopes this key already holds. Not part of any preset, Full access included',
     endpoints: [],
   },
 ];
@@ -361,7 +375,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = mergeContributedScopes(
   { onReject: reason => REJECTED_SCOPE_CONTRIBUTIONS.push(reason) }
 );
 if (REJECTED_SCOPE_CONTRIBUTIONS.length > 0) {
-  console.warn(`[api-keys] dropped contributed scope rows: ${REJECTED_SCOPE_CONTRIBUTIONS.join('; ')}`);
+  Logger.warn(`[api-keys] dropped contributed scope rows: ${REJECTED_SCOPE_CONTRIBUTIONS.join('; ')}`);
 }
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */
@@ -397,6 +411,16 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set(
   )
 );
 
+/**
+ * Scopes no bulk selection grants (the profile modal's Full access preset, the admin modal's Select
+ * All): each is offered, but only ticking it adds it. `personas:mint` creates accounts, and an
+ * `api-keys:manage` key can mint its own successors, so it outlives its own revocation.
+ */
+export const EXPLICIT_ONLY_API_KEY_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set([
+  ApiKeyScope.PERSONAS_MINT,
+  ApiKeyScope.API_KEYS_MANAGE,
+]);
+
 /** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
@@ -423,7 +447,7 @@ export interface ApiKeyScopeAccess {
   entitlements: ReadonlySet<string>;
 }
 
-type ProductAccessFlag = 'hasOptiAccess' | 'hasOverwatchAccess' | 'hearthEnabled';
+type ProductAccessFlag = 'hasOptiAccess' | 'hasOverwatchAccess' | 'hearthEnabled' | 'bypass';
 
 /**
  * Product scopes offered only when the matching ApiKeyScopeAccess flag holds; see isApiKeyScopeOffered.
@@ -438,6 +462,8 @@ export const GATED_API_KEY_SCOPES: Readonly<Partial<Record<ApiKeyScope, ProductA
   [ApiKeyScope.MARKETING_REPORTS_WRITE]: 'hasOverwatchAccess',
   [ApiKeyScope.HEARTH_READ]: 'hearthEnabled',
   [ApiKeyScope.HEARTH_WRITE]: 'hearthEnabled',
+  // Admin or developer only; the persona routes re-check the key owner on every call (canMintPersonas).
+  [ApiKeyScope.PERSONAS_MINT]: 'bypass',
 };
 
 const REQUIRED_ENTITLEMENT_BY_SCOPE: ReadonlyMap<string, string> = new Map(
@@ -456,6 +482,23 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
   return !required || access.bypass || access.entitlements.has(required);
 };
 
+/**
+ * The scopes an org-owned key may carry (pages/api/organizations/[id]/api-keys, OrgApiKeysSection's
+ * picker): the generic built-in scopes with no product or entitlement gate. Such a key is held by the
+ * org's service account, which has no subscription or entitlements, so a gated or contributed scope
+ * would be refused at use however it was minted. `api-keys:manage` is left out for the same reason:
+ * every `/api/user-api-keys/*` route refuses an org service account (assertNotOrgServiceAccount).
+ */
+export const ORG_API_KEY_SCOPES: readonly ApiKeyScopeOption[] = GENERIC_MODAL_API_KEY_SCOPES.filter(
+  s =>
+    isBuiltInApiKeyScope(s.value) &&
+    !GATED_API_KEY_SCOPES[s.value] &&
+    !s.requiredEntitlement &&
+    s.value !== ApiKeyScope.API_KEYS_MANAGE
+);
+
+export const isOrgApiKeyScope = (value: string): boolean => ORG_API_KEY_SCOPES.some(s => s.value === value);
+
 // One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
 // selection when the identity changes).
 const genericScopesCache = new Map<string, ApiKeyScopeOption[]>();
@@ -465,7 +508,7 @@ export const genericApiKeyScopesFor = (access: ApiKeyScopeAccess): ApiKeyScopeOp
   // Only the entitlements some contributed row requires can change the result, so the key holds
   // exactly those; keying on the whole set would grow the cache per distinct viewer.
   const heldRequired = REQUIRED_ENTITLEMENTS.filter(key => access.bypass || access.entitlements.has(key));
-  const cacheKey = `${access.hasOptiAccess}:${access.hasOverwatchAccess}:${access.hearthEnabled}:${heldRequired.join(',')}`;
+  const cacheKey = `${access.bypass}:${access.hasOptiAccess}:${access.hasOverwatchAccess}:${access.hearthEnabled}:${heldRequired.join(',')}`;
   let scopes = genericScopesCache.get(cacheKey);
   if (!scopes) {
     const offered = GENERIC_MODAL_API_KEY_SCOPES.filter(s => isApiKeyScopeOffered(s.value, access));

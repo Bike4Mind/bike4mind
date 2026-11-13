@@ -9,16 +9,23 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { mockFindById, mockSearchOwnSessions, mockLogEvent, mockValidate, mockRateLimit, mockUnpublish } = vi.hoisted(
-  () => ({
-    mockUnpublish: vi.fn(),
-    mockFindById: vi.fn(),
-    mockSearchOwnSessions: vi.fn(),
-    mockLogEvent: vi.fn(),
-    mockValidate: vi.fn(),
-    mockRateLimit: vi.fn(),
-  })
-);
+const {
+  mockFindById,
+  mockSearchOwnSessions,
+  mockLogEvent,
+  mockValidate,
+  mockRateLimit,
+  mockUnpublish,
+  mockPurgeMedia,
+} = vi.hoisted(() => ({
+  mockUnpublish: vi.fn(),
+  mockPurgeMedia: vi.fn(),
+  mockFindById: vi.fn(),
+  mockSearchOwnSessions: vi.fn(),
+  mockLogEvent: vi.fn(),
+  mockValidate: vi.fn(),
+  mockRateLimit: vi.fn(),
+}));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -41,8 +48,11 @@ vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
+}));
+vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+  purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -117,6 +127,7 @@ describe('/api/sessions API-key scopes', () => {
       select: () => ({ lean: () => Promise.resolve([{ _id: 'nb-1' }, { _id: 'nb-2' }]) }),
     } as never);
     mockUnpublish.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    mockPurgeMedia.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -138,6 +149,7 @@ describe('/api/sessions API-key scopes', () => {
     expect(JSON.stringify(res._getData())).toContain('notebooks:write is required');
     expect(mockDeleteMany).not.toHaveBeenCalled();
     expect(mockUnpublish).not.toHaveBeenCalled();
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
   });
 
   it('lets a notebooks:write key delete all notebooks', async () => {
@@ -152,6 +164,8 @@ describe('/api/sessions API-key scopes', () => {
       { kind: 'reply', sessionIds: ['nb-1', 'nb-2'] },
       expect.anything()
     );
+    expect(mockPurgeMedia).toHaveBeenCalledWith(['nb-1', 'nb-2'], expect.anything());
+    expect(mockPurgeMedia.mock.invocationCallOrder[0]).toBeGreaterThan(mockDeleteMany.mock.invocationCallOrder[0]);
   });
 
   it('still serves the notebook list to a notebooks:read key', async () => {

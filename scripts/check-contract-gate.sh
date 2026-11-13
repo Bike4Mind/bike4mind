@@ -6,7 +6,7 @@
 #      never installed in that mode, see server/middlewares/baseApi.ts), or be on the frozen
 #      baseline. A new handler that accepts API keys must go through a v1 contract instead.
 #   3. every file that accepts API keys (no `auth: 'jwtOnly'`) and calls an LLM must name a
-#      credit-billing seam (server/billing/meterPlatformCompletion.ts), or be on the baseline.
+#      credit-billing seam (packages/server-utils/src/billing/meterPlatformCompletion.ts), or be on the baseline.
 #   4. every `sst.aws.Function` in infra/ that exposes a Function URL (`url:`) must have a
 #      handler built on defineLambdaRoute, or be on the function-url baseline. A Function URL
 #      skips the Next.js middleware chain, so the contract has to be wired at the handler;
@@ -203,7 +203,7 @@ unmetered_violators=$(files_matching_without "$LLM_CALL" "$JWT_ONLY" "$BILLING_S
 report "$ALLOWLIST_UNMETERED" "$unmetered_violators" \
   "accept API keys and call an LLM without credit metering" \
   "Fix: meter the call (meterCompletionBackend + createRequestCompletionMeter, or
-reserveCompletionCredits + settleCompletion; see apps/client/server/billing/meterPlatformCompletion.ts),
+reserveCompletionCredits + settleCompletion; see packages/server-utils/src/billing/meterPlatformCompletion.ts),
 or, for an SPA-only helper, add auth: 'jwtOnly'. Do NOT add to $ALLOWLIST_UNMETERED." || failed=1
 
 # Scan 4: Functions in infra/ with a Function URL whose handler is not built on

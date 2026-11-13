@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
+import { ADMIN_USERS_BULK_ROUTE_PERMISSIONS } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { AdminSettings } from '@bike4mind/database/infra';
 
-vi.mock('@server/middlewares/baseApi', async () =>
-  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).asyncHandlerMock()
@@ -15,9 +16,11 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
 const mockDeps = vi.fn(() => ({ deps: true }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkExecuteDeps: (...a: unknown[]) => mockDeps(...a) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkExecuteDeps: (...a: unknown[]) => mockDeps(...a),
+}));
 const mockExecute = vi.fn();
-vi.mock('@server/admin/usersBulk/execute', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersBulk/execute', () => ({
   executeAdminUsersBulk: (...a: unknown[]) => mockExecute(...a),
 }));
 const mockGate = vi.fn();
@@ -32,6 +35,7 @@ vi.mock('@server/admin/usersBulk/approvalGate', () => ({
 import handler from '../execute';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAdmin: false, adminPermissions });
 const BODY = {
   target: { kind: 'ids', userIds: ['b'.repeat(24)] },
   action: { type: 'contain' },
@@ -69,13 +73,34 @@ describe('POST /api/admin/users/bulk/execute', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: ADMIN_USERS_BULK_ROUTE_PERMISSIONS },
     });
     expect(rateLimitOptions).toContainEqual(expect.objectContaining({ limit: 10, windowMs: 60_000 }));
   });
 
-  it('refuses a non-admin', async () => {
-    await expect(call(BODY, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate holding none of the bulk permissions', async () => {
+    await expect(call(BODY, delegate('support:read'))).rejects.toThrow(
+      'Missing permission: users:moderate or credits:adjust or keys:revoke or settings:manage'
+    );
     expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('refuses an action whose own permission the delegate lacks', async () => {
+    const body = { ...BODY, action: { type: 'adjustCredits', mode: 'set', amount: 10 } };
+
+    await expect(call(body, delegate('users:moderate'))).rejects.toThrow('Missing permission: credits:adjust');
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding every permission its action needs, as a non-full admin', async () => {
+    const res = await call(BODY, delegate('users:moderate', 'credits:adjust'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockExecute).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: ADMIN.id, selfIds: [ADMIN.id], fullAdmin: false },
+      { deps: true }
+    );
   });
 
   it.each([
@@ -96,7 +121,7 @@ describe('POST /api/admin/users/bulk/execute', () => {
     expect(mockDeps).toHaveBeenCalledWith(expect.anything(), BODY.reason, expect.anything());
     expect(mockExecute).toHaveBeenCalledWith(
       expect.objectContaining({ action: { type: 'contain' }, expectedCount: 1, cohortHash: BODY.cohortHash }),
-      { id: ADMIN.id, selfIds: [ADMIN.id] },
+      { id: ADMIN.id, selfIds: [ADMIN.id], fullAdmin: true },
       { deps: true }
     );
   });
@@ -107,7 +132,7 @@ describe('POST /api/admin/users/bulk/execute', () => {
     await call({ ...BODY, action: { type: 'adjustCredits', mode: 'set', amount: 1000 } });
     expect(mockExecute).toHaveBeenCalledWith(
       expect.anything(),
-      { id: ADMIN.id, selfIds: [ADMIN.id], creditBalances },
+      { id: ADMIN.id, selfIds: [ADMIN.id], fullAdmin: true, creditBalances },
       expect.anything()
     );
   });

@@ -38,13 +38,21 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const mockFindSession = vi.fn();
 const mockFindMessage = vi.fn();
+const txn = vi.hoisted(() => ({ active: false }));
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findByIdAndUserId: (...a: unknown[]) => mockFindSession(...a),
     update: vi.fn().mockResolvedValue(undefined),
   },
   questRepository: { findBySessionIdAndId: (...a: unknown[]) => mockFindMessage(...a) },
-  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+  withTransaction: async <T>(fn: () => Promise<T>) => {
+    txn.active = true;
+    try {
+      return await fn();
+    } finally {
+      txn.active = false;
+    }
+  },
 }));
 
 const mockDeleteSessionMessage = vi.fn();
@@ -53,11 +61,21 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockUnpublish = vi.fn();
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 
+const mockPurgeMedia = vi.fn();
+const purgeCalledInTxn = vi.hoisted(() => ({ value: false }));
+vi.mock('@server/sessions/purgeDeletedMessageMedia', () => ({
+  purgeDeletedMessageMedia: (...a: unknown[]) => {
+    if (txn.active) purgeCalledInTxn.value = true;
+    return mockPurgeMedia(...a);
+  },
+}));
+
 import handler from '@pages/api/v1/sessions/[id]/messages/[messageId]';
+import spaHandler from '@pages/api/sessions/[id]/chat/[messageId]';
 
 // The URL id is matched case-insensitively upstream; the stored message carries the canonical one.
 function fireDelete() {
@@ -77,6 +95,8 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     mockFindMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
     mockDeleteSessionMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
     mockUnpublish.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    mockPurgeMedia.mockResolvedValue(undefined);
+    purgeCalledInTxn.value = false;
   });
 
   it("takes down the caller's replies before the delete and sweeps again after it commits", async () => {
@@ -118,6 +138,7 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
     await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 404 });
     expect(mockFindMessage).not.toHaveBeenCalled();
     expect(mockUnpublish).not.toHaveBeenCalled();
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
   });
 
   it('takes nothing down when the message is missing or already deleted', async () => {
@@ -127,6 +148,48 @@ describe('DELETE /api/v1/sessions/[id]/messages/[messageId]', () => {
 
     await expect(handler(req, res)).rejects.toMatchObject({ statusCode: 404 });
     expect(mockUnpublish).not.toHaveBeenCalled();
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
+  });
+
+  it('purges the deleted message media once the delete has committed', async () => {
+    const deleted = { id: 'quest-1', sessionId: 'sess-1', images: ['a.png'], videos: ['b.mp4'] };
+    let deletedInTxn = false;
+    mockDeleteSessionMessage.mockImplementation(async () => {
+      deletedInTxn = txn.active;
+      return deleted;
+    });
+    const { req, res, logger } = fireDelete();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ msg: 'Message deleted' });
+    expect(mockPurgeMedia).toHaveBeenCalledTimes(1);
+    expect(mockPurgeMedia).toHaveBeenCalledWith(deleted, { logger });
+    expect(deletedInTxn).toBe(true);
+    expect(purgeCalledInTxn.value).toBe(false);
+    expect(mockDeleteSessionMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      mockPurgeMedia.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("purges media on the SPA's message delete too, which is served by this handler", async () => {
+    const deleted = { id: 'quest-1', sessionId: 'sess-1', images: ['a.png'], videos: [] };
+    mockDeleteSessionMessage.mockResolvedValue(deleted);
+    const { req, res, logger } = fireDelete();
+
+    await spaHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPurgeMedia).toHaveBeenCalledWith(deleted, { logger });
+  });
+
+  it('does not purge media when the take-down fails before the delete', async () => {
+    mockUnpublish.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = fireDelete();
+
+    await expect(handler(req, res)).rejects.toThrow('db down');
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
   });
 
   it('logs a failed post-commit sweep and still reports the committed delete', async () => {

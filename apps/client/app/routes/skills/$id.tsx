@@ -60,7 +60,12 @@ const SkillDetailPage: FC = () => {
 
   const handleDelete = async () => {
     if (!skill) return;
-    if (!window.confirm(`Delete skill "${skill.name}"? This cannot be undone.`)) return;
+    if (
+      !window.confirm(
+        `Delete skill "${skill.name}"? Any Skill Market listing of this skill will be withdrawn. This cannot be undone.`
+      )
+    )
+      return;
     await deleteSkill.mutateAsync(skill.id);
     await navigate({ to: '/skills' });
   };
@@ -111,7 +116,7 @@ const SkillDetailPage: FC = () => {
           All skills
         </Button>
 
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
+        <Stack gap={2}>
           <Box>
             <Typography level="h2" component="code" data-testid="skill-detail-name">
               /{skill.name}
@@ -129,7 +134,13 @@ const SkillDetailPage: FC = () => {
               <MarketStatusBadge status={skill.marketStatus} />
             </Stack>
           </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+          <Stack
+            direction="row"
+            gap={1}
+            flexWrap="wrap"
+            data-testid="skill-detail-actions"
+            sx={{ '& > .MuiButton-root': { whiteSpace: 'nowrap', flexShrink: 0 } }}
+          >
             <Button
               variant="outlined"
               startDecorator={<TerminalIcon />}

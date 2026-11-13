@@ -3,13 +3,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
 
 const apiGet = vi.hoisted(() => vi.fn());
+const apiPost = vi.hoisted(() => vi.fn());
 const openProfile = vi.hoisted(() => vi.fn());
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet, post: apiPost } }));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));
@@ -25,13 +27,20 @@ vi.mock('./Views/RecentActivityView', () => ({ default: () => <div data-testid="
 vi.mock('../Signups/SignupActivityPanel', () => ({
   SignupActivityPanel: ({
     onSelectWindow,
+    onRangeChange,
   }: {
     onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
+    onRangeChange: (range: '30d') => void;
   }) => (
-    <button
-      data-testid="signup-panel-select-btn"
-      onClick={() => onSelectWindow({ createdFrom: '2026-03-10T11:00:00.000Z', createdTo: '2026-03-10T12:00:00.000Z' })}
-    />
+    <>
+      <button
+        data-testid="signup-panel-select-btn"
+        onClick={() =>
+          onSelectWindow({ createdFrom: '2026-03-10T11:00:00.000Z', createdTo: '2026-03-10T12:00:00.000Z' })
+        }
+      />
+      <button data-testid="signup-panel-range-btn" onClick={() => onRangeChange('30d')} />
+    </>
   ),
 }));
 
@@ -55,6 +64,8 @@ const row = (id: string, name: string) => ({
 });
 
 const respond = (url: string) => {
+  if (url === '/api/admin/signup-timeseries') return { until: '2026-10-27T12:00:00.000Z' };
+  if (url === '/api/admin/users/signup-verdicts') return { verdicts: {} };
   if (url === '/api/admin/users/summary') {
     return { total: 2, activeThisWeek: 1, views: { newThisWeek: 0, highRisk: 0, suspended: 1 } };
   }
@@ -84,9 +95,12 @@ const renderTab = (withPalette = false) => {
 };
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
   apiGet.mockReset();
   openProfile.mockReset();
   apiGet.mockImplementation(async (url: string) => ({ data: respond(url) }));
+  apiPost.mockReset();
+  apiPost.mockImplementation(async (url: string) => ({ data: respond(url) }));
   act(() => {
     useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS } });
     fakeAdminRouter.reset({ tab: 'users' });
@@ -94,6 +108,18 @@ beforeEach(() => {
 });
 
 describe('UsersTab', () => {
+  it("posts the page's ids for signup verdicts in the request body, not the URL", async () => {
+    renderTab();
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/admin/users/signup-verdicts',
+        expect.objectContaining({ asOf: '2026-10-27T12:00:00.000Z', ids: ['u1', 'u2'] })
+      )
+    );
+    expect(apiGet).not.toHaveBeenCalledWith('/api/admin/users/signup-verdicts', expect.anything());
+  });
+
   it('clears a stored search at once, without writing the old term back while the debounce settles', async () => {
     apiGet.mockImplementation(async (url: string) => ({
       data: url === '/api/admin/users' ? { users: [], totalUsers: 0, page: 1, totalPages: 0 } : respond(url),
@@ -169,7 +195,24 @@ describe('UsersTab', () => {
   it('opens the profile page when a row is activated', async () => {
     renderTab();
     fireEvent.click(await screen.findByTestId('admin-users-name-u2'));
-    expect(openProfile).toHaveBeenCalledWith('u2');
+    expect(openProfile).toHaveBeenCalledWith('u2', {
+      signupRange: '7d',
+      signupAsOf: '2026-10-27T12:00:00.000Z',
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
+  });
+
+  it('carries a nondefault classification window and evaluation time into the profile', async () => {
+    renderTab();
+    await screen.findByTestId('admin-users-name-u2');
+    fireEvent.click(screen.getByTestId('signup-panel-range-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-users-verdict-loading-u2')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('admin-users-name-u2'));
+    expect(openProfile).toHaveBeenLastCalledWith('u2', {
+      signupRange: '30d',
+      signupAsOf: '2026-10-27T12:00:00.000Z',
+      signupTzOffset: -new Date().getTimezoneOffset(),
+    });
   });
 
   it('applies a built-in view through the URL and asks the server for it', async () => {
@@ -319,7 +362,11 @@ describe('UsersTab', () => {
       '/api/admin/users',
       expect.objectContaining({ params: expect.objectContaining({ aiVerdict: 'abuse' }) })
     );
-    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 AI');
+    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 Confirmed abuse');
+    expect(screen.getByTestId('admin-users-ai-advisory-u1')).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('on an unreviewed Account campaign detection')
+    );
     expect(screen.queryByTestId('admin-users-ai-advisory-u2')).toBeNull();
 
     fireEvent.click(screen.getByTestId('admin-filter-clear-aiVerdict-btn'));

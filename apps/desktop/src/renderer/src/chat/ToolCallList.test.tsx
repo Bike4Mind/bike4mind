@@ -176,6 +176,32 @@ describe('ToolCallList', () => {
     expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
   });
 
+  it('lists only the parts of a chain that need a decision, each with why', () => {
+    const html = markup([
+      awaiting({
+        approvalDetail: '$ git status && node -e 1',
+        approvalParts: [{ text: 'node -e 1', reason: 'Can send data off this computer (node -e).' }],
+      }),
+    ]);
+    const parts = html.slice(html.indexOf('data-testid="chat-tool-approval-parts"'));
+    expect(parts).toContain('Only this part needs a decision:');
+    expect(parts).toContain('node -e 1');
+    expect(parts).toContain('Can send data off this computer (node -e).');
+    expect(parts.slice(0, parts.indexOf('chat-tool-approve-once'))).not.toContain('git status');
+    expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approval-parts"');
+  });
+
+  it('offers "Allow in this project" only when main derived prefix rules for it, and names them', () => {
+    expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approve-project"');
+
+    const html = markup([
+      awaiting({ approvalProjectRules: ['Bash(git diff:*)'], approvalProject: '/Users/me/code/app' }),
+    ]);
+    const button = html.slice(html.indexOf('data-testid="chat-tool-approve-project"'));
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Allow in this project');
+    expect(html).toContain('saves Bash(git diff:*) for every session in app.');
+  });
+
   it('says a bare rule covers every site or every call', () => {
     const fetch = markup([awaiting({ name: 'web_fetch', approvalAlways: 'every site', approvalRules: ['WebFetch'] })]);
     expect(fetch).toContain('&quot;Allow in this chat&quot; covers every site for the rest of this conversation');

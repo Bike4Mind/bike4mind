@@ -127,8 +127,18 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /** Number of unreviewed incidents (reviewStatus absent or 'pending_review'). */
-  async countPendingReview(): Promise<number> {
-    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } });
+  async countPendingReview(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } }, { limit: options.limit });
+  }
+
+  async oldestPendingReviewAt(): Promise<Date | null> {
+    const row = await this.model
+      .findOne({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } })
+      .sort({ createdAt: 1 })
+      .select({ createdAt: 1 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.createdAt ?? null;
   }
 
   /**

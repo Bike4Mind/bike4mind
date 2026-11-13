@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -28,14 +29,22 @@ const setup = () => {
 describe('skillMarket hooks', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('keys the listing detail by token so a no-token 404 is not reused for a token fetch', async () => {
-    h.get.mockRejectedValueOnce(new Error('404')).mockResolvedValueOnce({ data: { listing: { id: 'l1' } } });
+  it('fetches by id without sending a token', async () => {
+    h.get.mockResolvedValue({ data: { listing: { id: 'l1' } } });
     const { wrapper } = setup();
-    const noToken = renderHook(() => useListingDetail({ id: 'l1' }), { wrapper });
-    await waitFor(() => expect(noToken.result.current.isError).toBe(true));
-    const withToken = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
-    await waitFor(() => expect(withToken.result.current.isSuccess).toBe(true));
-    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1?token=abc');
+    const byId = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
+    await waitFor(() => expect(byId.result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1');
+  });
+
+  it('fetches an unlisted listing by token alone through the header, not the URL', async () => {
+    h.get.mockResolvedValueOnce({ data: { listing: { id: 'l2' } } });
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useListingDetail({ token: 'xyz' }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/by-token', {
+      headers: { [SKILL_SHARE_TOKEN_HEADER]: 'xyz' },
+    });
   });
 
   it('invalidates the reports queue and listing detail after a report', async () => {

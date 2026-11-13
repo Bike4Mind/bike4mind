@@ -148,16 +148,22 @@ export const deleteFromQueue = async (queueUrl: string, receiptHandle: string): 
  */
 export const getQueueAttributes = async (
   queueUrl: string
-): Promise<{ approximateMessageCount: number; approximateNotVisibleCount: number }> => {
+): Promise<{
+  approximateMessageCount: number;
+  approximateNotVisibleCount: number;
+  messageRetentionSeconds?: number;
+}> => {
   const sqs = createSqsClient();
   const command = new GetQueueAttributesCommand({
     QueueUrl: queueUrl,
-    AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible'],
+    AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'MessageRetentionPeriod'],
   });
   const response = await sqs.send(command);
+  const retention = parseInt(response.Attributes?.MessageRetentionPeriod ?? '', 10);
   return {
     approximateMessageCount: parseInt(response.Attributes?.ApproximateNumberOfMessages ?? '0', 10),
     approximateNotVisibleCount: parseInt(response.Attributes?.ApproximateNumberOfMessagesNotVisible ?? '0', 10),
+    messageRetentionSeconds: Number.isFinite(retention) ? retention : undefined,
   };
 };
 

@@ -196,8 +196,12 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     key: string,
     amount: number,
     limit: number,
-    ttlMs: number
+    ttlMs: number,
+    opts?: { outsideTransaction?: boolean }
   ): Promise<{ success: boolean; count: number; expiresAt: Date }> {
+    // An explicit null session opts out of the ambient transaction: a refused claim's duplicate-key
+    // error would otherwise abort the caller's transaction.
+    const txn = opts?.outsideTransaction ? { session: null } : {};
     const now = new Date();
     const freshExpiresAt = new Date(now.getTime() + ttlMs);
 
@@ -211,7 +215,7 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
 
     if (amount <= 0) {
       // Nothing to meter. Report current window state without consuming from it.
-      const existing = await this.model.findOne({ key, expiresAt: { $gt: now } });
+      const existing = await this.model.findOne({ key, expiresAt: { $gt: now } }, null, txn);
       const count = (existing?.result as { count?: number })?.count ?? 0;
       return { success: true, count, expiresAt: existing?.expiresAt ?? freshExpiresAt };
     }
@@ -229,7 +233,7 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
         'result.count': roomBound,
       },
       { $inc: { 'result.count': amount } },
-      { new: true }
+      { new: true, ...txn }
     );
     if (incremented) return readSuccess(incremented);
 
@@ -243,7 +247,7 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
             $or: [{ expiresAt: { $lte: now } }, { 'result.count': { $exists: false } }],
           },
           { $set: { result: { count: amount }, expiresAt: freshExpiresAt } },
-          { upsert: true, new: true }
+          { upsert: true, new: true, ...txn }
         );
         if (claimed) return readSuccess(claimed);
       } catch (err) {
@@ -257,20 +261,45 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
             'result.count': roomBound,
           },
           { $inc: { 'result.count': amount } },
-          { new: true }
+          { new: true, ...txn }
         );
         if (retried) return readSuccess(retried);
       }
     }
 
     // No room. Look up current state for Retry-After.
-    const existing = await this.model.findOne({ key });
+    const existing = await this.model.findOne({ key }, null, txn);
     const count = (existing?.result as { count?: number })?.count ?? limit;
     return {
       success: false,
       count,
       expiresAt: existing?.expiresAt ?? freshExpiresAt,
     };
+  }
+
+  /**
+   * Inverse of `tryAddWithinLimitFixedWindow`: live window only, clamped at 0, no-op otherwise.
+   * Passing the grant's `expiresAt` pins the release to that window, so one that has since rolled
+   * over is left alone.
+   */
+  async releaseFromFixedWindow(
+    key: string,
+    amount: number,
+    expiresAt?: Date,
+    opts?: { outsideTransaction?: boolean }
+  ): Promise<void> {
+    if (!(amount > 0)) return;
+    const now = new Date();
+    await this.model.updateOne(
+      {
+        key,
+        expiresAt: expiresAt ? { $eq: expiresAt, $gt: now } : { $gt: now },
+        'result.count': { $type: 'number' },
+      },
+      [{ $set: { 'result.count': { $max: [0, { $subtract: ['$result.count', amount] }] } } }],
+      // mongoose types `session` as non-null, but an explicit null is what opts out of the ambient one
+      (opts?.outsideTransaction ? { session: null } : {}) as { session?: undefined }
+    );
   }
 
   /**

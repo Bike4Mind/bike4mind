@@ -4,11 +4,14 @@ import { RemoteMcpError, RemoteMcpOAuthError, exchangeRemoteMcpCode } from '@bik
 import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { assertPolicyAllows, audit, toPublicView, userOwner, type ConnectionActor } from '../connectionService';
-import type { CustomMcpContext } from '../customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { discoverConnectionTools } from '../discovery';
-import type { InvokeRemoteMcpOptions } from '../invokeRemoteMcp';
-import { dropRejectedRegistration, loadConnectionClient } from './clientIdentity';
-import { withOAuthFetch } from './oauthFetch';
+import type { InvokeRemoteMcpOptions } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
+import {
+  dropRejectedRegistration,
+  loadConnectionClient,
+} from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
+import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
 import { sha256Hex } from './startOAuth';
 
 export interface CompleteOAuthParams {

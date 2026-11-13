@@ -15,7 +15,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';

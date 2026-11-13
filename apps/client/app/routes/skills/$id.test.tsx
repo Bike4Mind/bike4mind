@@ -130,3 +130,25 @@ describe('SkillDetailPage team marketplace', () => {
     expect(openDialog()).toBeNull();
   });
 });
+
+describe('SkillDetailPage action row', () => {
+  beforeEach(() => {
+    h.skill = { id: 's1', userId: 'u1', name: 'hello-team', description: 'd', body: 'b' };
+    h.listings = [];
+    h.orgs = [];
+  });
+
+  it('keeps every action label on one line', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillDetailPage />
+      </CssVarsProvider>
+    );
+    const row = screen.getByTestId('skill-detail-actions');
+    const buttons = Array.from(row.querySelectorAll('button'));
+    expect(buttons.length).toBeGreaterThan(1);
+    for (const button of buttons) {
+      expect(getComputedStyle(button).whiteSpace).toBe('nowrap');
+    }
+  });
+});

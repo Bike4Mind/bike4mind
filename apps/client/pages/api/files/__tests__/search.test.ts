@@ -35,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { __repo: 'users' },
   projectRepository: { __repo: 'projects' },
   adminSettingsRepository: { __repo: 'adminSettings' },
+  favoriteRepository: { __repo: 'favorites' },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -79,11 +80,9 @@ describe('GET /api/files/search', () => {
       await mockRefs.getHandler!(req, res);
       const adapter = mockRefs.searchArgs?.[2] as {
         storage: {
-          signedUrlCache?: string;
           generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
         };
       };
-      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
       await adapter.storage.generateSignedUrl('owned/report.txt', 600);
       expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
         expiresIn: 600,

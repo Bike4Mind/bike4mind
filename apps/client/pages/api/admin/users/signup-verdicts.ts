@@ -1,21 +1,21 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   SIGNUP_TIMESERIES_RANGES,
   SIGNUP_TZ_OFFSET_MESSAGE,
   SIGNUP_VERDICTS_MAX_IDS,
   signupTzOffsetSchema,
 } from '@bike4mind/server-utils/app/utils/signupSignals';
-import { getSignupVerdicts } from '@server/users/signupTimeseries';
+import { getSignupVerdicts } from '@bike4mind/server-utils/users/signupTimeseries';
 
 // ms. Room for clock skew between the server that answered the chart and this one.
 const AS_OF_FUTURE_SKEW_MS = 60_000;
 // ms. Bounds how far back a request can make the server classify; the column's Retry reloads the chart.
 const AS_OF_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const querySchema = z.object({
+const bodySchema = z.object({
   range: z.enum(SIGNUP_TIMESERIES_RANGES),
   tzOffset: signupTzOffsetSchema,
   // The chart response's `until`, so the verdicts classify the cohort the chart counted.
@@ -28,8 +28,8 @@ const querySchema = z.object({
       return age >= -AS_OF_FUTURE_SKEW_MS && age <= AS_OF_MAX_AGE_MS;
     }),
   ids: z
-    .string()
-    .transform(value => [...new Set(value.split(','))])
+    .array(z.string())
+    .transform(ids => [...new Set(ids)])
     .pipe(
       z
         .array(z.string().regex(/^[0-9a-f]{24}$/))
@@ -42,19 +42,23 @@ const FIELD_MESSAGES: Record<string, string> = {
   range: 'range must be one of 24h, 7d, 30d or 90d.',
   tzOffset: SIGNUP_TZ_OFFSET_MESSAGE,
   asOf: "asOf must be the signup chart's until instant from the last 24 hours.",
-  ids: `ids must be 1 to ${SIGNUP_VERDICTS_MAX_IDS} comma-separated user ids.`,
+  ids: `ids must be an array of 1 to ${SIGNUP_VERDICTS_MAX_IDS} user ids.`,
 };
 
 /**
- * The signup chart's verdict for a page of the Users list: GET /api/admin/users/signup-verdicts.
+ * The signup chart's verdict for a page of the Users list: POST /api/admin/users/signup-verdicts.
+ * Read-only; POST only so a full page of ids travels in the JSON body rather than the URL.
  * Separate from the list so classifying the range never slows or fails the list itself.
  */
-export default baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+export default adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: MODERATION_PAGE_READ },
+})
   // Lower than the list's limit: each miss classifies the whole range (see classifyCohort).
   .use(rateLimit({ limit: 30, windowMs: 60_000, bucket: 'admin-users-signup-verdicts' }))
-  .get(async (req, res) => {
-    if (!req.user?.isAdmin) return res.status(403).json({ message: 'Admin access required' });
-    const parsed = querySchema.safeParse(req.query);
+  .post(async (req, res) => {
+    const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) {
       const field = String(parsed.error.issues[0]?.path[0] ?? 'ids');
       return res.status(400).json({ message: FIELD_MESSAGES[field] ?? FIELD_MESSAGES.ids });

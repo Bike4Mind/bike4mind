@@ -15,7 +15,7 @@
  * abuse signals in the alarms channel. Cost is for money the provider or Stripe reports.
  */
 
-import { ADMIN_MODERATION_INCIDENTS_TAB_SLUG, classifyStage } from '@bike4mind/common';
+import { ADMIN_MODERATION_INCIDENTS_TAB_SLUG, adminDlqReplayPath, classifyStage } from '@bike4mind/common';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 export type AlarmLevel = 'page' | 'warn' | 'info';
@@ -63,6 +63,8 @@ export interface AlarmCatalogEntry {
   handoff?: string;
   /** Admin pages the "what to do" text points at; rendered as buttons when the app URL is known. */
   links?: AlarmLinkKey[];
+  /** Per-alarm path for a link key, replacing its ADMIN_LINKS path (a deep link to one queue or record). */
+  linkPaths?: Partial<Record<AlarmLinkKey, string>>;
   /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
   detail?: AlarmDetailKind;
 }
@@ -94,7 +96,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'api-key-accounts': { label: 'Accounts with API keys', path: '/admin?tab=users&keys=yes' },
   'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
-  'dlq-replay': { label: 'DLQ replay', path: '/admin?tab=dlq-replay' },
+  'dlq-replay': { label: 'DLQ replay', path: adminDlqReplayPath() },
   'live-ops-triage': { label: 'LiveOps triage', path: '/admin?tab=live-ops-triage' },
   'agent-executions': { label: 'Agent executions', path: '/admin?tab=agent-executions' },
   'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
@@ -551,6 +553,8 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
   if (!match) return undefined;
   const queue = match[1].replace(/-/g, ' ');
   const action = 'Open DLQ replay, read the error on the message, fix the cause, then replay it.';
+  // The alarm's queue label is the DLQ registry label (infra/dlqAlarms.ts), so the page opens on it.
+  const linkPaths = { 'dlq-replay': adminDlqReplayPath(match[1]) };
   if (match[2] === 'messages') {
     return {
       title: `Background job failed: ${queue}`,
@@ -560,6 +564,7 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
       meaning: `A message for the ${queue} job could not be processed after retries and is parked in its dead-letter queue. Whatever that job does for the affected item did not happen.`,
       action,
       links: ['dlq-replay'],
+      linkPaths,
     };
   }
   return {
@@ -570,6 +575,7 @@ export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
     meaning: `A failed message for the ${queue} job has sat in its dead-letter queue for more than an hour without being replayed or dropped.`,
     action,
     links: ['dlq-replay'],
+    linkPaths,
   };
 }
 
@@ -996,7 +1002,8 @@ export function formatAlarmSlackMessage(
   const appUrl = options.appUrl?.replace(/\/+$/, '');
   if (appUrl) {
     for (const key of entry?.links ?? []) {
-      buttons.push({ label: ADMIN_LINKS[key].label, url: `${appUrl}${ADMIN_LINKS[key].path}` });
+      const path = entry?.linkPaths?.[key] ?? ADMIN_LINKS[key].path;
+      buttons.push({ label: ADMIN_LINKS[key].label, url: `${appUrl}${path}` });
     }
   }
 
@@ -1028,7 +1035,7 @@ export interface AlarmWebhookResources {
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: string };
 }
 
-const SECRET_PLACEHOLDER = 'not-configured';
+export const SECRET_PLACEHOLDER = 'not-configured';
 
 /**
  * Reads an optional linked secret. sst's Resource proxy throws for a name the function never

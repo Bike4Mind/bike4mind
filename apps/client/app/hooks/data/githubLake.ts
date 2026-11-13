@@ -28,6 +28,7 @@ export type LakeGitHubConnection = {
   syncStale: boolean;
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
+  isLastInstallationBinding: boolean;
   /** A disconnect was accepted and its file purge is running in the background. */
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
@@ -87,6 +88,12 @@ function useLakeGitHubConnectionOptions(dataLakeId: string | undefined, enabled:
       // the first poll after connecting must refresh the file lists too.
       if (dataLakeId && cached !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
+      }
+      // The lake list caches for minutes and carries the lake's name, which the bind may have changed
+      // after this tab read it (a connect from another tab). Once per finished sync, not on every
+      // mid-sync count change, which would refetch it each poll.
+      if (dataLakeId && syncFinished) {
+        void queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       }
       return response.data;
     },
@@ -181,6 +188,8 @@ export function useCompleteLakeGitHubConnect() {
       // The picker's list is now stale (the bound repository must show as taken); a closed picker
       // just refetches fresh next time it opens rather than carrying this invalidation forward.
       queryClient.removeQueries({ queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId) });
+      // The bind renames a lake still on the placeholder name to the repository (nameLakeAfterRepository).
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },
   });
 }

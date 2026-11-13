@@ -2,10 +2,11 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -21,10 +22,14 @@ interface UpdateEmbedKeyRequest {
 // Neither method is admin-gated at the route: the services resolve the key by
 // ownership - the minter, or an admin of the org the key is billed to (mirroring
 // the org-admin-aware LIST route). A caller who is neither gets a not-found.
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .patch(
     asyncHandler<{}, unknown, UpdateEmbedKeyRequest, { id: string }>(async (req, res) => {
       const userId = req.user?.id;
+      assertNotOrgServiceAccount(req.user);
       const keyId = req.query.id;
       const { agentId, allowedOrigins, branding, identifiedClientIds } = req.body;
 
@@ -118,6 +123,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
       const userId = req.user?.id;
+      assertNotOrgServiceAccount(req.user);
       const keyId = req.query.id;
 
       if (!keyId) throw new BadRequestError('Invalid key ID');

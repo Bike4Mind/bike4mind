@@ -2,19 +2,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
+  config: null as unknown,
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
   findById: vi.fn(),
   update: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: () => ({
-      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-        h.handler = fn;
-        return {};
+  baseApi: (config: unknown) => {
+    h.config = config;
+    const chain = {
+      use: (guard: unknown) => {
+        h.guard ??= guard as typeof h.guard;
+        return chain;
       },
-    }),
-  }),
+      post: (fn: typeof h.handler) => {
+        h.handler = fn;
+        return chain;
+      },
+    };
+    return chain;
+  },
 }));
 
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
@@ -34,13 +42,25 @@ await import('../api-key-trust');
 
 const REASON = 'Verified the integration owner';
 
-const makeReq = (body: unknown, isAdmin = true) => ({
+const makeReq = (
+  body: unknown,
+  isAdmin = true,
+  user: Record<string, unknown> = { id: 'admin-1', username: 'admin', isAdmin }
+) => ({
+  method: 'POST',
   query: { userId: 'user-1' },
   body,
-  user: { id: 'admin-1', username: 'admin', isAdmin },
+  user,
   headers: {},
   logger: { info: vi.fn(), error: vi.fn() },
 });
+
+// Runs the permission guard adminApi installs, then the handler, as the router would.
+const guarded = async (req: Parameters<NonNullable<typeof h.handler>>[0]) => {
+  h.guard!(req, {}, () => {});
+  return h.handler!(req, { json: vi.fn() });
+};
+const delegate = (adminPermissions: string[]) => ({ id: 'admin-1', username: 'd', isAdmin: false, adminPermissions });
 
 describe('POST /api/admin/users/[userId]/api-key-trust', () => {
   beforeEach(() => {
@@ -48,7 +68,8 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
   });
 
   it('rejects a non-admin before touching the user', async () => {
-    await expect(h.handler!(makeReq({ approved: true }, false), { json: vi.fn() })).rejects.toThrow(/admin/i);
+    expect(h.config).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['POST'] });
+    await expect(guarded(makeReq({ approved: true }, false))).rejects.toThrow(/Missing permission: keys:revoke/);
 
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
@@ -118,5 +139,27 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
 
     expect(h.update).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  describe('delegated admins', () => {
+    it('refuses a delegate without keys:revoke before touching the user', async () => {
+      const req = makeReq({ approved: true, reason: REASON }, false, delegate(['support:read']));
+      await expect(guarded(req)).rejects.toMatchObject({ statusCode: 403 });
+      expect(h.findById).not.toHaveBeenCalled();
+    });
+
+    it('lets a delegate with keys:revoke change trust on a non-admin user', async () => {
+      h.findById.mockResolvedValue({ id: 'user-1', username: 'u', apiKeyTrustApproved: false });
+      await guarded(makeReq({ approved: true, reason: REASON }, false, delegate(['keys:revoke'])));
+      expect(h.update).toHaveBeenCalledWith({ id: 'user-1', apiKeyTrustApproved: true });
+    });
+
+    it('refuses a delegate on an admin user without writing', async () => {
+      h.findById.mockResolvedValue({ id: 'user-1', username: 'u', isAdmin: true });
+      const req = makeReq({ approved: true, reason: REASON }, false, delegate(['keys:revoke']));
+      await expect(guarded(req)).rejects.toMatchObject({ statusCode: 403 });
+      expect(h.update).not.toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    });
   });
 });

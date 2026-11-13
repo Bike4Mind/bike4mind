@@ -22,7 +22,7 @@ export const TICKET_STATUSES = ['open', 'redeeming', 'redeemed', 'expired'] as c
 export type TicketPreview = {
   status: (typeof TICKET_STATUSES)[number];
   expiresAt: string;
-  rungs: { date: string; length: 5 | 6 | 7; hard: boolean }[];
+  rungs: { date: string; length: 5 | 6 | 7; hard: boolean; word?: string }[];
   result?: ClaimResult;
   /** The account a redeemed ticket paid. */
   b4mUserId?: string;

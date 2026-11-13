@@ -1,8 +1,11 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
+  SERVER_OWNED_SESSION_ORIGIN_FIELDS,
 } from '@bike4mind/common';
 
 /**
@@ -29,11 +32,9 @@ import {
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
- * transports cannot drift. `stripeCustomerId` is dropped for everyone. `billingContact` is kept
- * only for a platform admin, NOT for an org owner as the REST serializer does: a Mongo projection
- * is per-query, not per-document, so an owner-keyed keep would also hand over the billing contact
- * of every co-member org the same subscription happens to match. An owner's own billing contact
- * still reaches them through the access-gated REST GET.
+ * transports cannot drift. A Mongo projection is per-query, not per-document: billingContact
+ * is kept only for a platform admin; member credit details are also kept for owners/managers
+ * when the query is pinned to their verified org. Broader subscriptions exclude both.
  *
  * invites: the subscription matches both invites addressed to the caller and every invite on a
  * project the caller may share, so a raw document carries co-recipients' addresses and addresses
@@ -41,6 +42,11 @@ import {
  * (inviteManager.filterInviteRecipientsToSelf / toSharerInviteViews); a per-query projection cannot,
  * so `recipients` and `typedRecipients` are dropped for every non-admin and `token` for everyone.
  * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
+ *
+ * sessions: REST strips SERVER_OWNED_SESSION_FIELDS and SERVER_OWNED_SESSION_ORIGIN_FIELDS (under
+ * `origin.`) for every viewer.
+ * A subscription may include both owned and shared sessions, so the query projection must
+ * exclude them for everyone, including the owner, to match the REST response shape.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
 const QUEST_SERVER_ONLY_FIELDS = CHAT_MESSAGE_WITHHELD_FIELDS;
@@ -52,22 +58,27 @@ const INVITE_ADMIN_ONLY_FIELDS = ['recipients', 'typedRecipients'] as const;
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
+  sessionCollectionName: string;
   organizationCollectionName: string;
   inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
   isQuestOwner?: boolean;
-  /** Caller is a platform admin, the only viewer a per-query projection can safely privilege. */
+  /** Caller is a platform admin. */
   isPlatformAdmin?: boolean;
+  /** The query is pinned to a verified org owned or managed by the caller. */
+  isPrivilegedOrgSubscriber?: boolean;
 };
 
 export function resolveFieldLimits(
   collectionName: string,
   {
     questCollectionName,
+    sessionCollectionName,
     organizationCollectionName,
     inviteCollectionName,
     isQuestOwner = false,
     isPlatformAdmin = false,
+    isPrivilegedOrgSubscriber = false,
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
@@ -94,8 +105,22 @@ export function resolveFieldLimits(
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
+  if (collectionName === sessionCollectionName) {
+    return Object.fromEntries(
+      [...SERVER_OWNED_SESSION_FIELDS, ...SERVER_OWNED_SESSION_ORIGIN_FIELDS.map(f => `origin.${f}`)].map(path => [
+        path,
+        false,
+      ])
+    );
+  }
   if (collectionName === organizationCollectionName) {
-    const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
+    const excluded = [
+      ...ORGANIZATION_SECRET_FIELDS,
+      ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
+      // A per-query projection cannot keep one row, so non-privileged subscribers lose the credit
+      // fields on every row (the budget notice reads its own row over REST).
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber ? [] : ORGANIZATION_MEMBER_CREDIT_FIELDS),
+    ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
   if (collectionName === inviteCollectionName) {
@@ -120,8 +145,15 @@ export function findWithheldFilterPaths(filter: unknown, fieldLimits: Record<str
     .map(([path]) => path);
   if (!withheld.length) return [];
 
-  const touches = (path: string) =>
-    withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  const normalize = (path: string) =>
+    path
+      .split('.')
+      .filter(segment => !/^\d+$/.test(segment))
+      .join('.');
+  const touches = (key: string) => {
+    const path = normalize(key);
+    return withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  };
   const found: string[] = [];
   const walk = (node: unknown) => {
     if (Array.isArray(node)) {

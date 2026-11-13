@@ -28,7 +28,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockVerifyApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: (...args: unknown[]) => mockVerifyApiKey(...args),
 }));
 
@@ -85,6 +85,28 @@ describe('websocket connect - token gates', () => {
     mockAssertAccountStateUsable.mockReturnValue(undefined);
     mockAssertSessionActive.mockResolvedValue(undefined);
     mockIpBlockRefusal.mockResolvedValue(null);
+  });
+
+  it('marks the user online without stamping lastActiveAt: connecting is not an action', async () => {
+    const user: Record<string, unknown> = { id: 'user-1', tokenVersion: 3, save: vi.fn() };
+    mockFindById.mockResolvedValue(user);
+
+    await connect();
+
+    expect(user.isOnline).toBe(true);
+    expect(user).not.toHaveProperty('lastActiveAt');
+    expect(user.save).toHaveBeenCalled();
+  });
+
+  it('checks an API key without counting the connect as a use of it', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('not a jwt');
+    });
+    mockVerifyApiKey.mockResolvedValue({ userId: 'user-1', scopes: ['ai:chat'], keyId: 'key-1' });
+
+    await connect('b4m_live_key');
+
+    expect(mockVerifyApiKey).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordUse: false }));
   });
 
   it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {

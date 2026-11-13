@@ -10,14 +10,23 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return {};
+vi.mock('@server/middlewares/baseApi', () => {
+  let guard: (req: unknown, res: unknown, next: () => void) => void;
+  const chain = {
+    use: (fn: typeof guard) => {
+      guard = fn;
+      return chain;
     },
-  }),
-}));
+    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+      h.handler = async (req: unknown, res: unknown) => {
+        guard({ method: 'POST', ...(req as object) }, res, () => {});
+        return fn(req, res);
+      };
+      return chain;
+    },
+  };
+  return { baseApi: () => chain };
+});
 vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: { formatRegInvites: h.formatRegInvites },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -83,7 +92,7 @@ describe('POST /api/reg-invites/update - admin audit', () => {
   });
 
   it('rejects a non-admin before any write', async () => {
-    await expect(run(['inv-1'], false)).rejects.toThrow(/permission denied/i);
+    await expect(run(['inv-1'], false)).rejects.toThrow('Missing permission: settings:manage');
     expect(h.formatRegInvites).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });

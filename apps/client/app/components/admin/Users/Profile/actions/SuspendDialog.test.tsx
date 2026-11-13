@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReinstateDialog, SuspendDialog } from './SuspendDialog';
 import { LiveProfile, ProfileTestWrapper, buildProfile } from '../profileTestUtils';
@@ -7,6 +8,9 @@ const mocks = vi.hoisted(() => ({ update: vi.fn(), toastWarning: vi.fn() }));
 
 vi.mock('sonner', () => ({ toast: { warning: mocks.toastWarning, error: vi.fn(), success: vi.fn() } }));
 vi.mock('./useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  usePublicConfig: () => ({ data: { supportEmail: 'support@example.com' } }),
+}));
 
 const setup = (credits = 500) => {
   const onClose = vi.fn();
@@ -16,11 +20,19 @@ const setup = (credits = 500) => {
   return { onClose };
 };
 
-const pickReason = () => fireEvent.click(screen.getByTestId('suspend-dialog-reason-input-preset-0'));
+const pickCategory = () => {
+  fireEvent.mouseDown(screen.getByTestId('suspend-dialog-category-select'));
+  fireEvent.click(screen.getByTestId('suspend-dialog-category-option-multiple_accounts'));
+};
+const pickReason = () => {
+  fireEvent.click(screen.getByTestId('suspend-dialog-reason-input-preset-0'));
+  pickCategory();
+};
 const confirmButton = () => screen.getByTestId('suspend-dialog-confirm-btn');
 
 describe('SuspendDialog', () => {
   beforeEach(() => {
+    useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
     vi.clearAllMocks();
     mocks.update.mockResolvedValue(undefined);
   });
@@ -55,8 +67,29 @@ describe('SuspendDialog', () => {
 
     expect(screen.getByRole('dialog', { name: 'Suspend Ada Lovelace?' })).toBeInTheDocument();
     expect(confirmButton()).toBeDisabled();
+    expect(screen.getByTestId('suspend-dialog-hint')).toHaveTextContent('Choose the reason the user is told.');
+
+    pickCategory();
+
+    expect(confirmButton()).toBeDisabled();
     expect(screen.getByTestId('suspend-dialog-hint')).toHaveTextContent(
       'Pick a reason or write at least 5 characters.'
+    );
+  });
+
+  it('cannot suspend until the user-facing reason category is chosen, and previews what the user sees', async () => {
+    setup();
+    fireEvent.click(screen.getByTestId('suspend-dialog-reason-input-preset-0'));
+    expect(confirmButton()).toBeDisabled();
+
+    pickCategory();
+
+    expect(confirmButton()).toBeEnabled();
+    expect(screen.getByTestId('suspend-dialog-category-preview')).toHaveTextContent(
+      'This account is suspended for using multiple accounts to obtain free credits'
+    );
+    expect(screen.getByTestId('suspend-dialog-category-preview')).toHaveTextContent(
+      'you can appeal by emailing support@example.com'
     );
   });
 
@@ -70,6 +103,7 @@ describe('SuspendDialog', () => {
     await waitFor(() =>
       expect(mocks.update).toHaveBeenCalledWith({
         isBanned: true,
+        suspensionReasonCategory: 'multiple_accounts',
         statusChangeReason: 'Abuse / automated signups',
       })
     );
@@ -89,6 +123,7 @@ describe('SuspendDialog', () => {
     await waitFor(() =>
       expect(mocks.update).toHaveBeenCalledWith({
         isBanned: true,
+        suspensionReasonCategory: 'multiple_accounts',
         statusChangeReason: 'Abuse / automated signups',
         currentCredits: 0,
         creditReason: 'Abuse / automated signups',
@@ -107,6 +142,7 @@ describe('SuspendDialog', () => {
     await waitFor(() =>
       expect(mocks.update).toHaveBeenCalledWith({
         isBanned: true,
+        suspensionReasonCategory: 'multiple_accounts',
         statusChangeReason: 'Abuse / automated signups',
       })
     );
@@ -122,6 +158,7 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
       })
     );
   });
@@ -137,10 +174,18 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
         creditDelta: 500,
         creditReason: 'Undo: Abuse / automated signups',
       })
     );
+  });
+
+  it('offers the credit wipe to a delegate only as a disabled option', async () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['users:moderate'] } as never });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('suspend-dialog-zero-credits-checkbox')).toBeDisabled());
+    expect(screen.getByText('Only full administrators can change credits while suspending.')).toBeInTheDocument();
   });
 
   it('stays open when the write fails', async () => {
@@ -181,6 +226,7 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
         creditDelta: 320,
         creditReason: 'Undo: Abuse / automated signups',
       })

@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { ModelIdSchema } from './modelId';
-
 import {
   actorKindSchema,
   hearthEventKindSchema,
@@ -15,14 +13,12 @@ import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
-import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
-import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 import {
-  CompletionProviderBlockEventSchema,
-  CompletionSessionIdSchema,
-  CompletionToolSchema,
-  ResponseFormatSchema,
-} from './cliCompletions';
+  GENERATION_JOB_KINDS,
+  GENERATION_JOB_STATES,
+  QUEST_GENERATION_JOB_KINDS,
+} from '../types/entities/GenerationJobTypes';
+import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -88,37 +84,6 @@ export const VoiceSessionSendTranscriptAction = z.object({
   timestamp: z.coerce.date().optional(),
 });
 export type IVoiceSessionSendTranscriptAction = z.infer<typeof VoiceSessionSendTranscriptAction>;
-
-/**
- * CLI Completion request over WebSocket (bypasses CloudFront 20s timeout)
- */
-export const CliCompletionRequestAction = z.object({
-  action: z.literal('cli_completion_request'),
-  accessToken: z.string(),
-  requestId: z.uuid(),
-  model: ModelIdSchema,
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system']),
-        content: z.union([z.string(), z.array(z.unknown())]),
-        // per-message cache flag (Anthropic only - silently ignored elsewhere)
-        cache: z.boolean().optional(),
-      })
-    )
-    .min(1),
-  sessionId: CompletionSessionIdSchema.optional(),
-  options: z
-    .object({
-      temperature: z.number().optional(),
-      maxTokens: z.number().optional(),
-      stream: z.boolean().optional(),
-      tools: z.array(CompletionToolSchema).optional(),
-      response_format: ResponseFormatSchema.optional(),
-    })
-    .optional(),
-});
-export type ICliCompletionRequestAction = z.infer<typeof CliCompletionRequestAction>;
 
 /**
  * CLI Tool execution request over WebSocket
@@ -375,7 +340,8 @@ export const GenerationJobUpdatedAction = z.object({
     progress: z.number().min(0).max(1).optional(),
     error: z.object({ code: z.string(), message: z.string() }).optional(),
     output: z
-      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      // durationSeconds: absent for an image.
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number().optional() })
       .optional(),
   }),
 });
@@ -394,7 +360,7 @@ export const StreamedChatCompletionAction = z.object({
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
       videoJobIds: z.array(z.string()).optional(),
-      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -516,6 +482,11 @@ export const InvalidateQueryAction = z.object({
   queryKey: z.array(z.unknown()),
 });
 
+export const AccountDataExportReadyAction = z.object({
+  action: z.literal('account_data_export_ready'),
+  exportJobId: z.uuid(),
+});
+
 /**
  * Temporary ws action until the collection/document subscription feature lands.
  */
@@ -606,57 +577,6 @@ export const VoiceCreditsExhaustedAction = z.object({
   clientId: z.string().optional(),
 });
 export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedAction>;
-
-/**
- * CLI Completion chunk sent from server over WebSocket
- * Mirrors SSEContentEvent shape for minimal server-side changes
- */
-export const CliCompletionChunkAction = z.object({
-  action: z.literal('cli_completion_chunk'),
-  requestId: z.string(),
-  chunk: z.union([
-    z.object({
-      type: z.enum(['content', 'tool_use']),
-      text: z.string(),
-      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-      tools: z.array(z.unknown()).optional(),
-      usage: z
-        .object({
-          inputTokens: z.number().optional(),
-          outputTokens: z.number().optional(),
-        })
-        .optional(),
-      thinking: z.array(z.unknown()).optional(),
-    }),
-    CompletionProviderBlockEventSchema,
-  ]),
-});
-export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
-
-/**
- * CLI Completion stream finished successfully
- */
-export const CliCompletionDoneAction = z.object({
-  action: z.literal('cli_completion_done'),
-  requestId: z.string(),
-});
-export type ICliCompletionDoneAction = z.infer<typeof CliCompletionDoneAction>;
-
-/**
- * CLI Completion stream error
- */
-export const CliCompletionErrorAction = z.object({
-  action: z.literal('cli_completion_error'),
-  requestId: z.string(),
-  error: z.string(),
-  /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
-  retryAfter: z.number().optional(),
-  /** Machine-readable reason, e.g. `tool_search_unsupported` or `provider_not_configured`. */
-  errorCode: z.string().optional(),
-  /** HTTP status the SSE route would have answered with. */
-  status: z.number().int().optional(),
-});
-export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 
 /**
  * CLI Tool execution response over WebSocket
@@ -1353,7 +1273,7 @@ export const AgentProgressAction = z.object({
   // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
   // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
   questId: z.string().optional(),
-  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
   pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
@@ -1634,7 +1554,6 @@ export const MessageDataToServer = z.discriminatedUnion('action', [
   ReauthConnectionAction,
   VoiceSessionSendTranscriptAction,
   VoiceSessionEndedAction,
-  CliCompletionRequestAction,
   CliToolRequestAction,
   KeepCommandRequestAction,
   KeepCommandResponseAction,
@@ -1668,6 +1587,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   StreamedChatCompletionAction,
   StreamedRapidReplyAction,
   InvalidateQueryAction,
+  AccountDataExportReadyAction,
   UpdateResearchTaskStatusAction,
   ImportHistoryJobProgressUpdateAction,
   ResearchModeStreamAction,
@@ -1683,9 +1603,6 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   PiHistoryErrorAction,
   SessionCreatedAction,
   VoiceCreditsExhaustedAction,
-  CliCompletionChunkAction,
-  CliCompletionDoneAction,
-  CliCompletionErrorAction,
   CliToolResponseAction,
   KeepCommandAction,
   KeepCommandResultAction,

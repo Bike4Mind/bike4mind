@@ -16,11 +16,11 @@ import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { hostingNetworkOf } from '@server/auth/datacenterAsns';
+import { hostingNetworkOf } from '@bike4mind/server-utils/auth/datacenterAsns';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
-import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifecycle';
+import { adminOwnerSlackRef } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { lockIfPaidWithBlockedCard } from '@server/billing/linkedAccounts';
+import { lockIfPaidWithBlockedCard } from '@bike4mind/server-utils/billing/linkedAccounts';
 import type Stripe from 'stripe';
 
 const MINUTE_MS = 60_000;
@@ -226,7 +226,9 @@ export function buildPaymentRiskShadowDetection(input: {
         ? null
         : { ip: null, asn: null, asnOrg: null, country: null, hosting: attempt.hostingNetwork },
     signals: signals.map(signal => toDetectionSignal(signal, thresholds)),
-    windowMinutes: signals.some(signal => signal.type === 'manyCardsPerAccount' || signal.type === 'manyCardsPerNetwork')
+    windowMinutes: signals.some(
+      signal => signal.type === 'manyCardsPerAccount' || signal.type === 'manyCardsPerNetwork'
+    )
       ? thresholds.cardWindowMinutes
       : null,
     group: null,

@@ -20,19 +20,34 @@
  *   subdocuments only the matching elements change (`versions.createdBy` anonymizes the versions
  *   this person created, not every version).
  *
+ * Content shared with others:
+ * - What the person owns goes, even when others can see it (their notebook shared with a team, their
+ *   personal lake), and the access entries inside it go with it.
+ * - What the person wrote inside something another user or an organization owns (a message in
+ *   someone else's notebook, an upload to an org's lake, a version of a shared artifact) stays with
+ *   that owner, anonymized: the reference becomes the "Deleted user" placeholder, so the owner's
+ *   record stays whole. The text itself is not rewritten.
+ * - The exception is an annotation thread: it is the author's own comment rather than part of the
+ *   owner's content, so `Annotation` deletes it with its author wherever it sits.
+ * - The person's own access to others' content (`sharedWith`, a membership) is pulled.
+ *
  * What an export includes for a document (`exportScope.ts` implements this):
  * - A `deleteDocument` or `retain` match on a scalar path (`userId`, `metadata.actorId`) marks the
  *   document as the person's own record: the whole document minus `secretPaths`, plus its
- *   `viaParent` children.
+ *   `viaParent` children. A `retain` with `exportScope: 'reference'` is the exception: the person is
+ *   only the actor on a record about someone else.
  * - Any other match exports only the matched paths and the document id. That is every `anonymize`
  *   (the document belongs to someone else and only records this person: a referrer's export carries
  *   the `referredByUserId` of each account they referred, not those accounts), with its `alsoRedact`
- *   fields because they repeat this person's identity; and every match through an array (an array of
+ *   fields because they repeat this person's identity; every `exportScope: 'reference'` match, with
+ *   its `identifies` fields for the same reason; and every match through an array (an array of
  *   ids such as `userIds`, or a key inside an array of subdocuments such as `versions.createdBy`),
  *   whatever the action, where only the matching elements are exported. The other elements name
  *   other people (co-members of a fraud cluster, other editors of a page).
  * When a document matches several references and one of them is an own-record match, the whole
- * document is exported.
+ * document is exported, less every other person on it: a reference that names someone else goes
+ * with its `alsoRedact` and `identifies` fields, and an array a reference reads through keeps only
+ * this person's elements.
  */
 
 /** What erasure does with a document (or field) that references the erased person. */
@@ -53,17 +68,37 @@ export type ErasureAction =
    */
   | { action: 'pullFromArray' }
   /**
-   * The law or a legitimate interest requires keeping the record; the reason is shown in the dry
-   * run. `alsoRedact` lists fields the reason does not cover (marketing attribution on a billing
-   * record), which erasure clears so only what the reason needs is kept.
+   * The law or a legitimate interest requires keeping the record; the reason and how long it is kept
+   * are shown in the dry run. `alsoRedact` lists fields the reason does not cover (marketing
+   * attribution on a billing record), which erasure clears so only what the reason needs is kept.
    */
-  | { action: 'retain'; reason: string; alsoRedact?: readonly string[] };
+  | { action: 'retain'; reason: string; retention: RetentionPeriod; alsoRedact?: readonly string[] };
+
+/**
+ * How long a retained record outlives the erasure request. `registry/retention.ts` holds the shared
+ * periods, so a policy change is one edit.
+ */
+export type RetentionPeriod =
+  /**
+   * A TTL index on `field` deletes the record `days` after that date. `dataHolderCoverage.test.ts`
+   * checks the model declares exactly this index, and that a retained model with any TTL index says so.
+   */
+  | { expiresBy: 'ttlIndex'; field: string; days: number }
+  /**
+   * A policy period counted from `from`. Nothing deletes these records on a timer yet, so erasure
+   * lists them with the period rather than claiming they expire.
+   */
+  | { expiresBy: 'policy'; years: number; from: string }
+  /** Kept while a condition holds rather than for a fixed time (a suppression entry, while the objection stands). */
+  | { expiresBy: 'condition'; until: string };
 
 export type UserReference = ErasureAction & {
   path: string;
   /**
    * `email` is compared case-insensitively with the user's current email only: User does not
    * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
+   * The export queries the address as given and lowercased (to stay on the index), so a stored copy
+   * in some other mixed case is not found.
    */
   matchBy: 'userId' | 'email';
   /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
@@ -72,10 +107,23 @@ export type UserReference = ErasureAction & {
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
    * the person's personal-workspace organizations, so the executor must reuse the account purge's
-   * predicate (`personalFilter` in `server/users/purgeAccountContent.ts`; for `FabFile` also
-   * `isOrganizationFile` in `server/users/purgeAccountFiles.ts`, which keeps legacy org uploads).
+   * predicate (`personalFilter` in `packages/server-utils/src/users/purgeAccountContent.ts`; for `FabFile` also
+   * `isOrganizationFile` in `packages/server-utils/src/users/purgeAccountFiles.ts`, which keeps legacy org uploads).
    */
   scope?: 'personal';
+  /**
+   * Fields beside `path` that describe the person it names (a cached name, email, request IP), for
+   * a reference that does not clear them on erasure (a `retain`). They travel with this person's
+   * matched paths and are withheld from anyone else's export of the document. Erasure does not read
+   * this; it clears `alsoRedact`.
+   */
+  identifies?: readonly string[];
+  /**
+   * `reference` marks a `retain` whose person is only the actor on a record about someone else (the
+   * admin who wrote a note or an audit entry): their export carries the matched paths, not the
+   * record, as for an `anonymize`.
+   */
+  exportScope?: 'reference';
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };
@@ -104,6 +152,12 @@ export type DataHolder =
        * left in place, so the gap is visible rather than silent.
        */
       unmatchedPaths?: Readonly<Record<string, string>>;
+      /**
+       * Paths under a `Mixed` field that name someone other than whoever the document is exported
+       * for (the approving admin an audit entry's `details` caches). Withheld from every export
+       * without being queried on, so they add no unindexed clause; erasure leaves them in place.
+       */
+      withheldPaths?: readonly string[];
     }
   /**
    * The document carries no user field of its own but belongs to a parent document that does (a

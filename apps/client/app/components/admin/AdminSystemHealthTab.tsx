@@ -86,9 +86,10 @@ interface CircuitBreakerStatus {
 
 interface IntegrationHealthSummary {
   integration: IntegrationName;
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  // 'no_data' (with a null lastCheckedAt) means the integration has never been checked.
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'no_data';
   latencyMs: number;
-  lastCheckedAt: string;
+  lastCheckedAt: string | null;
   successRate: number;
   consecutiveFailures: number;
   error: string | null;
@@ -204,6 +205,7 @@ const getRealtimeBreakerChipProps = (
 const getStatusTone = (status: string): AdminStatusTone => {
   if (status === 'healthy') return 'good';
   if (status === 'degraded') return 'warn';
+  if (status === 'no_data') return 'neutral';
   return 'bad';
 };
 
@@ -1055,7 +1057,11 @@ const AdminSystemHealthTab = () => {
                   </Typography>
                   <StatusChip
                     tone={getStatusTone(integration.status)}
-                    label={integration.status.charAt(0).toUpperCase() + integration.status.slice(1)}
+                    label={
+                      integration.status === 'no_data'
+                        ? 'Not checked'
+                        : integration.status.charAt(0).toUpperCase() + integration.status.slice(1)
+                    }
                     data-testid={`integration-health-${integration.integration}-status`}
                   />
                 </Stack>
@@ -1224,7 +1230,7 @@ const AdminSystemHealthTab = () => {
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                    {integration.lastCheckedAt && new Date(integration.lastCheckedAt).getTime() > 0
+                    {integration.lastCheckedAt
                       ? `Checked ${new Date(integration.lastCheckedAt).toLocaleTimeString()}`
                       : 'No data yet'}
                   </Typography>

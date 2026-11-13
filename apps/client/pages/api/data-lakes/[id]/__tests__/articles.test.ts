@@ -9,6 +9,7 @@ const LAKE = {
 };
 
 const h = vi.hoisted(() => ({
+  adminSettings: {},
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
   registryMembershipScope: vi.fn(),
@@ -16,6 +17,7 @@ const h = vi.hoisted(() => ({
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
   record: vi.fn().mockResolvedValue(undefined),
+  adminBypassLakeIds: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -44,7 +46,7 @@ vi.mock('@bike4mind/services', async () => ({
   fabFilesService: { search: h.search },
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: h.adminSettings,
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -60,7 +62,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn() },
   lakeAccessEventRepository: { record: h.record },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
+  adminBypassLakeIds: h.adminBypassLakeIds,
+}));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
@@ -90,9 +95,20 @@ beforeEach(() => {
     creatorUserId: LAKE.createdByUserId,
   });
   h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
+  h.adminBypassLakeIds.mockResolvedValue([]);
 });
 
 describe('GET /api/data-lakes/:id/articles lake scoping', () => {
+  it('wires admin settings into the read gate so reader grants are honored', async () => {
+    const { res } = makeRes();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
+  });
+
   it('scopes the browse with the shared membership predicate, anchored to the lake creator', async () => {
     const { res } = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
@@ -321,6 +337,50 @@ describe('GET /api/data-lakes/:id/articles access-event audit', () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
+  it('marks an admin-bypass read with adminBypassLakeIds on exactly one record call', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    h.adminBypassLakeIds.mockResolvedValue(['lake1']);
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.adminBypassLakeIds).toHaveBeenCalledWith(expect.anything(), ['lake1']);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record.mock.calls[0][0]).toMatchObject({ resolvedLakeIds: ['lake1'], adminBypassLakeIds: ['lake1'] });
+  });
+
+  it('records and sends nothing when member-access classification is incomplete', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    h.adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+    const { res, json } = makeRes();
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res)).rejects.toThrow(
+      'classification unavailable'
+    );
+    expect(h.record).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('fails the request, sending nothing, when an admin-bypass audit write rejects', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    h.adminBypassLakeIds.mockResolvedValue(['lake1']);
+    h.record.mockRejectedValueOnce(new Error('mongo blip'));
+    const { res, json } = makeRes();
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res)).rejects.toThrow(
+      'mongo blip'
+    );
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('leaves the marker off a member read', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.record.mock.calls[0][0]).not.toHaveProperty('adminBypassLakeIds');
+  });
+
   it('still returns the response when the audit write rejects', async () => {
     h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
     h.record.mockRejectedValueOnce(new Error('mongo blip'));
@@ -400,9 +460,8 @@ it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
     const { res } = makeRes();
     await handler(makeReq() as never, res);
     const adapter = h.search.mock.calls[0][2] as {
-      storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
+      storage: { generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
     };
-    expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
     await adapter.storage.generateSignedUrl('owned/report.txt', 600);
     expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', { expiresIn: 600, audience: 'browser' });
   }

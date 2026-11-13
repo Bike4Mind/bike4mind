@@ -8,6 +8,8 @@ import {
   ICreditTransactionRepository,
   IApiKeyUsage,
   ISourceUsage,
+  ILedgerUsageTotal,
+  LEDGER_USAGE_TRANSACTION_TYPES,
   ILedgerPage,
   ILedgerQueryOptions,
   COMPLETION_SOURCES,
@@ -158,6 +160,12 @@ CreditTransactionSchema.index(
   }
 );
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
+// Serves the cross-owner purchase reads of the admin Payments report (server/admin/payments). Partial on
+// purchases, so a query must say `type: 'purchase'`. Built by the 20260921241030 ensure migration.
+CreditTransactionSchema.index(
+  { createdAt: -1, _id: -1 },
+  { name: 'credit_tx_purchases_by_date', partialFilterExpression: { type: 'purchase' } }
+);
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
@@ -274,6 +282,14 @@ export class CreditTransactionRepository
       { new: true }
     );
     return marked ?? this.model.findOne({ stripePaymentIntentId: paymentIntentId, type: 'purchase' });
+  }
+
+  async rekeyTransaction(fromTransactionId: string, toTransactionId: string) {
+    return this.model.findOneAndUpdate(
+      { transactionId: fromTransactionId },
+      { $set: { transactionId: toTransactionId } },
+      { new: true }
+    );
   }
 
   /** Any completed purchase of this owner's that was never refunded or lost to a dispute. */
@@ -499,6 +515,27 @@ export class CreditTransactionRepository
     return rows.map(row => ({ at: new Date(row._id), credits: row.credits }));
   }
 
+  /** AI spend in credits per owner since `since`; owners with none are absent. */
+  async aiSpendByOwnersSince(
+    ownerIds: string[],
+    ownerType: CreditHolderType,
+    since: Date
+  ): Promise<Record<string, number>> {
+    if (ownerIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      {
+        $match: {
+          ownerId: { $in: ownerIds },
+          ownerType,
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+          createdAt: { $gte: since },
+        },
+      },
+      { $group: { _id: '$ownerId', credits: { $sum: { $abs: '$credits' } } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
   /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
   async summarizeAiSpend(ownerId: string, ownerType: CreditHolderType, now: Date): Promise<AiSpendSummary> {
     const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -619,6 +656,23 @@ export class CreditTransactionRepository
       { $project: { _id: 0, apiKeyId: '$_id', requests: 1, creditsSpent: 1, inputTokens: 1, outputTokens: 1 } },
       { $sort: { creditsSpent: -1 } },
     ]);
+  }
+
+  async usageTotalForOwner(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    days: number = 30
+  ): Promise<ILedgerUsageTotal> {
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    const [total] = await this.model.aggregate<ILedgerUsageTotal>([
+      {
+        $match: { ownerId, ownerType, createdAt: { $gte: from }, type: { $in: [...LEDGER_USAGE_TRANSACTION_TYPES] } },
+      },
+      { $group: { _id: null, creditsCharged: { $sum: { $abs: '$credits' } }, transactions: { $sum: 1 } } },
+      { $project: { _id: 0, creditsCharged: 1, transactions: 1 } },
+    ]);
+    return total ?? { creditsCharged: 0, transactions: 0 };
   }
 
   async sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ISourceUsage[]> {

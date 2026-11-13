@@ -20,7 +20,10 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
-import { createCompletionMeter, createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import {
+  createCompletionMeter,
+  createRequestCompletionMeter,
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -66,7 +69,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   });
 
   if (!sessionId || !curationJobId) {
-    logger.error(`Invalid message: ${body}`);
+    logger.error('Invalid message: sessionId and curationJobId are required', {
+      sqsMessageId: event.Records[0].messageId,
+      hasSessionId: Boolean(sessionId),
+      hasCurationJobId: Boolean(curationJobId),
+    });
     return;
   }
 
@@ -139,7 +146,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       try {
         // Get operations model with initialized LLM backend
         const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
-        const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        const { llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when
         // present); the operations model runs on the platform key.

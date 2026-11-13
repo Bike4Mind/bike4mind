@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   stored: vi.fn(),
   update: vi.fn(),
   getModel: vi.fn(),
+  getConfig: vi.fn(),
   audit: vi.fn(),
 }));
 
@@ -32,10 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
+  DEFAULT_OPERATIONS_SPEECH_MODEL: 'whisper-1',
+  DEFAULT_OPERATIONS_TEXT_MODEL: 'gpt-5.6-luna',
   OperationsModelService: {
     updateOperationsModel: h.update,
     getOperationsModel: h.getModel,
-    getOperationsModelConfig: vi.fn(),
+    getOperationsModelConfig: h.getConfig,
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
@@ -95,6 +98,23 @@ describe('PUT /api/admin/operations-model admin audit', () => {
   });
 });
 
+describe('GET /api/admin/operations-model', () => {
+  it('reports the shared defaults when no operations model is configured', async () => {
+    h.getConfig.mockResolvedValue(null);
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      modelId: 'gpt-5.6-luna',
+      imageModelId: 'flux-3-image-klein',
+      speechModelId: 'whisper-1',
+    });
+  });
+});
+
 describe('/api/admin/operations-model permission gate', () => {
   it.each(['GET', 'PUT'] as const)('refuses %s for a user without admin access before any work', async method => {
     const { req, res } = createMocks({ method, body });
@@ -106,5 +126,15 @@ describe('/api/admin/operations-model permission gate', () => {
     expect(h.getModel).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses PUT with 403 to a delegate holding settings:manage', async () => {
+    const { req, res } = createMocks({ method: 'PUT', body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(h.update).not.toHaveBeenCalled();
   });
 });

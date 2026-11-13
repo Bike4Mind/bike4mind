@@ -6,7 +6,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getOrgCustomMcpPolicy, listOrgMemberConnections } from '@server/mcpConnections/orgPolicy';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {

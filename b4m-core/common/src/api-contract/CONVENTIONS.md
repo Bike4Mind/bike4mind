@@ -147,6 +147,7 @@ re-deciding per endpoint:
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
+| Valid credential, but an admin suspended the owner's account | `403` | `account_suspended` (the body carries `suspension`: `reason_category`, and `terms_url` / `appeal_url` when the deployment has a website; never the signals behind the decision; not retryable) |
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
@@ -176,6 +177,7 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
+| A completion's `run` does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
@@ -199,7 +201,7 @@ failure used to be remapped to `404` by the error handler.
 This row describes the target, not the whole deployed surface. Roughly 27 files guard a malformed
 id with a `400` today and have **not** been converged - most inherit it from one of the three
 shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
-`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in `quest-plans/[id]/*`,
+`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in
 `business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
 `admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
 `data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this

@@ -1,9 +1,12 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { isImportKind, type ClaudeImportKind } from '@shared/claudeImport';
 import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
+import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
+import { MiniTavern } from './watch/MiniTavern';
 
 const rootRoute = createRootRoute();
 
@@ -19,14 +22,22 @@ const profileRoute = createRoute({
   component: Profile,
 });
 
+const billingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/billing',
+  component: Billing,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection } =>
-    isSettingsSection(search.section) ? { section: search.section } : {},
+  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection; focus?: ClaudeImportKind } => ({
+    ...(isSettingsSection(search.section) ? { section: search.section } : {}),
+    ...(isImportKind(search.focus) ? { focus: search.focus } : {}),
+  }),
   component: function SettingsRoute() {
-    const { section } = settingsRoute.useSearch();
-    return <Settings section={section ?? 'general'} />;
+    const { section, focus } = settingsRoute.useSearch();
+    return <Settings section={section ?? 'general'} importFocus={focus} />;
   },
 });
 
@@ -39,11 +50,28 @@ const devLogsRoute = createRoute({
   component: DevLogsWindow,
 });
 
+// The always-on-top mini Tavern window (main/watch/miniWindow.ts). Its preload exposes only
+// window.b4mMini, so nothing on this route may reach for window.b4m.
+const miniTavernRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/mini-tavern',
+  component: function MiniTavernRoute() {
+    return <MiniTavern />;
+  },
+});
+
 // A packaged build loads the renderer over file://, which has no origin for the History
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, profileRoute, settingsRoute, devLogsRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    profileRoute,
+    billingRoute,
+    settingsRoute,
+    devLogsRoute,
+    miniTavernRoute,
+  ]),
   history: createHashHistory(),
 });
 

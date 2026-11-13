@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
 
 /**
  * DELETE /api/organizations/[id] (org-groups #1172/#1219). Pins two things that were both
@@ -46,6 +50,8 @@ vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const clearOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+const findInvites = vi.hoisted(() => vi.fn().mockResolvedValue([{ id: 'inv1' }]));
+const closeInvite = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const withTransaction = vi.hoisted(() =>
   vi.fn(async (fn: any) => {
     txn.depth++;
@@ -63,6 +69,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
   integrationRequestRepository: { clearOrganization },
+  inviteRepository: { find: findInvites, closeInvite },
   withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -81,7 +88,7 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));
@@ -93,6 +100,8 @@ describe('DELETE /api/organizations/[id]', () => {
     deleteOrganization.mockClear();
     updateMany.mockClear();
     clearOrganization.mockClear();
+    findInvites.mockClear();
+    closeInvite.mockClear();
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
@@ -208,6 +217,17 @@ describe('DELETE /api/organizations/[id]', () => {
     // The step before it ran, and the failure did not undo it.
     expect(updateMany).toHaveBeenCalledWith({ organizationId: 'org1' }, { organizationId: null });
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the deleted org's pending invites, and a failure there only logs a warning", async () => {
+    await call();
+    expect(findInvites).toHaveBeenCalledWith({ type: 'Organization', documentId: 'org1' });
+    expect(closeInvite).toHaveBeenCalledWith('inv1');
+
+    findInvites.mockRejectedValueOnce(new Error('invites down'));
+    await call();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/org1.*invites down/);
   });
 
   it('does not warn when the integration requests clear cleanly', async () => {

@@ -67,9 +67,12 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
   return inviteWithDetails;
 };
 
-export type InviteViewAccess = 'allowed' | 'expired' | 'denied';
+export type InviteViewAccess = 'allowed' | 'expired' | 'revoked' | 'denied';
 
-/** 'allowed' | 'expired' (caller could view it but it lapsed) | 'denied'. Share-authorized callers still see expired invites. */
+/**
+ * 'allowed' | 'expired' (caller could view it but it lapsed) | 'revoked' (a share link its sharer
+ * revoked) | 'denied'. Share-authorized callers still see expired invites.
+ */
 export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<InviteViewAccess> {
   const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
   const email = user.email?.toLowerCase();
@@ -82,6 +85,9 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
   // already holds it. Gating it out would 404 the /share/$id landing page and leave acceptInvite's
   // link path unreachable. Redeemability is the gate here: exhaustion denies, expiry yields 'expired'.
   if (isLinkOnlyInvite(invite)) {
+    // Ahead of the exhaustion check: revoking also zeroes `remaining`, and the holder of the link
+    // should be told it was revoked rather than shown a generic not-found.
+    if (invite.revokedAt) return 'revoked';
     if (invite.remaining <= 0) return 'denied';
     return expired ? 'expired' : 'allowed';
   }

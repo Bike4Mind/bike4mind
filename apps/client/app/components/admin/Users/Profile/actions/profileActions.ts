@@ -9,18 +9,21 @@ export type ProfileAction =
   | 'restrict'
   | 'shadowTier'
   | 'role'
+  | 'permissions'
   | 'productAccess'
   | 'tags'
   | 'mfaReset'
   | 'emailVerification'
   | 'apiKeyTrust'
   | 'newAccountSpendCap'
+  | 'fileEmbeddingWindowReset'
   | 'internalAccount'
   | 'subscription'
   | 'loginAs'
   | 'message'
   | 'scheduleDeletion'
   | 'cancelDeletion'
+  | 'dataExport'
   | 'delete';
 
 /**

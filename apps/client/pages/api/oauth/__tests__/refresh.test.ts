@@ -56,11 +56,14 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-  User: { findById: h.findById },
+  User: {
+    findById: (...a: unknown[]) =>
+      Object.assign(Promise.resolve(h.findById(...a)), { select: () => ({ lean: async () => null }) }),
+  },
   userRepository: { findById: h.findById },
   authSessionRepository: { findBySid: h.findBySid },
 }));
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   assertApiKeyAccessAllowed: h.assertAccess,
 }));
@@ -137,7 +140,7 @@ describe('POST /api/oauth/refresh client allowlist', () => {
 
 describe('POST /api/oauth/refresh account state', () => {
   it.each([
-    ['banned', { isBanned: true }, 401],
+    ['banned', { isBanned: true }, 403],
     ['dispute-suspended', { disputePending: true }, 403],
     ['content-suspended', { moderation: { status: 'suspended' } }, 403],
   ])('refuses a %s account, revokes the rotated session and returns no tokens', async (_label, state, status) => {
@@ -162,7 +165,7 @@ describe('POST /api/oauth/refresh account state', () => {
 
     const res = await call('b4m-cli');
 
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(403);
     expect(h.issueSession).not.toHaveBeenCalled();
   });
 

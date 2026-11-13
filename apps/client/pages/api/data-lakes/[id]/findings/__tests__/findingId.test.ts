@@ -39,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   DATA_LAKE_READ_SCOPES: [],
   assertDataLakeWriteScope: h.assertDataLakeWriteScope,
 }));
@@ -63,7 +63,7 @@ vi.mock('@bike4mind/database', () => ({
     assignFinding: h.assignFinding,
   },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Mocked to keep this a route test, but ALSO because the real module reaches into
 // `@bike4mind/database` for repositories this file's mock does not declare - leaving it real would
 // fail every case here with a missing-export error rather than anything about the route.

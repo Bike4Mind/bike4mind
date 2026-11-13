@@ -22,7 +22,8 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -92,6 +93,8 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
       userId,
     });
   }
+
+  await purgeDeletedNotebookMedia([id], { logger: req.logger });
 
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 

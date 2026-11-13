@@ -8,11 +8,11 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import { OLLAMA_SKIPS_INTEL_IGPU } from '@bike4mind/common';
 import {
   formatMemory,
   anIntelGpu,
   LLAMA_SERVER_VRAM_HELP,
-  OLLAMA_SKIPS_INTEL_IGPU,
   pullKey,
   type CuratedBuildView,
   type CuratedEntryView,

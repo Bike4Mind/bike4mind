@@ -6,9 +6,9 @@ const { step, publishGenerationJobReadyPush } = vi.hoisted(() => ({
   publishGenerationJobReadyPush: vi.fn(async () => undefined),
 }));
 
-vi.mock('@server/generationJobs/wiring', () => ({ getGenerationJobEngine: () => ({ step }) }));
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({ getGenerationJobEngine: () => ({ step }) }));
 vi.mock('@bike4mind/database', () => ({ generationJobRepository: {} }));
-vi.mock('@server/utils/pushNotifications', () => ({
+vi.mock('@bike4mind/server-utils/utils/pushNotifications', () => ({
   appRootDeepLink: vi.fn(),
   publishPushNotification: vi.fn(),
   sessionDeepLink: vi.fn(),

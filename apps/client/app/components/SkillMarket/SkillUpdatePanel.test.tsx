@@ -88,6 +88,20 @@ describe('SkillUpdatePanel version guard', () => {
     );
   });
 
+  it('shows a change to the Claude Code model before the update is applied', () => {
+    h.detail.data = {
+      version: {
+        ...latestDetail.version,
+        snapshot: { ...latestDetail.version.snapshot, claudeCodeModel: 'haiku' },
+      },
+    };
+    renderPanel();
+    fireEvent.click(screen.getByTestId('skill-market-show-changes'));
+    expect(screen.getByTestId('skill-market-update-field-changes')).toHaveTextContent(
+      'Claude Code model: (none) -> haiku'
+    );
+  });
+
   it('sends the loaded version id when saving as a new copy', async () => {
     h.detail.data = latestDetail;
     renderPanel();
@@ -96,5 +110,58 @@ describe('SkillUpdatePanel version guard', () => {
     expect(h.importListing).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'fmt-v2', expectedVersionId: 'version-2' })
     );
+  });
+});
+
+describe('SkillUpdatePanel notices and update wording', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.detail.data = undefined;
+  });
+
+  const renderWith = (marketStatus: unknown) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillUpdatePanel skill={{ ...skill, marketStatus } as unknown as ISkillWithSharing} />
+      </CssVarsProvider>
+    );
+
+  it('tells the importer a report-hidden listing is hidden and that their copy keeps working', () => {
+    renderWith({ state: 'hidden', importedVersion: 1, latestVersion: 1, locallyModified: false });
+    expect(screen.getByTestId('skill-market-hidden')).toHaveTextContent(
+      'hidden while a moderator reviews reports. Your copy keeps working.'
+    );
+  });
+
+  it('shows no hidden notice for a current copy', () => {
+    renderWith({ state: 'current', importedVersion: 1, latestVersion: 1, locallyModified: false });
+    expect(screen.queryByTestId('skill-market-hidden')).toBeNull();
+  });
+
+  const stale = { state: 'stale', importedVersion: 1, latestVersion: 2, locallyModified: false };
+  const withReview = (reviewStatus: string) => ({
+    version: { ...latestDetail.version, reviewStatus },
+  });
+
+  it('does not claim safety checks for a version a reviewer approved', () => {
+    h.detail.data = withReview('approved');
+    renderWith(stale);
+    const text = screen.getByTestId('skill-market-update-panel').textContent;
+    expect(text).toContain('a reviewer approved');
+    expect(text).not.toContain('safety checks');
+  });
+
+  it('says the author approved their own version rather than a reviewer', () => {
+    h.detail.data = { version: { ...latestDetail.version, reviewStatus: 'approved', selfApproved: true } };
+    renderWith(stale);
+    const text = screen.getByTestId('skill-market-update-panel').textContent;
+    expect(text).toContain('The author published and approved a new version.');
+    expect(text).not.toContain('a reviewer approved');
+  });
+
+  it('says safety checks passed for an auto-approved version', () => {
+    h.detail.data = withReview('auto_approved');
+    renderWith(stale);
+    expect(screen.getByTestId('skill-market-update-panel')).toHaveTextContent('passed the safety checks');
   });
 });

@@ -13,9 +13,9 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
+import { subscriptionCancellationAudit } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
 
 export const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({

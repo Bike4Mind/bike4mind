@@ -110,12 +110,20 @@ export class LocalServerSupervisor {
     if (!file) return;
     let found: OwnedRecord[];
     let listedCount: number;
+    let resealed = false;
     try {
       const text = await file.read();
       const cipher = this.sealer();
       found = readOwnedRecords(
         text,
-        cipher ? sealed => cipher.decryptString(Buffer.from(sealed, 'base64')) : undefined
+        cipher
+          ? sealed => {
+              const blob = Buffer.from(sealed, 'base64');
+              const key = cipher.decryptString(blob);
+              resealed ||= cipher.needsReencrypt?.(blob) === true;
+              return key;
+            }
+          : undefined
       );
       listedCount = ownedEntryCount(text);
     } catch (error) {
@@ -149,12 +157,14 @@ export class LocalServerSupervisor {
         starting: null,
       };
       this.slots.set(record.id, slot);
+      if (handle.warning) this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
       const { unverifiedLaunches, ...fresh } = record;
       this.records.set(record.id, fresh);
       if (unverifiedLaunches) reset = true;
       this.watch(record.id, slot, handle);
     }
-    if (this.unverified.size > 0 || this.records.size !== listedCount || reset) await this.persist();
+    // A key read from an older cipher format is written back in the current one.
+    if (this.unverified.size > 0 || this.records.size !== listedCount || reset || resealed) await this.persist();
   }
 
   /**
@@ -314,6 +324,7 @@ export class LocalServerSupervisor {
       startedAt: new Date().toISOString(),
       settings,
       ...(handle.apiKey ? { apiKey: handle.apiKey } : {}),
+      ...(handle.warning ? { warning: handle.warning } : {}),
     });
     await this.persist();
     return true;

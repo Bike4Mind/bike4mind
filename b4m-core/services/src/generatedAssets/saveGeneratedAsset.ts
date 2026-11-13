@@ -18,6 +18,7 @@ import {
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { createFabFile, type CreateFabFileAdapters } from '../fabFileService/create';
+import { generateSignedUrl } from '../fabFileService/get';
 
 type Modality = 'audio' | 'video' | 'image';
 
@@ -111,7 +112,12 @@ export async function saveGeneratedAsset(
       deletedAt: null,
       tags: { $elemMatch: { name: jobTag } },
     });
-    if (existing?.filePath) return savedResult(existing, existing.filePath);
+    if (existing?.filePath) {
+      const signed = await generateSignedUrl(existing, {
+        storage: { generateSignedUrl: (path, expiresIn) => deps.storage.generateSignedUrl(path, expiresIn, 'get') },
+      });
+      return savedResult(signed, existing.filePath);
+    }
   }
 
   const modality = MODALITY[generation.generator];

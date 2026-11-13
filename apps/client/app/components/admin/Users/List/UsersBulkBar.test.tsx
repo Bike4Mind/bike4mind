@@ -6,6 +6,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { USERS_BULK_ACTIONS, USERS_BULK_ACTION_COPY } from './UsersBulkActionDialog';
 import { UsersBulkBar } from './UsersBulkBar';
 
+const user = vi.hoisted(() => ({ current: { id: 'u1', isAdmin: true } as Record<string, unknown> }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;
 
@@ -37,5 +40,37 @@ describe('UsersBulkBar help', () => {
       expect(entry).toHaveTextContent(USERS_BULK_ACTION_COPY[type].description);
     }
     expect(legend).toHaveTextContent('undo it for 30 seconds');
+  });
+});
+
+describe('UsersBulkBar permissions', () => {
+  it('enables every action for a full admin', () => {
+    user.current = { id: 'u1', isAdmin: true };
+    renderBar();
+    for (const type of USERS_BULK_ACTIONS) {
+      expect(screen.getByTestId(`admin-users-bulk-${type}-btn`)).toBeEnabled();
+    }
+  });
+
+  it('lets a users:moderate delegate suspend and restrict but not adjust credits, contain or revoke keys', () => {
+    user.current = { id: 'u2', isAdmin: false, adminPermissions: ['users:moderate'] };
+    renderBar();
+    const enabled = (type: string) =>
+      !(screen.getByTestId(`admin-users-bulk-${type}-btn`) as HTMLButtonElement).disabled;
+    expect(enabled('suspend')).toBe(true);
+    expect(enabled('restrict')).toBe(true);
+    expect(enabled('adjustCredits')).toBe(false);
+    expect(enabled('contain')).toBe(false);
+    expect(enabled('revokeApiKeys')).toBe(false);
+    expect(enabled('addTag')).toBe(false);
+  });
+
+  it('disables the same actions in the narrow-screen menu', () => {
+    user.current = { id: 'u2', isAdmin: false, adminPermissions: ['users:moderate'] };
+    renderBar();
+    fireEvent.click(screen.getByTestId('admin-users-bulk-menu-btn'));
+    expect(screen.getByTestId('admin-users-bulk-suspend-menuitem')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('admin-users-bulk-adjustCredits-menuitem')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('admin-users-bulk-contain-menuitem')).toHaveAttribute('aria-disabled', 'true');
   });
 });

@@ -146,6 +146,9 @@ const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => (
   articleParams: [] as Array<{ tags?: string[]; lakeId?: string[] } | null | undefined>,
 }));
 
+// The picker's refresh-on-open; what it invalidates is covered in dataLakes.test.ts.
+const pickerRefresh = vi.hoisted(() => ({ sessionIds: [] as Array<string | null | undefined>, refresh: vi.fn() }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
@@ -195,6 +198,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
     lakesHookSessionIds.push(sessionId);
     return { data: lakesState.value, isLoading: lakesState.isLoading, isError: lakesState.isError };
+  },
+  useRefreshLakePickerReads: (sessionId: string | null | undefined) => {
+    pickerRefresh.sessionIds.push(sessionId);
+    return pickerRefresh.refresh;
   },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
@@ -983,6 +990,32 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
   });
 
+  // A connector sync renames a lake and adds files server-side; with no manager open, nothing else
+  // refreshes the picker's cached names and counts.
+  it("refreshes the session's lake list and counts each time the picker opens", () => {
+    pickerRefresh.refresh.mockClear();
+    renderExplorer();
+    expect(pickerRefresh.refresh).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+    expect(pickerRefresh.refresh).toHaveBeenCalledTimes(1);
+    expect(pickerRefresh.sessionIds.at(-1)).toBe('sess-1');
+  });
+
+  it('keeps the cached lake rows when a refresh read fails, instead of swapping in the error panel', () => {
+    lakesState.isError = true;
+    try {
+      renderExplorer();
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+      expect(screen.queryByTestId('datalake-lake-picker-error')).not.toBeInTheDocument();
+      expect(screen.getByTestId('datalake-lake-picker-lake-lake-1')).toBeInTheDocument();
+    } finally {
+      lakesState.isError = false;
+    }
+  });
+
   // The tree is built purely from tag counts, which have nothing to seed a branch from for a
   // lake with zero files - so an accessible-but-empty lake used to vanish from it entirely (#3234).
   it('adds a row for an accessible lake with no tagged files yet, alongside populated ones (#3234)', () => {
@@ -1429,6 +1462,8 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     it('surfaces a failed lake list as an error while the bucket is open', () => {
       lakesState.isError = true;
+      // A first load that failed has no data; a failed refresh keeps the cached rows instead.
+      lakesState.value = undefined as unknown as unknown[];
       renderExplorer();
       nav(['lakea', U]);
 

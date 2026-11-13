@@ -95,3 +95,20 @@ describe('TransformBatchRepository.claimCompletion', () => {
     expect(again?.creditSettledAt).toEqual(settledAt);
   });
 });
+
+describe('TransformBatchRepository customIdMap', () => {
+  it('keeps executedModel on a stored mapping', async () => {
+    await transformBatchRepository.create({
+      ownerUserId: 'u1',
+      anthropicBatchId: 'msgbatch_executed',
+      status: 'in_progress',
+      requestCount: 1,
+      succeededCount: 0,
+      erroredCount: 0,
+      customIdMap: [{ customId: 'req_0', clientRef: 'a', model: 'm1', executedModel: 'm2' }],
+    });
+
+    const stored = await transformBatchRepository.findByAnthropicBatchId('msgbatch_executed');
+    expect(stored?.customIdMap[0].executedModel).toBe('m2');
+  });
+});

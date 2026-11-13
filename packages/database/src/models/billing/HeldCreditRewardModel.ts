@@ -1,6 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer';
+export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
 /** `paused` is a blocked account's reward: out of the queue, its heldAt kept so unblock restores its place. */
 export type HeldCreditRewardStatus = 'held' | 'paid' | 'void' | 'paused';
 
@@ -13,6 +13,7 @@ export type HeldCreditReward = {
   reason: string;
   description: string;
   metadata?: Record<string, unknown>;
+  lotRef?: string;
   heldAt: Date;
   status: HeldCreditRewardStatus;
   paidAt?: Date | null;
@@ -26,10 +27,16 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     transactionId: { type: String, required: true, unique: true },
     userId: { type: String, required: true },
     credits: { type: Number, required: true, min: 1 },
-    source: { type: String, enum: ['gear', 'referral_first_answer'], required: true },
+    source: {
+      type: String,
+      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription'],
+      required: true,
+    },
     reason: { type: String, required: true },
     description: { type: String, required: true },
     metadata: { type: Schema.Types.Mixed },
+    // Stamped as the paid lot's stripeRef so a refund take-back finds the lot.
+    lotRef: { type: String },
     heldAt: { type: Date, required: true },
     status: { type: String, enum: ['held', 'paid', 'void', 'paused'], required: true, default: 'held' },
     paidAt: { type: Date, default: null },
@@ -140,10 +147,27 @@ export const heldCreditRewardRepository = {
     }
     return totals;
   },
-  async settle(transactionId: string, status: 'paid' | 'void', at: Date = new Date()) {
-    await HeldCreditRewardModel.updateOne(
-      { transactionId, status: 'held' },
+  /** With `credits`, settles only while the row still holds that amount (a refund may have reduced it). */
+  async settle(
+    transactionId: string,
+    status: 'paid' | 'void',
+    { credits, at = new Date() }: { credits?: number; at?: Date } = {}
+  ): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: 'held', ...(credits !== undefined ? { credits } : {}) },
       { $set: { status, ...(status === 'paid' ? { paidAt: at } : {}) } }
     );
+    return modifiedCount;
+  },
+  /**
+   * Lowers an unpaid (`held` or `paused`) reward from `fromCredits` to `toCredits`, voiding it at 0. Conditional on
+   * the current amount, so a concurrent change makes it a no-op; returns how many rows moved.
+   */
+  async reduceHeld(transactionId: string, fromCredits: number, toCredits: number): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: { $in: ['held', 'paused'] }, credits: fromCredits },
+      { $set: toCredits > 0 ? { credits: toCredits } : { status: 'void' } }
+    );
+    return modifiedCount;
   },
 };

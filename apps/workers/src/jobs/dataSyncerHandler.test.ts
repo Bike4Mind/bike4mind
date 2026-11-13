@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger, redactLogValue } from '@bike4mind/observability';
 import type { Context } from 'aws-lambda';
 
 // The Resource links only MONGODB_URI: the handler must not need a prod API key.
@@ -14,6 +15,7 @@ const state = vi.hoisted(() => ({
   failConnect: false,
   failMarker: false,
   failInsertInto: undefined as string | undefined,
+  failInsertWith: undefined as Error | undefined,
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
@@ -56,7 +58,7 @@ vi.mock('mongodb', () => {
         };
       }),
       insertMany: vi.fn(async (docs: unknown[]) => {
-        if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
+        if (name === state.failInsertInto) throw state.failInsertWith ?? new Error(`insert into ${name} failed`);
         inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
         return { insertedCount: docs.length };
       }),
@@ -117,6 +119,7 @@ beforeEach(() => {
   state.failConnect = false;
   state.marker = null;
   state.failInsertInto = undefined;
+  state.failInsertWith = undefined;
   state.emptyTarget = false;
   state.failFirstDeleteOn = undefined;
   state.ops = [];
@@ -272,11 +275,60 @@ describe('dataSyncerHandler', () => {
     expect(result?.message).toContain('no documents copied; will retry next deploy');
   });
 
+  it('keeps the documents carried by a bulk-write error out of the logged error', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    const marker = 'doc-marker-do-not-log';
+    const failure = Object.assign(new Error('bulk write failed'), { code: 11000, writeErrors: [{ op: { marker } }] });
+    state.failInsertWith = failure;
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
+
+    try {
+      await invoke();
+
+      // Assert on what is emitted: the redactor runs after the call, so raw call arguments prove nothing.
+      const emitted = errorSpy.mock.calls.map(([message, metadata]) => [message, redactLogValue(metadata)]);
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(JSON.stringify(emitted)).not.toContain(marker);
+      expect(emitted).toContainEqual([
+        'Error syncing collection',
+        expect.objectContaining({ error: expect.objectContaining({ message: 'bulk write failed', code: 11000 }) }),
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each(['cyclic', 'deep'] as const)('restores the backup when the copy error has a %s cause chain', async shape => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    const failure = new Error('copy failed');
+    if (shape === 'cyclic') failure.cause = failure;
+    else {
+      const causes = Array.from({ length: 10_000 }, () => new Error('nested failure'));
+      causes.forEach((cause, index) => {
+        cause.cause = causes[index + 1];
+      });
+      failure.cause = causes[0];
+    }
+    state.failInsertWith = failure;
+
+    const result = await invoke();
+
+    expect(state.ops.filter(operation => operation.startsWith('rapidreplymappings.'))).toEqual([
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.bulkWrite',
+    ]);
+    expect(state.markerWrites).toEqual([]);
+    expect(result.message).toContain('copy failed');
+  });
+
   it('surfaces both the copy failure and the rollback failure', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
     state.failInsertInto = 'rapidreplymappings';
     state.failRollbackBulkWrite = true;
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
 
     try {
       const result = await invoke();
@@ -285,12 +337,11 @@ describe('dataSyncerHandler', () => {
       expect(result?.message).toContain('rollback of rapidreplymappings failed');
       expect(state.markerWrites).toHaveLength(0);
       // The combined error keeps the original failure as its cause, so the log shows both.
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Error syncing preview settings from staging:',
-        expect.objectContaining({
+      expect(errorSpy).toHaveBeenCalledWith('Error syncing preview settings from staging', {
+        error: expect.objectContaining({
           cause: expect.objectContaining({ message: 'insert into rapidreplymappings failed' }),
-        })
-      );
+        }),
+      });
     } finally {
       errorSpy.mockRestore();
     }
@@ -319,6 +370,28 @@ describe('dataSyncerHandler', () => {
     expect(adminFilter.settingName.$nin).toEqual(
       expect.arrayContaining(['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'])
     );
+  });
+
+  it('does not copy the model-list revision, whose cache row stays behind', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toContain('modelListRevision');
+  });
+
+  it('does not copy the model access revision, which belongs to the preview', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toContain('modelAccessRevision');
   });
 
   it('excludes ciphertext-shaped values under any name and keeps plaintext', async () => {
@@ -391,7 +464,7 @@ describe('strict seed result', () => {
   );
   it('logs a safe connection failure category without exposing credentials', async () => {
     state.failConnect = true;
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
     try {
       const response = await strict();
       expect(response).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });

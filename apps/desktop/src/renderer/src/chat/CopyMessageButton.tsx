@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
+import { VISUALLY_HIDDEN } from '../visuallyHidden';
 import { CheckIcon, CopyIcon, WarningIcon } from './icons';
 
 type CopyState = 'idle' | 'copied' | 'failed';
@@ -72,19 +73,7 @@ export function CopyMessageButton({ text, testId }: { text: string; testId: stri
       >
         {state === 'copied' ? <CheckIcon /> : state === 'failed' ? <WarningIcon /> : <CopyIcon />}
       </IconButton>
-      <Box
-        component="span"
-        role="status"
-        data-testid={`${testId}-status`}
-        sx={{
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          overflow: 'hidden',
-          clip: 'rect(0 0 0 0)',
-          whiteSpace: 'nowrap',
-        }}
-      >
+      <Box component="span" role="status" data-testid={`${testId}-status`} sx={VISUALLY_HIDDEN}>
         {state === 'idle' ? '' : LABEL[state]}
       </Box>
     </Box>

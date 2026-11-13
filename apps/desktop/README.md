@@ -433,13 +433,15 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
+   `DESKTOP_MAC_SELFSIGNED_BETA=true` is a third 0.x path with in-app updates; see
+   Self-signed macOS beta below.
 5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
    `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset. They also
    enable online lists in every npm CLI release and feature-branch snapshot.
 6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for
-   the Developer ID path only). CI logs record
+   the Developer ID and self-signed paths). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
@@ -452,6 +454,66 @@ ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover w
 a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
 Distribution App setup is still required independently of Apple. These opt-ins do
 not enable Sparkle or prove macOS auto-update compatibility.
+
+#### Self-signed macOS beta
+
+`DESKTOP_MAC_SELFSIGNED_BETA=true` selects a third macOS path for 0.x versions: every build is
+signed with one stable self-signed certificate (hardened runtime and the usual entitlements, no
+notarization), the update feed is baked in, and the zip, its blockmap and `latest-mac.yml` are
+published as on the Developer ID path, so in-app updates work. Squirrel.Mac installs an update only
+if it satisfies the running app's designated requirement. An ad-hoc signature pins that to one
+build's own hash; a stable certificate makes it
+`identifier "com.bike4mind.desktop" and certificate leaf = H"<certificate SHA-1>"` for every build.
+macOS does not trust the certificate, so installing stays the install command's job (or Open
+Anyway). `DESKTOP_MAC_SIGNING=true` takes precedence over it, and it over `DESKTOP_MAC_ADHOC_BETA`;
+on a 1.x version it fails. Pull requests still package ad-hoc with updates off.
+
+Setup, in this order:
+
+1. On a trusted machine, outside any repository, generate the certificate and its PKCS#12. The
+   3DES/SHA-1 PKCS#12 profile is the one `security import` reads on every supported macOS:
+
+   ```bash
+   cat > selfsigned.cnf <<'EOF'
+   [req]
+   distinguished_name = dn
+   x509_extensions = ext
+   prompt = no
+   [dn]
+   CN = Bike4Mind Desktop
+   [ext]
+   basicConstraints = critical,CA:FALSE
+   keyUsage = critical,digitalSignature
+   extendedKeyUsage = critical,codeSigning
+   EOF
+   openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes -config selfsigned.cnf \
+     -keyout selfsigned.key -out selfsigned.pem
+   openssl pkcs12 -export -inkey selfsigned.key -in selfsigned.pem -out selfsigned.p12 \
+     -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+   openssl x509 -in selfsigned.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d : | tr A-F a-f
+   ```
+
+2. Secret `DESKTOP_MAC_SELFSIGNED_P12`: the output of `base64 -i selfsigned.p12`.
+3. Secret `DESKTOP_MAC_SELFSIGNED_P12_PASSWORD`: the export password from step 1.
+4. Variable `DESKTOP_MAC_SELFSIGNED_CERT_SHA1`: the fingerprint printed in step 1. The release
+   fails unless the built app's designated requirement names exactly this certificate and every
+   Mach-O inside is signed by it.
+5. Variable `DESKTOP_MAC_SELFSIGNED_BETA=true`.
+6. Keep `selfsigned.key` and `selfsigned.p12` in offline storage and delete the working copies.
+   Never add the certificate to a keychain or mark it trusted.
+
+Only trusted main runs receive the secret. The packaging step imports it into a temporary keychain
+that is on the user's keychain search list only while the job runs: the job ends by restoring the
+list and deleting the keychain.
+
+The certificate is the app's identity. A new or renewed certificate changes the designated
+requirement: installed builds refuse the next build as an update, and every user reruns the
+install command once. macOS ties the app's keychain item to the exact build unless the certificate
+is issued by Apple, so in this mode, as with ad-hoc builds, the first launch after every update asks
+for keychain access once. `node apps/desktop/scripts/smoke-mac-update.mjs` (run from the repository root,
+also on every macOS CI run) checks the whole path with throwaway certificates and a test app
+identity: two packaged builds, a loopback feed, check, download, restart into the newer build,
+and a newer build from another certificate that is refused.
 
 #### GitHub App setup (independent of Apple)
 
@@ -777,10 +839,18 @@ panel into the collapsible **More**.
 
 ### Session panel
 
-In Code conversations, the session panel reserves space beside the conversation when the pane
-can fit the panel and a full reading column. The header, messages and composer recenter together
-when you toggle it. Smaller panes open the panel as a popover without shifting the conversation.
-The layout transition respects the system's reduced-motion preference.
+In Code conversations, how the session panel opens depends on the width of the conversation pane
+(not the window, so the sidebar and the browser pane count):
+
+- **Wide** (pane at least 1320px): the panel floats in the free margin beside the centered reading
+  column, and nothing moves when you toggle it.
+- **Medium** (1064px to 1319px): the panel reserves space, and the header, messages and composer
+  slide left together to make room.
+- **Narrow** (below 1064px): the panel opens from its header button as an overlay with a light
+  scrim. Escape, a click outside or its close button shuts it, and Tab stays inside it while open.
+
+In the orchestrator view there is no free margin beside the stage, so a wide pane reserves space
+instead. Layout transitions respect the system's reduced-motion preference.
 
 ## Orchestration worker models and task evidence
 
@@ -833,8 +903,12 @@ If a configured model disappears, becomes unavailable or lacks required capabili
 role-routed work blocks before starting; no more expensive or hosted replacement is selected.
 Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
 run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
-model picker for that task. Device-local tasks cannot switch to a hosted model. Settings read/save
-failures and blocked task evidence remain visible; retry the operation after repairing access.
+model picker for that task. In a connected app, explicitly picking a hosted model there authorizes
+moving that worker's future turns off its local model; approving a task escalation alone does not.
+For a conversation with history, the picker first asks "Send this conversation to Bike4Mind?".
+A local parent cannot start a hosted worker until you explicitly pick a hosted model for the parent
+conversation. A device-local app permits only local models until you sign in to use hosted models.
+Settings read/save failures and blocked task evidence remain visible; retry after repairing access.
 
 ## Authentication
 
@@ -848,12 +922,24 @@ token.
   with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
   the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
   `client_id` (RFC 8628 s3.4).
-- **Storage.** Tokens go to the OS keychain via Electron `safeStorage`, keyed per normalized
+- **Storage.** Tokens are encrypted with a key held in the OS keychain, keyed per normalized
   API URL, in `<userData>/auth-vault.json`. Deliberately not the CLI's plaintext
-  `~/.bike4mind/config.json`. `safeStorage` is only usable after the app `ready` event, so
-  `registerAuth()` must be called from inside `whenReady()`. Where
-  `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
-  memory-only and the UI says so - it never falls back to writing plaintext.
+  `~/.bike4mind/config.json`. The cipher (`src/main/secrets/`) is only usable after the app
+  `ready` event, so `registerAuth()` must be called from inside `whenReady()`. Where encryption
+  is unavailable (Linux with no keyring) the vault degrades to memory-only and the UI says so -
+  it never falls back to writing plaintext.
+- **Secret key per build type.** Windows, Linux, unpackaged runs and macOS builds signed with a
+  Developer ID use Electron `safeStorage`. A packaged macOS build whose signature has no team
+  identifier (ad-hoc or self-signed) instead encrypts with AES-256-GCM under its own key, kept in
+  the login keychain item `<app name> Secret Key` and written through `/usr/bin/security`, so an
+  update does not ask for the keychain password again. Its first launch re-saves every secret
+  `safeStorage` stored (auth, MCP, model servers, Hugging Face), and either build type still
+  reads the other's format.
+  The trade-off: the item trusts `/usr/bin/security` rather than the app, so any process running
+  as the same user can read the key without a prompt. Developer ID builds keep `safeStorage`,
+  whose item only the app itself reads silently. A build from before this change cannot read the
+  new format: moving back to one signs the user out and leaves stored MCP and model-server
+  secrets unreadable until they are entered again.
 - **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
   the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
   sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
@@ -908,13 +994,54 @@ are killed before the app is handed to the installer, not left to the quit handl
 A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
 one quiet state that keeps showing the current version, and none of them can retract an update
 that is already downloaded and waiting. The state machine is in `src/shared/update.ts` and is
-unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned
-app**, so until code-signing certificates exist the full download-and-install cycle cannot be
-exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
-accepts unsigned payloads is a remote code execution path.
+unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned or
+ad-hoc signed app**. The full download-and-install cycle on macOS needs a stable signing
+certificate; `scripts/smoke-mac-update.mjs` exercises it with throwaway ones (see Self-signed
+macOS beta above). Do not "fix" that by relaxing the signature check - an updater that accepts
+unsigned payloads is a remote code execution path.
 
 Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
 packaging config once it lands.
+
+### Signed update manifests
+
+`B4M_UPDATE_PUBLIC_KEYS` is baked in exactly like `B4M_UPDATE_FEED_URL`: a comma-separated list
+of base64 Ed25519 public keys (SPKI DER). Unset, the app reads the feed's manifests as before.
+Set, it fetches `<manifest>.sig` beside `latest.yml`, `latest-mac.yml` or `latest-linux.yml` and
+offers an update only if that signature verifies under one of the listed keys; a missing or bad
+signature is a failed check, logged and not shown. A downloaded payload must also match the
+signed manifest's SHA-512 before Restart is offered. If any listed key does not parse, the build
+switches updates off and logs why. The logic is in `src/main/update/manifestSignature.ts` and
+`signedFeed.ts`.
+
+A `.sig` file is the standard base64 of a 64-byte Ed25519 signature plus a newline. The signed
+message is `b4m-desktop-update-manifest-v1\n`, then the manifest's file name and `\n`, then the
+manifest bytes exactly as published. `scripts/sign-update-manifests.mjs` produces and checks
+them; run it with no arguments for usage.
+
+In CI, the `sign` job in `desktop-release.yml` signs the manifests `validate` produced, in the
+`desktop-update-signing` environment, and `publish` refuses to release without those signatures
+while keys are configured. Every build bakes the source repository variable
+`DESKTOP_UPDATE_PUBLIC_KEYS` and fails if it did not reach the main bundle. To enable it:
+
+1. Generate a key pair with Node 24 and keep the private key out of the repository:
+
+   ```bash
+   (umask 077 && node -e "process.stdout.write(require('node:crypto').generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))" > desktop-update-signing.pem)
+   node -e "console.log(require('node:crypto').createPublicKey(require('node:fs').readFileSync('desktop-update-signing.pem')).export({ type: 'spki', format: 'der' }).toString('base64'))"
+   ```
+
+2. Create the `desktop-update-signing` environment, limited to the `main` branch, and add the
+   PEM file's contents as its secret `DESKTOP_UPDATE_SIGNING_KEY`.
+3. Only then set the repository variable `DESKTOP_UPDATE_PUBLIC_KEYS` to the printed public
+   key. Define it once at repository level, not on the environment, so builds and the signer
+   read the same value.
+
+Installed builds trust only the keys they were built with. To rotate, append the new public
+key to the list and release; once installs have taken that release, switch the secret to the
+new private key and release again, then drop the old key from the list. An install that never
+took the transition release, or any keyed install after the variable is unset, cannot verify
+later releases and needs a manual install.
 
 ## App icon
 

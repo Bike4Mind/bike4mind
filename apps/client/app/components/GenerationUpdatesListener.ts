@@ -11,6 +11,7 @@ import { invalidateGenerationCreditBalances } from '@client/app/hooks/data/gener
 import { isAwaitingGenerationOutput, isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { patchMusicGeneration } from '@client/app/hooks/data/musicGenerationCache';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
+import { patchStudioImageJob, studioImageJobKeys } from '@client/app/hooks/data/studioImageJobs';
 import { patchVideoGeneration } from '@client/app/hooks/data/videoGenerationCache';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 
@@ -27,7 +28,10 @@ type KindCache = {
   patch: (queryClient: QueryClient, job: JobUpdate) => boolean;
 };
 
-const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
+// Image jobs have no per-job cache: Studio's gallery list is the only one (handleImageUpdate).
+type CachedKind = Exclude<GenerationJobKind, 'image'>;
+
+const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {
     keys: videoGenerationKeys,
     patch: (queryClient, { id, state, progress }) => patchVideoGeneration(queryClient, { id, state, progress }),
@@ -39,10 +43,30 @@ const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
 };
 
 // A server newer than this client can send a kind it has no cache for.
-const isCachedKind = (kind: string): kind is GenerationJobKind => Object.hasOwn(KIND_CACHES, kind);
+const isCachedKind = (kind: string): kind is CachedKind => Object.hasOwn(KIND_CACHES, kind);
+
+// The frame moves the gallery row's state; a finished job refetches the list, which carries its output file and
+// public error. Nothing to do when the gallery has never loaded.
+const handleImageUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
+  const isTerminal = isTerminalGenerationState(job.state);
+  const cached = patchStudioImageJob(queryClient, job);
+  const pending: Promise<void>[] = [];
+  if ((isTerminal || !cached) && queryClient.getQueryData(studioImageJobKeys.list)) {
+    pending.push(queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list }));
+  }
+  if (isTerminal) pending.push(invalidateGenerationCreditBalances(queryClient));
+  await Promise.all(pending);
+};
 
 const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
-  if (!isCachedKind(job.kind)) return;
+  if (job.kind === 'image') {
+    await handleImageUpdate(queryClient, job);
+    return;
+  }
+  if (!isCachedKind(job.kind)) {
+    if (isTerminalGenerationState(job.state)) await invalidateGenerationCreditBalances(queryClient);
+    return;
+  }
   const { keys, patch } = KIND_CACHES[job.kind];
   const cached = patch(queryClient, job);
   const pending: Promise<void>[] = [];
@@ -67,7 +91,7 @@ const invalidateUnfinishedDetails = (queryClient: QueryClient, detailsKey: reado
 };
 
 /**
- * Writes `generation_job_updated` frames for video and music jobs into the React Query cache, so every job card (the
+ * Writes `generation_job_updated` frames for video, music and Studio image jobs into the React Query cache, so every job card (the
  * Studio galleries and the chat cards) is live without a subscription of its own.
  * A frame carries the stored error (internal code, possibly provider wording) and no signed URL, so only state
  * and progress are applied; a terminal frame refetches the job for its public error and output.
@@ -96,6 +120,7 @@ const GenerationUpdatesListener = () => {
         void queryClient.invalidateQueries({ queryKey: keys.list });
         invalidateUnfinishedDetails(queryClient, keys.details);
       }
+      void queryClient.invalidateQueries({ queryKey: studioImageJobKeys.list });
     }
     if (isOpen) hasOpenedRef.current = true;
     wasOpenRef.current = isOpen;

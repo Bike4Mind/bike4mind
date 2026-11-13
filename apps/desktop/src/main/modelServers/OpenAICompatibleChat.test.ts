@@ -4,7 +4,14 @@ import type { CompletionStreamEvent } from '../chat/streamEvents';
 import type { ModelLoadSettings } from '@shared/modelSettings';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import type { LearnedThinker } from './ModelServerStore';
-import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
+import {
+  isEffortTemplate,
+  OpenAICompatibleChat,
+  PROPS_CONCURRENCY,
+  NO_PROPS_EXPIRY_MS,
+  TEMPLATE_RETRY_MS,
+  toOpenAIMessages,
+} from './OpenAICompatibleChat';
 
 const BASE = 'http://127.0.0.1:18080';
 const MODEL = 'local:srv-abc123:qwen2.5-0.5b';
@@ -14,8 +21,14 @@ function sse(frames: readonly (object | string)[]): Response {
   return new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
-function chat(fetch: FetchLike, product: OpenAICompatibleProduct | null = 'llama-server', toolsChanged?: () => void) {
+function chat(
+  fetch: FetchLike,
+  product: OpenAICompatibleProduct | null = 'llama-server',
+  toolsChanged?: () => void,
+  extra: Partial<ConstructorParameters<typeof OpenAICompatibleChat>[0]> = {}
+) {
   return new OpenAICompatibleChat({
+    ...extra,
     runtimeId: 'srv-abc123',
     baseUrl: BASE,
     label: 'llama box',
@@ -615,6 +628,655 @@ describe('OpenAICompatibleChat generation settings', () => {
       ['qwen3-8b', true, true],
       ['gpt-oss-20b', undefined, undefined],
     ]);
+  });
+});
+
+describe('OpenAICompatibleChat gpt-oss by its template', () => {
+  const HARMONY =
+    '{%- if reasoning_effort is not defined %}{%- set reasoning_effort = "medium" %}{%- endif %}' +
+    '<|start|>system<|message|>Reasoning: {{ reasoning_effort }}<|end|>' +
+    '{{- "<|start|>assistant<|channel|>analysis<|message|>" }}';
+  const QWEN =
+    '{%- if enable_thinking is defined and enable_thinking is false %}<think>\n\n</think>{%- endif %}<|im_start|>';
+  const CHANNEL_ONLY = '<|start|>assistant<|channel|>final<|message|>';
+  const EFFORT_ONLY = '{{ reasoning_effort }}<|im_start|>assistant';
+
+  type PropsAnswer = () => Response | Promise<Response>;
+
+  /** A llama-server whose `/props` answers with `props`; chat replies reason when `reasoning` is set. */
+  function llamaServer(options: {
+    names?: () => string[];
+    size?: () => number | null;
+    /** A router's `status.value` by name; a name left out carries no status, as on a single-model server. */
+    states?: () => Record<string, string>;
+    props: PropsAnswer;
+    /** Extra fields on a listed entry, such as a shared `root` that makes names aliases of one model. */
+    fields?: (id: string) => Record<string, unknown>;
+    /** Throws for a listing, as an unreachable server does. */
+    down?: () => boolean;
+  }) {
+    const bodies: Record<string, unknown>[] = [];
+    const propsUrls: string[] = [];
+    const names = options.names ?? (() => ['house-model']);
+    const fetch = vi.fn<FetchLike>(async (url, init) => {
+      const path = String(url);
+      if (path.endsWith('/v1/models')) {
+        if (options.down?.()) throw new TypeError('fetch failed');
+        const size = options.size?.();
+        const states = options.states?.() ?? {};
+        return Response.json({
+          object: 'list',
+          data: names().map(id => ({
+            id,
+            object: 'model',
+            ...(size === undefined ? {} : { meta: size && { size } }),
+            ...(Object.hasOwn(states, id) ? { status: { value: states[id] } } : {}),
+            ...(options.fields?.(id) ?? {}),
+          })),
+        });
+      }
+      if (path.startsWith(`${BASE}/props`)) {
+        propsUrls.push(path);
+        return options.props();
+      }
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+    });
+    return { fetch, bodies, propsUrls };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** Drives performance.now, which the retry spacing reads, from `set`; offsets are from the start of the test. */
+  function fakeClock() {
+    let offset = 0;
+    const base = performance.now();
+    vi.spyOn(performance, 'now').mockImplementation(() => base + offset);
+    return { set: (ms: number) => void (offset = ms) };
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const notLoaded = () => Response.json({ error: { code: 400, message: 'model is not loaded' } }, { status: 400 });
+  const template = (chat_template: unknown, model_path?: string) => () =>
+    Response.json({ chat_template, ...(model_path ? { model_path } : {}) });
+  const ask = (model: string, extra: Partial<Parameters<OpenAICompatibleChat['stream']>[0]> = {}) => ({
+    model: `local:srv-abc123:${model}`,
+    messages: [{ role: 'user' as const, content: 'hi' }],
+    ...extra,
+  });
+  const effortOf = async (client: OpenAICompatibleChat) =>
+    (await client.listModels()).map(model => [model.name, model.supportsReasoningEffort, model.thinkingToggle]);
+
+  it.each([
+    ['the gpt-oss harmony template', HARMONY, true],
+    ['a Qwen template', QWEN, false],
+    ['harmony channels without reasoning_effort', CHANNEL_ONLY, false],
+    ['reasoning_effort without harmony channels', EFFORT_ONLY, false],
+    ['an empty template', '', false],
+  ])('reads %s as taking effort levels: %s', (_label, text, expected) => {
+    expect(isEffortTemplate(text)).toBe(expected);
+  });
+
+  it('gives a model served under any name effort levels once its template is the gpt-oss one', async () => {
+    const server = llamaServer({ props: template(HARMONY) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    const [listed] = await client.listModels();
+    expect(listed).toMatchObject({ name: 'house-model', supportsReasoningEffort: true });
+    expect(listed?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
+    expect(listed?.thinkingToggle).toBeUndefined();
+
+    await collect(client, ask('house-model', { thinking: false, reasoningEffort: 'high' }));
+    expect(server.bodies[0]).toMatchObject({
+      reasoning_effort: 'high',
+      chat_template_kwargs: { reasoning_effort: 'high' },
+    });
+    expect(server.bodies[0]?.chat_template_kwargs).not.toHaveProperty('enable_thinking');
+    expect(server.propsUrls).toEqual([`${BASE}/props?model=house-model&autoload=false`]);
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a Qwen template', QWEN],
+    ['harmony channels without reasoning_effort', CHANNEL_ONLY],
+    ['reasoning_effort without harmony channels', EFFORT_ONLY],
+    ['an empty template', ''],
+  ])('keeps %s as known, with no effort levels and no second ask', async (_label, text) => {
+    const server = llamaServer({ props: template(text) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await collect(client, ask('house-model', { thinking: false, reasoningEffort: 'high' }));
+    expect(server.bodies[0]).not.toHaveProperty('reasoning_effort');
+    expect(server.bodies[0]).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(server.propsUrls).toHaveLength(1);
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('asks a router again once a reply has loaded a model it could not answer for', async () => {
+    let loaded = false;
+    const server = llamaServer({
+      names: () => ['org/gpt oss:Q4'],
+      props: () =>
+        loaded
+          ? Response.json({ chat_template: HARMONY })
+          : Response.json({ error: { code: 400, message: 'model is not loaded' } }, { status: 400 }),
+    });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await effortOf(client)).toEqual([['org/gpt oss:Q4', false, undefined]]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(server.propsUrls).toEqual([`${BASE}/props?model=org%2Fgpt%20oss%3AQ4&autoload=false`]);
+    expect(changed).not.toHaveBeenCalled();
+
+    loaded = true;
+    await collect(client, ask('org/gpt oss:Q4'));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(server.propsUrls).toHaveLength(2);
+    expect(await effortOf(client)).toEqual([['org/gpt oss:Q4', true, undefined]]);
+    await collect(client, ask('org/gpt oss:Q4', { reasoningEffort: 'low' }));
+    expect(server.bodies[1]).toMatchObject({ reasoning_effort: 'low' });
+  });
+
+  it.each([
+    ['a refused connection', () => Promise.reject(new TypeError('fetch failed'))],
+    ['a server error', () => new Response('boom', { status: 500 })],
+    ['a body that is not JSON', () => new Response('<html>', { status: 200 })],
+    ['JSON without a template', () => Response.json({ default_generation_settings: { n_ctx: 4096 } })],
+    ['a template that is not text', template(42)],
+    ['a null body', () => Response.json(null)],
+  ] satisfies [string, PropsAnswer][])('lists the model and asks again a while after %s', async (_label, props) => {
+    const clock = fakeClock();
+    const server = llamaServer({ props });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    clock.set(TEMPLATE_RETRY_MS - 1);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await settle();
+    expect(server.propsUrls).toHaveLength(1);
+    clock.set(TEMPLATE_RETRY_MS);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('spaces retries by the monotonic clock, so a wall-clock jump back does not stall them', async () => {
+    const clock = fakeClock();
+    vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
+    const server = llamaServer({ props: () => new Response('boom', { status: 500 }) });
+    const client = chat(server.fetch);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
+    clock.set(TEMPLATE_RETRY_MS);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+  });
+
+  it.each(['vllm', 'lmstudio', 'llama-swap', null] as const)('never asks %s for a template', async product => {
+    const server = llamaServer({ props: template(HARMONY) });
+    const client = chat(server.fetch, product);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await collect(client, ask('house-model'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(server.propsUrls).toEqual([]);
+  });
+
+  it('lists without waiting for the template and asks once while the answer is out', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const server = llamaServer({ props: () => new Promise<Response>(resolve => (answer = resolve)) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await collect(client, ask('house-model'));
+    expect(server.propsUrls).toHaveLength(1);
+    answer(Response.json({ chat_template: HARMONY }));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    // A turn sent before the next listing already carries the level.
+    await collect(client, ask('house-model', { reasoningEffort: 'medium' }));
+    expect(server.bodies[1]).toMatchObject({ reasoning_effort: 'medium' });
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+  });
+
+  it('asks again once other weights take the name, and keeps the answer when a listing names no weights', async () => {
+    let size: number | null = 12_000_000_000;
+    let text = HARMONY;
+    const server = llamaServer({ size: () => size, props: () => Response.json({ chat_template: text }) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+
+    size = null;
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+    size = 12_000_000_000;
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+    expect(server.propsUrls).toHaveLength(1);
+
+    size = 5_000_000_000;
+    text = QWEN;
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    expect(server.propsUrls).toHaveLength(2);
+  });
+
+  it('asks again for a name that left the listing and came back', async () => {
+    let names = ['house-model'];
+    const server = llamaServer({ names: () => names, props: template(HARMONY) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    names = ['other'];
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    names = ['house-model'];
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(3));
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+  });
+
+  it.each([
+    { oldTemplate: HARMONY, currentTemplate: QWEN, effort: false },
+    { oldTemplate: QWEN, currentTemplate: HARMONY, effort: true },
+  ])(
+    'discards the old template when a returning model takes effort=$effort',
+    async ({ oldTemplate, currentTemplate, effort }) => {
+      let names = ['house-model'];
+      const answers: ((response: Response) => void)[] = [];
+      const server = llamaServer({
+        names: () => names,
+        props: () => new Promise<Response>(resolve => answers.push(resolve)),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+
+      names = [];
+      expect(await effortOf(client)).toEqual([]);
+      names = ['house-model'];
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+
+      answers[0](Response.json({ chat_template: oldTemplate }));
+      await settle();
+      expect(changed).not.toHaveBeenCalled();
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      answers[1](Response.json({ chat_template: currentTemplate }));
+      await settle();
+      expect(await effortOf(client)).toEqual([['house-model', effort, undefined]]);
+      expect(changed).toHaveBeenCalledTimes(effort ? 1 : 0);
+    }
+  );
+
+  it('asks at once for a name it got no template for once it has left the listing and come back', async () => {
+    let names = ['house-model'];
+    const server = llamaServer({ names: () => names, props: () => new Response('boom', { status: 500 }) });
+    const client = chat(server.fetch, 'llama-server');
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    names = ['other'];
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    names = ['house-model'];
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(3));
+    expect(server.propsUrls.map(url => new URL(url).searchParams.get('model'))).toEqual([
+      'house-model',
+      'other',
+      'house-model',
+    ]);
+  });
+
+  const probed = (urls: string[]) => urls.map(url => new URL(url).searchParams.get('model'));
+  const sharedRoot = () => ({ root: 'one-set-of-weights' });
+
+  describe('on a router', () => {
+    it('asks only models that are loaded, sleeping or carry no status, two at a time', async () => {
+      let active = 0;
+      let most = 0;
+      const server = llamaServer({
+        names: () => ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6'],
+        states: () => ({ m0: 'loaded', m1: 'loaded', m2: 'unloaded', m3: 'sleeping', m4: 'loading', m5: 'loaded' }),
+        props: async () => {
+          active++;
+          most = Math.max(most, active);
+          await settle();
+          active--;
+          return Response.json({ chat_template: QWEN });
+        },
+      });
+      const client = chat(server.fetch);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(5));
+      await settle();
+      expect(probed(server.propsUrls).sort()).toEqual(['m0', 'm1', 'm3', 'm5', 'm6']);
+      expect(most).toBe(PROPS_CONCURRENCY);
+    });
+
+    it('does not ask a model that is unloaded at listing, and asks once it is loaded with other weights', async () => {
+      let state = 'unloaded';
+      let size = 12_000_000_000;
+      const server = llamaServer({
+        size: () => size,
+        states: () => ({ 'house-model': state }),
+        props: template(HARMONY),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+      await settle();
+      expect(server.propsUrls).toEqual([]);
+
+      state = 'loaded';
+      size = 5_000_000_000;
+      await client.listModels();
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+    });
+
+    it('asks again at once when other weights take the name of a model that was not loaded', async () => {
+      let size = 12_000_000_000;
+      let answer: PropsAnswer = notLoaded;
+      const server = llamaServer({
+        size: () => size,
+        states: () => ({ 'house-model': 'loaded' }),
+        props: () => answer(),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await settle();
+      await client.listModels();
+      await settle();
+      expect(server.propsUrls).toHaveLength(1);
+
+      size = 5_000_000_000;
+      answer = template(HARMONY);
+      await client.listModels();
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(server.propsUrls).toHaveLength(2);
+    });
+
+    it('drops an answer that was out when other weights took the name', async () => {
+      let size = 12_000_000_000;
+      let answer: (response: Response) => void = () => undefined;
+      const server = llamaServer({
+        size: () => size,
+        props: () => new Promise<Response>(resolve => (answer = resolve)),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      size = 5_000_000_000;
+      await client.listModels();
+      answer(Response.json({ chat_template: HARMONY }));
+      await settle();
+      expect(changed).not.toHaveBeenCalled();
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    });
+
+    it('keeps a template when a model is loaded again from the same file, and drops it for another file', async () => {
+      let state = 'loaded';
+      let answer: PropsAnswer = template(HARMONY, '/models/a.gguf');
+      const server = llamaServer({
+        size: () => 12_000_000_000,
+        states: () => ({ 'house-model': state }),
+        props: () => answer(),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+
+      state = 'unloaded';
+      await client.listModels();
+      await settle();
+      expect(server.propsUrls).toHaveLength(1);
+
+      state = 'loaded';
+      answer = template(QWEN, '/models/a.gguf');
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+      await settle();
+      expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+      expect(changed).toHaveBeenCalledOnce();
+
+      state = 'unloaded';
+      await client.listModels();
+      state = 'loaded';
+      answer = template(QWEN, '/models/b.gguf');
+      await client.listModels();
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    });
+
+    it('reads the template under the listed name when a reply came through an alias', async () => {
+      let loaded = false;
+      const server = llamaServer({
+        names: () => ['alpha', 'beta'],
+        fields: sharedRoot,
+        props: () => (loaded ? Response.json({ chat_template: HARMONY }) : notLoaded()),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+      await settle();
+      loaded = true;
+      await collect(client, ask('beta'));
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(probed(server.propsUrls)).toEqual(['alpha', 'alpha']);
+      expect(await effortOf(client)).toEqual([['alpha', true, undefined]]);
+    });
+  });
+
+  it('gives a turn through an alias the effort level once the listed name has a template, before the next listing', async () => {
+    const server = llamaServer({ names: () => ['alpha', 'beta'], fields: sharedRoot, props: template(HARMONY) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await collect(client, ask('beta', { reasoningEffort: 'high' }));
+    expect(server.bodies[0]).toMatchObject({ reasoning_effort: 'high' });
+    expect(probed(server.propsUrls)).toEqual(['alpha']);
+  });
+
+  it.each([404, 405])('stops asking a server that answers %s for /props, across models and replies', async status => {
+    const server = llamaServer({
+      names: () => ['m0', 'm1', 'm2', 'm3', 'm4'],
+      props: () => new Response('', { status }),
+    });
+    const client = chat(server.fetch);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY));
+    await settle();
+    for (const model of ['m0', 'm1', 'm0']) await collect(client, ask(model));
+    await client.listModels();
+    await settle();
+    expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY);
+  });
+
+  it('probes /props again once the 404 expires, and not before', async () => {
+    const clock = fakeClock();
+    let status = 404;
+    const changed = vi.fn();
+    const server = llamaServer({
+      props: () => (status === 404 ? new Response('', { status }) : Response.json({ chat_template: HARMONY })),
+    });
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    clock.set(NO_PROPS_EXPIRY_MS - 1);
+    await collect(client, ask('house-model'));
+    await client.listModels();
+    await settle();
+    expect(server.propsUrls).toHaveLength(1);
+
+    status = 200;
+    clock.set(NO_PROPS_EXPIRY_MS);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(server.propsUrls).toHaveLength(2);
+  });
+
+  it('asks again after a restart for a server that had no /props, and keeps asking once it has one', async () => {
+    let down = false;
+    let status = 404;
+    const server = llamaServer({
+      down: () => down,
+      props: () => (status === 404 ? new Response('', { status }) : Response.json({ chat_template: HARMONY })),
+    });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    await collect(client, ask('house-model'));
+    expect(server.propsUrls).toHaveLength(1);
+
+    down = true;
+    await expect(client.listModels()).rejects.toThrow();
+    down = false;
+    status = 200;
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(server.propsUrls).toHaveLength(2);
+  });
+
+  it('does not ask again after a reply when the last ask failed for a reason other than not being loaded', async () => {
+    const server = llamaServer({ props: () => new Response('boom', { status: 500 }) });
+    const client = chat(server.fetch);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    for (let turn = 0; turn < 3; turn++) await collect(client, ask('house-model'));
+    await settle();
+    expect(server.propsUrls).toHaveLength(1);
+  });
+
+  it('asks again after every reply while a router says the model is not loaded', async () => {
+    const server = llamaServer({ props: notLoaded });
+    const client = chat(server.fetch);
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    await settle();
+    await collect(client, ask('house-model'));
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await settle();
+    await collect(client, ask('house-model'));
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(3));
+  });
+
+  it('never asks about a model whose name or alias already says gpt-oss', async () => {
+    const server = llamaServer({
+      names: () => ['gpt-oss-20b', 'house', 'my-gpt-oss'],
+      fields: id => (id === 'gpt-oss-20b' ? {} : sharedRoot()),
+      props: template(QWEN),
+    });
+    const client = chat(server.fetch);
+    expect(await effortOf(client)).toEqual([
+      ['gpt-oss-20b', true, undefined],
+      ['house', true, undefined],
+    ]);
+    for (const model of ['gpt-oss-20b', 'house', 'my-gpt-oss']) await collect(client, ask(model));
+    await settle();
+    expect(server.propsUrls).toEqual([]);
+    expect(await effortOf(client)).toEqual([
+      ['gpt-oss-20b', true, undefined],
+      ['house', true, undefined],
+    ]);
+  });
+
+  it('does nothing when its server was replaced or removed while an ask was out', async () => {
+    let current = true;
+    let answer: (response: Response) => void = () => undefined;
+    const server = llamaServer({ props: () => new Promise<Response>(resolve => (answer = resolve)) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed, { isCurrent: () => current });
+    await client.listModels();
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+    current = false;
+    answer(Response.json({ chat_template: HARMONY }));
+    await settle();
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it('sends no queued ask once its server was replaced or removed', async () => {
+    let current = true;
+    const answers: ((response: Response) => void)[] = [];
+    const server = llamaServer({
+      names: () => ['m0', 'm1', 'm2', 'm3'],
+      props: () => new Promise<Response>(resolve => answers.push(resolve)),
+    });
+    const client = chat(server.fetch, 'llama-server', undefined, { isCurrent: () => current });
+    await client.listModels();
+    await vi.waitFor(() => expect(answers).toHaveLength(PROPS_CONCURRENCY));
+    current = false;
+    for (const answer of answers) answer(Response.json({ chat_template: QWEN }));
+    await settle();
+    expect(server.propsUrls).toHaveLength(PROPS_CONCURRENCY);
+  });
+
+  it('forgets every template after a failed listing, in case the server restarted with another one', async () => {
+    let down = false;
+    let text = HARMONY;
+    const server = llamaServer({ down: () => down, props: () => Response.json({ chat_template: text }) });
+    const changed = vi.fn();
+    const client = chat(server.fetch, 'llama-server', changed);
+    await client.listModels();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
+    expect(server.propsUrls).toHaveLength(1);
+
+    down = true;
+    await expect(client.listModels()).rejects.toThrow();
+    await expect(client.listModels()).rejects.toThrow();
+    down = false;
+    text = QWEN;
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    await vi.waitFor(() => expect(server.propsUrls).toHaveLength(2));
+    await settle();
+    expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+    expect(server.propsUrls).toHaveLength(2);
+  });
+
+  it('warns and carries on when the model list change callback throws', async () => {
+    const server = llamaServer({ props: template(HARMONY) });
+    const warn = vi.fn();
+    const toolsChanged = vi.fn(() => {
+      throw new Error('registry gone');
+    });
+    const client = chat(server.fetch, 'llama-server', toolsChanged, { warn });
+    await client.listModels();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    expect(warn.mock.calls[0]?.[0]).toContain('registry gone');
+    expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
   });
 });
 

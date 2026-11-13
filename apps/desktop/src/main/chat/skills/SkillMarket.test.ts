@@ -111,11 +111,11 @@ describe('SkillMarket', () => {
     });
 
     const byToken = await market.listing({ token: 'a/b' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token/a%2Fb', undefined);
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'a/b' } });
     expect(byToken.detail).toMatchObject({ canImport: true, version: { id: 'v2' }, myImport: null });
 
     await market.listing({ id: 'l1', token: 'tok' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/l1', { params: { token: 'tok' } });
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'tok' } });
   });
 
   it('offers an update with a diff and the tool change when the imported copy is behind', async () => {
@@ -384,6 +384,7 @@ describe('SkillMarket', () => {
         'argumentHint',
         'body',
         'claudeCodeAllowedTools',
+        'claudeCodeModel',
         'description',
         'disableModelInvocation',
         'files',
@@ -405,6 +406,17 @@ describe('SkillMarket', () => {
         .mockResolvedValueOnce(mineBody([]));
       await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
       expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeAllowedTools: [] }));
+    });
+
+    it('sends the SKILL.md model as claudeCodeModel, and an empty string to clear it on update', async () => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      await market.saveSkill({ fields: { ...FIELDS, claudeCodeModel: 'haiku' }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ claudeCodeModel: 'haiku' }));
+
+      get.mockResolvedValueOnce({ data: { id: 's1', userId: 'me' } }).mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeModel: '' }));
     });
 
     it('sends each supporting file with its path and content, on create and update', async () => {

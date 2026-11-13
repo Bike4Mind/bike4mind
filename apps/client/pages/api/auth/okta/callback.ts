@@ -35,7 +35,7 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import { validateAppUrl } from '@server/utils/validators';
+import { validateAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { authSessionService } from '@bike4mind/services';
@@ -45,7 +45,7 @@ import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/c
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { isLocalAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -533,12 +533,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     const successQuery = authSuccessRedirectQuery(redirectTo);
     const signupFragment = isNewUser ? '&firstSignupSession=1' : '';
 
-    // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
-    // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
-    // consumer social sign-in.
-    const secondFactor: SecondFactorOutcome = idp
-      ? { kind: 'satisfied', trustedDevice: null }
-      : await resolveSecondFactor(req, user, { origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' } });
+    const secondFactor: SecondFactorOutcome = await resolveSecondFactor(req, user, {
+      origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' },
+      enterpriseIdp: !!idp,
+    });
     if (secondFactor.kind !== 'satisfied') {
       const handoff = mfaHandoffFragment({
         mfaToken: secondFactor.mfaToken,

@@ -49,6 +49,7 @@ overrides:
   markdown-it@<14.3.3: ^14.3.3
   dompurify@>=3.0.0 <3.4.17: ^3.4.17
   decode-uri-component@>=0.5.0 <0.5.1: ^0.5.1
+  mongoose@>=8.0.0 <8.24.7: ^8.24.7
 
 patchedDependencies:
   '@mui/joy@5.0.0-beta.52':
@@ -290,7 +291,7 @@ importers:
         version: 6.8.1
       '@casl/mongoose':
         specifier: ^8.0.5
-        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       '@elevenlabs/client':
         specifier: ^1.14.1
         version: 1.14.1(@types/dom-mediacapture-record@1.0.22)
@@ -338,7 +339,7 @@ importers:
         version: 5.0.0-beta.52(patch_hash=6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4)(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@mui/material-nextjs':
         specifier: ^7.3.9
-        version: 7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
+        version: 7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
       '@mui/system':
         specifier: ^5.15.15
         version: 5.18.0(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react@19.3.0)
@@ -541,11 +542,11 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       next:
         specifier: 16.4.1
-        version: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       next-connect:
         specifier: ^0.13.0
         version: 0.13.0
@@ -554,7 +555,7 @@ importers:
         version: 10.2.1
       nuqs:
         specifier: ^2.10.1
-        version: 2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
+        version: 2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
@@ -725,11 +726,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/typescript-config
       '@playwright/test':
-        specifier: ^1.64.0
-        version: 1.64.0
+        specifier: ^1.65.0
+        version: 1.65.0
       '@serwist/turbopack':
         specifier: 9.5.3
-        version: 9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(@swc/helpers@0.5.23)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+        version: 9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(@swc/helpers@0.5.23)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
       '@tanstack/react-query-devtools':
         specifier: ^5.104.2
         version: 5.104.2(@tanstack/react-query@5.104.2(react@19.3.0))(@types/react@19.3.0)(csstype@3.2.3)(react@19.3.0)
@@ -1123,7 +1124,7 @@ importers:
         version: link:../../b4m-core/utils
       '@casl/mongoose':
         specifier: ^8.0.5
-        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
@@ -1164,8 +1165,8 @@ importers:
         specifier: ^6.20.0
         version: 6.20.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       p-limit:
         specifier: ^7.3.2
         version: 7.3.2
@@ -1396,8 +1397,8 @@ importers:
         version: link:../observability
     devDependencies:
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -1481,8 +1482,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -1615,6 +1616,9 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../fab-pipeline
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
@@ -1779,8 +1783,8 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
@@ -1898,8 +1902,8 @@ importers:
         specifier: ^1.11.23
         version: 1.11.23
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
@@ -2228,8 +2232,8 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       ollama:
         specifier: ^0.6.3
         version: 0.6.3
@@ -2423,7 +2427,7 @@ importers:
         version: 6.8.1
       '@casl/mongoose':
         specifier: ^8.0.5
-        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -2431,11 +2435,11 @@ importers:
         specifier: ^1.11.23
         version: 1.11.23
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       mongoose-lean-virtuals:
         specifier: ^2.1.0
-        version: 2.1.0(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+        version: 2.1.0(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       sst:
         specifier: 4.17.1
         version: 4.17.1
@@ -2477,6 +2481,9 @@ importers:
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+      tsx:
+        specifier: ^4.23.0
+        version: 4.23.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2598,8 +2605,8 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       p-limit:
         specifier: ^7.3.2
         version: 7.3.2
@@ -2710,12 +2717,18 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-sesv2':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@bike4mind/agents':
         specifier: workspace:*
         version: link:../../b4m-core/agents
+      '@bike4mind/auth':
+        specifier: workspace:*
+        version: link:../../b4m-core/auth
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../../b4m-core/common
@@ -2763,10 +2776,13 @@ importers:
         version: 6.8.1
       '@casl/mongoose':
         specifier: ^8.0.5
-        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+        version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       '@googleapis/drive':
         specifier: ^22.0.0
         version: 22.0.0
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.1
+        version: 1.32.1(zod@4.6.6)
       '@octokit/auth-app':
         specifier: ^8.2.0
         version: 8.2.0
@@ -2801,8 +2817,8 @@ importers:
         specifier: ^9.0.3
         version: 9.0.3
       mongoose:
-        specifier: ^8.24.1
-        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+        specifier: ^8.24.7
+        version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       nodemailer:
         specifier: ^10.2.1
         version: 10.2.1
@@ -2849,6 +2865,12 @@ importers:
       mongodb-memory-server:
         specifier: ^11.3.0
         version: 11.3.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      next-connect:
+        specifier: ^0.13.0
+        version: 0.13.0
+      node-mocks-http:
+        specifier: ^1.18.1
+        version: 1.18.1(@types/express@4.17.23)(@types/node@24.12.3)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2979,6 +3001,10 @@ packages:
 
   '@aws-sdk/client-secrets-manager@3.1151.0':
     resolution: {integrity: sha512-TGqF12bgdX9V1tXoEJS0DNP5mS1ngMMPeO27qyYQYUMsZeKKpDbRV/7LeL742NLzNQafofp36MOE+rJr3oQkPg==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-sesv2@3.1151.0':
+    resolution: {integrity: sha512-Gann1GbKHVmksv0igE+7t96NIIWU83tPKyYvqzpYzbskVGzc4GOC6D98pxzucNQHKmwagK4OweR7LoPLZjiLSA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-sqs@3.1151.0':
@@ -3308,7 +3334,7 @@ packages:
     resolution: {integrity: sha512-dCUFBtNFLBKH01eDKFfC0DXfZGQimtFkxfzMfRAuURkbRM7aYOKzr3Yd5dTe30q2sDP6ocLtFKA0YM5DcprBnw==}
     peerDependencies:
       '@casl/ability': ^6.7.0
-      mongoose: ^6.0.13 || ^7.0.0 || ^8.0.0 || ^9.0.0
+      mongoose: ^8.24.7
 
   '@changesets/apply-release-plan@7.1.1':
     resolution: {integrity: sha512-9qPCm/rLx/xoOFXIHGB229+4GOL76S4MC+7tyOuTsR6+1jYlfFDQORdvwR5hDA6y4FL2BPt3qpbcQIS+dW85LA==}
@@ -5354,8 +5380,8 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
-  '@playwright/test@1.64.0':
-    resolution: {integrity: sha512-oTN9FNYuN6bqQMwiho6jJKLCG2/QOYCixGXuCjRmzOq23eODeukuY2XiAVoVpAECbuezMt1MHQjAiQxK8F+Y+g==}
+  '@playwright/test@1.65.0':
+    resolution: {integrity: sha512-iGURLGuKDLakSEl7Pgfv8h7f+XLT+V861Wfhz0zlEl5nyFuKUopdkFBPKqTllTUp06aOwPuH8iuUEb3yp3MpbQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -5884,7 +5910,9 @@ packages:
   '@smithy/core@3.36.1':
     resolution: {integrity: sha512-WC5W1Jrsfxu1y6LeqXMie7N14qmcdafij/Haye4feVlyMMXLGpYxBeOX6Ee1iRJbDzGG5LVman8U1rrt9MYFHA==}
     engines: {node: '>=18.0.0'}
-    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -7620,6 +7648,7 @@ packages:
 
   axios-retry@4.5.0:
     resolution: {integrity: sha512-aR99oXhpEDGo0UuAlYcn2iGRds30k366Zfa05XWScR9QaQD4JYiP3/1Qt1u7YlefUOK+cn0CcwoL1oefavQUlQ==}
+    deprecated: axios-retry is no longer maintained. See https://github.com/softonic/axios-retry for alternatives.
     peerDependencies:
       axios: 1.20.0
 
@@ -11090,10 +11119,10 @@ packages:
     resolution: {integrity: sha512-1fBeyRGzwB1yHs9L/q6QBybMgJmTcgZ8v1mjCEpRTP7FNOTOMo2yzSJmOBT9gJcpOso+mOHNQiXDfYzvMLIFTw==}
     engines: {node: '>=16.20.1'}
     peerDependencies:
-      mongoose: '>=8.0.0 || ^9.0.0-0'
+      mongoose: ^8.24.7
 
-  mongoose@8.24.1:
-    resolution: {integrity: sha512-UpHBA0l5kHyKJQFjmBaFYQFo5sgz1DK0TRqDkOyBLYbqiIbKKhIvBpHWBXqeo0rgW4kGI1UhhAw+kTQZoj1BdA==}
+  mongoose@8.24.8:
+    resolution: {integrity: sha512-p6g/mvvW2PJlC3lgzQJ7PECArfaOTKWJVG/KHf67WYU3MvJ72ZWdv5u7syFRe881IjALMZpKwffNE97G10HTzg==}
     engines: {node: '>=16.20.1'}
 
   motion-dom@11.18.1:
@@ -11110,8 +11139,8 @@ packages:
     resolution: {integrity: sha512-ikJRQTk8hw5DEoFVxHG1Gn9T/xcjtdnOKIU1JTmGjZZlg9LST2mBLmcX3/ICIbgJydT2GOc15RnNy5mHmzfSew==}
     engines: {node: '>=4.0.0'}
 
-  mquery@5.0.0:
-    resolution: {integrity: sha512-iQMncpmEK8R8ncT8HJGsGc9Dsp8xcgYMVSbs5jgnm1lFHTZqMJTUWTDx1LBO8+mK3tPNZWFLBghQEIOULSTHZg==}
+  mquery@5.0.1:
+    resolution: {integrity: sha512-C99lWV0TFI34pS008jBsi3JrE2xZPnTgUw5yApQR71nRP0hxLy8D5m1Lbbk83c8AQWJwdJ0329HzFtZ1MRTUIw==}
     engines: {node: '>=14.0.0'}
 
   mri@1.2.0:
@@ -11748,8 +11777,13 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  playwright@1.64.0:
-    resolution: {integrity: sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg==}
+  playwright-core@1.65.0:
+    resolution: {integrity: sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.65.0:
+    resolution: {integrity: sha512-F3AMWcR44qMBt4kq+6Kb6mX7bjGXshktKFOPULd7reED6ZJWevjbNRqysP7q+AATE9kdPEZBibex1BYsvpVoeA==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -12068,7 +12102,7 @@ packages:
       react-dom: '>=16.6.0'
 
   react-use-websocket@https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684:
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
+    resolution: {gitHosted: true, integrity: sha512-coe6cEGS+ufx7gKtme40KQnbbue1ZM0S+AeL7tlIe4T7NqAXBBeY8EB+qatMSTn0Emsrt2N15xMzIKsiwy9pnw==, tarball: https://codeload.github.com/MillionOnMars/react-use-websocket/tar.gz/4e449870cc177e04fa6c879e4d35947a601ce684}
     version: 4.8.2
     peerDependencies:
       react: '>= 18.0.0'
@@ -14385,6 +14419,18 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-sesv2@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/signature-v4-multi-region': 3.996.48
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
   '@aws-sdk/client-sqs@3.1151.0':
     dependencies:
       '@aws-sdk/core': 3.978.3
@@ -14975,10 +15021,10 @@ snapshots:
     dependencies:
       '@ucast/mongo2js': 1.4.1
 
-  '@casl/mongoose@8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))':
+  '@casl/mongoose@8.0.5(@casl/ability@6.8.1)(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))':
     dependencies:
       '@casl/ability': 6.8.1
-      mongoose: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      mongoose: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
 
   '@changesets/apply-release-plan@7.1.1':
     dependencies:
@@ -16771,11 +16817,11 @@ snapshots:
       '@emotion/styled': 11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react@19.3.0)
       '@types/react': 19.3.0
 
-  '@mui/material-nextjs@7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)':
+  '@mui/material-nextjs@7.3.9(@emotion/cache@11.14.0)(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@babel/runtime': 7.28.6
       '@emotion/react': 11.14.0(@types/react@19.3.0)(react@19.3.0)
-      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
     optionalDependencies:
       '@emotion/cache': 11.14.0
@@ -17499,9 +17545,9 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@playwright/test@1.64.0':
+  '@playwright/test@1.65.0':
     dependencies:
-      playwright: 1.64.0
+      playwright: 1.65.0
 
   '@polka/url@1.0.0-next.29': {}
 
@@ -17797,7 +17843,7 @@ snapshots:
     transitivePeerDependencies:
       - browserslist
 
-  '@serwist/turbopack@9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(@swc/helpers@0.5.23)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)(typescript@5.9.3)':
+  '@serwist/turbopack@9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(@swc/helpers@0.5.23)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)(typescript@5.9.3)':
     dependencies:
       '@serwist/build': 9.5.3(browserslist@4.28.9)(typescript@5.9.3)
       '@serwist/utils': 9.5.3(browserslist@4.28.9)
@@ -17805,7 +17851,7 @@ snapshots:
       '@swc/core': 1.15.11(@swc/helpers@0.5.23)
       browserslist: 4.28.9
       kolorist: 1.8.0
-      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
       semver: 7.7.3
       serwist: 9.5.3(browserslist@4.28.9)(typescript@5.9.3)
@@ -19208,7 +19254,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.4(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/expect@4.1.12':
     dependencies:
@@ -19273,7 +19319,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@25.9.6)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@25.9.6)(typescript@5.9.3))(vite@8.3.4(@types/node@25.9.6)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/utils@4.1.12':
     dependencies:
@@ -23989,18 +24035,18 @@ snapshots:
       '@aws-sdk/credential-providers': 3.1050.0
       socks: 2.8.6
 
-  mongoose-lean-virtuals@2.1.0(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)):
+  mongoose-lean-virtuals@2.1.0(mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)):
     dependencies:
-      mongoose: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      mongoose: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       mpath: 0.8.4
 
-  mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6):
+  mongoose@8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6):
     dependencies:
       bson: 6.10.4
       kareem: 2.6.3
       mongodb: 6.20.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       mpath: 0.9.0
-      mquery: 5.0.0
+      mquery: 5.0.1
       ms: 2.1.3
       sift: 17.1.3
     transitivePeerDependencies:
@@ -24023,7 +24069,7 @@ snapshots:
 
   mpath@0.9.0: {}
 
-  mquery@5.0.0:
+  mquery@5.0.1:
     dependencies:
       debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
@@ -24156,7 +24202,7 @@ snapshots:
     dependencies:
       trouter: 3.2.1
 
-  next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
     dependencies:
       '@next/env': 16.4.1
       '@swc/helpers': 0.5.23
@@ -24176,7 +24222,7 @@ snapshots:
       '@next/swc-win32-arm64-msvc': 16.4.1
       '@next/swc-win32-x64-msvc': 16.4.1
       '@opentelemetry/api': 1.9.0
-      '@playwright/test': 1.64.0
+      '@playwright/test': 1.65.0
       sharp: 0.35.5(@types/node@24.12.3)
     transitivePeerDependencies:
       - '@babel/core'
@@ -24280,13 +24326,13 @@ snapshots:
     dependencies:
       boolbase: 1.0.0
 
-  nuqs@2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0):
+  nuqs@2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0):
     dependencies:
       '@standard-schema/spec': 1.1.0
       react: 19.3.0
     optionalDependencies:
       '@tanstack/react-router': 1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      next: 16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.65.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
   oauth4webapi@3.8.8: {}
 
@@ -24691,9 +24737,11 @@ snapshots:
 
   playwright-core@1.64.0: {}
 
-  playwright@1.64.0:
+  playwright-core@1.65.0: {}
+
+  playwright@1.65.0:
     dependencies:
-      playwright-core: 1.64.0
+      playwright-core: 1.65.0
 
   please-upgrade-node@3.2.0:
     dependencies:

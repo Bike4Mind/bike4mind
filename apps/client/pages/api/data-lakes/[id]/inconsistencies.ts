@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -21,11 +21,12 @@ import {
   type IDataLakeDocument,
 } from '@bike4mind/common';
 import { Request, Response } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -296,7 +297,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
-    return res.json(await renderStoredReport(lake));
+    const report = await renderStoredReport(lake);
+    if (report && report.findings.length > 0) {
+      const fileIds = report.findings.flatMap(f => f.sources.map(s => s.fabFileId));
+      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-inconsistencies' });
+    }
+    return res.json(report);
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

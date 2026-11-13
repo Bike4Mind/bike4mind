@@ -16,7 +16,7 @@ import {
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
   isAgentOwnedByEmbedKey,
-  inlinesReasoningIntoText,
+  reasoningChannelOf,
   type IMessage,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -59,7 +59,7 @@ import {
   scopedSettingsRepository,
   embedConversationRepository,
 } from '@bike4mind/database';
-import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { verifyEmbedApiKey, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
@@ -74,8 +74,8 @@ import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
-import { getUserEntitlements } from '@server/entitlements';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -586,7 +586,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // the catalog read can miss its cache and reach a provider, and a caller past its
       // spend cap or rate limit must not be able to drive that work; still before any
       // stream bytes, so the refusal is a clean JSON 422.
-      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
+      // Fail-closed on a model the list cannot describe (see reasoningChannelOf).
       const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(actorUserId, {
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         getSettingsByNames,
@@ -596,11 +596,16 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // ('gpt-4.1-mini') finds its dated catalog entry here instead of reading as an
       // undescribed model and failing closed on one completion would have accepted.
       const embedModelId = resolveOpenAiBareModelAlias(hydrated.model);
-      const embedAdapterFamily = embedModels.find(m => m.id === embedModelId)?.adapterFamily;
-      if (inlinesReasoningIntoText(embedAdapterFamily)) {
+      const embedModel = embedModels.find(m => m.id === embedModelId);
+      // Only a model the catalog resolved carries adapterFamily; an adapter-literal model
+      // routes on backend, so the channel is read the way getLlmByModel dispatches. The
+      // row itself is required: reasoningChannelOf infers from a bare Claude id, and an
+      // id with no row here must not be admitted on its spelling.
+      if (!embedModel || reasoningChannelOf(embedModel) === 'always') {
         logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
           model: embedModelId,
-          adapterFamily: embedAdapterFamily,
+          backend: embedModel?.backend,
+          adapterFamily: embedModel?.adapterFamily,
         });
         return res.status(422).json({
           error: 'unprocessable',

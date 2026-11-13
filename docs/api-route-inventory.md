@@ -23,6 +23,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 - **Scopes**: API-key scopes the route gate accepts (any one of them), listed per verb (`GET: ...; DELETE: ...`)
   when a contract gives verbs different scopes. Empty on a `jwt+key` route means any unconfined API key
   passes the gate. Per-method `assertApiKeyScope` checks inside non-contract handlers are not listed.
+- **Permissions**: the admin permission each `adminApi` verb requires (`or` admits any one); `?` when the
+  declaration is not a literal the generator can read. A dash means the route declares none.
 - **Contract**: served by `nextRouteForContract`, so the operation is in the public OpenAPI spec. On an alias
   the contract is documented under the alias target's path, not this one.
 - **Alias of**: the file only re-exports another route's handler (`export { default } from ...`), so both
@@ -34,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1076 routes: 84 contracted, 12 aliases of another route, 260 with no static caller in `apps/client/app`.
+1141 routes: 94 contracted, 11 aliases of another route, 288 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -42,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 299 | 0 | 202 | 90 | 0 | 7 | 53 |
+| admin | 334 | 0 | 202 | 125 | 0 | 7 | 63 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -51,8 +53,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
 | artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
-| artifacts | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
-| auth | 34 | 0 | 7 | 17 | 0 | 10 | 5 |
+| artifacts | 7 | 0 | 6 | 1 | 0 | 0 | 1 |
+| auth | 35 | 0 | 7 | 18 | 0 | 10 | 5 |
 | blog | 6 | 0 | 6 | 0 | 0 | 0 | 0 |
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
@@ -71,8 +73,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | external-image | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | fabfiles | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | favorites | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| feedback | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
-| files | 23 | 0 | 23 | 0 | 0 | 0 | 2 |
+| feedback | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
+| file-links | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
+| files | 27 | 0 | 23 | 3 | 0 | 1 | 3 |
 | friends | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | gears | 3 | 0 | 2 | 1 | 0 | 0 | 0 |
 | generated-content | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
@@ -97,17 +100,19 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | mcp-connections | 8 | 0 | 0 | 7 | 0 | 1 | 2 |
 | mcp-servers | 18 | 0 | 16 | 0 | 0 | 2 | 6 |
 | mementos | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
-| memory | 2 | 0 | 2 | 0 | 0 | 0 | 1 |
+| memory | 4 | 0 | 2 | 2 | 0 | 0 | 3 |
+| modal-images | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | modals | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | model-hub | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | models | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
-| organizations | 39 | 0 | 35 | 4 | 0 | 0 | 1 |
+| organizations | 52 | 0 | 35 | 17 | 0 | 0 | 1 |
 | otc | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | overwatch | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | partners | 3 | 0 | 1 | 2 | 0 | 0 | 1 |
+| personas | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | preference-arena | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | projects | 9 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -115,10 +120,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | publish | 20 | 0 | 11 | 0 | 6 | 3 | 10 |
 | pyodide-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | qa | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
-| quest-graphs | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
-| quest-master-plans | 8 | 0 | 7 | 1 | 0 | 0 | 6 |
-| quest-nodes | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| quest-plans | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
+| quest-master-plans | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
+| quest-plans | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | quests | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | react-artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | referrals | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -128,13 +131,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | search-image | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | secret-rotations | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
-| sessions | 30 | 1 | 28 | 2 | 0 | 0 | 4 |
+| sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 21 | 0 | 3 | 18 | 0 | 0 | 0 |
+| skills | 23 | 0 | 3 | 20 | 0 | 0 | 1 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 15 | 0 | 7 | 1 | 0 | 7 | 7 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
-| stripe | 5 | 0 | 3 | 1 | 0 | 1 | 1 |
+| stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
+| studio | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | subscribers | 5 | 0 | 4 | 0 | 0 | 1 | 0 |
 | subscriptions | 9 | 0 | 6 | 3 | 0 | 0 | 2 |
 | system-prompts | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -142,1658 +146,1745 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | tools | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | transforms | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | turnstile | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
+| tutorials | 6 | 0 | 0 | 6 | 0 | 0 | 6 |
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 82 | 78 | 75 | 1 | 0 | 6 | 71 |
+| v1 | 92 | 88 | 85 | 1 | 0 | 6 | 81 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| well-known | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | work-items | 4 | 0 | 4 | 0 | 0 | 0 | 4 |
 
 ## Routes
 
 ### [...unmatchedApiPath]
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/[...unmatchedApiPath]` | any | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/[...unmatchedApiPath]` | any | handler | - | - | no | - | 0 |
 
 ### [type]
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/[type]/[id]` | GET | jwt+key | - | no | - | 3: `components/admin/ApiKeyScopePreflightTab.tsx`, `hooks/data/researchTasks.ts`, `utils/regInviteAPICalls.ts` |
-| `/api/[type]/[id]/invites` | GET, POST, DELETE | jwt+key | - | no | - | 3: `hooks/data/invites.ts`, `hooks/data/organizations.ts`, `utils/invitesAPICalls.ts` |
-| `/api/[type]/[id]/revokeSharing` | any | jwt+key | - | no | - | 1: `utils/sharingApi.ts` |
-| `/api/[type]/[id]/updateSharing` | PUT | jwt+key | - | no | - | 1: `utils/sharingApi.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/[type]/[id]` | GET | jwt+key | - | - | no | - | 3: `components/admin/ApiKeyScopePreflightTab.tsx`, `hooks/data/researchTasks.ts`, `utils/regInviteAPICalls.ts` |
+| `/api/[type]/[id]/invites` | GET, POST, DELETE | jwt+key | - | - | no | - | 3: `hooks/data/invites.ts`, `hooks/data/organizations.ts`, `utils/invitesAPICalls.ts` |
+| `/api/[type]/[id]/revokeSharing` | any | jwt+key | - | - | no | - | 1: `utils/sharingApi.ts` |
+| `/api/[type]/[id]/updateSharing` | PUT | jwt+key | - | - | no | - | 1: `utils/sharingApi.ts` |
 
 ### account
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/account/deletion` | GET, POST, DELETE | jwt | - | no | - | 1: `hooks/data/accountDeletion.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/account/deletion` | GET, POST, DELETE | jwt | - | - | no | - | 1: `hooks/data/accountDeletion.ts` |
 
 ### activities
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/activities` | GET | jwt+key | - | no | - | 1: `hooks/data/activities.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/activities` | GET | jwt+key | - | - | no | - | 1: `hooks/data/activities.ts` |
 
 ### admin
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/admin/abuse/bulk-execute` | POST | jwt | `admin:*` | no | - | 1: `hooks/data/adminBulkAbuse.ts` |
-| `/api/admin/abuse/bulk-preview` | POST | jwt | `admin:*` | no | - | 1: `hooks/data/adminBulkAbuse.ts` |
-| `/api/admin/activity-summary` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/useAdminActivitySummary.ts` |
-| `/api/admin/agent-executions/cleanup` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/stuckAgentExecutions.ts` |
-| `/api/admin/agent-executions/stuck` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/stuckAgentExecutions.ts` |
-| `/api/admin/agent-ops-settings` | GET, POST, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
-| `/api/admin/agent-ops-settings/repair` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
-| `/api/admin/agent-ops-settings/seed` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/agent-ops-settings/versions` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
-| `/api/admin/agent-ops-settings/versions/[version]/activate` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
-| `/api/admin/analytics` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useAnalyticsMetrics.ts` |
-| `/api/admin/analytics/cohorts` | GET | jwt | - | no | - | 1: `components/admin/Analytics/useAnalyticsCohorts.ts` |
-| `/api/admin/analytics/overview` | GET | jwt | - | no | - | 1: `components/admin/Analytics/useAnalyticsOverview.ts` |
-| `/api/admin/analytics/top-accounts` | GET | jwt | - | no | - | 1: `components/admin/Analytics/useAnalyticsTopAccounts.ts` |
-| `/api/admin/api-keys/scope-preflight` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/apiKeyScopePreflight.ts` |
-| `/api/admin/approvals` | GET | jwt | - | no | - | 1: `hooks/data/adminApprovals.ts` |
-| `/api/admin/approvals/[id]/approve` | POST | jwt | - | no | - | 1: `hooks/data/adminApprovals.ts` |
-| `/api/admin/approvals/[id]/reject` | POST | jwt | - | no | - | 1: `hooks/data/adminApprovals.ts` |
-| `/api/admin/audit-log` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/[id]` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/alert-status` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/export` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/review-queue` | GET | jwt | - | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/reviews` | GET, POST, DELETE | jwt | - | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/audit-log/summary` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminAuditLog.ts` |
-| `/api/admin/bulk-create-users` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/InviteCenter/BulkInvite/BulkInviteTab.tsx` |
-| `/api/admin/context-telemetry` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/context-telemetry/[id]` | GET, DELETE | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/context-telemetry/[id]/analyze` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/context-telemetry/[id]/create-issue` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/context-telemetry/dry-run-results` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/context-telemetry/export` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/context-telemetry/integration-status` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/context-telemetry/metrics` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/context-telemetry/test-config` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/useContextTelemetry.ts` |
-| `/api/admin/create-user` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/Users/CreateUserModal.tsx` |
-| `/api/admin/credit-adjustments` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/useCreditAdjustmentsLog.ts` |
-| `/api/admin/dlq/history` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/dlqManagement.ts` |
-| `/api/admin/dlq/messages` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/dlqManagement.ts` |
-| `/api/admin/dlq/queues` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/dlqManagement.ts` |
-| `/api/admin/dlq/replay` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/dlqManagement.ts` |
-| `/api/admin/email/attempts/[id]` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/email/EmailPreviewModal.tsx` |
-| `/api/admin/email/jobs` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/analytics` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/cancel` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/check-status` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/email/jobs/[id]/clone` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/preview-for-user` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/recipients` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/schedule` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/send` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/start` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/[id]/summary` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/jobs/preview-recipients` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/templates` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/templates/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/templates/[id]/clone` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/emailMarketing.ts` |
-| `/api/admin/email/templates/[id]/test` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/email/EmailTemplateEditor.tsx` |
-| `/api/admin/email/whats-new-content` | GET | jwt+key | `admin:*` | no | - | 2: `components/admin/email/EmailTemplateEditor.tsx`, `hooks/data/emailMarketing.ts` |
-| `/api/admin/embedding-limits` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/EmbeddingProviderLimits.tsx` |
-| `/api/admin/emergency-login` | POST | handler | - | no | - | 1: `routes/admin-emergency.tsx` |
-| `/api/admin/event-metrics` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/EventMetrics/hooks/useEventMetrics.ts` |
-| `/api/admin/gears` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
-| `/api/admin/gears/[key]` | DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
-| `/api/admin/generate-highlights` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/whatsNewModals.ts` |
-| `/api/admin/github/connection` | GET, POST, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
-| `/api/admin/github/rate-limit` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
-| `/api/admin/github/repositories` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/useGitHubRepositories.ts` |
-| `/api/admin/github/rotate-key` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
-| `/api/admin/github/test` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
-| `/api/admin/grant-packages` | GET, POST | jwt | `admin:*` | no | - | 1: `utils/grantPackageAPICalls.ts` |
-| `/api/admin/grant-packages/[id]` | PATCH | jwt | `admin:*` | no | - | 1: `utils/grantPackageAPICalls.ts` |
-| `/api/admin/held-signup-grants` | GET | jwt | `admin:*` | no | - | 1: `components/admin/HeldSignupGrantsTab.tsx` |
-| `/api/admin/held-signup-grants/release` | POST | jwt | `admin:*` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
-| `/api/admin/held-signup-grants/revoke` | POST | jwt | `admin:*` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
-| `/api/admin/help-analytics` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/helpAnalytics.ts` |
-| `/api/admin/identity-providers` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |
-| `/api/admin/identity-providers/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |
-| `/api/admin/integration-audit-logs` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/integration-health-dashboard` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/IntegrationHealth/hooks/useIntegrationHealthDashboard.ts` |
-| `/api/admin/integrations/demand` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/integrationDemand.ts` |
-| `/api/admin/integrations/demand/[integrationId]/requesters` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/integrationDemand.ts` |
-| `/api/admin/liveops-triage-configs` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]/health` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/[id]/trigger` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-configs/runs` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
-| `/api/admin/liveops-triage-env` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/llm-models/configurations` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/llmModelConfig.ts` |
-| `/api/admin/mementos/reembed` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/mementos/reembed-ledger` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/modal-tool` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/modals/variants` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/whatsNewModals.ts` |
-| `/api/admin/model-deprecation-status` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/ModelLifecycleTab.tsx` |
-| `/api/admin/model-discovery` | GET, POST | jwt+key | `admin:*` | no | - | 2: `components/admin/DiscoveryRunDetailModal.tsx`, `components/admin/DiscoveryStatusCard.tsx` |
-| `/api/admin/model-hub/curated/versions` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/model-logs` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useModelLogs.ts` |
-| `/api/admin/model-logs/[id]` | GET | jwt | `admin:*` | no | - | 1: `hooks/useModelLogs.ts` |
-| `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
-| `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx` |
-| `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/moderationIncidents.ts` |
-| `/api/admin/moderation-incidents/[id]/verdict` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/moderationIncidents.ts` |
-| `/api/admin/moderation-incidents/[id]/view` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/moderationIncidents.ts` |
-| `/api/admin/oauth-clients` | GET, POST | jwt+key | `admin:*` | no | - | 1: `utils/oauthClientAPICalls.ts` |
-| `/api/admin/oauth-clients/[id]` | PATCH | jwt+key | `admin:*` | no | - | 1: `utils/oauthClientAPICalls.ts` |
-| `/api/admin/oauth-clients/[id]/rotate-secret` | POST | jwt+key | `admin:*` | no | - | 1: `utils/oauthClientAPICalls.ts` |
-| `/api/admin/operations-model` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminOperationsModelSetting.tsx` |
-| `/api/admin/organizations/[id]/convert-to-paid` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/organizations/[id]/group-types` | PUT | jwt+key | `admin:*` | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/admin/organizations/[id]/members` | POST | jwt | - | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserOrgMembership.ts` |
-| `/api/admin/organizations/[id]/members/[userId]` | PATCH, DELETE | jwt | - | no | - | 0 |
-| `/api/admin/organizations/[id]/revoke` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/organizations/[id]/seats` | PATCH | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/organizations/[id]/top-up` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/organizations/grant` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/organizations/grants` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
-| `/api/admin/overwatch/backfill-first-seen` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/partner-signup-rules` | GET, POST | jwt+key | `admin:*` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
-| `/api/admin/partner-signup-rules/[id]` | PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
-| `/api/admin/partner-signup-rules/backfill` | POST | jwt+key | `admin:*` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
-| `/api/admin/platform-usage` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/usePlatformUsage.ts` |
-| `/api/admin/platform-usage/endpoints` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/useEndpointUsage.ts` |
-| `/api/admin/pr-report/generate` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/prReport.ts` |
-| `/api/admin/pr-report/send` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/prReport.ts` |
-| `/api/admin/preference-arena/pairs` | GET, POST | jwt | `admin:*` | no | - | 1: `hooks/data/preferenceArena.ts` |
-| `/api/admin/preference-arena/pairs/[id]` | PATCH | jwt | `admin:*` | no | - | 1: `hooks/data/preferenceArena.ts` |
-| `/api/admin/preference-arena/stats` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/preferenceArena.ts` |
-| `/api/admin/provider-invoices` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
-| `/api/admin/published-artifacts` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
-| `/api/admin/published-artifacts/[id]/reports` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
-| `/api/admin/published-artifacts/[id]/takedown` | POST, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
-| `/api/admin/qa/facets` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/qaStatus.ts` |
-| `/api/admin/qa/overview` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/qaStatus.ts` |
-| `/api/admin/qa/report/[runId]/[token]/[...path]` | GET | handler | - | no | - | 0 |
-| `/api/admin/qa/runs` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/qaStatus.ts` |
-| `/api/admin/qa/runs/[id]` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/qaStatus.ts` |
-| `/api/admin/qa/tests` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/qaStatus.ts` |
-| `/api/admin/rapid-reply/mappings` | GET, POST | jwt+key | `admin:*` | no | - | 2: `components/admin/RapidReplyTab.tsx`, `hooks/data/rapidReplyMutations.ts` |
-| `/api/admin/rapid-reply/mappings/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/rapidReplyMutations.ts` |
-| `/api/admin/rapid-reply/mappings/bulk` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/rapid-reply/metrics` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RapidReplyTab.tsx` |
-| `/api/admin/rapid-reply/prompts` | GET, POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/rapid-reply/prompts/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/rapid-reply/prompts/[id]/activate` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/rapid-reply/test` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/rapidReplyMutations.ts` |
-| `/api/admin/rate-limits` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RateLimits/hooks/useRateLimitMetrics.ts` |
-| `/api/admin/rate-limits/ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/recalculate-message-counts` | POST | jwt+key | `admin:*` | no | - | 1: `components/Notebook/Search/AdvancedSearchDrawer.tsx` |
-| `/api/admin/release-notes` | GET | jwt+key | `admin:*`, `release-notes:write` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
-| `/api/admin/release-notes/[id]` | PATCH | jwt+key | `admin:*`, `release-notes:write` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
-| `/api/admin/release-notes/[id]/status` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
-| `/api/admin/release-notes/config` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
-| `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
-| `/api/admin/revenue` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Revenue/useAdminRevenue.ts` |
-| `/api/admin/saved-views` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
-| `/api/admin/saved-views/[id]` | PATCH, DELETE | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
-| `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/settings.ts` |
-| `/api/admin/scoped-settings/effective` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/search` | GET | jwt | - | no | - | 1: `components/admin/shared/useAdminEntitySearch.ts` |
-| `/api/admin/security-dashboard/attack-simulation` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/attack-simulation-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/cloud` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/cloud-prowler` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/cloud-prowler-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-dashboard/incident-signals` | GET | jwt | - | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/incident-state` | GET | jwt | - | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/overview` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/run-attack-simulation` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/waf-blocked-requests` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/waf-logs-insights` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/waf-traffic` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/web` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-dashboard/web-owasp-ingest` | POST | handler | - | no | - | 0 |
-| `/api/admin/security-scan-schedule/[scanType]` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/security-scan-schedules` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/session-usage` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/useSessionUsage.ts` |
-| `/api/admin/sessions/[id]` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/sessions/[id]/quests` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/shadow-detections` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
-| `/api/admin/shadow-detections/ai-advisory` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/aiAdvisory.ts` |
-| `/api/admin/shadow-detections/assessment-replay` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/shadow-detections/assessments` | GET, POST | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
-| `/api/admin/shadow-detections/verdict` | POST | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
-| `/api/admin/shadow-detections/verdict-eval` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
-| `/api/admin/signup-anomaly` | GET | jwt | - | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/signup-domain-holds` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/SignupDomainHoldsTab.tsx` |
-| `/api/admin/signup-grants/bulk-block` | POST | jwt | - | no | - | 1: `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
-| `/api/admin/signup-grants/bulk-unblock` | POST | jwt | - | no | - | 1: `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
-| `/api/admin/signup-grants/pending` | GET | jwt | - | no | - | 1: `hooks/data/adminSignupGrant.ts` |
-| `/api/admin/signup-grants/pending-summary` | GET | jwt | - | no | - | 1: `hooks/data/adminSignupGrant.ts` |
-| `/api/admin/signup-risk-reviews` | GET, POST | jwt | `admin:*` | no | - | 1: `hooks/data/signupRiskReviews.ts` |
-| `/api/admin/signup-timeseries` | GET | jwt | - | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
-| `/api/admin/slack-app/create` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreateSlackAppModal.tsx` |
-| `/api/admin/slack-app/manifest-status` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/admin/slack-app/update-manifest` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/admin/slack-audit-logs` | GET | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | no | - | 5: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx`, `components/admin/ContextInspectorTab.tsx`, `components/admin/SecopsTriageTab.tsx` +2 more |
-| `/api/admin/spend` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/ModelMetrics/hooks/useSpend.ts` |
-| `/api/admin/spend-reconciliation` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/ReconciliationBanner.tsx` |
-| `/api/admin/stripe-disputes` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/stripeDisputes.ts` |
-| `/api/admin/stripe-disputes/resolve` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/stripe-disputes/undo-contain` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions` | GET | jwt | `admin:*` | no | - | 2: `components/admin/Subscriptions/subscriptionsLastSeen.ts`, `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
-| `/api/admin/subscriptions/[id]` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
-| `/api/admin/subscriptions/[id]/admin-log` | GET | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions/[id]/cancel` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions/[id]/comp` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions/[id]/resume` | POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions/[id]/sync` | GET, POST | jwt | `admin:*` | no | - | 0 |
-| `/api/admin/subscriptions/[id]/timeline` | GET | jwt | - | no | - | 0 |
-| `/api/admin/subscriptions/by-stripe/[stripeSubscriptionId]` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
-| `/api/admin/subscriptions/export` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
-| `/api/admin/subscriptions/summary` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
-| `/api/admin/system-health` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
-| `/api/admin/system-health/integration-health` | GET, POST, PUT | jwt+key | `admin:*` | no | - | 3: `components/admin/AdminSystemHealthTab.tsx`, `components/admin/IntegrationHealth/hooks/useCircuitBreakerOverride.ts`, `components/admin/IntegrationHealth/hooks/useIntegrationHistory.ts` |
-| `/api/admin/system-health/test-database` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
-| `/api/admin/system-health/test-email` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
-| `/api/admin/system-health/test-oauth` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
-| `/api/admin/system-prompts` | GET, POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/systemPrompts.ts` |
-| `/api/admin/system-prompts/[promptId]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/systemPrompts.ts` |
-| `/api/admin/system-prompts/[promptId]/create-version` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
-| `/api/admin/system-prompts/[promptId]/history` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
-| `/api/admin/system-prompts/[promptId]/reset` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/system-prompts/[promptId]/save-version` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
-| `/api/admin/system-prompts/[promptId]/switch-version` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
-| `/api/admin/system-prompts/[promptId]/test` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/systemPrompts.ts` |
-| `/api/admin/system-secrets` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
-| `/api/admin/system-secrets/[id]` | GET, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
-| `/api/admin/system-secrets/tier1-status` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
-| `/api/admin/team-members` | GET, POST, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/admin.ts` |
-| `/api/admin/tool-definitions` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/toolDefinitions.ts` |
-| `/api/admin/tool-definitions/[toolId]` | GET, PUT, DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/toolDefinitions.ts` |
-| `/api/admin/tools/execute` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/useAdminTools.ts` |
-| `/api/admin/transactions` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/useTransactionLedger.ts` |
-| `/api/admin/upload-logo` | POST, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminLogoUpload.tsx` |
-| `/api/admin/usage-by-source` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/EventMetrics/hooks/useUsageBySource.ts` |
-| `/api/admin/usage-margin` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
-| `/api/admin/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | `admin:*` | no | - | 0 |
-| `/api/admin/user-api-keys/[id]/reset-rate-limit` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/admin/user-api-keys/[id]/restore` | POST | jwt | - | no | - | 0 |
-| `/api/admin/user-api-keys/[id]/revoke` | POST | jwt | - | no | - | 0 |
-| `/api/admin/user-api-keys/[id]/rotate` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
-| `/api/admin/users/[userId]/activity` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserActivity.ts` |
-| `/api/admin/users/[userId]/api-key-trust` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/block-signup-grant` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/cancel-deletion` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/compliance` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userCompliance.ts` |
-| `/api/admin/users/[userId]/credit-history` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserActivity.ts` |
-| `/api/admin/users/[userId]/credit-ledger` | GET | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/credit-ledger-export` | GET | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/credit-summary` | GET | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/credit-transactions` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/hooks/useUserCreditAdjustments.ts` |
-| `/api/admin/users/[userId]/entitlements` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/entitlements.ts` |
-| `/api/admin/users/[userId]/generate-api-key` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/admin/users/[userId]/grant-subscription` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/admin/users/[userId]/internal` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/linked-accounts` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
-| `/api/admin/users/[userId]/new-account-spend-cap` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/notes` | GET, POST, PATCH | jwt | - | no | - | 1: `hooks/data/adminUserNotes.ts` |
-| `/api/admin/users/[userId]/profile` | any | handler | - | no | - | 1: `components/admin/Users/Profile/actions/EditProfileDialog.tsx` |
-| `/api/admin/users/[userId]/release-held-signup-grant` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/resend-email-change` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/[userId]/resend-verification` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/[userId]/revoke-api-keys` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/risk-evidence` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminRiskEvidence.ts` |
-| `/api/admin/users/[userId]/risk-flags` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/useUserRiskFlags.ts` |
-| `/api/admin/users/[userId]/schedule-deletion` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/sessions` | GET, DELETE | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserSessions.ts` |
-| `/api/admin/users/[userId]/sign-ins` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
-| `/api/admin/users/[userId]/signup-cluster` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
-| `/api/admin/users/[userId]/signup-grant-pending` | GET | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/subscriptions` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove` | DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/admin/users/[userId]/support-access` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/Profile/tabs/SupportAccessHistory.tsx` |
-| `/api/admin/users/[userId]/tags` | PATCH | jwt | - | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserTagsUpdate.ts` |
-| `/api/admin/users/[userId]/timeline` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
-| `/api/admin/users/[userId]/unblock-signup-grant` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/unlock-signup-grant` | POST | jwt | - | no | - | 0 |
-| `/api/admin/users/[userId]/unverify-email` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/[userId]/user-api-keys` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/admin/users/[userId]/verify-email` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/bulk/execute` | POST | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
-| `/api/admin/users/bulk/preview` | POST | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
-| `/api/admin/users/bulk/undo` | POST | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
-| `/api/admin/users/email-verification` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/export` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/exportUsersCsv.ts` |
-| `/api/admin/users/signup-verdicts` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
-| `/api/admin/users/summary` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
-| `/api/admin/voice-agents` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
-| `/api/admin/voice-agents/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
-| `/api/admin/webhook-logs` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
-| `/api/admin/webhook-logs/[deliveryId]` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
-| `/api/admin/webhook-logs/stats` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
-| `/api/admin/whats-new-highlights-config` | GET, PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/whatsNewModals.ts` |
-| `/api/admin/whats-new-highlights-preview` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/AdminWhatsNewModalsTab.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/admin/abuse/bulk-execute` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/adminBulkAbuse.ts` |
+| `/api/admin/abuse/bulk-preview` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/adminBulkAbuse.ts` |
+| `/api/admin/action-counts` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/adminActionCounts.ts` |
+| `/api/admin/activity-summary` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/useAdminActivitySummary.ts` |
+| `/api/admin/agent-executions/cleanup` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/stuckAgentExecutions.ts` |
+| `/api/admin/agent-executions/stuck` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/stuckAgentExecutions.ts` |
+| `/api/admin/agent-ops-settings` | GET, POST, PUT | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
+| `/api/admin/agent-ops-settings/repair` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
+| `/api/admin/agent-ops-settings/seed` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/agent-ops-settings/versions` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
+| `/api/admin/agent-ops-settings/versions/[version]/activate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AgentOpsTab.tsx` |
+| `/api/admin/ai-operations` | GET, POST, PUT | jwt | - | GET: `settings:manage`; PUT: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/AiOperationsTab.tsx` |
+| `/api/admin/analytics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useAnalyticsMetrics.ts` |
+| `/api/admin/analytics/activation` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useActivationFunnel.ts` |
+| `/api/admin/analytics/cohorts` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useAnalyticsCohorts.ts` |
+| `/api/admin/analytics/overview` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useAnalyticsOverview.ts` |
+| `/api/admin/analytics/top-accounts` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Analytics/useAnalyticsTopAccounts.ts` |
+| `/api/admin/api-keys/scope-preflight` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/apiKeyScopePreflight.ts` |
+| `/api/admin/approvals` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
+| `/api/admin/approvals/[id]/approve` | POST | jwt | - | POST: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
+| `/api/admin/approvals/[id]/reject` | POST | jwt | - | POST: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
+| `/api/admin/audit-log` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/alert-status` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/export` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/review-queue` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/reviews` | GET, POST, DELETE | jwt | - | GET: `support:read`; POST: `support:read`; DELETE: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log/summary` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/billing-overview` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminBillingOverview.ts` |
+| `/api/admin/bulk-create-users` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/InviteCenter/BulkInvite/BulkInviteTab.tsx` |
+| `/api/admin/campaign-watches` | GET, POST | jwt | - | GET: `support:read`; POST: `users:moderate` | no | - | 1: `hooks/data/campaignWatches.ts` |
+| `/api/admin/campaign-watches/[id]` | GET, PATCH | jwt | - | GET: `support:read`; PATCH: `users:moderate` | no | - | 1: `hooks/data/campaignWatches.ts` |
+| `/api/admin/context-telemetry` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/context-telemetry/[id]` | GET, DELETE | jwt+key | `admin:*` | GET: `support:read`; DELETE: `settings:manage` | no | - | 0 |
+| `/api/admin/context-telemetry/[id]/analyze` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/context-telemetry/[id]/create-issue` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/context-telemetry/dry-run-results` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/context-telemetry/export` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/context-telemetry/integration-status` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/context-telemetry/metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/context-telemetry/test-config` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useContextTelemetry.ts` |
+| `/api/admin/create-user` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/Users/CreateUserModal.tsx` |
+| `/api/admin/credit-adjustments` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/CreditAnalysis/hooks/useCreditAdjustmentsLog.ts` |
+| `/api/admin/credit-economy` | GET | jwt | - | GET: ? | no | - | 1: `components/admin/CreditAnalysis/components/CreditEconomy.tsx` |
+| `/api/admin/dlq/all-messages` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
+| `/api/admin/dlq/discard` | POST | jwt | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/dlqManagement.ts` |
+| `/api/admin/dlq/history` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
+| `/api/admin/dlq/messages` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/dlq/queues` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/dlqManagement.ts` |
+| `/api/admin/dlq/replay` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/dlqManagement.ts` |
+| `/api/admin/email/attempts/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/email/EmailPreviewModal.tsx` |
+| `/api/admin/email/jobs` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]` | GET, PUT | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/analytics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/cancel` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/check-status` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/email/jobs/[id]/clone` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/preview-for-user` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/recipients` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/schedule` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/send` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/start` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/[id]/summary` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/jobs/preview-recipients` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/templates` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/templates/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/templates/[id]/clone` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/emailMarketing.ts` |
+| `/api/admin/email/templates/[id]/test` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/email/EmailTemplateEditor.tsx` |
+| `/api/admin/email/whats-new-content` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 2: `components/admin/email/EmailTemplateEditor.tsx`, `hooks/data/emailMarketing.ts` |
+| `/api/admin/embedding-limits` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/EmbeddingProviderLimits.tsx` |
+| `/api/admin/emergency-login` | POST | handler | - | - | no | - | 1: `routes/admin-emergency.tsx` |
+| `/api/admin/event-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/EventMetrics/hooks/useEventMetrics.ts` |
+| `/api/admin/feedback-trends` | GET | jwt | - | GET: `support:read` | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/admin/feedback/[id]/ai` | GET, PATCH | jwt | - | GET: `support:read` or `users:moderate`; PATCH: `users:moderate` | no | - | 1: `components/admin/Feedback/FeedbackAiPanel.tsx` |
+| `/api/admin/feedback/[id]/history` | GET, POST | jwt | - | GET: `users:moderate`; POST: `users:moderate` | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/admin/feedback/[id]/status` | PATCH | jwt | - | PATCH: `users:moderate` | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/admin/gears` | GET, PUT | jwt+key | `admin:*` | GET: ?; PUT: `settings:manage` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
+| `/api/admin/gears/[key]` | DELETE | jwt+key | `admin:*` | DELETE: `settings:manage` | no | - | 1: `components/admin/ManageGearsTab.tsx` |
+| `/api/admin/generate-highlights` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/whatsNewModals.ts` |
+| `/api/admin/github/connection` | GET, POST, PUT, DELETE | jwt+key | `admin:*` | POST: `settings:manage`; GET: `support:read`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
+| `/api/admin/github/rate-limit` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
+| `/api/admin/github/repositories` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/useGitHubRepositories.ts` |
+| `/api/admin/github/rotate-key` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
+| `/api/admin/github/test` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/GitHubConnectionTab.tsx` |
+| `/api/admin/grant-packages` | GET, POST | jwt | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/grantPackageAPICalls.ts` |
+| `/api/admin/grant-packages/[id]` | PATCH | jwt | `admin:*` | PATCH: `settings:manage` | no | - | 1: `utils/grantPackageAPICalls.ts` |
+| `/api/admin/held-signup-grants` | GET | jwt | - | GET: `credits:adjust` | no | - | 1: `components/admin/HeldSignupGrantsTab.tsx` |
+| `/api/admin/held-signup-grants/release` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/held-signup-grants/revoke` | POST | jwt | - | POST: `credits:adjust` | no | - | 2: `components/admin/HeldSignupGrantsTab.tsx`, `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/help-analytics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/helpAnalytics.ts` |
+| `/api/admin/identity-providers` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |
+| `/api/admin/identity-providers/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/IdentityProvidersTab.tsx` |
+| `/api/admin/integration-audit-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/integration-health-dashboard` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/IntegrationHealth/hooks/useIntegrationHealthDashboard.ts` |
+| `/api/admin/integrations/demand` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/integrationDemand.ts` |
+| `/api/admin/integrations/demand/[integrationId]/requesters` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/integrationDemand.ts` |
+| `/api/admin/liveops-triage-configs` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
+| `/api/admin/liveops-triage-configs/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
+| `/api/admin/liveops-triage-configs/[id]/health` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
+| `/api/admin/liveops-triage-configs/[id]/trigger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
+| `/api/admin/liveops-triage-configs/runs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx` |
+| `/api/admin/liveops-triage-env` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/llm-models/configurations` | GET, PUT | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/llmModelConfig.ts` |
+| `/api/admin/mementos/reembed` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/mementos/reembed-ledger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/modal-tool` | POST | jwt+key | `admin:*` | - | no | - | 0 |
+| `/api/admin/modals/variants` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/whatsNewModals.ts` |
+| `/api/admin/model-deprecation-status` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/ModelLifecycleTab.tsx` |
+| `/api/admin/model-discovery` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 2: `components/admin/DiscoveryRunDetailModal.tsx`, `components/admin/DiscoveryStatusCard.tsx` |
+| `/api/admin/model-hub/curated/versions` | POST | jwt+key | `admin:*` | POST: `models:curate` | no | - | 0 |
+| `/api/admin/model-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useModelLogs.ts` |
+| `/api/admin/model-logs/[id]` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useModelLogs.ts` |
+| `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
+| `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx` |
+| `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/models/access` | PATCH | jwt | - | PATCH: `settings:manage` | no | - | 0 |
+| `/api/admin/models/access/bulk` | POST | jwt | - | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
+| `/api/admin/moderation-incidents/[id]/verdict` | POST | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
+| `/api/admin/moderation-incidents/[id]/view` | GET | jwt | `admin:*` | GET: `users:moderate` | no | - | 1: `hooks/data/moderationIncidents.ts` |
+| `/api/admin/morning-brief` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/MorningBriefCard.tsx` |
+| `/api/admin/oauth-clients` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/oauthClientAPICalls.ts` |
+| `/api/admin/oauth-clients/[id]` | PATCH | jwt+key | `admin:*` | PATCH: `settings:manage` | no | - | 1: `utils/oauthClientAPICalls.ts` |
+| `/api/admin/oauth-clients/[id]/rotate-secret` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/oauthClientAPICalls.ts` |
+| `/api/admin/operations-model` | GET, PUT | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage` | no | - | 1: `components/admin/AdminOperationsModelSetting.tsx` |
+| `/api/admin/organizations/[id]/convert-to-paid` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/organizations/[id]/group-types` | PUT | jwt+key | `admin:*` | PUT: `settings:manage` | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/admin/organizations/[id]/members` | POST | jwt | - | POST: `users:moderate` | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserOrgMembership.ts` |
+| `/api/admin/organizations/[id]/members/[userId]` | PATCH, DELETE | jwt | - | DELETE: `users:moderate`; PATCH: `users:moderate` | no | - | 0 |
+| `/api/admin/organizations/[id]/revoke` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/organizations/[id]/seats` | PATCH | jwt+key | `admin:*` | PATCH: `credits:adjust` | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/organizations/[id]/top-up` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/organizations/grant` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/organizations/grants` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminOrganizations.ts` |
+| `/api/admin/overwatch/backfill-first-seen` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/partner-signup-rules` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/admin/partner-signup-rules/[id]` | PUT, DELETE | jwt+key | `admin:*` | PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/admin/partner-signup-rules/backfill` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/admin/payments` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
+| `/api/admin/payments/export` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
+| `/api/admin/payments/summary` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/payments/useAdminPayments.ts` |
+| `/api/admin/platform-usage` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/hooks/usePlatformUsage.ts` |
+| `/api/admin/platform-usage/endpoints` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/hooks/useEndpointUsage.ts` |
+| `/api/admin/pr-report/generate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/prReport.ts` |
+| `/api/admin/pr-report/send` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/prReport.ts` |
+| `/api/admin/preference-arena/pairs` | GET, POST | jwt | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `hooks/data/preferenceArena.ts` |
+| `/api/admin/preference-arena/pairs/[id]` | PATCH | jwt | `admin:*` | PATCH: `settings:manage` | no | - | 1: `hooks/data/preferenceArena.ts` |
+| `/api/admin/preference-arena/stats` | GET | jwt | `admin:*` | GET: `settings:manage` | no | - | 1: `hooks/data/preferenceArena.ts` |
+| `/api/admin/provider-invoices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
+| `/api/admin/published-artifacts` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
+| `/api/admin/published-artifacts/[id]/reports` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
+| `/api/admin/published-artifacts/[id]/takedown` | POST, DELETE | jwt+key | `admin:*` | POST: `users:moderate`; DELETE: `users:moderate` | no | - | 1: `components/admin/PublishedArtifactsTab.tsx` |
+| `/api/admin/qa/facets` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/qaStatus.ts` |
+| `/api/admin/qa/overview` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/qaStatus.ts` |
+| `/api/admin/qa/report/[runId]/[token]/[...path]` | GET | handler | - | - | no | - | 0 |
+| `/api/admin/qa/runs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/qaStatus.ts` |
+| `/api/admin/qa/runs/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/qaStatus.ts` |
+| `/api/admin/qa/tests` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/qaStatus.ts` |
+| `/api/admin/rapid-reply/mappings` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 2: `components/admin/RapidReplyTab.tsx`, `hooks/data/rapidReplyMutations.ts` |
+| `/api/admin/rapid-reply/mappings/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/rapidReplyMutations.ts` |
+| `/api/admin/rapid-reply/mappings/bulk` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/rapid-reply/metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/RapidReplyTab.tsx` |
+| `/api/admin/rapid-reply/prompts` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 0 |
+| `/api/admin/rapid-reply/prompts/[id]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 0 |
+| `/api/admin/rapid-reply/prompts/[id]/activate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/rapid-reply/test` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/rapidReplyMutations.ts` |
+| `/api/admin/rate-limits` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/RateLimits/hooks/useRateLimitMetrics.ts` |
+| `/api/admin/rate-limits/ingest` | POST | handler | - | - | no | - | 0 |
+| `/api/admin/recalculate-message-counts` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/Notebook/Search/AdvancedSearchDrawer.tsx` |
+| `/api/admin/release-notes` | GET | jwt+key | `admin:*`, `release-notes:write` | - | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/release-notes/[id]` | PATCH | jwt+key | `admin:*`, `release-notes:write` | - | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/release-notes/[id]/status` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/release-notes/config` | GET, PUT | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage` | no | - | 1: `components/admin/ReleaseNotes/useReleaseNotes.ts` |
+| `/api/admin/retrieval-rate` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/RetrievalRateTab.tsx` |
+| `/api/admin/revenue` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/Revenue/useAdminRevenue.ts` |
+| `/api/admin/saved-views` | GET, POST | jwt | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
+| `/api/admin/saved-views/[id]` | PATCH, DELETE | jwt | `admin:*` | PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/Users/List/useUsersSavedViews.ts` |
+| `/api/admin/scoped-settings` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/settings.ts` |
+| `/api/admin/scoped-settings/effective` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 0 |
+| `/api/admin/search` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/shared/useAdminEntitySearch.ts` |
+| `/api/admin/security-dashboard/attack-simulation` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/attack-simulation-ingest` | POST | handler | - | - | no | - | 0 |
+| `/api/admin/security-dashboard/cloud` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/cloud-prowler` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/cloud-prowler-ingest` | POST | handler | - | - | no | - | 0 |
+| `/api/admin/security-dashboard/incident-signals` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/incident-state` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/overview` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/run-attack-simulation` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/waf-blocked-requests` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/waf-logs-insights` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/waf-traffic` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/web` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-dashboard/web-owasp-ingest` | POST | handler | - | - | no | - | 0 |
+| `/api/admin/security-scan-schedule/[scanType]` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/security-scan-schedules` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/session-usage` | GET | jwt+key | `admin:*` | - | no | - | 1: `components/admin/CreditAnalysis/hooks/useSessionUsage.ts` |
+| `/api/admin/sessions/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/sessions/[id]/quests` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/shadow-detections` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/shadow-detections/ai-advisory` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/aiAdvisory.ts` |
+| `/api/admin/shadow-detections/assessment-replay` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 0 |
+| `/api/admin/shadow-detections/assessments` | GET, POST | jwt | `admin:*` | GET: `support:read`; POST: `users:moderate` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/shadow-detections/bulk-verdict` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/shadow-detections/eval-sets` | GET, POST | jwt | `admin:*` | GET: `support:read`; POST: `users:moderate` | no | - | 1: `hooks/data/verdictEvalSets.ts` |
+| `/api/admin/shadow-detections/eval-sets/[id]` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/verdictEvalSets.ts` |
+| `/api/admin/shadow-detections/eval-sets/[id]/runs` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/verdictEvalSets.ts` |
+| `/api/admin/shadow-detections/eval-sets/[id]/verdict` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/verdictEvalSets.ts` |
+| `/api/admin/shadow-detections/verdict` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/shadow-detections/verdict-eval` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/signup-anomaly` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/signup-domain-holds` | GET, POST | jwt | `admin:*` | GET: ?; POST: `users:moderate` | no | - | 1: `components/admin/SignupDomainHoldsTab.tsx` |
+| `/api/admin/signup-grants/bulk-block` | POST | jwt | - | POST: `credits:adjust` | no | - | 1: `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/signup-grants/bulk-unblock` | POST | jwt | - | POST: `credits:adjust` | no | - | 1: `components/admin/InviteCenter/Pending/usePendingBulkActions.ts` |
+| `/api/admin/signup-grants/pending` | GET | jwt | - | GET: `credits:adjust` | no | - | 1: `hooks/data/adminSignupGrant.ts` |
+| `/api/admin/signup-grants/pending-summary` | GET | jwt | - | GET: `credits:adjust` | no | - | 1: `hooks/data/adminSignupGrant.ts` |
+| `/api/admin/signup-risk-reviews` | GET, POST | jwt | `admin:*` | GET: ?; POST: `users:moderate` | no | - | 1: `hooks/data/signupRiskReviews.ts` |
+| `/api/admin/signup-timeseries` | GET | jwt | - | GET: `support:read` | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
+| `/api/admin/slack-app/create` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/CreateSlackAppModal.tsx` |
+| `/api/admin/slack-app/manifest-status` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/admin/slack-app/update-manifest` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/admin/slack-audit-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/slack-workspaces` | GET, PATCH | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage` | no | - | 5: `components/admin/AdminLiveOpsTriageMultiConfigTab.tsx`, `components/admin/ContextInspectorTab.tsx`, `components/admin/SecopsTriageTab.tsx` +2 more |
+| `/api/admin/spend` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useSpend.ts` |
+| `/api/admin/spend-reconciliation` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/components/ReconciliationBanner.tsx` |
+| `/api/admin/stripe-disputes` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/stripeDisputes.ts` |
+| `/api/admin/stripe-disputes/resolve` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 0 |
+| `/api/admin/stripe-disputes/undo-contain` | POST | jwt | `admin:*` | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/subscriptions` | GET | jwt | `admin:*` | GET: ? | no | - | 2: `components/admin/Subscriptions/subscriptionsLastSeen.ts`, `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
+| `/api/admin/subscriptions/[id]` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
+| `/api/admin/subscriptions/[id]/admin-log` | GET | jwt | `admin:*` | GET: ? | no | - | 0 |
+| `/api/admin/subscriptions/[id]/cancel` | POST | jwt | `admin:*` | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/comp` | POST | jwt | `admin:*` | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/resume` | POST | jwt | `admin:*` | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/stripe` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/sync` | GET, POST | jwt | `admin:*` | GET: ?; POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/timeline` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/subscriptions/by-stripe/[stripeSubscriptionId]` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
+| `/api/admin/subscriptions/export` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
+| `/api/admin/subscriptions/summary` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
+| `/api/admin/subscriptions/usage` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Subscriptions/SubscriptionUsageSummary.tsx` |
+| `/api/admin/system-health` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
+| `/api/admin/system-health/integration-health` | GET, POST, PUT | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage`; PUT: `settings:manage` | no | - | 3: `components/admin/AdminSystemHealthTab.tsx`, `components/admin/IntegrationHealth/hooks/useCircuitBreakerOverride.ts`, `components/admin/IntegrationHealth/hooks/useIntegrationHistory.ts` |
+| `/api/admin/system-health/test-database` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
+| `/api/admin/system-health/test-email` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
+| `/api/admin/system-health/test-oauth` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminSystemHealthTab.tsx` |
+| `/api/admin/system-prompts` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `hooks/data/systemPrompts.ts` |
+| `/api/admin/system-prompts/[promptId]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `support:read`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/systemPrompts.ts` |
+| `/api/admin/system-prompts/[promptId]/create-version` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
+| `/api/admin/system-prompts/[promptId]/history` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
+| `/api/admin/system-prompts/[promptId]/reset` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/system-prompts/[promptId]/save-version` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
+| `/api/admin/system-prompts/[promptId]/switch-version` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SystemPromptEditor.tsx` |
+| `/api/admin/system-prompts/[promptId]/test` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/data/systemPrompts.ts` |
+| `/api/admin/system-secrets` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
+| `/api/admin/system-secrets/[id]` | GET, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
+| `/api/admin/system-secrets/tier1-status` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 1: `components/admin/SystemSecretsTab.tsx` |
+| `/api/admin/team-members` | GET, POST, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/admin/tool-definitions` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/toolDefinitions.ts` |
+| `/api/admin/tool-definitions/[toolId]` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: ?; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/toolDefinitions.ts` |
+| `/api/admin/tools/execute` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `hooks/useAdminTools.ts` |
+| `/api/admin/transactions` | GET | jwt+key | `admin:*` | - | no | - | 1: `components/admin/CreditAnalysis/hooks/useTransactionLedger.ts` |
+| `/api/admin/upload-logo` | POST, DELETE | jwt+key | `admin:*` | POST: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/AdminLogoUpload.tsx` |
+| `/api/admin/usage-by-source` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/EventMetrics/hooks/useUsageBySource.ts` |
+| `/api/admin/usage-margin` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
+| `/api/admin/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | `admin:*` | PATCH: `users:moderate` | no | - | 0 |
+| `/api/admin/user-api-keys/[id]/reset-rate-limit` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/admin/user-api-keys/[id]/restore` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/user-api-keys/[id]/revoke` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/user-api-keys/[id]/rotate` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/users` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
+| `/api/admin/users/[userId]/activity` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserActivity.ts` |
+| `/api/admin/users/[userId]/api-key-trust` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/users/[userId]/block-signup-grant` | POST | jwt | - | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/cancel-deletion` | POST | jwt | - | POST: `users:delete` | no | - | 0 |
+| `/api/admin/users/[userId]/compliance` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/userCompliance.ts` |
+| `/api/admin/users/[userId]/credit-history` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserActivity.ts` |
+| `/api/admin/users/[userId]/credit-ledger` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/users/[userId]/credit-ledger-export` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/users/[userId]/credit-summary` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/users/[userId]/credit-transactions` | GET | jwt+key | `admin:*` | GET: ? | no | - | 0 |
+| `/api/admin/users/[userId]/detection-links` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/entitlements` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/entitlements.ts` |
+| `/api/admin/users/[userId]/file-embedding-window` | POST | jwt | - | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/users/[userId]/generate-api-key` | POST | jwt+key | `admin:*` | POST: `keys:revoke` | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/admin/users/[userId]/grant-subscription` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/admin/users/[userId]/internal` | POST | jwt | - | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/users/[userId]/linked-accounts` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/new-account-spend-cap` | POST | jwt | - | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/notes` | GET, POST, PATCH | jwt | - | GET: `support:read`; POST: `users:moderate`; PATCH: `users:moderate` | no | - | 1: `hooks/data/adminUserNotes.ts` |
+| `/api/admin/users/[userId]/permissions` | PUT | jwt | - | PUT: `settings:manage` | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserPermissionsUpdate.ts` |
+| `/api/admin/users/[userId]/profile` | any | handler | - | - | no | - | 1: `components/admin/Users/Profile/actions/EditProfileDialog.tsx` |
+| `/api/admin/users/[userId]/release-held-signup-grant` | POST | jwt | - | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/resend-email-change` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
+| `/api/admin/users/[userId]/resend-verification` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
+| `/api/admin/users/[userId]/revoke-api-keys` | POST | jwt | - | POST: `keys:revoke` | no | - | 0 |
+| `/api/admin/users/[userId]/risk-evidence` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminRiskEvidence.ts` |
+| `/api/admin/users/[userId]/risk-flags` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/useUserRiskFlags.ts` |
+| `/api/admin/users/[userId]/role` | PUT | jwt | - | PUT: `settings:manage` | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserRoleUpdate.ts` |
+| `/api/admin/users/[userId]/schedule-deletion` | POST | jwt | - | POST: `users:delete` | no | - | 0 |
+| `/api/admin/users/[userId]/sessions` | GET, DELETE | jwt | `admin:*` | GET: ?; DELETE: `users:moderate` | no | - | 1: `hooks/data/adminUserSessions.ts` |
+| `/api/admin/users/[userId]/sign-ins` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/signup-cluster` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/signup-grant-pending` | GET | jwt | - | GET: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/subscriptions` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits` | PUT | jwt+key | `admin:*` | PUT: `credits:adjust` | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove` | DELETE | jwt+key | `admin:*` | DELETE: `credits:adjust` | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/admin/users/[userId]/support-access` | GET | jwt | - | GET: `users:impersonate` | no | - | 1: `components/admin/Users/Profile/tabs/SupportAccessHistory.tsx` |
+| `/api/admin/users/[userId]/tags` | PATCH | jwt | - | PATCH: `settings:manage` | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserTagsUpdate.ts` |
+| `/api/admin/users/[userId]/timeline` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/unblock-signup-grant` | POST | jwt | - | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/unlock-signup-grant` | POST | jwt | - | POST: `credits:adjust` | no | - | 0 |
+| `/api/admin/users/[userId]/unverify-email` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
+| `/api/admin/users/[userId]/usage-receipt` | GET | jwt | - | - | no | - | 0 |
+| `/api/admin/users/[userId]/user-api-keys` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/admin/users/[userId]/verify-email` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
+| `/api/admin/users/bulk/execute` | POST | jwt | `admin:*` | POST: ? | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
+| `/api/admin/users/bulk/preview` | POST | jwt | `admin:*` | POST: ? | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
+| `/api/admin/users/bulk/undo` | POST | jwt | `admin:*` | POST: ? | no | - | 1: `components/admin/Users/List/useAdminUsersBulk.ts` |
+| `/api/admin/users/by-provider-id` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/users/email-verification` | GET | jwt+key | `admin:*` | GET: ? | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
+| `/api/admin/users/export` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Users/exportUsersCsv.ts` |
+| `/api/admin/users/linked-suspend-propagation` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/Users/Profile/DetectionLinkedAccountsCard.tsx` |
+| `/api/admin/users/signup-verdicts` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
+| `/api/admin/users/summary` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
+| `/api/admin/users/tags` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/voice-agents` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
+| `/api/admin/voice-agents/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
+| `/api/admin/webhook-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
+| `/api/admin/webhook-logs/[deliveryId]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
+| `/api/admin/webhook-logs/stats` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
+| `/api/admin/whats-new-highlights-config` | GET, PUT | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage` | no | - | 1: `hooks/data/whatsNewModals.ts` |
+| `/api/admin/whats-new-highlights-preview` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/AdminWhatsNewModalsTab.tsx` |
 
 ### agent-executions
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/agent-executions` | GET | jwt+key | - | no | - | 1: `hooks/data/agentExecutions.ts` |
-| `/api/agent-executions/[id]` | GET | jwt+key | - | no | - | 2: `hooks/data/agentExecutions.ts`, `hooks/useAgentExecution.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/agent-executions` | GET | jwt+key | - | - | no | - | 1: `hooks/data/agentExecutions.ts` |
+| `/api/agent-executions/[id]` | GET | jwt+key | - | - | no | - | 2: `hooks/data/agentExecutions.ts`, `hooks/useAgentExecution.ts` |
 
 ### agent-quest
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/agent-quest/manifest` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/agent-quest/manifest` | GET | handler | - | - | no | - | 0 |
 
 ### agents
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/agents` | GET, POST | jwt+key | `agents:read`, `agents:write` | no | - | 2: `hooks/data/agents.ts`, `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]` | GET, PUT, DELETE | jwt+key | `agents:read`, `agents:write` | no | - | 2: `components/Session/PromptReplies.tsx`, `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/embed-keys` | GET | jwt+key | `agents:write` | no | - | 1: `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/enhance-field` | POST | jwt+key | `agents:write` | no | - | 1: `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/generate-avatar` | POST | jwt+key | `agents:write` | no | - | 1: `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/generate-description` | POST | jwt+key | `agents:write` | no | - | 1: `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/generate-system-prompt` | POST | jwt+key | `agents:write` | no | - | 1: `utils/agentsAPICalls.ts` |
-| `/api/agents/[id]/missions` | GET, POST | jwt+key | `agents:read`, `agents:write` | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/agents/[id]/transfer-credits` | POST | jwt+key | `agents:write` | no | - | 1: `components/Agent/AgentCreditManagement.tsx` |
-| `/api/agents/create-from-context` | POST | jwt+key | `agents:write` | no | - | 1: `components/commands/CreateAgentCommand.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/agents` | GET, POST | jwt+key | `agents:read`, `agents:write` | - | no | - | 2: `hooks/data/agents.ts`, `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]` | GET, PUT, DELETE | jwt+key | `agents:read`, `agents:write` | - | no | - | 2: `components/Session/PromptReplies.tsx`, `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/embed-keys` | GET | jwt+key | `agents:write` | - | no | - | 1: `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/enhance-field` | POST | jwt+key | `agents:write` | - | no | - | 1: `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/generate-avatar` | POST | jwt+key | `agents:write` | - | no | - | 1: `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/generate-description` | POST | jwt+key | `agents:write` | - | no | - | 1: `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/generate-system-prompt` | POST | jwt+key | `agents:write` | - | no | - | 1: `utils/agentsAPICalls.ts` |
+| `/api/agents/[id]/missions` | GET, POST | jwt+key | `agents:read`, `agents:write` | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/agents/[id]/transfer-credits` | POST | jwt+key | `agents:write` | - | no | - | 1: `components/Agent/AgentCreditManagement.tsx` |
+| `/api/agents/create-from-context` | POST | jwt+key | `agents:write` | - | no | - | 1: `components/commands/CreateAgentCommand.ts` |
 
 ### ai
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/ai/audio-providers` | GET | jwt | - | no | - | 1: `hooks/data/audioProviders.ts` |
-| `/api/ai/barkeep-chat` | POST | jwt | - | no | - | 0 |
-| `/api/ai/classify-intent` | POST | jwt+key | - | no | - | 1: `hooks/useIntentClassifier.ts` |
-| `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
-| `/api/ai/edit-image` | POST | jwt+key | `ai:generate` | yes | `/api/v1/image-edits` | 1: `components/commands/ImageGenerationCommand.ts` |
-| `/api/ai/elevenlabs-voices` | GET | jwt | - | no | - | 1: `hooks/data/ttsVoices.ts` |
-| `/api/ai/generate-image` | POST | jwt+key | `ai:generate` | yes | `/api/v1/image-generations` | 1: `components/commands/ImageGenerationCommand.ts` |
-| `/api/ai/generate-video` | any | handler | - | no | - | 0 |
-| `/api/ai/llm` | POST | jwt+key | `ai:chat` | no | - | 1: `components/commands/LLMCommand.tsx` |
-| `/api/ai/music` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/ai/optimize-input` | POST | jwt | - | no | - | 1: `components/Session/RephraseButton.tsx` |
-| `/api/ai/rapid-reply` | POST | jwt | - | no | - | 1: `components/commands/LLMCommand.tsx` |
-| `/api/ai/refineText` | POST | jwt | - | no | - | 1: `hooks/useRefineText.ts` |
-| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/AudioStudio/useGenerateAudio.ts` |
-| `/api/ai/tavern-conversation` | POST | jwt | - | no | - | 0 |
-| `/api/ai/test-realtime-voice` | POST | jwt+key | - | no | - | 0 |
-| `/api/ai/transcribe` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
-| `/api/ai/transcribe/init` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
-| `/api/ai/tts` | POST | jwt+key | `ai:generate` | yes | - | 2: `components/AudioStudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
-| `/api/ai/v1/tools` | POST | jwt | - | yes | - | 0 |
-| `/api/ai/voice-sessions` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/ai/audio-providers` | GET | jwt | - | - | no | - | 1: `hooks/data/audioProviders.ts` |
+| `/api/ai/barkeep-chat` | POST | jwt | - | - | no | - | 0 |
+| `/api/ai/classify-intent` | POST | jwt+key | - | - | no | - | 1: `hooks/useIntentClassifier.ts` |
+| `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | - | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
+| `/api/ai/edit-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-edits` | 1: `components/commands/ImageGenerationCommand.ts` |
+| `/api/ai/elevenlabs-voices` | GET | jwt | - | - | no | - | 1: `hooks/data/ttsVoices.ts` |
+| `/api/ai/generate-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-generations` | 1: `components/commands/ImageGenerationCommand.ts` |
+| `/api/ai/generate-video` | any | handler | - | - | no | - | 0 |
+| `/api/ai/llm` | POST | jwt+key | `ai:chat` | - | no | - | 1: `components/commands/LLMCommand.tsx` |
+| `/api/ai/music` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/ai/optimize-input` | POST | jwt | - | - | no | - | 1: `components/Session/RephraseButton.tsx` |
+| `/api/ai/rapid-reply` | POST | jwt | - | - | no | - | 1: `components/commands/LLMCommand.tsx` |
+| `/api/ai/refineText` | POST | jwt | - | - | no | - | 1: `hooks/useRefineText.ts` |
+| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | - | yes | - | 1: `components/AudioStudio/useGenerateAudio.ts` |
+| `/api/ai/tavern-conversation` | POST | jwt | - | - | no | - | 0 |
+| `/api/ai/test-realtime-voice` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/ai/transcribe` | POST | jwt+key | `ai:generate` | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
+| `/api/ai/transcribe/init` | POST | jwt+key | `ai:generate` | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
+| `/api/ai/tts` | POST | jwt+key | `ai:generate` | - | yes | - | 2: `components/AudioStudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
+| `/api/ai/v1/tools` | POST | jwt | - | - | yes | - | 0 |
+| `/api/ai/voice-sessions` | POST | jwt+key | - | - | no | - | 1: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
 
 ### analytics
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/analytics/aggregate` | GET | jwt+key | - | no | - | 0 |
-| `/api/analytics/log-event` | POST | jwt+key | - | no | - | 1: `hooks/data/analytics.ts` |
-| `/api/analytics/page` | POST | handler | - | no | - | 1: `utils/pageBeacon.ts` |
-| `/api/analytics/visit` | POST | handler | - | no | - | 1: `utils/visitBeacon.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/analytics/aggregate` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/analytics/log-event` | POST | jwt+key | - | - | no | - | 1: `hooks/data/analytics.ts` |
+| `/api/analytics/page` | POST | handler | - | - | no | - | 1: `utils/pageBeacon.ts` |
+| `/api/analytics/visit` | POST | handler | - | - | no | - | 1: `utils/visitBeacon.ts` |
 
 ### api-keys
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/api-keys` | GET | jwt+key | - | no | - | 1: `utils/keyAPICalls.ts` |
-| `/api/api-keys/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `hooks/data/apiKeys.ts` |
-| `/api/api-keys/[id]/set-active` | POST | jwt+key | - | no | - | 1: `hooks/data/apiKeys.ts` |
-| `/api/api-keys/create` | POST | jwt+key | - | no | - | 2: `components/commands/SetKeyCommand.tsx`, `utils/keyAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/api-keys` | GET | jwt+key | - | - | no | - | 1: `utils/keyAPICalls.ts` |
+| `/api/api-keys/[id]/delete` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/apiKeys.ts` |
+| `/api/api-keys/[id]/set-active` | POST | jwt+key | - | - | no | - | 1: `hooks/data/apiKeys.ts` |
+| `/api/api-keys/create` | POST | jwt+key | - | - | no | - | 2: `components/commands/SetKeyCommand.tsx`, `utils/keyAPICalls.ts` |
 
 ### app-files
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/app-files` | GET | jwt+key | - | no | - | 1: `hooks/data/appFile.ts` |
-| `/api/app-files/[id]/upload` | PUT | jwt+key | - | no | - | 0 |
-| `/api/app-files/delete` | DELETE | jwt+key | - | no | - | 1: `components/admin/FilesTab/index.tsx` |
-| `/api/app-files/generate-presigned-url` | POST | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx`, `utils/filesAPICalls.ts` |
-| `/api/app-files/get-file-url` | POST | jwt+key | - | no | - | 0 |
-| `/api/app-files/serve/[...key]` | GET | handler | - | no | - | 0 |
-| `/api/app-files/update-tags` | PATCH | jwt+key | - | no | - | 1: `components/admin/FilesTab/EditTagModal.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/app-files` | GET | jwt+key | - | - | no | - | 1: `hooks/data/appFile.ts` |
+| `/api/app-files/[id]/upload` | PUT | jwt+key | - | - | no | - | 0 |
+| `/api/app-files/delete` | DELETE | jwt+key | - | - | no | - | 1: `components/admin/FilesTab/index.tsx` |
+| `/api/app-files/generate-presigned-url` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx`, `utils/filesAPICalls.ts` |
+| `/api/app-files/get-file-url` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/app-files/serve/[...key]` | GET | handler | - | - | no | - | 0 |
+| `/api/app-files/update-tags` | PATCH | jwt+key | - | - | no | - | 1: `components/admin/FilesTab/EditTagModal.tsx` |
 
 ### artifact-sandbox
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/artifact-sandbox` | GET | handler | - | no | - | 2: `components/GenAI/InlineArtifactPreview.tsx`, `components/Knowledge/HtmlArtifactViewer.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/artifact-sandbox` | GET | handler | - | - | no | - | 2: `components/GenAI/InlineArtifactPreview.tsx`, `components/Knowledge/HtmlArtifactViewer.tsx` |
 
 ### artifacts
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/artifacts` | GET, POST | jwt+key | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
-| `/api/artifacts/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
-| `/api/artifacts/[id]/versions` | GET, POST | jwt+key | `notebooks:read`, `notebooks:write` | no | - | 1: `hooks/data/artifacts.ts` |
-| `/api/artifacts/[id]/versions/[version]` | GET | jwt+key | - | no | - | 3: `components/Knowledge/PythonArtifactViewer.tsx`, `components/Knowledge/ReactArtifactViewer.tsx`, `hooks/data/artifacts.ts` |
-| `/api/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | no | - | 0 |
-| `/api/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | no | - | 3: `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/artifacts` | GET, POST | jwt+key | - | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
+| `/api/artifacts/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
+| `/api/artifacts/[id]/versions` | GET, POST | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 1: `hooks/data/artifacts.ts` |
+| `/api/artifacts/[id]/versions/[version]` | GET | jwt+key | - | - | no | - | 3: `components/Knowledge/PythonArtifactViewer.tsx`, `components/Knowledge/ReactArtifactViewer.tsx`, `hooks/data/artifacts.ts` |
+| `/api/artifacts/by-identifier` | GET | jwt | - | - | no | - | 1: `utils/artifactPersistence.ts` |
+| `/api/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 0 |
+| `/api/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 3: `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` |
 
 ### auth
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/auth/[strategy]` | GET | handler | - | no | - | 4: `components/MultiStepLogin.tsx`, `components/ProfileModal/SettingsTabContent/ConnectedAppsSection.tsx`, `components/Register.tsx` +1 more |
-| `/api/auth/[strategy]/callback` | GET, POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
-| `/api/auth/github/authorize` | POST | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
-| `/api/auth/github/disconnect` | POST | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
-| `/api/auth/github/mcp-callback` | GET | handler | - | no | - | 0 |
-| `/api/auth/impersonation` | GET, POST | jwt | - | no | - | 1: `components/ImpersonationBanner.tsx` |
-| `/api/auth/mfa/cancel-setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/disable` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/force-reset` | POST | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/passkey` | GET | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/passkey/[id]` | DELETE | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/passkey/authenticate` | POST | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/passkey/authenticate-options` | POST | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/passkey/register` | POST | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/passkey/register-options` | POST | jwt | - | no | - | 1: `hooks/data/passkeys.ts` |
-| `/api/auth/mfa/regenerate-backup-codes` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/status` | GET | jwt+key | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/verify` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/mfa/verify-setup` | POST | jwt | - | no | - | 1: `hooks/data/mfa.ts` |
-| `/api/auth/okta` | GET | handler | - | no | - | 0 |
-| `/api/auth/okta/callback` | GET | handler | - | no | - | 0 |
-| `/api/auth/refreshToken` | POST | handler | - | no | - | 2: `utils/accountDeletionInterceptor.ts`, `utils/refreshCoordinator.ts` |
-| `/api/auth/returnToAdmin` | POST | handler | - | no | - | 2: `hooks/data/user.ts`, `utils/refreshCoordinator.ts` |
-| `/api/auth/saml` | GET | handler | - | no | - | 0 |
-| `/api/auth/saml/callback` | GET, POST | handler | - | no | - | 0 |
-| `/api/auth/step-up` | POST | jwt | - | no | - | 2: `components/auth/StepUpModal.tsx`, `utils/stepUpInterceptor.ts` |
-| `/api/auth/step-up/email/send` | POST | jwt | - | no | - | 1: `components/auth/StepUpModal.tsx` |
-| `/api/auth/step-up/options` | GET | jwt | - | no | - | 1: `components/auth/StepUpModal.tsx` |
-| `/api/auth/step-up/passkey-options` | POST | jwt | - | no | - | 1: `components/auth/StepUpModal.tsx` |
-| `/api/auth/strategy` | GET | handler | - | no | - | 1: `components/MultiStepLogin.tsx` |
-| `/api/auth/trusted-devices` | GET, DELETE | jwt+key | - | no | - | 1: `hooks/data/trustedDevices.ts` |
-| `/api/auth/trusted-devices/[id]` | DELETE | jwt+key | - | no | - | 1: `hooks/data/trustedDevices.ts` |
-| `/api/auth/unlink` | POST | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/ConnectedAppsSection.tsx`, `components/integrations/IntegrationDrawer.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/auth/[strategy]` | GET | handler | - | - | no | - | 4: `components/MultiStepLogin.tsx`, `components/ProfileModal/SettingsTabContent/ConnectedAppsSection.tsx`, `components/Register.tsx` +1 more |
+| `/api/auth/[strategy]/callback` | GET, POST | handler | - | - | no | - | 1: `hooks/data/auth.ts` |
+| `/api/auth/github/authorize` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
+| `/api/auth/github/disconnect` | POST | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
+| `/api/auth/github/mcp-callback` | GET | handler | - | - | no | - | 0 |
+| `/api/auth/impersonation` | GET, POST | jwt | - | - | no | - | 1: `components/ImpersonationBanner.tsx` |
+| `/api/auth/mfa/cancel-setup` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/disable` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/enrollment-abandoned` | POST | jwt | - | - | no | - | 1: `utils/mfaEnrollmentFunnel.ts` |
+| `/api/auth/mfa/force-reset` | POST | jwt+key | `admin:*` | POST: `users:moderate` | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/passkey` | GET | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/passkey/[id]` | DELETE | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/passkey/authenticate` | POST | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/passkey/authenticate-options` | POST | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/passkey/register` | POST | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/passkey/register-options` | POST | jwt | - | - | no | - | 1: `hooks/data/passkeys.ts` |
+| `/api/auth/mfa/regenerate-backup-codes` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/setup` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/status` | GET | jwt+key | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/verify` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/mfa/verify-setup` | POST | jwt | - | - | no | - | 1: `hooks/data/mfa.ts` |
+| `/api/auth/okta` | GET | handler | - | - | no | - | 0 |
+| `/api/auth/okta/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/auth/refreshToken` | POST | handler | - | - | no | - | 2: `utils/accountDeletionInterceptor.ts`, `utils/refreshCoordinator.ts` |
+| `/api/auth/returnToAdmin` | POST | handler | - | - | no | - | 2: `hooks/data/user.ts`, `utils/refreshCoordinator.ts` |
+| `/api/auth/saml` | GET | handler | - | - | no | - | 0 |
+| `/api/auth/saml/callback` | GET, POST | handler | - | - | no | - | 0 |
+| `/api/auth/step-up` | POST | jwt | - | - | no | - | 2: `components/auth/StepUpModal.tsx`, `utils/stepUpInterceptor.ts` |
+| `/api/auth/step-up/email/send` | POST | jwt | - | - | no | - | 1: `components/auth/StepUpModal.tsx` |
+| `/api/auth/step-up/options` | GET | jwt | - | - | no | - | 1: `components/auth/StepUpModal.tsx` |
+| `/api/auth/step-up/passkey-options` | POST | jwt | - | - | no | - | 1: `components/auth/StepUpModal.tsx` |
+| `/api/auth/strategy` | GET | handler | - | - | no | - | 1: `components/MultiStepLogin.tsx` |
+| `/api/auth/trusted-devices` | GET, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/trustedDevices.ts` |
+| `/api/auth/trusted-devices/[id]` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/trustedDevices.ts` |
+| `/api/auth/unlink` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/ConnectedAppsSection.tsx`, `components/integrations/IntegrationDrawer.tsx` |
 
 ### blog
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/blog/enhance` | POST | jwt+key | - | no | - | 1: `hooks/data/blog.ts` |
-| `/api/blog/generate-featured-image` | POST | jwt+key | - | no | - | 1: `hooks/useBlogImageGeneration.ts` |
-| `/api/blog/generate-image-prompt` | POST | jwt+key | - | no | - | 1: `hooks/useBlogImageGeneration.ts` |
-| `/api/blog/presign-image-upload` | POST | jwt+key | - | no | - | 1: `utils/blogImageUpload.ts` |
-| `/api/blog/proxy-fabfile-image` | POST | jwt+key | - | no | - | 1: `components/ProfileModal/ContentPreviewModal.tsx` |
-| `/api/blog/publish` | POST | jwt+key | - | no | - | 1: `hooks/data/blog.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/blog/enhance` | POST | jwt+key | - | - | no | - | 1: `hooks/data/blog.ts` |
+| `/api/blog/generate-featured-image` | POST | jwt+key | - | - | no | - | 1: `hooks/useBlogImageGeneration.ts` |
+| `/api/blog/generate-image-prompt` | POST | jwt+key | - | - | no | - | 1: `hooks/useBlogImageGeneration.ts` |
+| `/api/blog/presign-image-upload` | POST | jwt+key | - | - | no | - | 1: `utils/blogImageUpload.ts` |
+| `/api/blog/proxy-fabfile-image` | POST | jwt+key | - | - | no | - | 1: `components/ProfileModal/ContentPreviewModal.tsx` |
+| `/api/blog/publish` | POST | jwt+key | - | - | no | - | 1: `hooks/data/blog.ts` |
 
 ### blog-integration
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/blog-integration` | GET, POST, DELETE | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/BlogIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/blog-integration` | GET, POST, DELETE | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/BlogIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
 
 ### briefcase
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/briefcase/catalog` | POST | jwt+key | - | no | - | 1: `hooks/data/briefcase.ts` |
-| `/api/briefcase/prompts` | POST | jwt+key | - | no | - | 1: `hooks/data/briefcase.ts` |
-| `/api/briefcase/prompts/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/briefcase.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/briefcase/catalog` | POST | jwt+key | - | - | no | - | 1: `hooks/data/briefcase.ts` |
+| `/api/briefcase/prompts` | POST | jwt+key | - | - | no | - | 1: `hooks/data/briefcase.ts` |
+| `/api/briefcase/prompts/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/briefcase.ts` |
 
 ### business-links
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/business-links` | GET, POST | jwt+key | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
-| `/api/business-links/[id]` | PUT, DELETE | jwt+key | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
-| `/api/business-links/category` | GET, POST | jwt+key | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
-| `/api/business-links/category/[id]` | PUT, DELETE | jwt+key | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
-| `/api/business-links/import` | POST | jwt+key | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/business-links` | GET, POST | jwt+key | - | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
+| `/api/business-links/[id]` | PUT, DELETE | jwt+key | - | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
+| `/api/business-links/category` | GET, POST | jwt+key | - | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
+| `/api/business-links/category/[id]` | PUT, DELETE | jwt+key | - | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
+| `/api/business-links/import` | POST | jwt+key | - | - | no | - | 1: `components/ResearchTasks/PopularTargets/hooks.ts` |
 
 ### cc-bridge
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/cc-bridge/agents` | GET | jwt+key | - | no | - | 0 |
-| `/api/cc-bridge/command` | POST | jwt+key | - | no | - | 1: `hooks/data/ccAgentCommand.ts` |
-| `/api/cc-bridge/download` | POST | jwt+key | - | no | - | 0 |
-| `/api/cc-bridge/events` | GET | jwt+key | - | no | - | 1: `hooks/data/codeAgentEvents.ts` |
-| `/api/cc-bridge/pair` | POST | jwt+key | - | no | - | 0 |
-| `/api/cc-bridge/redeem` | POST | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/cc-bridge/agents` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/cc-bridge/command` | POST | jwt+key | - | - | no | - | 1: `hooks/data/ccAgentCommand.ts` |
+| `/api/cc-bridge/download` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/cc-bridge/events` | GET | jwt+key | - | - | no | - | 1: `hooks/data/codeAgentEvents.ts` |
+| `/api/cc-bridge/pair` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/cc-bridge/redeem` | POST | handler | - | - | no | - | 0 |
 
 ### chat
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/chat` | POST | jwt+key | `ai:chat`, `ai:generate` | yes | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/chat` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
 
 ### chat-completion-status
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/chat-completion-status` | GET | jwt+key | - | no | - | 1: `components/NetworkStatus.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/chat-completion-status` | GET | jwt+key | - | - | no | - | 1: `components/NetworkStatus.tsx` |
 
 ### credits
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/credits/balance` | GET | jwt | - | no | - | 1: `hooks/data/credits.ts` |
-| `/api/credits/transactions` | GET | jwt+key | - | no | - | 1: `hooks/data/credits.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/credits/balance` | GET | jwt | - | - | no | - | 1: `hooks/data/credits.ts` |
+| `/api/credits/transactions` | GET | jwt+key | - | - | no | - | 1: `hooks/data/credits.ts` |
 
 ### data-lakes
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/data-lakes` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]` | GET, PUT, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 3: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakeWizard.ts`, `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/access` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/converge` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/drive-connection` | GET, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/googleDrive.ts` |
-| `/api/data-lakes/[id]/files/[fabFileId]` | POST, DELETE | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/files/[fabFileId]/purge` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/files/[fabFileId]/tags` | GET, PUT | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/findings` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/findings/[findingId]` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/findings/[findingId]/belief` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 0 |
-| `/api/data-lakes/[id]/findings/[findingId]/corpus-action` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/github-connection` | GET, POST, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/githubLake.ts` |
-| `/api/data-lakes/[id]/github-connection/complete` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/githubLake.ts` |
-| `/api/data-lakes/[id]/github-connection/repositories` | GET | jwt+key | `datalake:write` | no | - | 1: `hooks/data/githubLake.ts` |
-| `/api/data-lakes/[id]/github-connection/sync` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/githubLake.ts` |
-| `/api/data-lakes/[id]/grants` | POST, DELETE | jwt+key | `datalake:share` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/health` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/inconsistencies` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/lake-memory` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/lifecycle` | POST | jwt+key | `datalake:write` | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/membership-decisions` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/membership-diff` | GET | jwt | - | no | - | 0 |
-| `/api/data-lakes/[id]/membership-duplicates` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/proposals` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/proposals/[proposalId]` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/rechunk` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/research/configs` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/research/configs/[configId]` | PUT, DELETE | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/research/runs` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/reset-embedding-spend` | POST | jwt+key | `datalake:write` | no | - | 0 |
-| `/api/data-lakes/[id]/settings` | PUT | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/skipped-files` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/spend` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/transfer-ownership` | GET, POST, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/[id]/visibility` | POST | jwt+key | `datalake:share` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/archived` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 0 |
-| `/api/data-lakes/batches` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/batches/[batchId]` | GET, PUT, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
-| `/api/data-lakes/batches/[batchId]/apply-taxonomy` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/batches/[batchId]/dismiss-taxonomy` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/batches/[batchId]/reanalyze-taxonomy` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/batches/upload-complete` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
-| `/api/data-lakes/compute-sync-delta` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 0 |
-| `/api/data-lakes/deleted` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/drive-sync` | POST | jwt+key | `datalake:write` | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/googleDrive.ts` |
-| `/api/data-lakes/github-callback` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/githubLake.ts` |
-| `/api/data-lakes/github-connect` | POST | jwt+key | `datalake:write` | no | - | 1: `hooks/data/githubLakeCreate.ts` |
-| `/api/data-lakes/ownership-offers` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/ownership-offers/[offerId]/accept` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/ownership-offers/[offerId]/decline` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/public` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/rlm-answer` | POST | jwt+key | `datalake:query` | no | - | 0 |
-| `/api/data-lakes/semantic-search` | POST | jwt+key | `datalake:query` | no | - | 0 |
-| `/api/data-lakes/slug-preview` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
-| `/api/data-lakes/tag-counts` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 0 |
-| `/api/data-lakes/transitional` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | no | - | 1: `hooks/data/dataLakes.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/data-lakes` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]` | GET, PUT, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 3: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakeWizard.ts`, `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/access` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/converge` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/drive-connection` | GET, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/googleDrive.ts` |
+| `/api/data-lakes/[id]/files/[fabFileId]` | POST, DELETE | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/files/[fabFileId]/purge` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/files/[fabFileId]/tags` | GET, PUT | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/findings` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/findings/[findingId]` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/findings/[findingId]/belief` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 0 |
+| `/api/data-lakes/[id]/findings/[findingId]/corpus-action` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/github-connection` | GET, POST, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/githubLake.ts` |
+| `/api/data-lakes/[id]/github-connection/complete` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/githubLake.ts` |
+| `/api/data-lakes/[id]/github-connection/repositories` | GET | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/githubLake.ts` |
+| `/api/data-lakes/[id]/github-connection/sync` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/githubLake.ts` |
+| `/api/data-lakes/[id]/grants` | POST, DELETE | jwt+key | `datalake:share` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/health` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/inconsistencies` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/lake-memory` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/lifecycle` | POST | jwt+key | `datalake:write` | - | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/membership-decisions` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/membership-diff` | GET | jwt | - | - | no | - | 0 |
+| `/api/data-lakes/[id]/membership-duplicates` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/proposals` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/proposals/[proposalId]` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/rechunk` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/research/configs` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/research/configs/[configId]` | PUT, DELETE | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/research/runs` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/reset-embedding-spend` | POST | jwt+key | `datalake:write` | - | no | - | 0 |
+| `/api/data-lakes/[id]/settings` | PUT | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/skipped-files` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/spend` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/transfer-ownership` | GET, POST, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/visibility` | POST | jwt+key | `datalake:share` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/archived` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 0 |
+| `/api/data-lakes/batches` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/batches/[batchId]` | GET, PUT, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
+| `/api/data-lakes/batches/[batchId]/apply-taxonomy` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/batches/[batchId]/dismiss-taxonomy` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/batches/[batchId]/reanalyze-taxonomy` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/batches/upload-complete` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
+| `/api/data-lakes/compute-sync-delta` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 0 |
+| `/api/data-lakes/deleted` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/drive-sync` | POST | jwt+key | `datalake:write` | - | no | - | 2: `hooks/data/dataLakeUploadPipeline.ts`, `hooks/data/googleDrive.ts` |
+| `/api/data-lakes/github-callback` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/githubLake.ts` |
+| `/api/data-lakes/github-connect` | POST | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/githubLakeCreate.ts` |
+| `/api/data-lakes/ownership-offers` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/ownership-offers/[offerId]/accept` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/ownership-offers/[offerId]/decline` | POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:share`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/public` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/rlm-answer` | POST | jwt+key | `datalake:query` | - | no | - | 0 |
+| `/api/data-lakes/semantic-search` | POST | jwt+key | `datalake:query` | - | no | - | 0 |
+| `/api/data-lakes/slug-preview` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/tag-counts` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 0 |
+| `/api/data-lakes/transitional` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 
 ### deep-agent
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/deep-agent/agents` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/agents/[agentId]` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/mission-counts` | GET | jwt+key | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/review` | POST | jwt | - | no | - | 1: `hooks/data/deepAgents.ts` |
-| `/api/deep-agent/spin` | POST | jwt | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/deep-agent/agents` | GET | jwt+key | - | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/agents/[agentId]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/mission-counts` | GET | jwt+key | - | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/review` | POST | jwt | - | - | no | - | 1: `hooks/data/deepAgents.ts` |
+| `/api/deep-agent/spin` | POST | jwt | - | - | no | - | 1: `hooks/data/deepAgents.ts` |
 
 ### documentation
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/documentation/docusaurus-meta` | any | handler | - | no | - | 1: `components/admin/DocumentationTab/utils/docData.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/documentation/docusaurus-meta` | any | handler | - | - | no | - | 1: `components/admin/DocumentationTab/utils/docData.ts` |
 
 ### elabs
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/elabs/ready` | GET | jwt+key | - | no | - | 1: `utils/elabsUtils.ts` |
-| `/api/elabs/voice` | GET, POST | jwt+key | - | no | - | 1: `utils/voiceCalls.ts` |
-| `/api/elabs/voice/[id]` | DELETE | jwt+key | - | no | - | 1: `hooks/data/voice.ts` |
-| `/api/elabs/voice/[id]/set-active` | POST | jwt+key | - | no | - | 1: `hooks/data/voice.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/elabs/ready` | GET | jwt+key | - | - | no | - | 1: `utils/elabsUtils.ts` |
+| `/api/elabs/voice` | GET, POST | jwt+key | - | - | no | - | 1: `utils/voiceCalls.ts` |
+| `/api/elabs/voice/[id]` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/voice.ts` |
+| `/api/elabs/voice/[id]/set-active` | POST | jwt+key | - | - | no | - | 1: `hooks/data/voice.ts` |
 
 ### email
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/email/cancel-change` | POST | jwt+key | - | no | - | 1: `components/profile/ChangeEmailCard.tsx` |
-| `/api/email/change` | POST | jwt | - | no | - | 1: `components/profile/ChangeEmailCard.tsx` |
-| `/api/email/resend-verification` | POST | jwt+key | - | no | - | 4: `components/EmailVerificationBanner.tsx`, `components/Session/ZeroCreditWarning.tsx`, `components/profile/ChangeEmailCard.tsx` +1 more |
-| `/api/email/send` | POST | jwt+key | - | no | - | 2: `components/common/ShareModal.tsx`, `hooks/data/notebooks.ts` |
-| `/api/email/send-verification` | POST | jwt+key | - | no | - | 1: `hooks/data/auth.ts` |
-| `/api/email/track/click/[token]` | GET | handler | - | no | - | 0 |
-| `/api/email/track/open/[token]` | GET | handler | - | no | - | 0 |
-| `/api/email/unsubscribe` | GET, POST | handler | - | no | - | 1: `routes/email/unsubscribe.tsx` |
-| `/api/email/verify` | POST | handler | - | no | - | 1: `components/VerifyEmail.tsx` |
-| `/api/email/verify-change` | POST | handler | - | no | - | 1: `components/VerifyEmailChange.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/email/cancel-change` | POST | jwt+key | - | - | no | - | 1: `components/profile/ChangeEmailCard.tsx` |
+| `/api/email/change` | POST | jwt | - | - | no | - | 1: `components/profile/ChangeEmailCard.tsx` |
+| `/api/email/resend-verification` | POST | jwt+key | - | - | no | - | 4: `components/EmailVerificationBanner.tsx`, `components/Session/ZeroCreditWarning.tsx`, `components/profile/ChangeEmailCard.tsx` +1 more |
+| `/api/email/send` | POST | jwt+key | - | - | no | - | 2: `components/common/ShareModal.tsx`, `hooks/data/notebooks.ts` |
+| `/api/email/send-verification` | POST | jwt+key | - | - | no | - | 1: `hooks/data/auth.ts` |
+| `/api/email/track/click/[token]` | GET | handler | - | - | no | - | 0 |
+| `/api/email/track/open/[token]` | GET | handler | - | - | no | - | 0 |
+| `/api/email/unsubscribe` | GET, POST | handler | - | - | no | - | 1: `routes/email/unsubscribe.tsx` |
+| `/api/email/verify` | POST | handler | - | - | no | - | 1: `components/VerifyEmail.tsx` |
+| `/api/email/verify-change` | POST | handler | - | - | no | - | 1: `components/VerifyEmailChange.tsx` |
 
 ### embed
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/embed/branding` | GET | handler | - | no | - | 0 |
-| `/api/embed/history` | GET, DELETE | handler | - | no | - | 0 |
-| `/api/embed/serve` | GET | handler | - | no | - | 0 |
-| `/api/embed/session` | POST | handler | - | no | - | 0 |
-| `/api/embed/widget` | GET | handler | - | no | - | 1: `utils/embedSnippet.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/embed/branding` | GET | handler | - | - | no | - | 0 |
+| `/api/embed/history` | GET, DELETE | handler | - | - | no | - | 0 |
+| `/api/embed/serve` | GET | handler | - | - | no | - | 0 |
+| `/api/embed/session` | POST | handler | - | - | no | - | 0 |
+| `/api/embed/widget` | GET | handler | - | - | no | - | 1: `utils/embedSnippet.ts` |
 
 ### entitlements
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/entitlements` | GET | jwt+key | - | no | - | 1: `hooks/data/entitlements.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/entitlements` | GET | jwt+key | - | - | no | - | 1: `hooks/data/entitlements.ts` |
 
 ### external-image
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/external-image` | GET | jwt+key | - | no | - | 1: `components/admin/AdminModalTabNew.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/external-image` | GET | jwt+key | - | - | no | - | 1: `components/admin/AdminModalTabNew.tsx` |
 
 ### fabfiles
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/fabfiles/[id]/apply-auto-rename` | POST | jwt+key | - | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/fabFileUtils.tsx` |
-| `/api/fabfiles/[id]/apply-edit` | POST | jwt+key | - | no | - | 1: `components/Knowledge/KnowledgeViewer.tsx` |
-| `/api/fabfiles/[id]/auto-rename` | POST | jwt+key | - | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/fabFileUtils.tsx` |
-| `/api/fabfiles/[id]/edit` | POST | jwt+key | - | no | - | 1: `components/Knowledge/KnowledgeViewer.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/fabfiles/[id]/apply-auto-rename` | POST | jwt+key | - | - | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/fabFileUtils.tsx` |
+| `/api/fabfiles/[id]/apply-edit` | POST | jwt+key | - | - | no | - | 1: `components/Knowledge/KnowledgeViewer.tsx` |
+| `/api/fabfiles/[id]/auto-rename` | POST | jwt+key | - | - | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/fabFileUtils.tsx` |
+| `/api/fabfiles/[id]/edit` | POST | jwt+key | - | - | no | - | 1: `components/Knowledge/KnowledgeViewer.tsx` |
 
 ### favorites
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/favorites/check` | GET | jwt+key | - | no | - | 1: `hooks/data/favorites.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/favorites/check` | GET | jwt+key | - | - | no | - | 1: `hooks/data/favorites.ts` |
 
 ### feedback
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/feedback` | GET, POST | jwt+key | - | no | - | 1: `utils/feedbackAPICalls.ts` |
-| `/api/feedback/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/feedbackAPICalls.ts` |
-| `/api/feedback/[id]/read` | GET | jwt+key | - | no | - | 1: `utils/feedbackAPICalls.ts` |
-| `/api/feedback/[id]/update` | PUT | jwt+key | - | no | - | 1: `utils/feedbackAPICalls.ts` |
-| `/api/feedback/rollup` | GET | jwt | - | no | - | 1: `utils/feedbackAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/feedback` | GET, POST | jwt+key | - | - | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/feedback/[id]/delete` | DELETE | jwt+key | - | - | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/feedback/[id]/read` | GET | jwt+key | - | - | no | - | 1: `utils/feedbackAPICalls.ts` |
+| `/api/feedback/[id]/update` | PUT | jwt+key | - | - | no | - | 0 |
+| `/api/feedback/rollup` | GET | jwt | - | - | no | - | 1: `utils/feedbackAPICalls.ts` |
+
+### file-links
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/file-links/[token]` | GET | handler | - | - | no | - | 0 |
 
 ### files
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/files` | GET, DELETE | jwt+key | `files:read`, `files:write` | no | - | 6: `hooks/agent/useImageBrowser.ts`, `hooks/data/fabFileMutations.ts`, `hooks/data/fabFileQueries.ts` +3 more |
-| `/api/files/[id]` | GET, PUT, DELETE | jwt+key | `ai:generate`, `files:read`, `files:write` | no | - | 4: `components/admin/SystemPromptsManager.tsx`, `contexts/SessionsContext.tsx`, `hooks/agent/useImageUpload.ts` +1 more |
-| `/api/files/[id]/moderate` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/[id]/upload` | PUT | jwt+key | `files:write` | no | - | 0 |
-| `/api/files/bulk-delete` | DELETE | jwt+key | `files:write` | no | - | 1: `hooks/data/fabFileMutations.ts` |
-| `/api/files/byIds` | GET | jwt+key | `files:read` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/check-duplicates` | POST | jwt+key | `files:read` | no | - | 1: `hooks/data/dataLakeWizard.ts` |
-| `/api/files/chunk` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/copy-generated-image` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/createFabFile` | POST | jwt+key | `files:write`, `release-notes:write` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/createFabFileURL` | POST | jwt+key | `files:write` | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/filesAPICalls.ts` |
-| `/api/files/download` | GET | jwt+key | `files:read` | no | - | 3: `components/Files/Browser/ItemActions.tsx`, `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx`, `hooks/data/fabFileMutations.ts` |
-| `/api/files/generate-presigned-url` | POST | jwt+key | `ai:generate`, `files:write` | no | - | 0 |
-| `/api/files/generate-presigned-urls-batch` | POST | jwt+key | `files:write` | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
-| `/api/files/generate-smart-name` | POST | jwt+key | `files:write` | no | - | 1: `utils/generateSmartFileName.ts` |
-| `/api/files/getFabFileNameById` | GET | jwt+key | `files:read` | no | - | 1: `utils/filesAPICalls.ts` |
-| `/api/files/presigned-url` | GET | jwt+key | `files:read` | no | - | 3: `hooks/data/fabFileMutations.ts`, `hooks/data/fabFileQueries.ts`, `utils/filesAPICalls.ts` |
-| `/api/files/reprocess` | POST | jwt+key | `files:write` | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/fabFileMutations.ts` |
-| `/api/files/search` | GET | jwt+key | `files:read` | no | - | 1: `hooks/data/fabFileSearch.ts` |
-| `/api/files/tags` | GET, POST | jwt+key | `files:read`, `files:write` | no | - | 1: `hooks/data/tag.ts` |
-| `/api/files/tags/[id]` | PUT, DELETE | jwt+key | `files:write` | no | - | 1: `hooks/data/tag.ts` |
-| `/api/files/tags/counts` | GET | jwt+key | `files:read` | no | - | 1: `hooks/data/tag.ts` |
-| `/api/files/tags/toggle` | POST | jwt+key | `files:write` | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/tag.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/files` | GET, DELETE | jwt+key | `files:read`, `files:write` | - | no | - | 6: `hooks/agent/useImageBrowser.ts`, `hooks/data/fabFileMutations.ts`, `hooks/data/fabFileQueries.ts` +3 more |
+| `/api/files/[id]` | GET, PUT, DELETE | jwt+key | `ai:generate`, `files:read`, `files:write` | - | no | - | 4: `components/admin/SystemPromptsManager.tsx`, `contexts/SessionsContext.tsx`, `hooks/agent/useImageUpload.ts` +1 more |
+| `/api/files/[id]/content` | GET | handler | - | - | no | - | 0 |
+| `/api/files/[id]/favorite` | POST, DELETE | jwt | `files:write` | - | no | - | 1: `hooks/data/fileStars.ts` |
+| `/api/files/[id]/moderate` | POST | jwt+key | `files:write` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/[id]/upload` | PUT | jwt+key | `files:write` | - | no | - | 0 |
+| `/api/files/bulk-delete` | DELETE | jwt+key | `files:write` | - | no | - | 1: `hooks/data/fabFileMutations.ts` |
+| `/api/files/byIds` | GET | jwt+key | `files:read` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/check-duplicates` | POST | jwt+key | `files:read` | - | no | - | 1: `hooks/data/dataLakeWizard.ts` |
+| `/api/files/chunk` | POST | jwt+key | `files:write` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/copy-generated-image` | POST | jwt+key | `files:write` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/createFabFile` | POST | jwt+key | `files:write`, `release-notes:write` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/createFabFileURL` | POST | jwt+key | `files:write` | - | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/filesAPICalls.ts` |
+| `/api/files/download` | GET | jwt+key | `files:read` | - | no | - | 3: `components/Files/Browser/ItemActions.tsx`, `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx`, `hooks/data/fabFileMutations.ts` |
+| `/api/files/favorites` | GET | jwt | `files:read` | - | no | - | 1: `hooks/data/fileStars.ts` |
+| `/api/files/generate-presigned-url` | POST | jwt+key | `ai:generate`, `files:write` | - | no | - | 0 |
+| `/api/files/generate-presigned-urls-batch` | POST | jwt+key | `files:write` | - | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
+| `/api/files/generate-smart-name` | POST | jwt+key | `files:write` | - | no | - | 1: `utils/generateSmartFileName.ts` |
+| `/api/files/generation-models` | GET | jwt | `files:read` | - | no | - | 1: `hooks/data/fileStars.ts` |
+| `/api/files/getFabFileNameById` | GET | jwt+key | `files:read` | - | no | - | 1: `utils/filesAPICalls.ts` |
+| `/api/files/presigned-url` | GET | jwt+key | `files:read` | - | no | - | 3: `hooks/data/fabFileMutations.ts`, `hooks/data/fabFileQueries.ts`, `utils/filesAPICalls.ts` |
+| `/api/files/reprocess` | POST | jwt+key | `files:write` | - | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/fabFileMutations.ts` |
+| `/api/files/search` | GET | jwt+key | `files:read` | - | no | - | 1: `hooks/data/fabFileSearch.ts` |
+| `/api/files/tags` | GET, POST | jwt+key | `files:read`, `files:write` | - | no | - | 1: `hooks/data/tag.ts` |
+| `/api/files/tags/[id]` | PUT, DELETE | jwt+key | `files:write` | - | no | - | 1: `hooks/data/tag.ts` |
+| `/api/files/tags/counts` | GET | jwt+key | `files:read` | - | no | - | 1: `hooks/data/tag.ts` |
+| `/api/files/tags/toggle` | POST | jwt+key | `files:write` | - | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/tag.ts` |
 
 ### friends
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/friends` | POST | jwt+key | - | no | - | 1: `hooks/data/friends.ts` |
-| `/api/friends/[id]` | DELETE | jwt+key | - | no | - | 1: `hooks/data/friends.ts` |
-| `/api/friends/[id]/respond` | PATCH | jwt+key | - | no | - | 1: `hooks/data/friends.ts` |
-| `/api/friends/by-user/[id]` | GET | jwt+key | - | no | - | 1: `hooks/data/friends.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/friends` | POST | jwt+key | - | - | no | - | 1: `hooks/data/friends.ts` |
+| `/api/friends/[id]` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/friends.ts` |
+| `/api/friends/[id]/respond` | PATCH | jwt+key | - | - | no | - | 1: `hooks/data/friends.ts` |
+| `/api/friends/by-user/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/friends.ts` |
 
 ### gears
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/gears/claim` | POST | jwt | - | no | - | 1: `hooks/useGearsStatus.ts` |
-| `/api/gears/stamp` | POST | jwt+key | - | no | - | 1: `hooks/useGearCta.ts` |
-| `/api/gears/status` | GET | jwt+key | - | no | - | 1: `hooks/useGearsStatus.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/gears/claim` | POST | jwt | - | - | no | - | 1: `hooks/useGearsStatus.ts` |
+| `/api/gears/stamp` | POST | jwt+key | - | - | no | - | 1: `hooks/useGearCta.ts` |
+| `/api/gears/status` | GET | jwt+key | - | - | no | - | 1: `hooks/useGearsStatus.ts` |
 
 ### generated-content
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/generated-content/[ref]` | GET | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/generated-content/[ref]` | GET | jwt+key | `ai:generate` | - | no | - | 0 |
 
 ### google-drive
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/google-drive/callback` | GET | jwt+key | - | no | - | 1: `routes/google-drive/callback.tsx` |
-| `/api/google-drive/connect` | POST | jwt+key | - | no | - | 2: `hooks/data/driveAccessToken.ts`, `hooks/data/googleDrive.ts` |
-| `/api/google-drive/disconnect` | DELETE | jwt+key | - | no | - | 1: `hooks/data/googleDrive.ts` |
-| `/api/google-drive/estimate-folder` | POST | jwt | - | no | - | 1: `hooks/data/useDriveFolderEstimate.ts` |
-| `/api/google-drive/list-folder` | POST | jwt | - | no | - | 0 |
-| `/api/google-drive/token` | GET | jwt | - | no | - | 2: `components/Session/AttachFileButton.tsx`, `hooks/data/driveAccessToken.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/google-drive/callback` | GET | jwt+key | - | - | no | - | 1: `routes/google-drive/callback.tsx` |
+| `/api/google-drive/connect` | POST | jwt+key | - | - | no | - | 2: `hooks/data/driveAccessToken.ts`, `hooks/data/googleDrive.ts` |
+| `/api/google-drive/disconnect` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/googleDrive.ts` |
+| `/api/google-drive/estimate-folder` | POST | jwt | - | - | no | - | 1: `hooks/data/useDriveFolderEstimate.ts` |
+| `/api/google-drive/list-folder` | POST | jwt | - | - | no | - | 0 |
+| `/api/google-drive/token` | GET | jwt | - | - | no | - | 2: `components/Session/AttachFileButton.tsx`, `hooks/data/driveAccessToken.ts` |
 
 ### groups
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/groups` | GET | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/groups` | GET | jwt+key | - | - | no | - | 0 |
 
 ### health
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/health` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/health` | GET | handler | - | - | no | - | 0 |
 
 ### hearth
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/hearth/catchup` | POST | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
-| `/api/hearth/channels` | GET, POST | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
-| `/api/hearth/events` | POST | jwt+key | `admin:*`, `hearth:write` | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
-| `/api/hearth/presence` | GET | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | no | - | 1: `components/hearth/HearthPresencePanel.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/hearth/catchup` | POST | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | - | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
+| `/api/hearth/channels` | GET, POST | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | - | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
+| `/api/hearth/events` | POST | jwt+key | `admin:*`, `hearth:write` | - | no | - | 1: `components/hearth/HearthChannelsView.tsx` |
+| `/api/hearth/presence` | GET | jwt+key | `admin:*`, `hearth:read`, `hearth:write` | - | no | - | 1: `components/hearth/HearthPresencePanel.tsx` |
 
 ### help
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/help` | GET | optional | - | no | - | 1: `hooks/useHelpIndex.ts` |
-| `/api/help/chat` | POST | jwt+key | - | no | - | 1: `hooks/useHelpChat.ts` |
-| `/api/help/chat-feedback` | POST | jwt+key | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
-| `/api/help/content` | GET | jwt+key | `admin:*` | no | - | 2: `components/help/HelpContent.tsx`, `hooks/useHelpContent.ts` |
-| `/api/help/event` | POST | jwt+key | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
-| `/api/help/feedback` | POST | jwt+key | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
-| `/api/help/my-feedback` | GET | jwt+key | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
-| `/api/help/recently-viewed` | GET | jwt+key | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/help` | GET | optional | - | - | no | - | 1: `hooks/useHelpIndex.ts` |
+| `/api/help/chat` | POST | jwt+key | - | - | no | - | 1: `hooks/useHelpChat.ts` |
+| `/api/help/chat-feedback` | POST | jwt+key | - | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
+| `/api/help/content` | GET | jwt+key | `admin:*` | - | no | - | 2: `components/help/HelpContent.tsx`, `hooks/useHelpContent.ts` |
+| `/api/help/event` | POST | jwt+key | - | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
+| `/api/help/feedback` | POST | jwt+key | - | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
+| `/api/help/my-feedback` | GET | jwt+key | - | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
+| `/api/help/recently-viewed` | GET | jwt+key | - | - | no | - | 1: `hooks/useHelpAnalytics.ts` |
 
 ### identify
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/identify` | GET | jwt+key | - | no | - | 3: `contexts/UserContext.tsx`, `hooks/data/user.ts`, `utils/sessionBootstrap.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/identify` | GET | jwt+key | - | - | no | - | 3: `contexts/UserContext.tsx`, `hooks/data/user.ts`, `utils/sessionBootstrap.ts` |
 
 ### image-templates
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/image-templates` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/imageTemplates.ts` |
-| `/api/image-templates/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/imageTemplates.ts` |
-| `/api/image-templates/[id]/use` | POST | jwt+key | - | no | - | 1: `hooks/data/imageTemplates.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/image-templates` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/imageTemplates.ts` |
+| `/api/image-templates/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/imageTemplates.ts` |
+| `/api/image-templates/[id]/use` | POST | jwt+key | - | - | no | - | 1: `hooks/data/imageTemplates.ts` |
 
 ### import-history
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/import-history/upload` | GET, PUT | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/import-history/upload` | GET, PUT | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx` |
 
 ### import-history-jobs
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/import-history-jobs` | GET | jwt+key | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
-| `/api/import-history-jobs/[id]` | GET | jwt+key | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
-| `/api/import-history-jobs/[id]/retry` | POST | jwt+key | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/import-history-jobs` | GET | jwt+key | - | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
+| `/api/import-history-jobs/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
+| `/api/import-history-jobs/[id]/retry` | POST | jwt+key | - | - | no | - | 1: `hooks/data/importHistoryJobs.ts` |
 
 ### inbox
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/inbox` | GET | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
-| `/api/inbox/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
-| `/api/inbox/admin-send` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
-| `/api/inbox/create` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
-| `/api/inbox/read` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/inbox` | GET | jwt+key | - | - | no | - | 1: `utils/inboxAPICalls.ts` |
+| `/api/inbox/[id]/delete` | DELETE | jwt+key | - | - | no | - | 1: `utils/inboxAPICalls.ts` |
+| `/api/inbox/admin-send` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/inboxAPICalls.ts` |
+| `/api/inbox/create` | POST | jwt+key | - | - | no | - | 1: `utils/inboxAPICalls.ts` |
+| `/api/inbox/read` | POST | jwt+key | - | - | no | - | 1: `utils/inboxAPICalls.ts` |
 
 ### integrations
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/integrations/[integration]/rotate-token` | POST | jwt+key | - | no | - | 1: `hooks/data/tokenRotation.ts` |
-| `/api/integrations/requests` | GET, POST, DELETE | jwt | - | no | - | 1: `hooks/data/integrationRequests.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/integrations/[integration]/rotate-token` | POST | jwt+key | - | - | no | - | 1: `hooks/data/tokenRotation.ts` |
+| `/api/integrations/requests` | GET, POST, DELETE | jwt | - | - | no | - | 1: `hooks/data/integrationRequests.ts` |
 
 ### internal
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/internal/s3/object-created` | POST | handler | - | no | - | 0 |
-| `/api/internal/ws/[action]` | POST | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/internal/s3/object-created` | POST | handler | - | - | no | - | 0 |
+| `/api/internal/ws/[action]` | POST | handler | - | - | no | - | 0 |
 
 ### invites
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/invites` | GET | jwt+key | - | no | - | 0 |
-| `/api/invites/[id]` | GET, DELETE | jwt+key | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
-| `/api/invites/[id]/accept` | POST | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
-| `/api/invites/[id]/refuse` | POST | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
-| `/api/invites/batch` | POST | jwt | - | no | - | 1: `hooks/data/invites.ts` |
-| `/api/invites/bulk` | POST | jwt | - | no | - | 1: `hooks/data/invites.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/invites` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/invites/[id]` | GET, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
+| `/api/invites/[id]/accept` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
+| `/api/invites/[id]/refuse` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
+| `/api/invites/batch` | POST | jwt | - | - | no | - | 1: `hooks/data/invites.ts` |
+| `/api/invites/bulk` | POST | jwt | - | - | no | - | 1: `hooks/data/invites.ts` |
 
 ### jupyter
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/jupyter/execute` | POST | jwt | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
-| `/api/jupyter/progress` | POST | jwt | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/jupyter/execute` | POST | jwt | - | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
+| `/api/jupyter/progress` | POST | jwt | - | - | no | - | 1: `components/Session/NotebookExecutionButtons.tsx` |
 
 ### keep
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/keep/command` | GET, POST | jwt | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/keep/command` | GET, POST | jwt | - | - | no | - | 0 |
 
 ### lattice
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/lattice/chat` | POST | jwt+key | - | no | - | 1: `hooks/useLatticeLocalDev.ts` |
-| `/api/lattice/models` | GET, POST | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
-| `/api/lattice/models/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
-| `/api/lattice/models/[id]/entities` | POST | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
-| `/api/lattice/models/[id]/hydrate` | POST | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
-| `/api/lattice/models/[id]/rules` | POST | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
-| `/api/lattice/models/[id]/values` | PUT | jwt+key | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/lattice/chat` | POST | jwt+key | - | - | no | - | 1: `hooks/useLatticeLocalDev.ts` |
+| `/api/lattice/models` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| `/api/lattice/models/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| `/api/lattice/models/[id]/entities` | POST | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| `/api/lattice/models/[id]/hydrate` | POST | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| `/api/lattice/models/[id]/rules` | POST | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
+| `/api/lattice/models/[id]/values` | PUT | jwt+key | - | - | no | - | 1: `hooks/useLatticeApi.ts` |
 
 ### logout
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/logout` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/logout` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
 
 ### mcp
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/mcp/confirm` | POST | jwt+key | - | no | - | 1: `components/Session/PromptReplies.tsx` |
-| `/api/mcp/delete-attachment` | POST | jwt+key | - | no | - | 1: `components/Session/PromptReplies.tsx` |
-| `/api/mcp/download-attachment` | POST | jwt+key | - | no | - | 1: `components/Session/PromptReplies.tsx` |
-| `/api/mcp/github/repositories` | GET, POST, PATCH | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
-| `/api/mcp/github/status` | POST | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `hooks/data/useGitHubConnectionStatus.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/mcp/confirm` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
+| `/api/mcp/delete-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
+| `/api/mcp/download-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
+| `/api/mcp/github/repositories` | GET, POST, PATCH | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
+| `/api/mcp/github/status` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `hooks/data/useGitHubConnectionStatus.ts` |
 
 ### mcp-connections
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/mcp-connections` | GET, POST | jwt | - | no | - | 1: `hooks/data/mcpConnections.ts` |
-| `/api/mcp-connections/[id]` | GET, PATCH, DELETE | jwt | - | no | - | 1: `hooks/data/mcpConnections.ts` |
-| `/api/mcp-connections/[id]/api-key` | POST | jwt | - | no | - | 1: `hooks/data/mcpConnections.ts` |
-| `/api/mcp-connections/[id]/oauth/disconnect` | POST | jwt | - | no | - | 0 |
-| `/api/mcp-connections/[id]/oauth/start` | POST | jwt | - | no | - | 1: `hooks/data/mcpConnections.ts` |
-| `/api/mcp-connections/[id]/refresh-tools` | POST | jwt | - | no | - | 1: `hooks/data/mcpConnections.ts` |
-| `/api/mcp-connections/oauth/callback` | POST | jwt | - | no | - | 1: `routes/integrations/mcp-oauth-callback.tsx` |
-| `/api/mcp-connections/oauth/client-metadata` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/mcp-connections` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/mcpConnections.ts` |
+| `/api/mcp-connections/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/mcpConnections.ts` |
+| `/api/mcp-connections/[id]/api-key` | POST | jwt | - | - | no | - | 1: `hooks/data/mcpConnections.ts` |
+| `/api/mcp-connections/[id]/oauth/disconnect` | POST | jwt | - | - | no | - | 0 |
+| `/api/mcp-connections/[id]/oauth/start` | POST | jwt | - | - | no | - | 1: `hooks/data/mcpConnections.ts` |
+| `/api/mcp-connections/[id]/refresh-tools` | POST | jwt | - | - | no | - | 1: `hooks/data/mcpConnections.ts` |
+| `/api/mcp-connections/oauth/callback` | POST | jwt | - | - | no | - | 1: `routes/integrations/mcp-oauth-callback.tsx` |
+| `/api/mcp-connections/oauth/client-metadata` | GET | handler | - | - | no | - | 0 |
 
 ### mcp-servers
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/mcp-servers` | GET, POST | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/McpSection.tsx`, `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/McpSection.tsx`, `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/[id]/connect` | POST | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/McpSection.tsx` |
-| `/api/mcp-servers/[id]/disconnect` | DELETE | jwt+key | - | no | - | 0 |
-| `/api/mcp-servers/[id]/webhooks/github` | GET, POST, DELETE | jwt+key | - | no | - | 0 |
-| `/api/mcp-servers/[id]/webhooks/github/secret` | PATCH | jwt+key | - | no | - | 0 |
-| `/api/mcp-servers/atlassian/callback` | GET | handler | - | no | - | 0 |
-| `/api/mcp-servers/atlassian/cancel-selection` | POST | jwt+key | - | no | - | 1: `routes/integrations/atlassian/select-site.tsx` |
-| `/api/mcp-servers/atlassian/connect` | GET | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/atlassian/disconnect` | DELETE | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/atlassian/finalize` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/atlassian/pending-resources` | GET | jwt+key | - | no | - | 1: `routes/integrations/atlassian/select-site.tsx` |
-| `/api/mcp-servers/atlassian/refresh` | POST | jwt+key | - | no | - | 0 |
-| `/api/mcp-servers/notion/callback` | GET | handler | - | no | - | 0 |
-| `/api/mcp-servers/notion/connect` | GET | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/notion/disconnect` | DELETE | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
-| `/api/mcp-servers/notion/pages` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/NotionPagePicker.tsx` |
-| `/api/mcp-servers/notion/settings` | PATCH | jwt+key | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/mcp-servers` | GET, POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/McpSection.tsx`, `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/McpSection.tsx`, `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/[id]/connect` | POST | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/McpSection.tsx` |
+| `/api/mcp-servers/[id]/disconnect` | DELETE | jwt+key | - | - | no | - | 0 |
+| `/api/mcp-servers/[id]/webhooks/github` | GET, POST, DELETE | jwt+key | - | - | no | - | 0 |
+| `/api/mcp-servers/[id]/webhooks/github/secret` | PATCH | jwt+key | - | - | no | - | 0 |
+| `/api/mcp-servers/atlassian/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/mcp-servers/atlassian/cancel-selection` | POST | jwt+key | - | - | no | - | 1: `routes/integrations/atlassian/select-site.tsx` |
+| `/api/mcp-servers/atlassian/connect` | GET | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/atlassian/disconnect` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/atlassian/finalize` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/atlassian/pending-resources` | GET | jwt+key | - | - | no | - | 1: `routes/integrations/atlassian/select-site.tsx` |
+| `/api/mcp-servers/atlassian/refresh` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/mcp-servers/notion/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/mcp-servers/notion/connect` | GET | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/notion/disconnect` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
+| `/api/mcp-servers/notion/pages` | GET | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/NotionPagePicker.tsx` |
+| `/api/mcp-servers/notion/settings` | PATCH | jwt+key | - | - | no | - | 1: `hooks/data/mcpServers.ts` |
 
 ### mementos
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/mementos` | GET | jwt+key | - | no | - | 2: `components/Session/MementoIndicator.tsx`, `hooks/data/mementos.ts` |
-| `/api/mementos/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
-| `/api/mementos/[id]/update` | PATCH | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
-| `/api/mementos/create` | POST | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
-| `/api/mementos/create-batch` | POST | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
-| `/api/mementos/delete-all` | POST | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
-| `/api/mementos/groom` | POST | jwt+key | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/mementos` | GET | jwt+key | - | - | no | - | 2: `components/Session/MementoIndicator.tsx`, `hooks/data/mementos.ts` |
+| `/api/mementos/[id]/delete` | DELETE | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| `/api/mementos/[id]/update` | PATCH | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| `/api/mementos/create` | POST | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| `/api/mementos/create-batch` | POST | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| `/api/mementos/delete-all` | POST | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
+| `/api/mementos/groom` | POST | jwt+key | - | - | no | - | 1: `utils/mementosAPICalls.ts` |
 
 ### memory
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/memory/[kind]/[id]` | GET, DELETE | jwt+key | - | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/memoryV2.ts` |
-| `/api/memory/[kind]/[id]/events` | POST | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/memory/[kind]/[id]` | GET, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/dataLakes.ts`, `hooks/data/memoryV2.ts` |
+| `/api/memory/[kind]/[id]/events` | GET, POST | jwt+key | - | - | no | - | 0 |
+| `/api/memory/[kind]/[id]/events/[hash]` | GET | jwt | - | - | no | - | 0 |
+| `/api/memory/[kind]/[id]/export` | GET | jwt | - | - | no | - | 0 |
+
+### modal-images
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/modal-images/[name]` | GET | handler | - | - | no | - | 0 |
 
 ### modals
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/modals` | GET | jwt+key | - | no | - | 4: `components/Session/SessionBottom/SessionBottomModals.tsx`, `hooks/data/modals.ts`, `hooks/data/whatsNewModals.ts` +1 more |
-| `/api/modals/[id]/delete` | DELETE | jwt+key | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
-| `/api/modals/[id]/update` | PUT | jwt+key | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
-| `/api/modals/create` | POST | jwt+key | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/modals` | GET | jwt+key | - | - | no | - | 4: `components/Session/SessionBottom/SessionBottomModals.tsx`, `hooks/data/modals.ts`, `hooks/data/whatsNewModals.ts` +1 more |
+| `/api/modals/[id]/delete` | DELETE | jwt+key | - | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
+| `/api/modals/[id]/update` | PUT | jwt+key | - | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
+| `/api/modals/create` | POST | jwt+key | - | - | no | - | 2: `hooks/data/whatsNewModals.ts`, `utils/modalsAPICalls.ts` |
 
 ### model-hub
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/model-hub/curated/v2/[file]` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/model-hub/curated/v2/[file]` | GET | handler | - | - | no | - | 0 |
 
 ### models
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/models` | GET | jwt+key | - | no | - | 2: `components/commands/ModelsCommand.tsx`, `utils/llm.ts` |
-| `/api/models/stats` | GET | jwt+key | - | no | - | 1: `hooks/data/useModelStats.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/models` | GET | jwt+key | `ai:generate`, `me:read` | - | no | - | 2: `components/commands/ModelsCommand.tsx`, `utils/llm.ts` |
+| `/api/models/stats` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useModelStats.ts` |
 
 ### notebooks
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/notebooks/curate` | POST | jwt+key | - | no | - | 1: `hooks/data/notebooks.ts` |
-| `/api/notebooks/curate/[sessionId]` | GET | jwt+key | - | no | - | 0 |
-| `/api/notebooks/download` | POST | jwt+key | - | no | - | 1: `hooks/data/notebooks.ts` |
-| `/api/notebooks/export` | POST | jwt+key | - | no | - | 1: `components/ProfileModal/NotebookExportModal.tsx` |
-| `/api/notebooks/import` | POST | jwt+key | - | no | - | 1: `components/ProfileModal/NotebookImportModal.tsx` |
-| `/api/notebooks/import/upload` | PUT | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/notebooks/curate` | POST | jwt+key | - | - | no | - | 1: `hooks/data/notebooks.ts` |
+| `/api/notebooks/curate/[sessionId]` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/notebooks/download` | POST | jwt+key | - | - | no | - | 1: `hooks/data/notebooks.ts` |
+| `/api/notebooks/export` | POST | jwt+key | - | - | no | - | 1: `components/ProfileModal/NotebookExportModal.tsx` |
+| `/api/notebooks/import` | POST | jwt+key | - | - | no | - | 1: `components/ProfileModal/NotebookImportModal.tsx` |
+| `/api/notebooks/import/upload` | PUT | jwt+key | - | - | no | - | 0 |
 
 ### oauth
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/oauth/ai-token` | POST | handler | - | no | - | 0 |
-| `/api/oauth/code` | POST | jwt | - | no | - | 1: `routes/oauth/authorize.tsx` |
-| `/api/oauth/device/initiate` | POST | handler | - | no | - | 0 |
-| `/api/oauth/device/token` | POST | handler | - | no | - | 0 |
-| `/api/oauth/device/verify` | POST | jwt | - | no | - | 1: `hooks/data/device-auth.ts` |
-| `/api/oauth/federated-admin` | POST | handler | - | no | - | 0 |
-| `/api/oauth/grants` | GET | jwt | - | no | - | 1: `hooks/data/oauthGrants.ts` |
-| `/api/oauth/grants/[clientId]` | DELETE | jwt | - | no | - | 1: `hooks/data/oauthGrants.ts` |
-| `/api/oauth/jwks` | GET | handler | - | no | - | 0 |
-| `/api/oauth/openid-configuration` | GET | handler | - | no | - | 0 |
-| `/api/oauth/refresh` | POST | handler | - | no | - | 0 |
-| `/api/oauth/token` | POST | handler | - | no | - | 0 |
-| `/api/oauth/userinfo` | GET | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/oauth/ai-token` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/code` | POST | jwt | - | - | no | - | 1: `routes/oauth/authorize.tsx` |
+| `/api/oauth/device/initiate` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/device/token` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/device/verify` | POST | jwt | - | - | no | - | 1: `hooks/data/device-auth.ts` |
+| `/api/oauth/federated-admin` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/grants` | GET | jwt | - | - | no | - | 1: `hooks/data/oauthGrants.ts` |
+| `/api/oauth/grants/[clientId]` | DELETE | jwt | - | - | no | - | 1: `hooks/data/oauthGrants.ts` |
+| `/api/oauth/jwks` | GET | handler | - | - | no | - | 0 |
+| `/api/oauth/openid-configuration` | GET | handler | - | - | no | - | 0 |
+| `/api/oauth/refresh` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/token` | POST | handler | - | - | no | - | 0 |
+| `/api/oauth/userinfo` | GET | jwt+key | - | - | no | - | 0 |
 
 ### ollama
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/ollama/models` | GET | jwt | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/ollama/models` | GET | jwt | - | - | no | - | 0 |
 
 ### organizations
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/organizations` | GET, POST | jwt+key | - | no | - | 3: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx`, `utils/partnerSignupRuleAPICalls.ts` |
-| `/api/organizations/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 3: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx`, `utils/partnerSignupRuleAPICalls.ts` |
-| `/api/organizations/[id]/addUser` | POST | jwt+key | - | no | - | 0 |
-| `/api/organizations/[id]/admins` | PUT | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/organizations/[id]/custom-mcp/connections` | GET | jwt | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
-| `/api/organizations/[id]/custom-mcp/policy` | GET, PUT, DELETE | jwt | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
-| `/api/organizations/[id]/feedback-report` | GET | jwt+key | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
-| `/api/organizations/[id]/feedback-report/[feedbackId]` | GET | jwt+key | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
-| `/api/organizations/[id]/feedback-report/items` | GET | jwt+key | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
-| `/api/organizations/[id]/feedback-summary` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/useOrgFeedbackSummary.ts` |
-| `/api/organizations/[id]/github/connection` | GET, POST, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
-| `/api/organizations/[id]/github/rate-limit` | GET | jwt+key | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
-| `/api/organizations/[id]/github/repositories` | GET | jwt+key | - | no | - | 1: `hooks/data/useGitHubRepositories.ts` |
-| `/api/organizations/[id]/github/rotate-key` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
-| `/api/organizations/[id]/github/rotate-pat` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
-| `/api/organizations/[id]/github/test` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
-| `/api/organizations/[id]/groups` | GET | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/organizations/[id]/groups/[groupId]` | PATCH | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/organizations/[id]/groups/[groupId]/members` | POST | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/organizations/[id]/groups/[groupId]/members/[userId]` | DELETE | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
-| `/api/organizations/[id]/integrations/slack` | GET, DELETE | jwt+key | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
-| `/api/organizations/[id]/integrations/slack/channels` | GET, PUT | jwt | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
-| `/api/organizations/[id]/integrations/slack/connect` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
-| `/api/organizations/[id]/member-credit-budget` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/organizations.ts` |
-| `/api/organizations/[id]/members` | GET, POST, DELETE | jwt+key | - | no | - | 2: `hooks/data/organizations.ts`, `hooks/data/user.ts` |
-| `/api/organizations/[id]/members/[userId]` | DELETE | jwt+key | `datalake:share` | no | - | 1: `hooks/data/organizations.ts` |
-| `/api/organizations/[id]/members/[userId]/credit-budget` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/organizations.ts` |
-| `/api/organizations/[id]/pendingUsers` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/organizations/[id]/storage-usage` | GET | jwt | - | no | - | 1: `hooks/data/useOrgStorageUsage.ts` |
-| `/api/organizations/[id]/upload-logo` | POST | jwt+key | - | no | - | 2: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx` |
-| `/api/organizations/[id]/webhooks/github` | GET, POST, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
-| `/api/organizations/[id]/webhooks/github/replay-dlq` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
-| `/api/organizations/[id]/webhooks/github/rotate-secret` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
-| `/api/organizations/[id]/webhooks/github/test` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
-| `/api/organizations/create-dev` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/organizations/stats` | GET | jwt+key | - | no | - | 1: `utils/organizationAPICalls.tsx` |
-| `/api/organizations/subscriptions/subscribe` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/organizations/subscriptions/update-seats` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/organizations/users` | GET | jwt+key | - | no | - | 1: `utils/organizationAPICalls.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/organizations` | GET, POST | jwt+key | - | - | no | - | 3: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx`, `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/organizations/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 3: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx`, `utils/partnerSignupRuleAPICalls.ts` |
+| `/api/organizations/[id]/addUser` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/organizations/[id]/admins` | PUT | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/api-keys` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/[keyId]/revoke` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/[keyId]/rotate` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/members` | GET | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/api-keys/members/[keyId]/revoke` | POST | jwt | - | - | no | - | 1: `hooks/data/orgApiKeys.ts` |
+| `/api/organizations/[id]/audit` | GET | jwt | - | - | no | - | 1: `components/organizations/OrganizationAuditSection.tsx` |
+| `/api/organizations/[id]/bulk-invite` | POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/custom-mcp/connections` | GET | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
+| `/api/organizations/[id]/custom-mcp/policy` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
+| `/api/organizations/[id]/feedback-report` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
+| `/api/organizations/[id]/feedback-report/[feedbackId]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
+| `/api/organizations/[id]/feedback-report/items` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
+| `/api/organizations/[id]/feedback-summary` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgFeedbackSummary.ts` |
+| `/api/organizations/[id]/github/connection` | GET, POST, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
+| `/api/organizations/[id]/github/rate-limit` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
+| `/api/organizations/[id]/github/repositories` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useGitHubRepositories.ts` |
+| `/api/organizations/[id]/github/rotate-key` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
+| `/api/organizations/[id]/github/rotate-pat` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
+| `/api/organizations/[id]/github/test` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgGitHubConnection.ts` |
+| `/api/organizations/[id]/groups` | GET | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/groups/[groupId]` | PATCH | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/groups/[groupId]/members` | POST | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/groups/[groupId]/members/[userId]` | DELETE | jwt+key | - | - | no | - | 1: `utils/groupsAPICalls.ts` |
+| `/api/organizations/[id]/integrations/slack` | GET, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
+| `/api/organizations/[id]/integrations/slack/channels` | GET, PUT | jwt | - | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
+| `/api/organizations/[id]/integrations/slack/connect` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
+| `/api/organizations/[id]/invite-links` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/invite-links/[inviteId]` | DELETE | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/invite-resend` | POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/member-credit-budget` | PUT | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/members` | GET, POST, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/organizations.ts`, `hooks/data/user.ts` |
+| `/api/organizations/[id]/members/[userId]` | DELETE | jwt+key | `datalake:share` | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/members/[userId]/credit-budget` | PUT | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/members/[userId]/manager` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/members/[userId]/offboarding` | GET | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/pendingUsers` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/organizations/[id]/storage-usage` | GET | jwt | - | - | no | - | 1: `hooks/data/useOrgStorageUsage.ts` |
+| `/api/organizations/[id]/transfer-ownership` | POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
+| `/api/organizations/[id]/upload-logo` | POST | jwt+key | - | - | no | - | 2: `hooks/data/organizations.ts`, `utils/organizationAPICalls.tsx` |
+| `/api/organizations/[id]/webhooks/github` | GET, POST, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
+| `/api/organizations/[id]/webhooks/github/replay-dlq` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
+| `/api/organizations/[id]/webhooks/github/rotate-secret` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
+| `/api/organizations/[id]/webhooks/github/test` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
+| `/api/organizations/create-dev` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/organizations/stats` | GET | jwt+key | - | - | no | - | 1: `utils/organizationAPICalls.tsx` |
+| `/api/organizations/subscriptions/subscribe` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/organizations/subscriptions/update-seats` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/organizations/users` | GET | jwt+key | - | - | no | - | 1: `utils/organizationAPICalls.tsx` |
 
 ### otc
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/otc/form-token` | GET | handler | - | no | - | 1: `hooks/data/auth.ts` |
-| `/api/otc/send` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
-| `/api/otc/verify` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/otc/form-token` | GET | handler | - | - | no | - | 1: `hooks/data/auth.ts` |
+| `/api/otc/send` | POST | handler | - | - | no | - | 1: `hooks/data/auth.ts` |
+| `/api/otc/verify` | POST | handler | - | - | no | - | 1: `hooks/data/auth.ts` |
 
 ### overwatch
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/overwatch/v1/events` | POST | jwt+key | `overwatch-ingest:write` | no | - | 0 |
-| `/api/overwatch/v1/hops` | POST | jwt+key | `overwatch-ingest:write` | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/overwatch/v1/events` | POST | jwt+key | `overwatch-ingest:write` | - | no | - | 0 |
+| `/api/overwatch/v1/hops` | POST | jwt+key | `overwatch-ingest:write` | - | no | - | 0 |
 
 ### partners
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/partners/bedrocknews/claims/preview` | POST | jwt | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
-| `/api/partners/bedrocknews/claims/redeem` | POST | jwt | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
-| `/api/partners/rewards/grant` | POST | jwt+key | `rewards:grant` | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/partners/bedrocknews/claims/preview` | POST | jwt | - | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
+| `/api/partners/bedrocknews/claims/redeem` | POST | jwt | - | - | no | - | 1: `routes/partners/bedrocknews-claim.tsx` |
+| `/api/partners/rewards/grant` | POST | jwt+key | `rewards:grant` | - | no | - | 0 |
+
+### personas
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/personas/redeem` | GET, POST | handler | - | - | no | - | 0 |
 
 ### ping
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/ping` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/ping` | GET | handler | - | - | no | - | 0 |
 
 ### preference-arena
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/preference-arena/next` | GET | jwt | - | no | - | 1: `hooks/data/preferenceArena.ts` |
-| `/api/preference-arena/vote` | POST | jwt | - | no | - | 1: `hooks/data/preferenceArena.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/preference-arena/next` | GET | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
+| `/api/preference-arena/vote` | POST | jwt | - | - | no | - | 1: `hooks/data/preferenceArena.ts` |
 
 ### projects
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/projects` | GET, POST | jwt+key | `projects:read`, `projects:write` | no | - | 2: `hooks/agent/useProjectManagement.ts`, `hooks/data/projects.ts` |
-| `/api/projects/[id]` | GET, PUT, DELETE | jwt+key | `projects:read`, `projects:write` | no | - | 1: `hooks/data/projects.ts` |
-| `/api/projects/[id]/files` | GET, POST, DELETE | jwt+key | `projects:read`, `projects:write` | no | - | 2: `hooks/data/fabFileQueries.ts`, `hooks/data/projects.ts` |
-| `/api/projects/[id]/invites` | GET, POST | jwt+key | `projects:read`, `projects:write` | no | - | 1: `utils/invitesAPICalls.ts` |
-| `/api/projects/[id]/members` | DELETE | jwt+key | `projects:write` | no | - | 1: `hooks/data/projects.ts` |
-| `/api/projects/[id]/sessions` | GET, POST, DELETE | jwt+key | `projects:read`, `projects:write` | no | - | 2: `hooks/data/projects.ts`, `hooks/data/sessions.ts` |
-| `/api/projects/[id]/systemPrompts` | POST, DELETE | jwt+key | `projects:write` | no | - | 1: `hooks/data/projects.ts` |
-| `/api/projects/[id]/systemPrompts/toggle` | POST | jwt+key | `projects:write` | no | - | 1: `hooks/data/projects.ts` |
-| `/api/projects/removeNonExistintFiles` | DELETE | jwt+key | `projects:write` | no | - | 1: `hooks/data/projects.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/projects` | GET, POST | jwt+key | `projects:read`, `projects:write` | - | no | - | 2: `hooks/agent/useProjectManagement.ts`, `hooks/data/projects.ts` |
+| `/api/projects/[id]` | GET, PUT, DELETE | jwt+key | `projects:read`, `projects:write` | - | no | - | 1: `hooks/data/projects.ts` |
+| `/api/projects/[id]/files` | GET, POST, DELETE | jwt+key | `projects:read`, `projects:write` | - | no | - | 2: `hooks/data/fabFileQueries.ts`, `hooks/data/projects.ts` |
+| `/api/projects/[id]/invites` | GET, POST | jwt+key | `projects:read`, `projects:write` | - | no | - | 1: `utils/invitesAPICalls.ts` |
+| `/api/projects/[id]/members` | DELETE | jwt+key | `projects:write` | - | no | - | 1: `hooks/data/projects.ts` |
+| `/api/projects/[id]/sessions` | GET, POST, DELETE | jwt+key | `projects:read`, `projects:write` | - | no | - | 2: `hooks/data/projects.ts`, `hooks/data/sessions.ts` |
+| `/api/projects/[id]/systemPrompts` | POST, DELETE | jwt+key | `projects:write` | - | no | - | 1: `hooks/data/projects.ts` |
+| `/api/projects/[id]/systemPrompts/toggle` | POST | jwt+key | `projects:write` | - | no | - | 1: `hooks/data/projects.ts` |
+| `/api/projects/removeNonExistintFiles` | DELETE | jwt+key | `projects:write` | - | no | - | 1: `hooks/data/projects.ts` |
 
 ### prompts
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/prompts` | GET, POST | jwt+key | - | no | - | 1: `utils/promptAPICalls.ts` |
-| `/api/prompts/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/promptAPICalls.ts` |
-| `/api/prompts/[id]/update` | PUT | jwt+key | - | no | - | 1: `utils/promptAPICalls.ts` |
-| `/api/prompts/get-by-name` | GET | jwt+key | - | no | - | 1: `utils/promptAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/prompts` | GET, POST | jwt+key | - | - | no | - | 1: `utils/promptAPICalls.ts` |
+| `/api/prompts/[id]/delete` | DELETE | jwt+key | - | - | no | - | 1: `utils/promptAPICalls.ts` |
+| `/api/prompts/[id]/update` | PUT | jwt+key | - | - | no | - | 1: `utils/promptAPICalls.ts` |
+| `/api/prompts/get-by-name` | GET | jwt+key | - | - | no | - | 1: `utils/promptAPICalls.ts` |
 
 ### publish
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/publish/[publicId]/restore` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/[publicId]/revise` | POST | jwt+key | - | no | - | 0 |
-| `/api/publish/[publicId]/share-token` | GET, POST, DELETE | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/annotations/[publicId]` | GET, POST | optional | - | no | - | 0 |
-| `/api/publish/annotations/[publicId]/[id]` | PATCH, DELETE | optional | - | no | - | 0 |
-| `/api/publish/annotations/[publicId]/can-comment` | GET | optional | - | no | - | 0 |
-| `/api/publish/artifact/draft-upload` | PUT | handler | - | no | - | 0 |
-| `/api/publish/artifact/finalize` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifact/upload-url` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifacts` | GET | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifacts/[id]/report` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/fabfile` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/gate/owner` | POST | optional | - | no | - | 0 |
-| `/api/publish/gate/passphrase` | POST | handler | - | no | - | 0 |
-| `/api/publish/reply` | POST | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/serve/[...path]` | GET | optional | - | no | - | 0 |
-| `/api/publish/tags` | GET | jwt+key | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/view` | POST | optional | - | no | - | 0 |
-| `/api/publish/widget` | any | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/publish/[publicId]/restore` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/[publicId]/revise` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/publish/[publicId]/share-token` | GET, POST, DELETE | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/annotations/[publicId]` | GET, POST | optional | - | - | no | - | 0 |
+| `/api/publish/annotations/[publicId]/[id]` | PATCH, DELETE | optional | - | - | no | - | 0 |
+| `/api/publish/annotations/[publicId]/can-comment` | GET | optional | - | - | no | - | 0 |
+| `/api/publish/artifact/draft-upload` | PUT | handler | - | - | no | - | 0 |
+| `/api/publish/artifact/finalize` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifact/upload-url` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifacts` | GET | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifacts/[id]/report` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/fabfile` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/gate/owner` | POST | optional | - | - | no | - | 0 |
+| `/api/publish/gate/passphrase` | POST | handler | - | - | no | - | 0 |
+| `/api/publish/reply` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/serve/[...path]` | GET | optional | - | - | no | - | 0 |
+| `/api/publish/tags` | GET | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/view` | POST | optional | - | - | no | - | 0 |
+| `/api/publish/widget` | any | handler | - | - | no | - | 0 |
 
 ### pyodide-sandbox
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/pyodide-sandbox` | GET | handler | - | no | - | 1: `utils/pyodideManager.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/pyodide-sandbox` | GET | handler | - | - | no | - | 1: `utils/pyodideManager.ts` |
 
 ### qa
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/qa/runs` | POST | jwt+key | `qa:ingest` | no | - | 0 |
-| `/api/qa/uploads` | POST | jwt+key | `qa:ingest` | no | - | 0 |
-
-### quest-graphs
-
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-graphs` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/questGraphs.ts` |
-| `/api/quest-graphs/[id]` | GET | jwt+key | - | no | - | 1: `hooks/data/questGraphs.ts` |
-| `/api/quest-graphs/[id]/nodes` | POST | jwt+key | - | no | - | 1: `hooks/data/questGraphs.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/qa/runs` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
+| `/api/qa/uploads` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
 
 ### quest-master-plans
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-master-plans/[id]` | GET | jwt+key | - | no | - | 1: `hooks/data/quests.ts` |
-| `/api/quest-master-plans/[id]/blockers` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/decisions` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/handoff` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/resolve-blocker` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/review-gate` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/subquest-progress` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-master-plans/legacy-archive` | GET | jwt | - | no | - | 1: `components/questmaster/LegacyQuestmasterRetirement.tsx` |
-
-### quest-nodes
-
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-nodes/[id]/run` | POST | jwt+key | - | no | - | 1: `hooks/data/questGraphs.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/quest-master-plans/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
 
 ### quest-plans
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-plans` | GET, POST | jwt+key | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]` | GET, PATCH, DELETE | jwt+key | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]/clone` | POST | jwt+key | - | no | - | 0 |
-| `/api/quest-plans/[id]/continue` | POST | jwt+key | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]/export` | POST | jwt+key | - | no | - | 1: `hooks/data/useQuestExport.ts` |
-| `/api/quest-plans/[id]/progress` | PATCH | jwt+key | - | no | - | 1: `hooks/data/quests.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/quest-plans/[id]/export` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useQuestExport.ts` |
+| `/api/quest-plans/[id]/progress` | PATCH | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
 
 ### quests
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | `/api/v1/quests/[id]` | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
-| `/api/quests/[id]/check-timeout` | POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/quests/[id]/client-timing` | POST | jwt+key | - | no | - | 1: `hooks/useStreamingMetrics.ts` |
-| `/api/quests/[id]/context` | GET | jwt | - | no | - | 1: `hooks/data/quests.ts` |
-| `/api/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | no | - | 1: `hooks/data/fabFileQueries.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | `/api/v1/quests/[id]` | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/quests/[id]/check-timeout` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/quests/[id]/client-timing` | POST | jwt+key | - | - | no | - | 1: `hooks/useStreamingMetrics.ts` |
+| `/api/quests/[id]/context` | GET | jwt | - | - | no | - | 1: `hooks/data/quests.ts` |
+| `/api/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | no | - | 1: `hooks/data/fabFileQueries.ts` |
 
 ### react-artifact-sandbox
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/react-artifact-sandbox` | GET | handler | - | no | - | 1: `hooks/useReactArtifactSandbox.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/react-artifact-sandbox` | GET | handler | - | - | no | - | 1: `hooks/useReactArtifactSandbox.ts` |
 
 ### referrals
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/referrals/summary` | GET | jwt | - | no | - | 1: `hooks/data/referralSummary.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/referrals/summary` | GET | jwt | - | - | no | - | 1: `hooks/data/referralSummary.ts` |
 
 ### reg-invites
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/reg-invites` | GET | jwt+key | - | no | - | 1: `utils/regInviteAPICalls.ts` |
-| `/api/reg-invites/create` | POST | jwt+key | `admin:*` | no | - | 1: `utils/regInviteAPICalls.ts` |
-| `/api/reg-invites/delete` | POST | jwt+key | - | no | - | 1: `utils/regInviteAPICalls.ts` |
-| `/api/reg-invites/migrate` | POST | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
-| `/api/reg-invites/refer` | POST | jwt+key | - | no | - | 1: `utils/regInviteAPICalls.ts` |
-| `/api/reg-invites/update` | POST | jwt+key | - | no | - | 1: `utils/regInviteAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/reg-invites` | GET | jwt+key | - | - | no | - | 1: `utils/regInviteAPICalls.ts` |
+| `/api/reg-invites/create` | POST | jwt+key | `admin:*` | - | no | - | 1: `utils/regInviteAPICalls.ts` |
+| `/api/reg-invites/delete` | POST | jwt+key | - | - | no | - | 1: `utils/regInviteAPICalls.ts` |
+| `/api/reg-invites/migrate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/reg-invites/refer` | POST | jwt+key | - | - | no | - | 1: `utils/regInviteAPICalls.ts` |
+| `/api/reg-invites/update` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `utils/regInviteAPICalls.ts` |
 
 ### research
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/research/agents` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/researchAgent.ts` |
-| `/api/research/agents/[id]` | GET, POST, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/researchAgent.ts` |
-| `/api/research/agents/[id]/files` | GET | jwt+key | - | no | - | 0 |
-| `/api/research/agents/[id]/tasks` | GET, POST, DELETE | jwt+key | - | no | - | 2: `hooks/data/researchAgent.ts`, `hooks/data/researchTasks.ts` |
-| `/api/research/agents/[id]/tasks/[taskId]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/researchTasks.ts` |
-| `/api/research/agents/[id]/tasks/[taskId]/data/[dataId]` | DELETE | jwt+key | - | no | - | 1: `hooks/data/researchData.ts` |
-| `/api/research/agents/[id]/tasks/[taskId]/retry` | POST | jwt+key | - | no | - | 1: `hooks/data/researchTasks.ts` |
-| `/api/research/data/files` | GET | jwt+key | - | no | - | 1: `hooks/data/researchData.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/research/agents` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/researchAgent.ts` |
+| `/api/research/agents/[id]` | GET, POST, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/researchAgent.ts` |
+| `/api/research/agents/[id]/files` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/research/agents/[id]/tasks` | GET, POST, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/researchAgent.ts`, `hooks/data/researchTasks.ts` |
+| `/api/research/agents/[id]/tasks/[taskId]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/researchTasks.ts` |
+| `/api/research/agents/[id]/tasks/[taskId]/data/[dataId]` | DELETE | jwt+key | - | - | no | - | 1: `hooks/data/researchData.ts` |
+| `/api/research/agents/[id]/tasks/[taskId]/retry` | POST | jwt+key | - | - | no | - | 1: `hooks/data/researchTasks.ts` |
+| `/api/research/data/files` | GET | jwt+key | - | - | no | - | 1: `hooks/data/researchData.ts` |
 
 ### roll
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/roll` | POST | jwt+key | - | no | - | 1: `components/commands/RollCommand.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/roll` | POST | jwt+key | - | - | no | - | 1: `components/commands/RollCommand.tsx` |
 
 ### search-image
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/search-image` | GET | jwt | - | no | - | 1: `components/Session/SearchResultCards.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/search-image` | GET | jwt | - | - | no | - | 1: `components/Session/SearchResultCards.tsx` |
 
 ### secret-rotations
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/secret-rotations` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/[id]` | PUT | jwt+key | `admin:*` | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/renewed` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/secret-rotations` | GET | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
+| `/api/secret-rotations/[id]` | PUT | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
+| `/api/secret-rotations/renewed` | POST | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
 
 ### security
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/security/api-usage` | GET | jwt+key | - | no | - | 1: `hooks/data/admin.ts` |
-| `/api/security/blocked-ips` | GET, POST, DELETE | jwt+key | - | no | - | 1: `hooks/data/admin.ts` |
-| `/api/security/blocked-ips/evaluate` | POST | jwt+key | - | no | - | 0 |
-| `/api/security/support-access` | GET | jwt | - | no | - | 1: `components/ProfileModal/SecurityTab/SupportAccessActivity.tsx` |
-| `/api/security/user-recent` | GET | jwt+key | - | no | - | 1: `hooks/data/admin.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/security/api-usage` | GET | jwt+key | - | - | no | - | 1: `hooks/data/admin.ts` |
+| `/api/security/blocked-ips` | GET, POST, DELETE | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/admin.ts` |
+| `/api/security/blocked-ips/evaluate` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
+| `/api/security/support-access` | GET | jwt | - | - | no | - | 1: `components/ProfileModal/SecurityTab/SupportAccessActivity.tsx` |
+| `/api/security/user-recent` | GET | jwt+key | - | - | no | - | 1: `hooks/data/admin.ts` |
 
 ### sessions
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/sessions` | GET, DELETE | jwt+key | - | no | - | 3: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `hooks/data/sessions.ts`, `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | yes | - | 4: `components/Knowledge/KnowledgeViewer.tsx`, `components/admin/useAdminAssistantSession.ts`, `hooks/data/artifacts.ts` +1 more |
-| `/api/sessions/[id]/agents` | GET, POST, DELETE | jwt+key | - | no | - | 5: `components/Session/AISettings/AgentsSection.tsx`, `components/Session/AgentBench.tsx`, `contexts/SessionsContext.tsx` +2 more |
-| `/api/sessions/[id]/agents/[agentId]/config` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
-| `/api/sessions/[id]/agents/configs` | GET | jwt+key | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
-| `/api/sessions/[id]/agents/trigger-proactive-messages` | POST | jwt+key | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
-| `/api/sessions/[id]/auto-rename` | POST | jwt+key | - | no | - | 2: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts`, `hooks/data/sessions.ts` |
-| `/api/sessions/[id]/chat` | GET, POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/chat/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | yes | `/api/v1/sessions/[id]/messages/[messageId]` | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/chat/[messageId]/fork` | POST | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/[id]/chat/[messageId]/snip` | POST | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/[id]/chat/stop-reply` | POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | yes | `/api/v1/sessions/[id]/clone` | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/correction-pairs` | GET | jwt | - | no | - | 0 |
-| `/api/sessions/[id]/favorite` | POST, DELETE | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/[id]/files` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | `/api/v1/sessions/[id]/files` | 1: `hooks/data/fabFileQueries.ts` |
-| `/api/sessions/[id]/generated-media` | GET | jwt | - | no | - | 1: `hooks/data/generatedMedia.ts` |
-| `/api/sessions/[id]/questmaster-plans` | GET | jwt+key | - | no | - | 0 |
-| `/api/sessions/[id]/summary` | POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/surface` | PATCH | jwt+key | `notebooks:write` | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/tag` | POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/[id]/tool-approvals` | GET, DELETE | jwt+key | - | no | - | 0 |
-| `/api/sessions/bulk` | POST, DELETE | jwt+key | - | no | - | 3: `components/layouts/Notebook/Sidenav/TagModal.tsx`, `components/layouts/Notebook/Sidenav/useBulkActions.ts`, `utils/sessionsAPICalls.ts` |
-| `/api/sessions/count` | GET | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/create` | POST | jwt+key | `ai:generate`, `notebooks:write` | yes | `/api/v1/sessions` | 5: `components/admin/useAdminAssistantSession.ts`, `components/questmaster-v5/QuestGraphView.tsx`, `hooks/useCreateDataLakeSession.ts` +2 more |
-| `/api/sessions/download` | GET | jwt+key | - | no | - | 0 |
-| `/api/sessions/favorites` | GET | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
-| `/api/sessions/recent-proactive-messages` | GET | jwt+key | - | no | - | 1: `hooks/useUnreadProactiveMessages.ts` |
-| `/api/sessions/semantic-search` | POST | jwt+key | `notebooks:read`, `notebooks:write` | yes | `/api/v1/sessions/semantic-search` | 1: `hooks/data/semanticSearch.ts` |
-| `/api/sessions/shared` | GET | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/sessions` | GET, DELETE | jwt+key | - | - | no | - | 3: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `hooks/data/sessions.ts`, `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | - | 4: `components/Knowledge/KnowledgeViewer.tsx`, `components/admin/useAdminAssistantSession.ts`, `hooks/data/artifacts.ts` +1 more |
+| `/api/sessions/[id]/agents` | GET, POST, DELETE | jwt+key | - | - | no | - | 5: `components/Session/AISettings/AgentsSection.tsx`, `components/Session/AgentBench.tsx`, `contexts/SessionsContext.tsx` +2 more |
+| `/api/sessions/[id]/agents/[agentId]/config` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
+| `/api/sessions/[id]/agents/configs` | GET | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
+| `/api/sessions/[id]/agents/trigger-proactive-messages` | POST | jwt+key | - | - | no | - | 1: `hooks/data/agentProactiveMessaging.ts` |
+| `/api/sessions/[id]/auto-rename` | POST | jwt+key | - | - | no | - | 2: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts`, `hooks/data/sessions.ts` |
+| `/api/sessions/[id]/chat` | GET, POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/chat/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | `/api/v1/sessions/[id]/messages/[messageId]` | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/chat/[messageId]/fork` | POST | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
+| `/api/sessions/[id]/chat/[messageId]/snip` | POST | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
+| `/api/sessions/[id]/chat/stop-reply` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | - | yes | `/api/v1/sessions/[id]/clone` | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/correction-pairs` | GET | jwt | - | - | no | - | 0 |
+| `/api/sessions/[id]/favorite` | POST, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
+| `/api/sessions/[id]/files` | ? | handler | - | - | no | - | 1: `hooks/data/fabFileQueries.ts` |
+| `/api/sessions/[id]/generated-media` | GET | jwt | - | - | no | - | 1: `hooks/data/generatedMedia.ts` |
+| `/api/sessions/[id]/questmaster-plans` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/sessions/[id]/summary` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/surface` | PATCH | jwt+key | `notebooks:write` | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/tag` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/[id]/tool-approvals` | GET, DELETE | jwt+key | - | - | no | - | 0 |
+| `/api/sessions/bulk` | POST, DELETE | jwt+key | - | - | no | - | 3: `components/layouts/Notebook/Sidenav/TagModal.tsx`, `components/layouts/Notebook/Sidenav/useBulkActions.ts`, `utils/sessionsAPICalls.ts` |
+| `/api/sessions/count` | GET | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
+| `/api/sessions/create` | POST | jwt+key | `ai:generate`, `notebooks:write` | - | yes | `/api/v1/sessions` | 4: `components/admin/useAdminAssistantSession.ts`, `hooks/useCreateDataLakeSession.ts`, `hooks/useStartChatWithLake.ts` +1 more |
+| `/api/sessions/download` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/sessions/favorites` | GET | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
+| `/api/sessions/recent-proactive-messages` | GET | jwt+key | - | - | no | - | 1: `hooks/useUnreadProactiveMessages.ts` |
+| `/api/sessions/semantic-search` | POST | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | `/api/v1/sessions/semantic-search` | 1: `hooks/data/semanticSearch.ts` |
+| `/api/sessions/shared` | GET | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 
 ### settings
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/settings` | GET | jwt+key | - | no | - | 0 |
-| `/api/settings/fetch` | GET | jwt+key | - | no | - | 3: `contexts/AdminSettingsContext.tsx`, `hooks/data/settings.ts`, `utils/fabFileUtils.tsx` |
-| `/api/settings/logo` | GET | handler | - | no | - | 1: `hooks/data/settings.ts` |
-| `/api/settings/serverConfig` | GET | jwt+key | - | no | - | 1: `hooks/data/settings.ts` |
-| `/api/settings/serverConfigPublic` | GET | handler | - | no | - | 2: `hooks/data/auth.ts`, `hooks/data/settings.ts` |
-| `/api/settings/serverStatus` | GET | handler | - | no | - | 1: `hooks/data/settings.ts` |
-| `/api/settings/update` | PUT | jwt+key | - | no | - | 1: `hooks/data/settings.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/settings` | GET | jwt+key | `admin:*` | GET: `settings:manage` | no | - | 0 |
+| `/api/settings/fetch` | GET | jwt+key | - | - | no | - | 3: `contexts/AdminSettingsContext.tsx`, `hooks/data/settings.ts`, `utils/fabFileUtils.tsx` |
+| `/api/settings/logo` | GET | handler | - | - | no | - | 1: `hooks/data/settings.ts` |
+| `/api/settings/serverConfig` | GET | jwt+key | - | - | no | - | 1: `hooks/data/settings.ts` |
+| `/api/settings/serverConfigPublic` | GET | handler | - | - | no | - | 2: `hooks/data/auth.ts`, `hooks/data/settings.ts` |
+| `/api/settings/serverStatus` | GET | handler | - | - | no | - | 1: `hooks/data/settings.ts` |
+| `/api/settings/update` | PUT | jwt+key | `admin:*` | PUT: `settings:manage` | no | - | 1: `hooks/data/settings.ts` |
 
 ### skills
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/skills` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
-| `/api/skills/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
-| `/api/skills/[id]/share` | PUT | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
-| `/api/skills/market` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]` | GET, DELETE | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/import` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/moderate` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/rating` | PUT | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/report` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/versions` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/bundles` | GET, POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/by-token/[token]` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/me` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/mine` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/publish` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/recommended` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/review-queue` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/suggest-tags` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/versions/[vid]/rescan` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/versions/[vid]/review` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/skills` | GET, POST | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/[id]` | GET, PUT, DELETE | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/[id]/share` | PUT | jwt+key | `skills:write` | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/market` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]` | GET, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/import` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/moderate` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/permanent` | DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/rating` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/report` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/versions` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/bundles` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/by-token` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/by-token/[token]` | GET | jwt | - | - | no | - | 0 |
+| `/api/skills/market/me` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/mine` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/publish` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/recommended` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/review-queue` | GET | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/suggest-tags` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/versions/[vid]/rescan` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/versions/[vid]/review` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 
 ### sky-greeting
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/sky-greeting` | GET | handler | - | no | - | 1: `components/Session/NotebookSplash.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/sky-greeting` | GET | handler | - | - | no | - | 1: `components/Session/NotebookSplash.tsx` |
 
 ### slack
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/slack/commands` | any | handler | - | no | - | 0 |
-| `/api/slack/events` | POST | handler | - | no | - | 0 |
-| `/api/slack/export/async` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/slack/export/channel` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/slack/export/channel-info` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/slack/export/status/[jobId]` | GET, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
-| `/api/slack/interactive` | POST | handler | - | no | - | 0 |
-| `/api/slack/oauth/authorize` | GET | jwt | - | no | - | 1: `routes/integrations/slack/install.tsx` |
-| `/api/slack/oauth/callback` | GET | handler | - | no | - | 0 |
-| `/api/slack/oauth/org-connect/callback` | GET | handler | - | no | - | 0 |
-| `/api/slack/oauth/user-link` | GET | handler | - | no | - | 0 |
-| `/api/slack/oauth/user-link/callback` | GET | handler | - | no | - | 0 |
-| `/api/slack/oauth/user-link/initiate` | GET | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
-| `/api/slack/oauth/workspaces` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
-| `/api/slack/workspace/[workspaceId]` | GET | jwt+key | - | no | - | 1: `routes/integrations/slack/install.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/slack/commands` | any | handler | - | - | no | - | 0 |
+| `/api/slack/events` | POST | handler | - | - | no | - | 0 |
+| `/api/slack/export/async` | GET, POST | jwt+key | `admin:*` | POST: `settings:manage`; GET: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/slack/export/channel` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/slack/export/channel-info` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/slack/export/status/[jobId]` | GET, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
+| `/api/slack/interactive` | POST | handler | - | - | no | - | 0 |
+| `/api/slack/oauth/authorize` | GET | jwt | - | - | no | - | 1: `routes/integrations/slack/install.tsx` |
+| `/api/slack/oauth/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/slack/oauth/org-connect/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/slack/oauth/user-link` | GET | handler | - | - | no | - | 0 |
+| `/api/slack/oauth/user-link/callback` | GET | handler | - | - | no | - | 0 |
+| `/api/slack/oauth/user-link/initiate` | GET | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx`, `components/integrations/useIntegrationConnections.ts` |
+| `/api/slack/oauth/workspaces` | GET | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
+| `/api/slack/workspace/[workspaceId]` | GET | jwt+key | - | - | no | - | 1: `routes/integrations/slack/install.tsx` |
 
 ### sre
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/sre/metrics` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/patterns` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/patterns/[id]` | PATCH | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/scan` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/tracking` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/tracking/[id]` | GET | jwt+key | `admin:*` | no | - | 2: `components/admin/SreAgentTab.tsx`, `components/admin/TrackingDetailDrawer.tsx` |
-| `/api/sre/tracking/[id]/dismiss` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/tracking/[id]/issue-state` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/tracking/[id]/rerun` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/tracking/[id]/retry` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/trigger` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SreAgentTab.tsx` |
-| `/api/sre/workflow-callback` | POST | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/sre/metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/patterns` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/patterns/[id]` | PATCH | jwt+key | `admin:*` | PATCH: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/scan` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/tracking` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/tracking/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 2: `components/admin/SreAgentTab.tsx`, `components/admin/TrackingDetailDrawer.tsx` |
+| `/api/sre/tracking/[id]/dismiss` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/tracking/[id]/issue-state` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/tracking/[id]/rerun` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/tracking/[id]/retry` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/trigger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/SreAgentTab.tsx` |
+| `/api/sre/workflow-callback` | POST | handler | - | - | no | - | 0 |
 
 ### stripe
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/stripe/payment-intent` | GET | jwt | - | no | - | 1: `components/stripe/StripePaymentReturnHandler.tsx` |
-| `/api/stripe/portal` | POST | jwt+key | - | no | - | 1: `hooks/data/stripe.ts` |
-| `/api/stripe/start-payment` | POST | jwt+key | - | no | - | 1: `components/Credits/PaymentButton.tsx` |
-| `/api/stripe/subscription-plans` | GET | jwt+key | - | no | - | 1: `hooks/data/stripe.ts` |
-| `/api/stripe/webhook` | POST | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/stripe/payment-intent` | GET | jwt | - | - | no | - | 1: `components/stripe/StripePaymentReturnHandler.tsx` |
+| `/api/stripe/portal` | POST | jwt+key | - | - | no | - | 1: `hooks/data/stripe.ts` |
+| `/api/stripe/start-payment` | POST | jwt+key | - | - | no | - | 1: `components/Credits/PaymentButton.tsx` |
+| `/api/stripe/subscription-plans` | GET | jwt | - | - | no | - | 1: `hooks/data/stripe.ts` |
+| `/api/stripe/webhook` | POST | handler | - | - | no | - | 0 |
+
+### studio
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/studio/files/[id]/lineage` | GET | jwt | - | - | no | - | 1: `hooks/data/fileLineage.ts` |
+| `/api/studio/image-jobs` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/studioImageJobs.ts` |
 
 ### subscribers
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/subscribers` | GET | jwt+key | `admin:*` | no | - | 1: `utils/subscriberAPICalls.ts` |
-| `/api/subscribers/[id]/delete` | DELETE | jwt+key | `admin:*` | no | - | 1: `utils/subscriberAPICalls.ts` |
-| `/api/subscribers/create` | POST | handler | - | no | - | 1: `utils/subscriberAPICalls.ts` |
-| `/api/subscribers/generate-invite` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/WaitlistTab.tsx` |
-| `/api/subscribers/waiting-count` | GET | jwt+key | `admin:*` | no | - | 1: `utils/subscriberAPICalls.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/subscribers` | GET | jwt+key | `admin:*` | GET: `credits:adjust` | no | - | 1: `utils/subscriberAPICalls.ts` |
+| `/api/subscribers/[id]/delete` | DELETE | jwt+key | `admin:*` | DELETE: `credits:adjust` | no | - | 1: `utils/subscriberAPICalls.ts` |
+| `/api/subscribers/create` | POST | handler | - | - | no | - | 1: `utils/subscriberAPICalls.ts` |
+| `/api/subscribers/generate-invite` | POST | jwt+key | `admin:*` | POST: `credits:adjust` | no | - | 1: `components/admin/WaitlistTab.tsx` |
+| `/api/subscribers/waiting-count` | GET | jwt+key | `admin:*` | GET: `credits:adjust` | no | - | 1: `utils/subscriberAPICalls.ts` |
 
 ### subscriptions
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/subscriptions` | GET | jwt+key | - | no | - | 0 |
-| `/api/subscriptions/[ownerType]/[ownerId]` | GET | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/subscriptions/cancel` | POST | jwt | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/subscriptions/change` | PUT | jwt | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/subscriptions/checkout-session` | GET | jwt+key | - | no | - | 1: `components/stripe/StripeCheckoutSuccessHandler.tsx` |
-| `/api/subscriptions/own` | GET | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/subscriptions/pay-invoice` | POST | jwt | - | no | - | 1: `components/subscription/usePayFailedInvoice.ts` |
-| `/api/subscriptions/stats` | GET | jwt+key | - | no | - | 0 |
-| `/api/subscriptions/subscribe` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/subscriptions` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/subscriptions/[ownerType]/[ownerId]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/subscriptions/cancel` | POST | jwt | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/subscriptions/change` | PUT | jwt | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/subscriptions/checkout-session` | GET | jwt+key | - | - | no | - | 1: `components/stripe/StripeCheckoutSuccessHandler.tsx` |
+| `/api/subscriptions/own` | GET | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/subscriptions/pay-invoice` | POST | jwt | - | - | no | - | 1: `components/subscription/usePayFailedInvoice.ts` |
+| `/api/subscriptions/stats` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/subscriptions/subscribe` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
 
 ### system-prompts
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/system-prompts/activatable` | GET | jwt+key | - | no | - | 1: `hooks/data/useActivatablePrompts.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/system-prompts/activatable` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useActivatablePrompts.ts` |
 
 ### test
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/test/admin-approval` | POST | handler | - | no | - | 0 |
-| `/api/test/cleanup` | DELETE | handler | - | no | - | 0 |
-| `/api/test/create-user` | POST | handler | - | no | - | 0 |
-| `/api/test/expire-account-deletion` | POST | handler | - | no | - | 0 |
-| `/api/test/otc-code` | GET | handler | - | no | - | 0 |
-| `/api/test/propose-lake-content` | POST | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/test/admin-approval` | POST | handler | - | - | no | - | 0 |
+| `/api/test/cleanup` | DELETE | handler | - | - | no | - | 0 |
+| `/api/test/create-user` | POST | handler | - | - | no | - | 0 |
+| `/api/test/expire-account-deletion` | POST | handler | - | - | no | - | 0 |
+| `/api/test/otc-code` | GET | handler | - | - | no | - | 0 |
+| `/api/test/propose-lake-content` | POST | handler | - | - | no | - | 0 |
 
 ### tools
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/tools/weather` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
-| `/api/tools/web-fetch` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
-| `/api/tools/web-search` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/tools/weather` | POST | jwt+key | `ai:chat`, `ai:generate` | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/tools/web-fetch` | POST | jwt+key | `ai:chat`, `ai:generate` | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/tools/web-search` | POST | jwt+key | `ai:chat`, `ai:generate` | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
 
 ### transforms
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/transforms/batch` | POST | jwt+key | - | no | - | 0 |
-| `/api/transforms/batch/[id]` | GET | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/transforms/batch` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/transforms/batch/[id]` | GET | jwt+key | - | - | no | - | 0 |
 
 ### turnstile
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/turnstile/client-failure` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/turnstile/client-failure` | POST | handler | - | - | no | - | 1: `hooks/data/auth.ts` |
+
+### tutorials
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/tutorials/drafts` | any | jwt | - | GET: `settings:manage`; POST: `settings:manage` | no | - | 0 |
+| `/api/tutorials/overrides` | any | jwt | - | GET: `settings:manage`; PUT: `settings:manage` | no | - | 0 |
+| `/api/tutorials/owners` | GET | jwt | - | GET: `settings:manage` | no | - | 0 |
+| `/api/tutorials/run` | any | jwt | - | - | no | - | 0 |
+| `/api/tutorials/settings` | any | jwt | - | GET: `settings:manage`; PUT: `settings:manage` | no | - | 0 |
+| `/api/tutorials/summary` | any | jwt | - | GET: `settings:manage` | no | - | 0 |
 
 ### usage
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/usage` | GET | jwt+key | - | no | - | 1: `components/admin/CreditAnalysis/hooks/useOwnerUsage.ts` |
-| `/api/usage/fleet-export` | GET | handler | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/usage` | GET | jwt+key | - | - | no | - | 1: `components/admin/CreditAnalysis/hooks/useOwnerUsage.ts` |
+| `/api/usage/fleet-export` | GET | handler | - | - | no | - | 0 |
 
 ### user
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/user/accept-policies` | POST | jwt+key | - | no | - | 1: `routes/accept-policies.tsx` |
-| `/api/user/accept-policies/shown` | POST | jwt | - | no | - | 1: `hooks/data/analytics.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/user/accept-policies` | POST | jwt+key | - | - | no | - | 1: `routes/accept-policies.tsx` |
+| `/api/user/accept-policies/shown` | POST | jwt | - | - | no | - | 1: `hooks/data/analytics.ts` |
 
 ### user-api-keys
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/user-api-keys` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/[id]` | PATCH, DELETE | jwt+key | - | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/[id]/callback-secret` | POST | jwt+key | `ai:generate` | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | - | no | - | 0 |
-| `/api/user-api-keys/[id]/revoke` | POST | jwt+key | - | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/[id]/rotate` | POST | jwt+key | - | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/billing-organizations` | GET | jwt+key | - | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/user-api-keys/eligibility` | GET | jwt | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/user-api-keys` | GET, POST | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/[id]` | PATCH, DELETE | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/[id]/callback-secret` | POST | jwt+key | `ai:generate` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 0 |
+| `/api/user-api-keys/[id]/revoke` | POST | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/[id]/rotate` | POST | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/billing-organizations` | GET | jwt+key | `admin:*`, `api-keys:manage` | - | no | - | 1: `hooks/data/userApiKeys.ts` |
+| `/api/user-api-keys/eligibility` | GET | jwt | - | - | no | - | 1: `hooks/data/userApiKeys.ts` |
 
 ### users
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/users` | GET | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
-| `/api/users/[id]` | GET | jwt+key | - | no | - | 2: `hooks/data/user.ts`, `routes/auth/success.tsx` |
-| `/api/users/[id]/activities` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/agents` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
-| `/api/users/[id]/collections` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/confirm-photo` | POST | jwt | - | no | - | 1: `utils/userAPICalls.tsx` |
-| `/api/users/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/docx-template` | GET, POST, DELETE | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx` |
-| `/api/users/[id]/email-settings` | GET, PATCH | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/EmailIntegrationSection.tsx` |
-| `/api/users/[id]/friend-requests` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/friends` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/ingested-emails` | GET, DELETE | jwt+key | - | no | - | 1: `components/ProfileModal/EmailInboxTabContent.tsx` |
-| `/api/users/[id]/loginAs` | POST | jwt | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/[id]/moderation-appeal` | POST | jwt+key | - | no | - | 0 |
-| `/api/users/[id]/organization` | GET, DELETE | jwt+key | - | no | - | 1: `utils/organizationAPICalls.tsx` |
-| `/api/users/[id]/organizations` | GET | jwt+key | - | no | - | 0 |
-| `/api/users/[id]/projects` | GET | jwt+key | - | no | - | 1: `hooks/data/projects.ts` |
-| `/api/users/[id]/recalculate-storage` | POST | jwt+key | - | no | - | 0 |
-| `/api/users/[id]/revoke-sessions` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserSessions.ts` |
-| `/api/users/[id]/slack-settings` | GET, PATCH | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubNotificationsSection.tsx`, `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
-| `/api/users/[id]/telemetry-export` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/ExperimentalFeatureToggle.tsx` |
-| `/api/users/[id]/update` | PUT | jwt+key | - | no | - | 5: `components/AgentList/VoiceCustomizeModal.tsx`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx`, `components/Session/AISettings/AdvancedAIModal.tsx` +2 more |
-| `/api/users/[id]/upload-photo` | POST | jwt | - | no | - | 1: `utils/userAPICalls.tsx` |
-| `/api/users/[id]/userInvites` | GET | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
-| `/api/users/active-session` | POST | jwt | - | no | - | 1: `hooks/useSignupGrantHeartbeat.ts` |
-| `/api/users/activities/recent` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/by-email/[email]` | GET | jwt+key | - | no | - | 2: `hooks/data/skills.ts`, `hooks/data/user.ts` |
-| `/api/users/counterLogs` | GET | jwt+key | `admin:*` | no | - | 1: `utils/userAPICalls.tsx` |
-| `/api/users/me/data-export` | POST | jwt | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/me/data-export/[jobId]` | GET | jwt | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/me/sessions` | GET, DELETE | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/me/sessions/revoke-others` | POST | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
-| `/api/users/me/storage-breakdown` | GET | jwt | - | no | - | 1: `hooks/data/storageBreakdown.ts` |
-| `/api/users/report` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/users/signup-grant-eligibility` | POST | jwt | - | no | - | 0 |
-| `/api/users/tags` | GET | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/users` | GET | jwt+key | - | - | no | - | 2: `components/admin/CreditAnalysis/hooks/useUserCreditsManager.ts`, `utils/userAPICalls.tsx` |
+| `/api/users/[id]` | GET | jwt+key | - | - | no | - | 3: `components/admin/ModelMetrics/components/ControlPanel.tsx`, `hooks/data/user.ts`, `routes/auth/success.tsx` |
+| `/api/users/[id]/activities` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/agents` | GET | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
+| `/api/users/[id]/collections` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/confirm-photo` | POST | jwt | - | - | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/users/[id]/delete` | DELETE | jwt+key | `admin:*` | DELETE: `users:delete` | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/docx-template` | GET, POST, DELETE | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/DocxTemplateSection.tsx` |
+| `/api/users/[id]/email-settings` | GET, PATCH | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/EmailIntegrationSection.tsx` |
+| `/api/users/[id]/friend-requests` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/friends` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/ingested-emails` | GET, DELETE | jwt+key | - | - | no | - | 1: `components/ProfileModal/EmailInboxTabContent.tsx` |
+| `/api/users/[id]/loginAs` | POST | jwt | - | POST: `users:impersonate` | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/[id]/moderation-appeal` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/users/[id]/organization` | GET, DELETE | jwt+key | - | - | no | - | 1: `utils/organizationAPICalls.tsx` |
+| `/api/users/[id]/organizations` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/users/[id]/projects` | GET | jwt+key | - | - | no | - | 1: `hooks/data/projects.ts` |
+| `/api/users/[id]/recalculate-storage` | POST | jwt+key | - | - | no | - | 0 |
+| `/api/users/[id]/revoke-sessions` | POST | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/adminUserSessions.ts` |
+| `/api/users/[id]/slack-settings` | GET, PATCH | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubNotificationsSection.tsx`, `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
+| `/api/users/[id]/telemetry-export` | GET | jwt+key | - | - | no | - | 1: `components/ProfileModal/ExperimentalFeatureToggle.tsx` |
+| `/api/users/[id]/update` | PUT | jwt+key | - | - | no | - | 4: `components/AgentList/VoiceCustomizeModal.tsx`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx`, `components/Session/AISettings/AdvancedAIModal.tsx` +1 more |
+| `/api/users/[id]/upload-photo` | POST | jwt | - | - | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/users/[id]/userInvites` | GET | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
+| `/api/users/active-session` | POST | jwt | - | - | no | - | 1: `hooks/useSignupGrantHeartbeat.ts` |
+| `/api/users/activities/recent` | GET | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/by-email/[email]` | GET | jwt+key | - | - | no | - | 2: `hooks/data/skills.ts`, `hooks/data/user.ts` |
+| `/api/users/counterLogs` | GET | jwt+key | `admin:*` | - | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/users/me/data-export` | POST | jwt | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/me/data-export/[jobId]` | GET | jwt | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/me/sessions` | GET, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/me/sessions/revoke-others` | POST | jwt+key | - | - | no | - | 1: `hooks/data/user.ts` |
+| `/api/users/me/storage-breakdown` | GET | jwt | - | - | no | - | 1: `hooks/data/storageBreakdown.ts` |
+| `/api/users/report` | POST | jwt+key | `admin:*` | - | no | - | 0 |
+| `/api/users/signup-grant-eligibility` | POST | jwt | - | - | no | - | 0 |
+| `/api/users/tags` | GET | jwt+key | - | - | no | - | 1: `utils/userAPICalls.tsx` |
 
 ### v1
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/v1/[...unmatchedV1Path]` | any | handler | - | no | `/api/[...unmatchedApiPath]` | 0 |
-| `/api/v1/agent-executions` | POST | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
-| `/api/v1/agent-executions/[id]` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
-| `/api/v1/agents` | GET, POST | jwt+key | GET: `agents:read`, `agents:write`; POST: `agents:write` | yes | - | 0 |
-| `/api/v1/agents/[id]` | GET, PATCH, DELETE | jwt+key | GET: `agents:read`, `agents:write`; PATCH, DELETE: `agents:write` | yes | - | 0 |
-| `/api/v1/agents/[id]/enhance-field` | POST | jwt+key | `agents:write` | yes | - | 0 |
-| `/api/v1/agents/[id]/generate-avatar` | POST | jwt+key | `agents:write` | yes | - | 0 |
-| `/api/v1/agents/[id]/generate-description` | POST | jwt+key | `agents:write` | yes | - | 0 |
-| `/api/v1/agents/[id]/generate-system-prompt` | POST | jwt+key | `agents:write` | yes | - | 0 |
-| `/api/v1/artifacts` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | yes | - | 0 |
-| `/api/v1/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PATCH, DELETE: `notebooks:write` | yes | - | 0 |
-| `/api/v1/artifacts/[id]/versions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | yes | - | 0 |
-| `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | yes | - | 0 |
-| `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | yes | - | 0 |
-| `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | yes | - | 0 |
-| `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | yes | - | 0 |
-| `/api/v1/data-lakes/[id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | yes | - | 0 |
-| `/api/v1/data-lakes/[id]/files/[file_id]` | GET, POST, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST, DELETE: `datalake:write` | yes | - | 0 |
-| `/api/v1/data-lakes/[id]/search` | POST | jwt+key | `datalake:query` | yes | - | 0 |
-| `/api/v1/decision-models` | GET | jwt+key | `ai:decide`, `ai:generate` | yes | - | 0 |
-| `/api/v1/decisions` | POST | jwt+key | `ai:decide`, `ai:generate` | yes | - | 0 |
-| `/api/v1/docs` | GET | handler | - | no | - | 1: `utils/externalLinks.ts` |
-| `/api/v1/embedding-models` | GET | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/embeddings` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/files` | GET, POST | jwt+key | GET: `files:read`; POST: `files:write` | yes | - | 0 |
-| `/api/v1/files/[id]` | GET, PATCH, DELETE | jwt+key | GET: `files:read`; PATCH, DELETE: `files:write` | yes | - | 0 |
-| `/api/v1/files/[id]/chunk` | POST | jwt+key | `files:write` | yes | - | 0 |
-| `/api/v1/files/bulk-delete` | POST | jwt+key | `files:write` | yes | - | 0 |
-| `/api/v1/files/by-ids` | GET | jwt+key | `files:read` | yes | - | 0 |
-| `/api/v1/files/search` | GET | jwt+key | `files:read` | yes | - | 0 |
-| `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/me` | GET | jwt+key | `me:read` | yes | - | 0 |
-| `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
-| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
-| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
-| `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
-| `/api/v1/openapi.deployment.json` | ? | handler | - | no | - | 0 |
-| `/api/v1/openapi.json` | ? | handler | - | no | - | 1: `utils/externalLinks.ts` |
-| `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |
-| `/api/v1/projects/[id]` | GET, PATCH, DELETE | jwt+key | GET: `projects:read`, `projects:write`; PATCH, DELETE: `projects:write` | yes | - | 0 |
-| `/api/v1/projects/[id]/files` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |
-| `/api/v1/projects/[id]/files/[file_id]` | DELETE | jwt+key | `projects:write` | yes | - | 0 |
-| `/api/v1/projects/[id]/sessions` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |
-| `/api/v1/projects/[id]/sessions/[session_id]` | DELETE | jwt+key | `projects:write` | yes | - | 0 |
-| `/api/v1/push-tokens` | POST, DELETE | jwt | - | yes | - | 0 |
-| `/api/v1/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
-| `/api/v1/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
-| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | yes | - | 0 |
-| `/api/v1/sessions/[id]/files` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/sessions/[id]/messages/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | yes | - | 0 |
-| `/api/v1/sessions/[id]/quests` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/sessions/semantic-search` | POST | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
-| `/api/v1/skills/market/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | yes | - | 0 |
-| `/api/v1/skills/market/bundles/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | yes | - | 0 |
-| `/api/v1/skills/market/claude-marketplace.json` | GET | jwt+key | `skills:read` | yes | - | 1: `components/SkillsManagement/ClaudeCodeMarketplaceTab.tsx` |
-| `/api/v1/skills/market/listings` | GET, POST | jwt+key | GET: `skills:read`, `skills:write`; POST: `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/listings/[id]` | GET, DELETE | jwt+key | GET: `skills:read`, `skills:write`; DELETE: `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/listings/[id]/import` | POST | jwt+key | `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/listings/[id]/versions` | POST | jwt+key | `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/listings/mine` | GET | jwt+key | `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/review-queue` | GET | jwt+key | `skills:review` | yes | - | 0 |
-| `/api/v1/skills/market/versions/[vid]/rescan` | POST | jwt+key | `skills:write` | yes | - | 0 |
-| `/api/v1/skills/market/versions/[vid]/review` | POST | jwt+key | `skills:review` | yes | - | 0 |
-| `/api/v1/slack/messages` | POST | jwt+key | `slack:post` | yes | - | 0 |
-| `/api/v1/text-refinements` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/video-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/video-models` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/videoGenerations.ts` |
-| `/api/v1/voice/sessions` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/voice/sessions/[id]/end` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/voice/voices` | GET | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/whats-new` | GET | handler | - | yes | - | 1: `hooks/data/modalsWithReleaseNotes.ts` |
-| `/api/v1/whats-new/media/[id]/[asset]` | GET | handler | - | yes | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/v1/[...unmatchedV1Path]` | any | handler | - | - | no | `/api/[...unmatchedApiPath]` | 0 |
+| `/api/v1/agent-executions` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/agent-executions/[id]` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/agents` | GET, POST | jwt+key | GET: `agents:read`, `agents:write`; POST: `agents:write` | - | yes | - | 0 |
+| `/api/v1/agents/[id]` | GET, PATCH, DELETE | jwt+key | GET: `agents:read`, `agents:write`; PATCH, DELETE: `agents:write` | - | yes | - | 0 |
+| `/api/v1/agents/[id]/enhance-field` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
+| `/api/v1/agents/[id]/generate-avatar` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
+| `/api/v1/agents/[id]/generate-description` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
+| `/api/v1/agents/[id]/generate-system-prompt` | POST | jwt+key | `agents:write` | - | yes | - | 0 |
+| `/api/v1/artifacts` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PATCH, DELETE: `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/versions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
+| `/api/v1/completion-runs` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | - | yes | - | 0 |
+| `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | - | yes | - | 0 |
+| `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/files/[file_id]` | GET, POST, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST, DELETE: `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/search` | POST | jwt+key | `datalake:query` | - | yes | - | 0 |
+| `/api/v1/decision-models` | GET | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/decisions` | POST | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/docs` | GET | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
+| `/api/v1/embedding-models` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/embeddings` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/files` | GET, POST | jwt+key | GET: `files:read`; POST: `files:write` | - | yes | - | 0 |
+| `/api/v1/files/[id]` | GET, PATCH, DELETE | jwt+key | GET: `files:read`; PATCH, DELETE: `files:write` | - | yes | - | 0 |
+| `/api/v1/files/[id]/chunk` | POST | jwt+key | `files:write` | - | yes | - | 0 |
+| `/api/v1/files/bulk-delete` | POST | jwt+key | `files:write` | - | yes | - | 0 |
+| `/api/v1/files/by-ids` | GET | jwt+key | `files:read` | - | yes | - | 0 |
+| `/api/v1/files/search` | GET | jwt+key | `files:read` | - | yes | - | 0 |
+| `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/me` | GET | jwt+key | `me:read` | - | yes | - | 0 |
+| `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/openapi.deployment.json` | ? | handler | - | - | no | - | 0 |
+| `/api/v1/openapi.json` | ? | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
+| `/api/v1/personas` | POST | jwt+key | `personas:mint` | - | yes | - | 0 |
+| `/api/v1/personas/[id]` | DELETE | jwt+key | `personas:mint` | - | yes | - | 0 |
+| `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]` | GET, PATCH, DELETE | jwt+key | GET: `projects:read`, `projects:write`; PATCH, DELETE: `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/files` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/files/[file_id]` | DELETE | jwt+key | `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/invites` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/members/[user_id]` | DELETE | jwt+key | `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/sessions` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/sessions/[session_id]` | DELETE | jwt+key | `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/system-prompts` | POST | jwt+key | `projects:write` | - | yes | - | 0 |
+| `/api/v1/projects/[id]/system-prompts/[file_id]` | PATCH, DELETE | jwt+key | `projects:write` | - | yes | - | 0 |
+| `/api/v1/push-tokens` | POST, DELETE | jwt | - | - | yes | - | 0 |
+| `/api/v1/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | - | 0 |
+| `/api/v1/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | - | 0 |
+| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/[id]/files` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/[id]/messages/[messageId]` | GET, PUT, DELETE | jwt+key | GET: `notebooks:read`, `notebooks:write`; PUT, DELETE: `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/[id]/quests` | GET | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/sessions/semantic-search` | POST | jwt+key | `notebooks:read`, `notebooks:write` | - | yes | - | 0 |
+| `/api/v1/skills` | POST | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/[id]` | GET, PUT | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | - | yes | - | 0 |
+| `/api/v1/skills/market/bundles/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | - | yes | - | 0 |
+| `/api/v1/skills/market/claude-marketplace.json` | GET | jwt+key | `skills:read` | - | yes | - | 1: `components/SkillsManagement/ClaudeCodeMarketplaceTab.tsx` |
+| `/api/v1/skills/market/listings` | GET, POST | jwt+key | GET: `skills:read`, `skills:write`; POST: `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]` | GET, DELETE | jwt+key | GET: `skills:read`, `skills:write`; DELETE: `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]/import` | POST | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]/versions` | POST | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/listings/mine` | GET | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/review-queue` | GET | jwt+key | `skills:review` | - | yes | - | 0 |
+| `/api/v1/skills/market/versions/[vid]/rescan` | POST | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/skills/market/versions/[vid]/review` | POST | jwt+key | `skills:review` | - | yes | - | 0 |
+| `/api/v1/skills/mine` | GET | jwt+key | `skills:write` | - | yes | - | 0 |
+| `/api/v1/slack/messages` | POST | jwt+key | `slack:post` | - | yes | - | 0 |
+| `/api/v1/text-refinements` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/video-generations` | GET, POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations/[id]` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/video-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/videoGenerations.ts` |
+| `/api/v1/voice/sessions` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/voice/sessions/[id]/end` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/voice/voices` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
+| `/api/v1/whats-new` | GET | handler | - | - | yes | - | 1: `hooks/data/modalsWithReleaseNotes.ts` |
+| `/api/v1/whats-new/media/[id]/[asset]` | GET | handler | - | - | yes | - | 0 |
 
 ### voice
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/voice/v2/agents` | GET | jwt+key | `ai:generate` | no | - | 0 |
-| `/api/voice/v2/llm-proxy/chat/completions` | POST | handler | - | no | - | 0 |
-| `/api/voice/v2/sessions` | POST | jwt+key | `ai:generate` | yes | `/api/v1/voice/sessions` | 1: `components/Session/ConversationalVoice/useConversationalVoice.ts` |
-| `/api/voice/v2/sessions/[id]/activity` | POST | jwt+key | `ai:generate` | no | - | 1: `components/Session/ConversationalVoice/useConversationalVoice.ts` |
-| `/api/voice/v2/sessions/[id]/end` | POST | jwt+key | `ai:generate` | yes | `/api/v1/voice/sessions/[id]/end` | 2: `components/Session/ConversationalVoice/useConversationalVoice.ts`, `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
-| `/api/voice/v2/voices` | GET | jwt+key | `ai:generate` | yes | `/api/v1/voice/voices` | 1: `hooks/data/elevenLabsVoices.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/voice/v2/agents` | GET | jwt+key | `ai:generate` | - | no | - | 0 |
+| `/api/voice/v2/llm-proxy/chat/completions` | POST | handler | - | - | no | - | 0 |
+| `/api/voice/v2/sessions` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/voice/sessions` | 1: `components/Session/ConversationalVoice/useConversationalVoice.ts` |
+| `/api/voice/v2/sessions/[id]/activity` | POST | jwt+key | `ai:generate` | - | no | - | 1: `components/Session/ConversationalVoice/useConversationalVoice.ts` |
+| `/api/voice/v2/sessions/[id]/end` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/voice/sessions/[id]/end` | 2: `components/Session/ConversationalVoice/useConversationalVoice.ts`, `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
+| `/api/voice/v2/voices` | GET | jwt+key | `ai:generate` | - | yes | `/api/v1/voice/voices` | 1: `hooks/data/elevenLabsVoices.ts` |
 
 ### webhooks
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/webhooks/deliveries` | GET | jwt+key | - | no | - | 1: `hooks/data/useWebhookDeliveries.ts` |
-| `/api/webhooks/deliveries/[id]/retry` | POST | jwt+key | - | no | - | 1: `hooks/data/useWebhookDeliveries.ts` |
-| `/api/webhooks/github` | POST | handler | - | no | - | 0 |
-| `/api/webhooks/github/[token]` | POST | handler | - | no | - | 0 |
-| `/api/webhooks/github/lake` | POST | handler | - | no | - | 0 |
-| `/api/webhooks/github/sre` | POST | handler | - | no | - | 0 |
-| `/api/webhooks/github/subscriptions` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/useWebhookSubscriptions.ts` |
-| `/api/webhooks/github/subscriptions/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/useWebhookSubscriptions.ts` |
-| `/api/webhooks/jira/[token]` | POST | handler | - | no | - | 0 |
-| `/api/webhooks/jira/config` | GET, POST, PUT, DELETE | jwt+key | - | no | - | 2: `components/settings/JiraNotificationsForm.tsx`, `hooks/data/useJiraWebhooks.ts` |
-| `/api/webhooks/jira/subscriptions` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/useJiraWebhooks.ts` |
-| `/api/webhooks/jira/subscriptions/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/useJiraWebhooks.ts` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/webhooks/deliveries` | GET | jwt+key | - | - | no | - | 1: `hooks/data/useWebhookDeliveries.ts` |
+| `/api/webhooks/deliveries/[id]/retry` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useWebhookDeliveries.ts` |
+| `/api/webhooks/github` | POST | handler | - | - | no | - | 0 |
+| `/api/webhooks/github/[token]` | POST | handler | - | - | no | - | 0 |
+| `/api/webhooks/github/lake` | POST | handler | - | - | no | - | 0 |
+| `/api/webhooks/github/sre` | POST | handler | - | - | no | - | 0 |
+| `/api/webhooks/github/subscriptions` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/useWebhookSubscriptions.ts` |
+| `/api/webhooks/github/subscriptions/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useWebhookSubscriptions.ts` |
+| `/api/webhooks/jira/[token]` | POST | handler | - | - | no | - | 0 |
+| `/api/webhooks/jira/config` | GET, POST, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useJiraWebhooks.ts` |
+| `/api/webhooks/jira/subscriptions` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/useJiraWebhooks.ts` |
+| `/api/webhooks/jira/subscriptions/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/useJiraWebhooks.ts` |
 
 ### websocket
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/websocket/ticket` | POST | jwt | - | no | - | 1: `contexts/WebsocketContext.tsx` |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/websocket/ticket` | POST | jwt | - | - | no | - | 1: `contexts/WebsocketContext.tsx` |
+
+### well-known
+
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/well-known/assetlinks` | GET | handler | - | - | no | - | 0 |
 
 ### work-items
 
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/work-items` | GET, POST | jwt+key | - | no | - | 0 |
-| `/api/work-items/[id]` | GET, PATCH, DELETE | jwt+key | - | no | - | 0 |
-| `/api/work-items/graph` | GET | jwt+key | - | no | - | 0 |
-| `/api/work-items/ready` | GET | jwt+key | - | no | - | 0 |
+| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/work-items` | GET, POST | jwt+key | - | - | no | - | 0 |
+| `/api/work-items/[id]` | GET, PATCH, DELETE | jwt+key | - | - | no | - | 0 |
+| `/api/work-items/graph` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/work-items/ready` | GET | jwt+key | - | - | no | - | 0 |
 
 ## Client paths with no route
 
@@ -1808,6 +1899,7 @@ a path built in a way the generator misreads, or a string that is not an API cal
 | `/api/admin/users/:param` | `hooks/data/adminUserCredits.ts` |
 | `/api/admin/users/:param/:param` | `components/admin/Users/Profile/actions/accountDialogs.tsx` |
 | `/api/research/tasks/:param` | `hooks/data/researchTasks.ts` |
+| `/api/tutorials` | `components/tutorial/TutorialHostContext.tsx` |
 | `/api/webhooks/deliveries/:param` | `hooks/data/useWebhookDeliveries.ts` |
 | `/api/webhooks/deliveries/stats` | `hooks/data/useWebhookDeliveries.ts` |
 | `/api/webhooks/github/subscriptions/:param/re-enable` | `hooks/data/useWebhookSubscriptions.ts` |

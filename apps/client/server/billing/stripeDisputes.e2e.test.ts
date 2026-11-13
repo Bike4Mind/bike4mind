@@ -16,7 +16,7 @@ import {
   stripeDisputeRepository,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { usersBulkUndoDeps } from '@server/admin/usersBulk/adapters';
+import { usersBulkUndoDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import {
   DISPUTE_SYSTEM_ACTOR_ID,
   DisputeContainUndoRefused,
@@ -41,8 +41,8 @@ const cancelAccountSubscriptions = vi.hoisted(() =>
 );
 // Lets a test fail the first transaction attempt of a Contain with a transient error, as the driver retries.
 const retryContain = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
-vi.mock('@server/admin/usersBulk/adapters', async importOriginal => {
-  const original = await importOriginal<typeof import('@server/admin/usersBulk/adapters')>();
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/admin/usersBulk/adapters')>();
   return {
     ...original,
     usersBulkSystemApplyDeps: (...args: Parameters<typeof original.usersBulkSystemApplyDeps>) => {
@@ -70,8 +70,8 @@ vi.mock('@server/admin/usersBulk/adapters', async importOriginal => {
   };
 });
 
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions,
 }));
 

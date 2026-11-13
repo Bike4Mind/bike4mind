@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -17,7 +17,8 @@ import {
 } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
@@ -93,6 +94,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           ? finding.sources.map(s => s.fabFileId).filter(fabFileId => superseded.has(fabFileId))
           : [],
     }));
+
+    if (page.length > 0) {
+      const fileIds = page.flatMap(f => f.sources.map(s => s.fabFileId));
+      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-findings' });
+    }
 
     return respond(res, lakeFindingListResponseSchema, { data, hasMore: findings.length > pageLimit });
   });

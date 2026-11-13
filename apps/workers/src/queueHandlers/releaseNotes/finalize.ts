@@ -56,20 +56,39 @@ function headlineFromItems(items: ReleaseNote['items'], logger: Logger): string 
   return trimToBoundary(asHeadline((pick ?? ordered[0]).text), MAX_HEADLINE_CHARS);
 }
 
-export type FinalizeResult = { kind: 'repair'; reasons: string[] } | { kind: 'ok'; note: ReleaseNote };
+/** Headline for a draft whose own copy hit the denylist; re-checked so the guard stays fail-closed. */
+function rebuildHeadlineFromItems(
+  items: ReleaseNote['items'],
+  denylist: string[],
+  logger: Logger
+): { headline: string; heldForReview: boolean } {
+  if (items.length === 0) return { headline: '', heldForReview: true };
+  const headline = headlineFromItems(items, logger);
+  if (findDenied(headline, denylist)) return { headline: '', heldForReview: true };
+  return { headline, heldForReview: false };
+}
+
+export type FinalizeResult =
+  | { kind: 'repair'; reasons: string[] }
+  // heldForReview: the generated copy hit the denylist and no clean copy could be built, so the note is hidden.
+  | { kind: 'ok'; note: ReleaseNote; heldForReview: boolean };
 
 /**
  * Turns a generated draft into a storable note: scrub, denylist, embargo and status. A denylist hit in
  * an item drops that item; a hit in the headline or summary returns `repair` so the caller can regenerate.
  * Generic or hype copy also returns `repair`, except on the `lastAttempt`, where a generic headline is
  * rebuilt from the items and a hype summary is dropped, so the release still gets a note.
+ *
+ * With `rebuildDeniedCopy`, a denylist hit in the headline or summary never returns `repair`: the headline
+ * is rebuilt from the surviving items and the summary is dropped, and when no clean headline can be built
+ * the note is stored hidden with a blank headline, for an admin to finish. Denylisted text is never kept.
  */
 export function finalizeReleaseNote(
   draft: ReleaseNoteDraft,
   payload: Pick<ReleaseNotesJobPayload, 'releaseTag' | 'deployedSha' | 'deployedAt' | 'prs'>,
   config: Pick<ReleaseNotesConfig, 'embargoHours' | 'denylist'>,
   logger: Logger,
-  { lastAttempt = false }: { lastAttempt?: boolean } = {}
+  { lastAttempt = false, rebuildDeniedCopy = false }: { lastAttempt?: boolean; rebuildDeniedCopy?: boolean } = {}
 ): FinalizeResult {
   const denylist = config.denylist.map(term => term.trim().toLowerCase()).filter(Boolean);
   let headline = scrubCustomerText(draft.headline);
@@ -83,7 +102,8 @@ export function finalizeReleaseNote(
     const term = findDenied(value, denylist);
     if (term) reasons.push(`the ${field} must not mention "${term}"`);
   }
-  if (reasons.length) return { kind: 'repair', reasons };
+  const copyDenied = reasons.length > 0;
+  if (copyDenied && !rebuildDeniedCopy) return { kind: 'repair', reasons };
 
   let dropped = 0;
   const items = draft.items.flatMap(item => {
@@ -100,8 +120,21 @@ export function finalizeReleaseNote(
     });
   }
 
-  const headlineReasons = findGenericCopy('headline', headline);
-  const summaryReasons = findGenericCopy('summary', summary);
+  let heldForReview = false;
+  if (copyDenied) {
+    ({ headline, heldForReview } = rebuildHeadlineFromItems(items, denylist, logger));
+    // The items carry the detail, so no summary beats an unusable one.
+    summary = '';
+    logger.warn(
+      heldForReview
+        ? '[releaseNotes] copy still hit the denylist after a rewrite and no clean copy could be built from the items; storing as hidden for an admin to finish'
+        : '[releaseNotes] copy still hit the denylist after a rewrite; rebuilt the headline from the items',
+      { releaseTag: payload.releaseTag, reasons }
+    );
+  }
+
+  const headlineReasons = copyDenied ? [] : findGenericCopy('headline', headline);
+  const summaryReasons = copyDenied ? [] : findGenericCopy('summary', summary);
   if ((headlineReasons.length || summaryReasons.length) && items.length) {
     if (!lastAttempt) return { kind: 'repair', reasons: [...headlineReasons, ...summaryReasons] };
     logger.warn('[releaseNotes] copy still generic after a rewrite; rebuilding the headline from the items', {
@@ -113,7 +146,7 @@ export function finalizeReleaseNote(
     if (summaryReasons.length) summary = '';
   }
 
-  if (items.length === 0 && payload.prs.some(pr => FEAT_OR_FIX_TITLE.test(pr.title))) {
+  if (items.length === 0 && !heldForReview && payload.prs.some(pr => FEAT_OR_FIX_TITLE.test(pr.title))) {
     logger.warn('[releaseNotes] no customer-facing items although the release has feat/fix PRs; storing as hidden', {
       releaseTag: payload.releaseTag,
     });
@@ -129,10 +162,11 @@ export function finalizeReleaseNote(
       summary,
       items,
       audience: 'public',
-      status: items.length ? 'scheduled' : 'hidden',
+      status: items.length && !heldForReview ? 'scheduled' : 'hidden',
       publishAt: new Date(payload.deployedAt.getTime() + config.embargoHours * MS_PER_HOUR),
       editedAt: null,
       schemaVersion: RELEASE_NOTES_SCHEMA_VERSION,
     },
+    heldForReview,
   };
 }

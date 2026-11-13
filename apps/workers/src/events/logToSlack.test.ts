@@ -40,7 +40,7 @@ vi.mock('@bike4mind/utils', () => ({
   notifyEventLogsToSlack: (...args: unknown[]) => mockNotifyEventLogsToSlack(...args),
 }));
 
-vi.mock('@server/services/liveopsFingerprint', () => ({
+vi.mock('@bike4mind/server-utils/services/liveopsFingerprint', () => ({
   extractErrorType: vi.fn(() => 'TypeError'),
   normalizeErrorMessage: vi.fn((m: string) => m),
 }));

@@ -12,7 +12,6 @@ import {
   ipcMain,
   nativeImage,
   net,
-  safeStorage,
   shell,
   type WebContents,
 } from 'electron';
@@ -61,6 +60,7 @@ import {
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
@@ -69,11 +69,12 @@ import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
-import { localContextSizing, localHardware, localLlamaServer } from './localContextSizing';
+import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
+import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -94,6 +95,7 @@ import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
 import { privateFile } from '../privateFile';
+import { appSecretCipher } from '../secrets';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -153,6 +155,7 @@ import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './rea
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
+import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -163,6 +166,7 @@ import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
+import { rendererNotes } from './rendererNotes';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -323,6 +327,8 @@ export interface RegisteredChat {
   modelSettings: ModelSettingsStore;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
+  /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
+  respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
 }
 
 /**
@@ -477,6 +483,7 @@ export function registerChat(
     home,
     protectedRoots: () => permissionProtected.paths(),
     unresolvedProtected: () => permissionProtected.unresolved(),
+    mainCheckoutOf,
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -526,10 +533,18 @@ export function registerChat(
     logger.warn(message)
   );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
-  // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
+  // Encrypted like the MCP secrets: a server's token or header value never goes to plain JSON.
+  const modelServerStore = new ModelServerStore(
+    appSecretCipher(),
+    privateFile(join(userData, 'model-servers.json')),
+    logger
+  );
+  void modelServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MODEL SERVERS: could not re-save stored credentials: ${String(error)}`));
   const modelServers = new ModelServerRegistry({
     loadSettings,
-    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
+    store: modelServerStore,
     logger,
     changed: servers => {
       models.expireLocal();
@@ -544,7 +559,7 @@ export function registerChat(
       gpuVendor: async () => (await localHardware.probed())?.gpuVendor ?? null,
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
-    ownedCipher: safeStorage,
+    ownedCipher: appSecretCipher(),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -559,9 +574,10 @@ export function registerChat(
     localLlamaServer({
       views: () => serversLoaded.then(() => modelServers.views()),
       onPath: async () => findOnPath('llama-server', await resolveUserPath()),
-    })
+    }),
+    message => logger.warn(message)
   );
-  modelServers.onServerSaved(() => localHardware.relistLlamaServer());
+  modelServers.onServerSaved(relistAfterSave(localHardware, () => modelServers.views(), logger));
   void localHardware.profile();
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
@@ -674,12 +690,14 @@ export function registerChat(
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
-  // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
+  // Encrypted for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
-  const mcp = new McpManager(
-    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
-    logger,
-    (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
+  const mcpServerStore = new McpServerStore(appSecretCipher(), privateFile(join(userData, 'mcp-servers.json')), logger);
+  void mcpServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MCP: could not re-save stored secrets: ${String(error)}`));
+  const mcp = new McpManager(mcpServerStore, logger, (state: McpServersState) =>
+    send(IPC_CHANNELS.mcpServersChanged, state)
   );
 
   const foreground = new ForegroundCommandRegistry();
@@ -733,6 +751,9 @@ export function registerChat(
     models,
     modelSettings,
     logger,
+    mintCompletionRun: createCompletionRunMinter(message =>
+      logger.warn(`CHAT: could not mint a completion run: ${message}`)
+    ),
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
@@ -802,6 +823,9 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, async () =>
+    store.defaultsForNewSession(await service.modelForNewSession())
   );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
@@ -1141,7 +1165,7 @@ export function registerChat(
     )
   );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
-    service.send(request.sessionId, request.text, request.attachments)
+    service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
@@ -1176,8 +1200,11 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
+  // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
+  // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
+  const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => approvals.resolve(approvalId, answer);
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
-    approvals.resolve(approvalId, answer)
+    respondToApproval(approvalId, answer)
   );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one
@@ -1217,6 +1244,13 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
   );
+  ipcMain.handle(IPC_CHANNELS.chatCopyDraftAttachments, (_event, draftId: string, sessionId: string, ids: string[]) =>
+    attachments.copyDraft(draftId, sessionId, ids)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDiscardDraftAttachments, (_event, draftId: string) => {
+    if (!draftId.startsWith('draft-')) throw new Error('Invalid draft id.');
+    return attachments.disposeDraft(draftId);
+  });
 
   registerImageMenuIpc(ipcMain, {
     media,
@@ -1251,6 +1285,14 @@ export function registerChat(
     },
     writeFile: (path, content) => writeFile(path, content, 'utf8'),
     downloadsDirectory: () => app.getPath('downloads'),
+  });
+
+  registerLocalDataExportIpc(ipcMain, {
+    sessions: store,
+    attachments,
+    media,
+    userData,
+    pickFolder: sender => pickDirectory(sender),
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
@@ -1519,6 +1561,7 @@ export function registerChat(
     localContext,
     modelSettings,
     capabilityLedger,
+    respondToApproval,
   };
 }
 

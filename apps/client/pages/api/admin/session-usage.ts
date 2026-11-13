@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
@@ -28,7 +28,7 @@ const QuerySchema = z.object({
  * this session cost what it did?".
  *
  * Access: admins with `support:read` read any session, cross-org. A non-admin must pass
- * the org they can access (verifyOrgOwner) AND the session's spend must be
+ * the org they can access (verifyOrgAccess: owner or current manager) AND the session's spend must be
  * billed to that org - sessions carry no org of their own, so ownership is
  * proven off the usage events. Mismatches 404 (same as no access, to avoid
  * enumeration).
@@ -60,7 +60,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   if (!organizationId || hasAdminPermission(req.user, 'support:read')) {
     requireAdminPermission(req, 'support:read');
   } else {
-    await verifyOrgOwner(req.user, organizationId);
+    await verifyOrgAccess(req.user, organizationId);
     const belongsToOrg = await usageEventRepository.sessionBelongsToOwner(
       sessionId,
       organizationId,
@@ -75,7 +75,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const [usage, execDocs] = await Promise.all([
     usageEventRepository.sessionUsageSummary(
       sessionId,
-      orgScope ? { ownerId: orgScope, ownerType: CreditHolderType.Organization } : undefined
+      orgScope ? { ownerId: orgScope, ownerType: CreditHolderType.Organization } : undefined,
+      { includeExecuted: !orgScope }
     ),
     agentExecutionRepository.findBillingBySessionId(sessionId, orgScope),
   ]);

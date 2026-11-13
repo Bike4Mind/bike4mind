@@ -140,6 +140,21 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
   });
 });
 
+describe('POST /api/publish/gate/passphrase - expired share link', () => {
+  // shareTokenFilter excludes revoked and expired entries (pinned against real Mongo in
+  // PublishedArtifactModel.shareToken.test.ts), so an expired link resolves no row.
+  it('404s before checking the passphrase', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    mocks.lean.mockResolvedValue(null);
+
+    const { res, promise } = run({ path: '/a/tok123', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+    expect(res._getStatusCode()).toBe(404);
+  });
+});
+
 describe('POST /api/publish/gate/passphrase - owner check', () => {
   it('404s like the serve route when the owner account is gone, banned or suspended', async () => {
     gated();

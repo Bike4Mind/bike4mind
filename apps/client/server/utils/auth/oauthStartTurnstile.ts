@@ -1,7 +1,7 @@
 import type { Request, RequestHandler } from 'express';
 import { TURNSTILE_ACTION_OAUTH_START, TURNSTILE_OAUTH_TOKEN_PARAM, isTurnstileOAuthProvider } from '@bike4mind/common';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
-import type { LoginErrorCode } from '@client/app/utils/loginErrorMessages';
+import type { LoginErrorCode } from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 
 const strategyOf = (req: Request): unknown => req.query?.strategy;
 

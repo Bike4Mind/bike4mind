@@ -13,6 +13,9 @@ const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
@@ -24,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const feedbackDoc = { id: '507f1f77bcf86cd7994390fb', userId: 'owner1', contentStored: false };
+const feedbackDoc = { id: '507f1f77bcf86cd7994390fb', userId: 'owner1', contentStored: false, status: 'New' };
 const model = vi.hoisted(() => ({
   findById: vi.fn(),
   findOneAndUpdate: vi.fn(),
@@ -36,6 +39,8 @@ const feedbackText = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ FeedbackModel: model, FeedbackTextModel: feedbackText }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+const recordFeedbackRead = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead }));
 
 import '@pages/api/feedback/[id]/update';
 
@@ -43,7 +48,7 @@ function mocks(can: (action: string, subject: unknown) => boolean) {
   const { req, res } = createMocks({
     method: 'PUT',
     query: { id: '507f1f77bcf86cd7994390fb' },
-    body: { userId: 'someone', content: 'edited', username: 'x', status: 'open' },
+    body: { userId: 'someone', content: 'edited', username: 'x' },
   });
   (req as any).user = { id: 'attacker', isAdmin: false };
   (req as any).ability = { can: vi.fn(can) };
@@ -58,6 +63,8 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     // .toJSON() on it before redacting, so the mock needs that method too.
     model.findOneAndUpdate.mockResolvedValue({ ...updatedFeedbackDoc, toJSON: () => updatedFeedbackDoc });
     model.findOneAndUpdate.mockClear();
+    feedbackText.find.mockClear();
+    recordFeedbackRead.mockReset().mockResolvedValue(undefined);
   });
 
   it('authorizes against the fetched document, not the model class', async () => {
@@ -81,6 +88,51 @@ describe('PUT /api/feedback/[id] - instance-level authorization', () => {
     await mockRefs.putHandler!(req, res);
     expect(model.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each(['handledBy', 'handledAt', 'resolution', 'resolutionDuplicateId'])(
+    'refuses %s, which only the admin status route sets',
+    async field => {
+      const { req, res } = mocks(() => true);
+      req.body = { ...req.body, [field]: 'admin1' };
+      await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({
+        statusCode: 400,
+        message: `${field} cannot be set on a report.`,
+      });
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a status change but ignores the stored status echoed back', async () => {
+    const changed = mocks(() => true);
+    changed.req.body = { ...changed.req.body, status: 'Closed' };
+    await expect(mockRefs.putHandler!(changed.req, changed.res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+
+    const echoed = mocks(() => true);
+    echoed.req.body = { ...echoed.req.body, status: feedbackDoc.status };
+    await mockRefs.putHandler!(echoed.req, echoed.res);
+    expect(echoed.res._getStatusCode()).toBe(200);
+    expect(model.findOneAndUpdate.mock.calls[0][1].$set).not.toHaveProperty('status');
+  });
+
+  it('records the read of the returned report before loading its text', async () => {
+    recordFeedbackRead.mockImplementation(async () => {
+      expect(feedbackText.find).not.toHaveBeenCalled();
+    });
+    const { req, res } = mocks(() => true);
+    await mockRefs.putHandler!(req, res);
+
+    expect(recordFeedbackRead).toHaveBeenCalledWith(req, [{ id: feedbackDoc.id, userId: 'owner1' }]);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('fails without responding when the read cannot be audited', async () => {
+    recordFeedbackRead.mockRejectedValue(new Error('audit store down'));
+    const { req, res } = mocks(() => true);
+
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit store down');
+    expect(res._isEndCalled()).toBe(false);
   });
 
   it('redacts functionCalls[].returnValue in the response, the same as GET /api/feedback', async () => {

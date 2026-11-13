@@ -29,6 +29,58 @@ describe('partnerRules resolver', () => {
     mockFindActiveRules.mockResolvedValue([RULE]);
   });
 
+  it('propagates an unreadable rule set to a strict entitlement caller', async () => {
+    const failure = new Error('Partner rules unavailable');
+    mockFindActiveRules.mockRejectedValue(failure);
+    await expect(partnerEntitlementsForEmail('member@partner.com', true, { strict: true })).rejects.toBe(failure);
+  });
+
+  it('shares the raw refresh failure without letting the ordinary fallback hide it from strict callers', async () => {
+    const failure = new Error('Partner rules unavailable');
+    mockFindActiveRules.mockRejectedValue(failure);
+    const [ordinary, strict] = await Promise.allSettled([
+      partnerEntitlementsForEmail('member@partner.com', true),
+      partnerEntitlementsForEmail('member@partner.com', true, { strict: true }),
+    ]);
+    expect(ordinary).toEqual({ status: 'fulfilled', value: new Set() });
+    expect(strict).toEqual({ status: 'rejected', reason: failure });
+    expect(mockFindActiveRules).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failed strict refresh and trusts a successful cache without a second lookup', async () => {
+    mockFindActiveRules.mockRejectedValueOnce(new Error('Temporary outage'));
+    await expect(partnerEntitlementsForEmail('member@partner.com', true, { strict: true })).rejects.toThrow();
+    await expect(partnerEntitlementsForEmail('member@partner.com', true, { strict: true })).resolves.toEqual(
+      new Set(['optihashi:pro'])
+    );
+    await partnerEntitlementsForEmail('member@partner.com', true, { strict: true });
+    expect(mockFindActiveRules).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not treat an expired success cache as complete after a failed refresh', async () => {
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      await partnerEntitlementsForEmail('member@partner.com', true, { strict: true });
+      clock.mockReturnValue(start + 61_000);
+      mockFindActiveRules.mockRejectedValueOnce(new Error('Refresh unavailable'));
+      await expect(partnerEntitlementsForEmail('member@partner.com', true, { strict: true })).rejects.toThrow();
+      await expect(partnerEntitlementsForEmail('member@partner.com', true, { strict: true })).resolves.toEqual(
+        new Set(['optihashi:pro'])
+      );
+      expect(mockFindActiveRules).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not make an unverified email depend on partner storage in strict mode', async () => {
+    await expect(partnerEntitlementsForEmail('member@partner.com', false, { strict: true })).resolves.toEqual(
+      new Set()
+    );
+    expect(mockFindActiveRules).not.toHaveBeenCalled();
+  });
+
   it('resolves entitlement keys for a verified matching domain', async () => {
     const keys = await partnerEntitlementsForEmail('someone@partner.com', true);
     expect([...keys]).toEqual(['optihashi:pro']);

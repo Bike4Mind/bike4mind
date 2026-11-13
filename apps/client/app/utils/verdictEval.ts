@@ -12,10 +12,10 @@ export type VerdictEvalWindowDays = (typeof VERDICT_EVAL_WINDOWS)[number];
 
 /**
  * What is graded: the AI assessment of a detection (per model), the auto-containment decision on a
- * detection (per mode), and the signup chart's verdict on an account (the Users list's
- * Suspected / Likely legit chip).
+ * detection (per mode), the signup chart's verdict on an account (the Users list's Suspected /
+ * Likely legit chip), and, on an evaluation set, whether any detector flagged the account.
  */
-export const VERDICT_EVAL_GRADERS = ['assessment', 'containment', 'signupVerdict'] as const;
+export const VERDICT_EVAL_GRADERS = ['assessment', 'containment', 'signupVerdict', 'detectors'] as const;
 export type VerdictEvalGrader = (typeof VERDICT_EVAL_GRADERS)[number];
 
 export const VERDICT_EVAL_LABELS = ['abuse', 'legit'] as const;
@@ -27,6 +27,9 @@ export type VerdictEvalLabel = (typeof VERDICT_EVAL_LABELS)[number];
  */
 export const VERDICT_EVAL_LABEL_SOURCES = ['adminVerdict', 'reinstated', 'adminSuspended', 'riskReview'] as const;
 export type VerdictEvalLabelSource = (typeof VERDICT_EVAL_LABEL_SOURCES)[number];
+
+/** How far before its detection an account's spend counts as "before detection". */
+export const SPEND_LOOKBACK_DAYS = 30;
 
 export const verdictEvalScoreSchema = z.object({
   grader: z.enum(VERDICT_EVAL_GRADERS),
@@ -61,12 +64,68 @@ export const verdictEvalDisagreementSchema = z.object({
 });
 export type VerdictEvalDisagreement = z.infer<typeof verdictEvalDisagreementSchema>;
 
+/**
+ * Groups of legitimate users that detectors are more likely to flag by mistake. Assistive technology
+ * leaves no stored signal, so it is listed but never measurable.
+ */
+export const EVAL_COHORTS = ['mobile', 'sharedNetwork', 'apiAgent', 'assistive'] as const;
+export type EvalCohort = (typeof EVAL_COHORTS)[number];
+export const evalCohortSchema = z.enum(EVAL_COHORTS);
+
+export const verdictEvalCohortRowSchema = z.object({
+  cohort: evalCohortSchema,
+  measurable: z.boolean(),
+  /** Accounts in the cohort that a detection flagged. */
+  flaggedAccounts: z.number().int().min(0),
+  /** Of those, the accounts with an admin label. */
+  labelledAccounts: z.number().int().min(0),
+  abuse: z.number().int().min(0),
+  legit: z.number().int().min(0),
+  /** Labelled accounts labelled legit; null with none labelled. */
+  falsePositiveShare: z.number().min(0).max(1).nullable(),
+});
+export type VerdictEvalCohortRow = z.infer<typeof verdictEvalCohortRowSchema>;
+
+export const verdictEvalOperationsRowSchema = z.object({
+  detector: z.string(),
+  /** Detections of this detector in the window. */
+  detections: z.number().int().min(0),
+  /** Detections an admin gave a verdict. */
+  reviewed: z.number().int().min(0),
+  /** Reviewed detections whose verdict was not insufficient evidence. */
+  conclusive: z.number().int().min(0),
+  /** Confirmed abuse over conclusive verdicts; null with none. */
+  reviewYield: z.number().min(0).max(1).nullable(),
+  /** Hours from the earliest member signup to detection, over detections labelled abuse. */
+  timeToDetection: z.object({ n: z.number().int().min(1), medianHours: z.number(), p90Hours: z.number() }).nullable(),
+  /**
+   * Credits charged to members of detections labelled abuse, each account once, at its earliest such
+   * detection of this detector.
+   */
+  spend: z
+    .object({
+      accounts: z.number().int().min(0),
+      /** In the SPEND_LOOKBACK_DAYS before the detection. */
+      creditsBeforeDetection: z.number(),
+      /** From the detection until the account's earliest admin suspension, or now. */
+      creditsAfterDetection: z.number(),
+    })
+    .nullable(),
+});
+export type VerdictEvalOperationsRow = z.infer<typeof verdictEvalOperationsRowSchema>;
+
 export const verdictEvalReportSchema = z.object({
   since: z.coerce.date(),
   detections: z.number().int().min(0),
   labelledDetections: z.number().int().min(0),
   labelledAccounts: z.number().int().min(0),
+  /** Accounts whose only label would have been a risk review approved by policy, not by an admin. */
+  excludedAutoApprovals: z.number().int().min(0),
   scores: z.array(verdictEvalScoreSchema),
+  /** One row per detector, by name. */
+  operations: z.array(verdictEvalOperationsRowSchema),
+  /** Flagged accounts by cohort, one row per cohort. */
+  cohorts: z.array(verdictEvalCohortRowSchema),
   /** Newest first, capped; false negatives are the farms the grader let through. */
   disagreements: z.array(verdictEvalDisagreementSchema),
   /** True when a read hit its cap, so the counts cover only the newest part of the window. */

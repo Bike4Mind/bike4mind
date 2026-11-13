@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
-import { cohortHashOf, type BulkUser, type ResolveDeps } from './resolve';
+import type {
+  AdminUsersBulkAction,
+  AdminUsersBulkExecuteRequest,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import { cohortHashOf, type BulkUser, type ResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 
 const mocks = vi.hoisted(() => ({
   policy: vi.fn(),
@@ -33,7 +36,7 @@ vi.mock('@server/admin/approvals/service', () => ({
   getApprovalPolicy: mocks.policy,
   requestApproval: mocks.requestApproval,
 }));
-vi.mock('./adapters', () => ({ usersBulkResolveDeps: {} }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({ usersBulkResolveDeps: {} }));
 
 import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
 
@@ -211,5 +214,21 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
       pending: PENDING,
     });
     expect(reservations.rows.size).toBe(0);
+  });
+
+  it('holds a delegate back from an account with admin access, so the cohort no longer matches', async () => {
+    const target = { ...userRow(idOf(1)), adminPermissions: ['support:read'] };
+    const body = requestFor([target], { type: 'suspend' });
+    const delegate = {
+      user: { id: ADMIN, isAdmin: false, adminPermissions: ['users:moderate'] },
+    } as unknown as Request;
+    await expect(requestUsersBulkApprovalIfNeeded(delegate, body, depsFor([target]))).rejects.toThrow(
+      /matching users changed/
+    );
+    expect(mocks.requestApproval).not.toHaveBeenCalled();
+
+    await expect(requestUsersBulkApprovalIfNeeded(req, body, depsFor([target]))).resolves.toMatchObject({
+      pending: null,
+    });
   });
 });

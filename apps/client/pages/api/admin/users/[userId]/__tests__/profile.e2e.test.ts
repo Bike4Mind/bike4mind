@@ -8,6 +8,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
 import { User } from '@bike4mind/database';
+import { hashEmailToken } from '@bike4mind/utils';
 
 // Drives the real repository, userService and User model on a replica set, so the transaction,
 // the unique indexes and the required-name rule are the real ones; the unit test mocks all three.
@@ -150,6 +151,8 @@ describe('PATCH /api/admin/users/:userId/profile (real repository + Mongo)', () 
       'user-retry@example.com',
       'retry-next@example.com',
     ]);
-    expect(h.publish.mock.calls[1][0].body).toContain(stored!.pendingEmailToken);
+    const sentToken = /token=([0-9a-f-]{36})/.exec(h.publish.mock.calls[1][0].body)?.[1];
+    expect(sentToken).toBeDefined();
+    expect(hashEmailToken(sentToken!)).toBe(stored!.pendingEmailToken);
   });
 });

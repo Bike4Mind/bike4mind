@@ -84,7 +84,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
-vi.mock('@server/utils/validators', () => ({
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({
   validateAppUrl: () => 'http://localhost:3000',
   // The route now shares one localhost predicate with csrfProtection; the real
   // implementation is pure, so mirror it rather than stubbing a boolean.
@@ -821,7 +821,10 @@ describe('/api/auth/okta/callback - second factor', () => {
       userInfo,
     });
 
-    expect(mockResolveSecondFactor).not.toHaveBeenCalled();
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'okta', createdVia: 'okta' },
+      enterpriseIdp: true,
+    });
     expect(issueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
@@ -840,6 +843,7 @@ describe('/api/auth/okta/callback - second factor', () => {
     expect(mockResolveSecondFactor).toHaveBeenCalledTimes(1);
     expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       origin: { strategy: 'okta', createdVia: 'okta' },
+      enterpriseIdp: false,
     });
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
     expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=verify&passkey=1');
@@ -890,6 +894,19 @@ describe('/api/auth/okta/callback - second factor', () => {
 
     const res = await runCallback({ user: existingUser, userInfo });
 
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=setup');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('hands an IdP-bound org member to setup when local enrollment is owed', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+    const res = await runCallback({
+      user: {
+        ...existingUser,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-mfa', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo,
+    });
     expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=setup');
     expect(issueBrowserSession).not.toHaveBeenCalled();
   });

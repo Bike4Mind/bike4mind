@@ -1,5 +1,8 @@
 import {
+  BULK_ABUSE_ACTION_PERMISSIONS,
   MAX_BULK_ABUSE_BATCH,
+  hasAdminPermission,
+  missingAdminPermissionMessage,
   normalizeEmailDomain,
   type BulkAbuseAction,
   type BulkAbuseActions,
@@ -18,6 +21,7 @@ import {
   isAdminReasonComplete,
 } from '@client/app/components/admin/shared/adminReason';
 import { useBulkAbuseExecute, useBulkAbusePreview } from '@client/app/hooks/data/adminBulkAbuse';
+import { useUser } from '@client/app/contexts/UserContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
   Alert,
@@ -108,8 +112,21 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
 
   const normalizedDomain = normalizeEmailDomain(domain);
   const tooManySelected = selectedUserIds.length > MAX_BULK_ABUSE_BATCH;
+  const { currentUser } = useUser();
+  // A ban covers its own key revocation, so revokeApiKeys under a ban needs no keys:revoke.
+  const missingPermission = (action: BulkAbuseAction): string | null =>
+    (action === 'revokeApiKeys' && actions.ban) ||
+    hasAdminPermission(currentUser, BULK_ABUSE_ACTION_PERMISSIONS[action])
+      ? null
+      : missingAdminPermissionMessage(BULK_ABUSE_ACTION_PERMISSIONS[action]);
+  const permittedActions = Object.fromEntries(
+    (Object.keys(actions) as BulkAbuseAction[]).map(action => [action, actions[action] && !missingPermission(action)])
+  ) as BulkAbuseActions;
   // The server revokes API keys for any ban, so the checkbox shows it as on and locked.
-  const effectiveActions: BulkAbuseActions = { ...actions, revokeApiKeys: actions.revokeApiKeys || actions.ban };
+  const effectiveActions: BulkAbuseActions = {
+    ...permittedActions,
+    revokeApiKeys: permittedActions.revokeApiKeys || permittedActions.ban,
+  };
   const hasAction = Object.values(effectiveActions).some(Boolean);
   const targetValid =
     targetKind === 'domain' ? normalizedDomain !== null : selectedUserIds.length > 0 && !tooManySelected;
@@ -261,8 +278,14 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({
                 <Checkbox
                   key={action}
                   label={ACTION_LABELS[action]}
+                  title={missingPermission(action) ?? undefined}
                   checked={effectiveActions[action]}
-                  disabled={executeMutation.isPending || !!recordAction || (action === 'revokeApiKeys' && actions.ban)}
+                  disabled={
+                    executeMutation.isPending ||
+                    !!recordAction ||
+                    (action === 'revokeApiKeys' && actions.ban) ||
+                    !!missingPermission(action)
+                  }
                   onChange={event => {
                     setActions(current => ({ ...current, [action]: event.target.checked }));
                     resetPreview();

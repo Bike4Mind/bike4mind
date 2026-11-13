@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
 import { createCompletionCreditHolds } from './completionCreditHolds';
-import { newAccountSpendCapAdaptersWithAlert } from './newAccountSpendCapWithAlert';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 
 const hold = {
   ownerId: 'user',

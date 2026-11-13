@@ -47,8 +47,8 @@ const SESSION_GRANT_MARKERS = [
 ];
 const KEY_CLOSED_AUTH = /\bauth:\s*(?:'jwtOnly'|false\b)/;
 const KEY_SHIMS = [/\bapiKeyAuth\(/, /\boptionalAuth\b/];
-// Object-literal options only; a route passing a variable (`baseApi(opts)`) fails closed below.
-const BASE_API_CALL = /\bbaseApi\(([^)]*)\)/g;
+// adminApi forwards its options to baseApi. Object-literal options only; a route passing a variable (`baseApi(opts)`) fails closed below.
+const BASE_API_CALL = /\b(?:baseApi|adminApi)\(([^)]*)\)/g;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {

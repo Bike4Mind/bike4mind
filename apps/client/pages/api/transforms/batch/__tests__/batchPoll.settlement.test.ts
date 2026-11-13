@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   settle: vi.fn(),
   catalog: vi.fn(),
   record: vi.fn(async () => undefined),
+  warn: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -33,7 +34,7 @@ vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: (usd: number) => Math.round(usd * 1000),
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {
     findByAnthropicBatchId: async () => m.batch,
@@ -60,7 +61,7 @@ const hold = { ownerId: 'u1', reservedCredits: 500 };
 
 async function poll() {
   const { req, res } = createMocks({ method: 'GET', query: { id: 'msgbatch_1' } });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: m.warn, error: vi.fn() } });
   await m.getHandler!(req, res);
   return JSON.parse(res._getData());
 }
@@ -122,8 +123,11 @@ describe('GET /api/transforms/batch/:id settlement', () => {
         feature: 'completion_api',
         inputTokens: 110,
         outputTokens: 55,
+        costUsd: expect.closeTo(0.11, 6),
       })
     );
+    expect(m.record.mock.calls[0][0]).not.toHaveProperty('executedModel');
+    expect(m.record.mock.calls[0][0]).not.toHaveProperty('executedProvider');
   });
 
   it('prices items sharing a client_ref by their own customId model', async () => {
@@ -518,5 +522,106 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(m.claim).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
     expect(m.markSettled).not.toHaveBeenCalled();
+  });
+
+  describe('substituted items', () => {
+    const m1 = { id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } };
+    const m2 = { id: 'm2', pricing: { 200_000: { input: 1e-4, output: 2e-4 } } };
+    const substitute = (billingModels: Record<string, unknown>, executedModel = 'm2') => {
+      const row = m.batch as { customIdMap: Record<string, unknown>[] };
+      row.customIdMap = row.customIdMap.map(e => ({ ...e, executedModel }));
+      m.batch = { ...m.batch, billingModels };
+      m.claim.mockResolvedValue(m.batch);
+    };
+
+    it('charges credits at the requested price and records cost and executed model at the run price', async () => {
+      substitute({ m1, m2 });
+
+      await poll();
+
+      expect(m.settle.mock.calls[0][1]).toBe(110);
+      expect(m.settle.mock.calls[0][2]).toMatchObject({ model: 'm1' });
+      expect(m.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'm1',
+          costUsd: expect.closeTo(0.011, 6),
+          executedProvider: 'anthropic',
+          executedModel: 'm2',
+        })
+      );
+    });
+
+    it('prices cost on the requested model and warns when the run model cannot be priced', async () => {
+      substitute({ m1 }, 'ghost');
+
+      await poll();
+
+      expect(m.settle.mock.calls[0][1]).toBe(110);
+      expect(m.record.mock.calls[0][0].costUsd).toBeCloseTo(0.11, 6);
+      expect(m.record.mock.calls[0][0]).toMatchObject({ executedProvider: 'anthropic', executedModel: 'ghost' });
+      expect(m.warn).toHaveBeenCalledWith(expect.stringContaining('Cannot price executed model ghost'));
+    });
+
+    it('keeps canceled and expired errors on substituted failed items', async () => {
+      substitute({ m1, m2 });
+      batchResults.items = [
+        { customId: 'req_0', clientRef: 'a', status: 'failed', error: 'canceled' },
+        { customId: 'req_1', clientRef: 'b', status: 'failed', error: 'expired' },
+      ];
+      m.getBatchResults.mockImplementation(async () => ({
+        processingStatus: 'ended',
+        counts: { processing: 0, succeeded: 0, errored: 0, canceled: 1, expired: 1 },
+        results: batchResults.items,
+      }));
+
+      const body = await poll();
+
+      expect(body.results.map((r: { error: string }) => r.error)).toEqual(['canceled', 'expired']);
+    });
+
+    it('records the executed model per item in a mixed batch', async () => {
+      const m3 = { id: 'm3', pricing: { 200_000: { input: 4e-3, output: 8e-3 } } };
+      substitute({ m1, m2, m3 });
+      batchResults.items = [
+        { customId: 'req_0', clientRef: 'a', status: 'done', reply: 'x', tokenUsage: usage(100, 50) },
+        { customId: 'req_1', clientRef: 'b', status: 'done', reply: 'y', tokenUsage: usage(10, 5) },
+      ];
+      const row = m.batch as { customIdMap: Record<string, unknown>[] };
+      row.customIdMap = [
+        { customId: 'req_0', clientRef: 'a', model: 'm1', executedModel: 'm2' },
+        { customId: 'req_1', clientRef: 'b', model: 'm3' },
+      ];
+
+      await poll();
+
+      // Credits at requested prices: m1 $0.1 + m3 $0.04; cost: m2 $0.01 + m3 $0.04.
+      expect(m.settle.mock.calls[0][1]).toBe(140);
+      expect(m.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'm1,m3',
+          costUsd: expect.closeTo(0.05, 6),
+          executedProvider: 'anthropic',
+          executedModel: 'm2,m3',
+        })
+      );
+    });
+
+    it('masks a failed substituted item error but keeps an unsubstituted one', async () => {
+      substitute({ m1, m2 });
+      const row = m.batch as { customIdMap: Record<string, unknown>[] };
+      delete row.customIdMap[2].executedModel;
+      batchResults.items.push({
+        customId: 'req_3',
+        clientRef: 'd',
+        status: 'failed',
+        error: 'max_tokens > 64 for claude-m2',
+      });
+      row.customIdMap.push({ customId: 'req_3', clientRef: 'd', model: 'm1', executedModel: 'm2' });
+
+      const body = await poll();
+
+      expect(body.results.find((r: { client_ref: string }) => r.client_ref === 'c').error).toBe('overloaded');
+      expect(body.results.find((r: { client_ref: string }) => r.client_ref === 'd').error).toBe('errored');
+    });
   });
 });

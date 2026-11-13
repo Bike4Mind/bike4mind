@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { AdminUsersBulkResult } from '@client/app/utils/adminUsersBulk';
+import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
 const { showUndo, undo } = vi.hoisted(() => ({ showUndo: vi.fn(), undo: vi.fn() }));
 vi.mock('../../shared/UndoToast', () => ({ useUndoToast: () => showUndo }));

@@ -417,4 +417,13 @@ describe('executeCompletion - serverTools opt-in', () => {
       expect.objectContaining({ status: 'refusal', inputTokens: 100, outputTokens: 5 })
     );
   });
+
+  // No fallback loop runs here, so a refusalFallback model must settle its refusal rather than throw.
+  it('asks the backend to settle a safety refusal instead of throwing it', async () => {
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, db });
+
+    expect(capturedOptions!.settleRefusal).toBe(true);
+  });
 });

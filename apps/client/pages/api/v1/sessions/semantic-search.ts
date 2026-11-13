@@ -20,8 +20,8 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
   settleCompletion,
-} from '@server/billing/meterPlatformCompletion';
-import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   apiKeyRepository,
@@ -142,7 +142,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
       let throwIfExpansionRefused = () => {};
       try {
         const expansionStart = Date.now();
-        const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+        const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
         // The provider promise owns settlement even when SmallLLM's timeout returns a fallback first.
         const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search expansion', quotaContext);
         throwIfExpansionRefused = metered.throwIfRefused;
@@ -162,7 +162,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
 
         queryExpansionTimeMs = Date.now() - expansionStart;
         req.logger?.info?.(
-          `Query expansion: "${query}" → "${correctedQuery}" with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
+          `Query expansion: ${query.length} -> ${correctedQuery.length} chars with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
         );
       } catch (expansionError) {
         throwIfExpansionRefused();
@@ -469,7 +469,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
         let throwIfReRankRefused = () => {};
 
         try {
-          const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+          const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
           const metered = meterSearchBackend(req, llm, modelInfo, 'semantic search reranking', quotaContext);
           throwIfReRankRefused = metered.throwIfRefused;
           const reRankService = new ReRankService({ llm: metered.llm, modelId }, req.logger);

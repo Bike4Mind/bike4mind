@@ -32,6 +32,8 @@ export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
   cancelPendingRecipient: (id: string, email: string) => Promise<IInviteDocument | null>;
   /** Spend every slot and clear pending, keeping accepted/refused. */
   closeInvite: (id: string) => Promise<IInviteDocument | null>;
+  /** Spend every slot and stamp `revokedAt` (kept if already set). Null for an unknown id. */
+  markRevoked: (id: string) => Promise<IInviteDocument | null>;
   searchInvites: (
     query: Record<string, unknown>,
     limit: number,
@@ -93,6 +95,12 @@ export type IBaseInvite = {
   // `resolveRedeemableInvite` keys the legacy `_id` door on exactly that absence, so the old door
   // closes for every new invite without a clock constant to maintain.
   token?: string;
+
+  // Organization share links only: lowercased hosts an accepter's verified email must match exactly
+  // (no subdomains). Absent or empty means any account may join.
+  allowedDomains?: string[];
+  // Set when a manager revokes a share link; accept refuses a revoked invite before any other check.
+  revokedAt?: Date | null;
 
   expiresAt: undefined | Date;
 };

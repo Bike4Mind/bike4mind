@@ -134,7 +134,8 @@ import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
 import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
 import { catalogSampling } from './catalogSampling';
-import { clearsCap, isLinuxStoreDir, partialLoad } from './wslGpuCap';
+import type { OllamaBuild } from './ollamaWslPatch';
+import { clearsCap, isLinuxStoreDir, partialLoad, releaseCapsWslGpu, wslGpuCapWarning } from './wslGpuCap';
 import type { CatalogSampling } from '@shared/generation';
 
 /** The import methods are what a split build needs; without them it is refused. */
@@ -221,6 +222,8 @@ export interface ModelHubServiceDeps {
   curated: () => HubManifest;
   onPullsChanged: (pulls: ModelPull[]) => void;
   onInstalledChanged: (serverId: string) => void;
+  /** A server's badges changed outside any listing, so the open installed and curated lists are read again. */
+  onRatingsChanged?: (serverId: string) => void;
   /** A reviewed pull passed every check and its download starts; not called again on resume. */
   onPullStarted?: (pull: StartedPull) => void;
   /** Free bytes on the disk holding `path` on this computer; null when it cannot be read. */
@@ -239,6 +242,8 @@ export interface ModelHubServiceDeps {
   wslHost?: boolean;
   /** Whether this computer's NVIDIA GPU uses the CPU's memory; null when nvidia-smi cannot say. */
   integratedGpu?: () => Promise<boolean | null>;
+  /** The Ollama at `url` on this computer and whether it carries the WSL shared GPU memory change; null if unknown. */
+  ollamaWslPatch?: (url: string) => Promise<OllamaBuild | null>;
   /** The main log. */
   warn: (message: string) => void;
   /** Minimum gap between progress pushes (ms). */
@@ -248,6 +253,14 @@ export interface ModelHubServiceDeps {
 }
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+interface ServerIdentity {
+  version: string | null;
+  server: string | null;
+}
+/** True only when a part both reads know disagrees; a failed read never makes another server. */
+const otherServer = (seen: ServerIdentity, now: ServerIdentity) =>
+  (seen.version !== null && now.version !== null && seen.version !== now.version) ||
+  (seen.server !== null && now.server !== null && seen.server !== now.server);
 // Ollama 0.40 holds /api/show on a just-pulled model for about 15 s on a busy host, then answers in milliseconds.
 const CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
@@ -726,6 +739,8 @@ interface Sizing {
   kvCacheType?: QuantizedKvCacheType;
   /** The OLLAMA_FLASH_ATTENTION the server runs with, when Desktop knows it; absent is auto. */
   flashAttention?: FlashAttention;
+  /** Flagged on badges the GPU rates: a limit this server puts on GPU memory that the verdict does not count. */
+  fitWarning?: string;
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
@@ -758,6 +773,7 @@ function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit
     kvCacheType: sizing.kvCacheType,
     flashAttention: sizing.flashAttention,
     where: sizing.where,
+    warning: sizing.fitWarning,
     expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
     activeParamsFraction: activeParamsFraction(entry.params),
   });
@@ -801,6 +817,11 @@ export class ModelHubService {
   /** nvidia-smi's answer for the session, null included; undefined until it settles. */
   #integrated: boolean | null | undefined = undefined;
   #integratedAsked = false;
+  /** The server `#gpuCap` was seen on; the limit is not shown once another one answers. */
+  #gpuCapServer: ServerIdentity | null = null;
+  #buildUnreadLogged = false;
+  #publishedFitWarning: string | null = null;
+  #warnedChecks = new Set<string>();
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -850,6 +871,13 @@ export class ModelHubService {
   }
 
   async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    if (this.#gpuCap && this.#gpuCapServer) {
+      const seen = this.#gpuCapServer;
+      const now = await this.#serverIdentity(target);
+      if (otherServer(seen, now)) this.#gpuCap = null;
+      // A part unread when the limit was confirmed is learned from the first read that has it.
+      else this.#gpuCapServer = { version: seen.version ?? now.version, server: seen.server ?? now.server };
+    }
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);
     const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
@@ -866,33 +894,132 @@ export class ModelHubService {
     await this.#confirmGpuCap(target);
   }
 
-  /** nvidia-smi runs once per session, in the background; its answer is applied to the latest candidate. */
-  async #confirmGpuCap(target: Target): Promise<void> {
-    if (!this.#capCandidate) return;
-    if (this.#integrated === undefined) {
-      if (!this.#integratedAsked) {
-        this.#integratedAsked = true;
-        void Promise.resolve()
-          .then(() => this.#deps.integratedGpu?.())
-          .catch(() => null)
-          .then(answer => {
-            this.#integrated = answer ?? null;
-            return this.#queueGpuCap(() => this.#confirmGpuCap(target));
+  /**
+   * nvidia-smi's answer for the session, asked once in the background; undefined until it settles. Its answer is
+   * applied to the latest held-back load, and open lists are rated again if their badges now carry the WSL flag.
+   */
+  #integratedGpu(target: Target): boolean | null | undefined {
+    if (this.#integrated === undefined && !this.#integratedAsked) {
+      this.#integratedAsked = true;
+      void Promise.resolve()
+        .then(() => this.#deps.integratedGpu?.())
+        .catch(() => null)
+        .then(answer => {
+          this.#integrated = answer ?? null;
+          return this.#queueGpuCap(async () => {
+            if (await this.#confirmGpuCap(target)) return;
+            if (this.#integrated === true) this.#publishFitWarning(target, await this.#wslFitWarning(target));
           });
-      }
-      return;
+        });
     }
-    const store = this.#integrated === true ? await this.storeLocation(target.id) : null;
-    if (store && store.source !== 'default' && isLinuxStoreDir(store.path)) {
+    return this.#integrated;
+  }
+
+  /** True when it confirmed the held-back load as the WSL limit, which rates open lists again. */
+  async #confirmGpuCap(target: Target): Promise<boolean> {
+    if (!this.#capCandidate) return false;
+    const integrated = this.#integratedGpu(target);
+    if (integrated === undefined) return false;
+    const confirmed = integrated === true && (await this.#ollamaInLinux(target));
+    if (confirmed) {
+      const server = await this.#serverIdentity(target);
       this.#gpuCap = this.#capCandidate;
-      this.#deps.onInstalledChanged(target.id);
+      this.#gpuCapServer = server;
+      this.#ratingsChanged(target.id);
     }
     this.#capCandidate = null;
+    return confirmed;
+  }
+
+  /**
+   * Ollama runs under Linux (in WSL, on a WSL host): the probe found its `ollama serve` in this Linux, or, without a
+   * probe answer, Ollama reported a Linux model folder.
+   */
+  async #ollamaInLinux(target: Target, build?: OllamaBuild | null): Promise<boolean> {
+    if ((build === undefined ? await this.#build(target) : build) !== null) return true;
+    const store = await this.storeLocation(target.id);
+    return store.source !== 'default' && isLinuxStoreDir(store.path);
+  }
+
+  /**
+   * The flag this computer's badges carry while its Ollama runs in WSL on an integrated GPU and holds it to the VM's
+   * memory: a release known to, whose running binary lacks the fix, or one seen holding a load back. Null until
+   * nvidia-smi answers, which is not awaited.
+   */
+  async #wslFitWarning(target: Target): Promise<string | null> {
+    if (!target.local || !this.#deps.wslHost) return null;
+    // Without the probe only a load seen held back flags, so nvidia-smi and the folder lookup wait for one.
+    if (!this.#deps.ollamaWslPatch && !this.#gpuCap) return null;
+    try {
+      const health = await target.runtime.health();
+      const version = health.ok ? health.version : null;
+      const release = releaseCapsWslGpu(version) ? version : null;
+      if (!release && !this.#gpuCap) return null;
+      if (this.#integratedGpu(target) !== true) return null;
+      const build = await this.#build(target);
+      if (!(await this.#ollamaInLinux(target, build))) return null;
+      if (release && build?.patched === false) return wslGpuCapWarning(release);
+      const capped =
+        this.#gpuCap !== null &&
+        this.#gpuCapServer !== null &&
+        !otherServer(this.#gpuCapServer, { version, server: build?.server ?? null });
+      return capped ? wslGpuCapWarning(null) : null;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const message = `MODELS: could not check whether Ollama in WSL limits GPU memory, so badges are not flagged: ${reason}`;
+      if (!this.#warnedChecks.has(message)) {
+        this.#warnedChecks.add(message);
+        this.#deps.warn(message);
+      }
+      return null;
+    }
+  }
+
+  /** The running Ollama as the probe reads it; null without a probe or when it fails. One unread build is logged. */
+  async #build(target: Target): Promise<OllamaBuild | null> {
+    const probe = this.#deps.ollamaWslPatch;
+    if (!probe) return null;
+    let build: OllamaBuild | null = null;
+    let reason = '';
+    try {
+      build = await probe(target.runtime.baseUrl);
+    } catch (error) {
+      reason = `: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if ((build?.patched ?? null) === null && !this.#buildUnreadLogged) {
+      this.#buildUnreadLogged = true;
+      this.#deps.warn(
+        `MODELS: could not read whether this computer's Ollama carries the WSL GPU memory fix, so badges are not flagged before a load${reason}`
+      );
+    }
+    return build;
+  }
+
+  /** Which Ollama answers for this computer: its version and, where the probe reads it, its process and binary. */
+  async #serverIdentity(target: Target): Promise<ServerIdentity> {
+    const [health, build] = await Promise.all([target.runtime.health().catch(() => null), this.#build(target)]);
+    return { version: health?.ok ? health.version : null, server: build?.server ?? null };
+  }
+
+  /** Keep all visible ratings current when a later probe adds or clears the advisory. */
+  #publishFitWarning(target: Target, warning: string | null): void {
+    if (warning === this.#publishedFitWarning) return;
+    this.#publishedFitWarning = warning;
+    this.#ratingsChanged(target.id);
+  }
+
+  #ratingsChanged(serverId: string): void {
+    if (this.#disposed) return;
+    (this.#deps.onRatingsChanged ?? this.#deps.onInstalledChanged)(serverId);
   }
 
   /** Null for a saved server without entered hardware: its models are not rated. */
   async #sizing(target: Target): Promise<Sizing | null> {
-    if (target.local) return this.#localSizing();
+    if (target.local) {
+      const [sizing, fitWarning] = await Promise.all([this.#localSizing(), this.#wslFitWarning(target)]);
+      this.#publishFitWarning(target, fitWarning);
+      return fitWarning ? { ...sizing, fitWarning } : sizing;
+    }
     const specs = this.#deps.specs?.(target.id) ?? null;
     const hardware = serverHardware(specs);
     // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
@@ -966,7 +1093,7 @@ export class ModelHubService {
       projectorBytes: projector,
       draftMax,
     });
-    const { where } = sizing;
+    const { where, fitWarning: warning } = sizing;
     return arch
       ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
           mmprojBytes: projector,
@@ -975,8 +1102,9 @@ export class ModelHubService {
           kvCacheType: sizing.kvCacheType,
           flashAttention: sizing.flashAttention,
           where,
+          warning,
         })
-      : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });
+      : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where, warning });
   }
 
   /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
@@ -1006,6 +1134,7 @@ export class ModelHubService {
       return fitFromSize(build.sizeBytes + projector, sizing.hardware, context, {
         limitKnown: limit !== undefined,
         where: sizing.where,
+        warning: sizing.fitWarning,
       });
     };
   }

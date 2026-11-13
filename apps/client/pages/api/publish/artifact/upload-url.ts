@@ -1,4 +1,5 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -103,6 +104,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public') await assertPublicationPublicLink(body);
 
   const existing = await PublishedArtifact.findOne({
     tier: body.tier,
@@ -190,10 +192,10 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
     })
     .catch(refundAndRethrow);
 
-  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL (draftUploadUrl.ts).
+  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL plus a token header (draftUploadUrl.ts).
   const uploadUrls: UploadUrlResponse['uploadUrls'] = await Promise.all(
     body.files.map(async file => {
-      const url = await mintDraftUploadUrl({
+      const target = await mintDraftUploadUrl({
         storage,
         key: `${draftPrefix}${file.path}`,
         draftId,
@@ -202,7 +204,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
         size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
-      return { path: file.path, url, expiresAt };
+      return { path: file.path, ...target, expiresAt };
     })
   ).catch(refundAndRethrow);
 

@@ -20,10 +20,10 @@ const querySchema = z.object({
 });
 
 const ONE_MINUTE_MS = 60 * 1000;
-// Its only caller is ContextInspectorTab (via useContextTelemetry, 30s staleTime): six filter
-// dropdowns that each reset to page 0 and refetch, plus pagination and a Refresh button already
-// guarded on isFetching. A worst-case pass through every filter and a few pages lands near 15 in
-// a minute, so 20 leaves headroom without matching the CSV-export-driven counterLogs.ts route.
+// Its only caller is ContextInspectorTab (via useContextTelemetry, 30s staleTime): two date inputs
+// and four filter chips that each reset to page 0 and refetch, plus pagination and a Refresh button
+// already guarded on isFetching. A worst-case pass through every filter and a few pages lands near
+// 15 in a minute, so 20 leaves headroom without matching the CSV-export-driven counterLogs.ts route.
 export const CONTEXT_TELEMETRY_RATE_LIMIT = 20;
 
 // requiredScopes only constrains API-key callers (server/middlewares/baseApi.ts); browser/JWT
@@ -64,7 +64,7 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
       // requested minimum, so 0 includes benign turns. The 0 case deliberately uses
       // $gte: 0 rather than dropping the predicate: every path then hits the same
       // anomalyScore key (index-ready), and legacy docs lacking the anomalies
-      // sub-object stay excluded (TelemetryEntryCard reads anomalies.* unguarded).
+      // sub-object stay excluded (TelemetryEntryRow reads anomalies.* unguarded).
       const minScore = params.minAnomalyScore === undefined ? NaN : parseInt(params.minAnomalyScore, 10);
       if (Number.isNaN(minScore) || minScore < 0 || minScore > 100) {
         query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gt: 0 };
