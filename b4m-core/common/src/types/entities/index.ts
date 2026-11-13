@@ -110,6 +110,7 @@ export * from './LakeMembershipChangeEventTypes';
 export * from './LakeMembershipDiffTypes';
 export * from './LakeConfigHistoryTypes';
 export * from './DataLakeSpendNotificationTypes';
+export * from './OrgAlertTypes';
 export * from './LakeAccessViewTypes';
 export * from './DataLakeCorpusActionTypes';
 export * from './GenerationJobTypes';

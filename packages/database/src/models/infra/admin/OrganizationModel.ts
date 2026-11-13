@@ -167,6 +167,18 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    budgetAlerts: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean, default: false },
+          monthlyBudgetCredits: { type: Number, default: null },
+          percentThresholds: { type: [Number], default: [] },
+          lowBalanceCredits: { type: Number, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     virtuals: true,

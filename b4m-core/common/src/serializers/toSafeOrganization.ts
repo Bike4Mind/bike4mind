@@ -15,6 +15,7 @@ import { isOrgOwnerOrCurrentAdmin } from '../constants/organization';
  * - `billingContact` is kept only for the org OWNER or a site admin.
  * - Per-member credit fields in `userDetails` are kept for owners, current managers and site
  *   admins; other viewers keep only their own row's credit fields.
+ * - `budgetAlerts` is kept for owners, current managers and site admins.
  * - Everything else (name/description/seats/systemPrompt/userDetails identity/currentCredits/
  *   model config/logo) is preserved: the single-org GET is access-gated to members
  *   and roster administrators, and the list routes scope non-admins to their own
@@ -65,6 +66,7 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
         { id: viewer.userId },
         { userId: plain.userId, adminUserIds: plain.adminUserIds, users: plain.users }
       ));
+  if (!canViewMemberCredits) delete o.budgetAlerts;
   if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.
