@@ -14,7 +14,9 @@ export type TeamTab =
   | 'GitHub API'
   | 'Webhooks'
   | 'Connectors'
-  | 'Settings';
+  | 'API Keys'
+  | 'Settings'
+  | 'Audit';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
@@ -27,7 +29,9 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'GitHub API',
   'Webhooks',
   'Connectors',
+  'API Keys',
   'Settings',
+  'Audit',
 ];
 
 /**
