@@ -26,6 +26,7 @@ import {
   STATE_LAMP,
   assignCharacters,
   nameLabelLayout,
+  needsYouBubbles,
   hiddenByCounter,
   placeAgents,
   poseFor,
@@ -107,8 +108,11 @@ const twinkle = keyframes`
 
 const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}\u2026` : text);
 
-function bubbleText(agent: AgentView): string | undefined {
-  if (agent.state === 'needs-you') return 'Needs you!';
+function bubbleText(agent: AgentView, needsYou: number): string | undefined {
+  if (agent.state === 'needs-you') {
+    if (needsYou === 0) return undefined;
+    return needsYou === 1 ? 'Needs you!' : `${needsYou} need you!`;
+  }
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
   return undefined;
@@ -333,6 +337,7 @@ function Sprite({
   agent,
   point,
   label,
+  needsYou,
   persona,
   character,
   via,
@@ -345,6 +350,8 @@ function Sprite({
   agent: AgentView;
   point: SlotPoint;
   label: NameLabel;
+  /** How many waiting agents this sprite's bubble speaks for (needsYouBubbles); 0 when another sprite carries it. */
+  needsYou: number;
   persona: AgentPersona | undefined;
   character: CharacterId;
   /** The agent that spawned this one, below the first level; kept off the nameplate to keep it short. */
@@ -361,7 +368,7 @@ function Sprite({
   const entered = useAfterFirstPaint(!start);
   const at = entered || !start ? point : start;
   const pose = poseFor(agent.state);
-  const bubble = bubbleText(agent);
+  const bubble = bubbleText(agent, needsYou);
   const displayName = persona?.label ?? agent.title;
   const viaSuffix = via ? ` \u00B7 via ${via}` : '';
   const fullName = `${withPersona(persona, agent.title)}${viaSuffix}`;
@@ -644,6 +651,15 @@ export function TavernView({
       ...[...stacks].map(([zone, stack]) => [`${STACK_KEY}${zone}`, stack.point] as const),
     ])
   );
+  const needsYou = needsYouBubbles(
+    visible
+      .filter(({ agent }) => agent.state === 'needs-you')
+      .map(({ agent, placement }) => ({ id: agent.id, zone: placement.zone, point: placement.point }))
+  );
+  // The bar's bubble sits on the line of the Innkeeper's plate at every stage size, so the plate
+  // steps aside while it is up; pointing at the Innkeeper still shows it (LIFTED).
+  const barCalling = visible.some(({ agent, placement }) => placement.zone === 'bar' && needsYou.has(agent.id));
+  const innkeeperLabel = labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL;
   const [slip, setSlip] = useState<{ key: number; seed: string } | null>(null);
   const [dismissedReply, setDismissedReply] = useState<string | undefined>(undefined);
   // Starts at the request already pending, so a remount (a view switch) never reopens an old slip.
@@ -761,6 +777,7 @@ export function TavernView({
             agent={agent}
             point={arrived ? placement.point : DOOR_POINT}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
+            needsYou={needsYou.get(agent.id) ?? 0}
             persona={personas.get(agent.id)}
             character={characters.get(agent.id) ?? 1}
             via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
@@ -776,7 +793,7 @@ export function TavernView({
           pose={celebrating ? 'cheering' : visit ? 'walking' : act.pose}
           bubble={statusBubble}
           urgent={parent.status === 'needs-action'}
-          label={labels.get(INNKEEPER_KEY) ?? HIDDEN_LABEL}
+          label={barCalling ? { ...innkeeperLabel, shown: false } : innkeeperLabel}
           // A first-timer is told outright that he takes orders; after that it is a hover hint.
           greeting={!desk || slip || reply ? undefined : agents.length === 0 ? 'always' : 'hover'}
           onSelect={selectInnkeeper}

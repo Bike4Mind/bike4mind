@@ -164,6 +164,21 @@ describe('TavernView', () => {
     expect(el('orchestrator-tavern-bubble-b').textContent).toBe('Needs you!');
   });
 
+  it('gives agents waiting side by side at the bar one bubble with their count', async () => {
+    await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'needs-you')));
+    expect(el('orchestrator-tavern-bubble-b').textContent).toBe('3 need you!');
+    expect(query('orchestrator-tavern-bubble-a')).toBeNull();
+    expect(query('orchestrator-tavern-bubble-c')).toBeNull();
+  });
+
+  it("moves the Innkeeper's plate aside while the bar's bubble is up, and brings it back after", async () => {
+    const plate = () => getComputedStyle(el('orchestrator-tavern-innkeeper-name')).display;
+    await renderTavern([agentFixture('a', 'needs-you')], false, null, { parent: { status: 'done' } });
+    expect(plate()).toBe('none');
+    await renderTavern([agentFixture('a', 'done')], false, null, { parent: { status: 'done' } });
+    expect(plate()).not.toBe('none');
+  });
+
   it("shows a preparing agent's setup step in its bubble", async () => {
     await renderTavern([agentFixture('a', 'working', { preparing: 'worktree' })]);
     expect(el('orchestrator-tavern-bubble-a').textContent).toBe('Creating worktree\u2026');
