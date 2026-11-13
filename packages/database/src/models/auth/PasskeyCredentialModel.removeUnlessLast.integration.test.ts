@@ -77,3 +77,38 @@ describe('passkeyCredentialRepository.removeUnlessLast', () => {
     expect(await passkeyCredentialRepository.countByUser(userId)).toBe(2);
   });
 });
+
+describe('passkeyCredentialRepository.removeAllForUser', () => {
+  const backdate = (id: string, createdAt: Date) => PasskeyCredentialModel.updateOne({ _id: id }, { createdAt });
+
+  it("with createdBefore deletes only that user's older credentials", async () => {
+    const userId = await makeUser();
+    const otherUserId = await makeUser();
+    const cutoff = new Date('2026-06-01T00:00:00.000Z');
+    const older = await makePasskey(userId);
+    const newer = await makePasskey(userId);
+    const otherOlder = await makePasskey(otherUserId);
+    await backdate(older.id, new Date('2026-05-31T23:59:59.000Z'));
+    await backdate(newer.id, new Date('2026-06-01T00:00:01.000Z'));
+    await backdate(otherOlder.id, new Date('2026-05-01T00:00:00.000Z'));
+
+    expect(await passkeyCredentialRepository.removeAllForUser(userId, { createdBefore: cutoff })).toBe(1);
+
+    const remaining = await passkeyCredentialRepository.listByUser(userId);
+    expect(remaining.map(c => c.id)).toEqual([newer.id]);
+    expect(await passkeyCredentialRepository.countByUser(otherUserId)).toBe(1);
+  });
+
+  it("without options deletes all of that user's credentials and no one else's", async () => {
+    const userId = await makeUser();
+    const otherUserId = await makeUser();
+    await makePasskey(userId);
+    await makePasskey(userId);
+    await makePasskey(otherUserId);
+
+    expect(await passkeyCredentialRepository.removeAllForUser(userId)).toBe(2);
+
+    expect(await passkeyCredentialRepository.countByUser(userId)).toBe(0);
+    expect(await passkeyCredentialRepository.countByUser(otherUserId)).toBe(1);
+  });
+});

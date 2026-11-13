@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   logAuthAudit: vi.fn(),
   logSecondFactorSignIn: vi.fn(),
   recordForcedEnrollmentStep: vi.fn(),
+  removeAllForUser: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -21,7 +22,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIdWithMfaSecrets: mocks.findByIdWithMfaSecrets },
   authSessionRepository: {},
-  passkeyCredentialRepository: { removeAllForUser: vi.fn() },
+  passkeyCredentialRepository: { removeAllForUser: mocks.removeAllForUser },
   realtimeConnectionRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -149,5 +150,29 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
       createdVia: 'mfa-setup',
       tokenVersion: 4,
     });
+  });
+});
+
+describe('POST /api/auth/mfa/verify-setup - orphan passkey purge', () => {
+  const setupAt = new Date('2026-01-02T03:04:05.000Z');
+
+  it('bounds the purge at setupAt when the user has no factor', async () => {
+    mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false, setupAt } });
+
+    const res = await verifySetupAs({ id: 'u1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.removeAllForUser).toHaveBeenCalledTimes(1);
+    expect(mocks.removeAllForUser).toHaveBeenCalledWith('u1', { createdBefore: setupAt });
+  });
+
+  it('purges unbounded when no setupAt is recorded', async () => {
+    mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: false } });
+
+    const res = await verifySetupAs({ id: 'u1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.removeAllForUser).toHaveBeenCalledTimes(1);
+    expect(mocks.removeAllForUser).toHaveBeenCalledWith('u1', undefined);
   });
 });
