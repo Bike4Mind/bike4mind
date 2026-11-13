@@ -6,6 +6,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import { passkeysSupported } from '@client/app/hooks/data/passkeys';
 import type { MfaChallengeMode } from '@client/app/hooks/useMfaChallenge';
+import { MFA_SETUP_SIGN_OUT_HINT } from '@client/app/utils/mfaSetupCopy';
 
 interface MFAModalProps {
   open: boolean;
@@ -31,6 +32,13 @@ interface MFAModalProps {
   /** Offer a passkey as an alternative to the code. Verification only - never during setup. */
   onPasskeyVerify?: (rememberDevice: boolean) => void;
   passkeyLoading?: boolean;
+  /**
+   * Setup only: the labelled way out of forced enrollment. Leaving it ends the session, so when
+   * set it replaces the close icon, and Escape or a backdrop click no longer close the dialog.
+   * Without it (voluntary setup from settings) the close icon cancels setup through onCancel.
+   */
+  onSignOut?: () => void;
+  signOutLoading?: boolean;
 }
 
 const MFAModal: React.FC<MFAModalProps> = ({
@@ -52,6 +60,8 @@ const MFAModal: React.FC<MFAModalProps> = ({
   rememberDeviceDays = 30,
   onPasskeyVerify,
   passkeyLoading = false,
+  onSignOut,
+  signOutLoading = false,
 }) => {
   const [code, setCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(false);
@@ -62,7 +72,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
   // sense, so the opt-in is verification-only.
   const showRememberDevice = allowRememberDevice && showVerify && !isSetupMode;
   const showPasskey = !!onPasskeyVerify && showVerify && !isSetupMode && passkeysSupported();
-  const busy = loading || passkeyLoading;
+  const showSignOut = !!onSignOut && isSetupMode;
+  const showCloseIcon = !isEnforced && !showSignOut;
+  const busy = loading || passkeyLoading || signOutLoading;
 
   // Clear code input when modal is opened
   useEffect(() => {
@@ -133,10 +145,6 @@ const MFAModal: React.FC<MFAModalProps> = ({
     onVerify(code, showRememberDevice && rememberDevice);
   };
 
-  const handleCancel = () => {
-    onCancel();
-  };
-
   const handleClose = () => {
     if (!isEnforced) {
       onClose();
@@ -147,7 +155,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
     <Modal
       className="mfa-modal"
       open={open}
-      onClose={isEnforced ? undefined : handleClose}
+      onClose={isEnforced || showSignOut ? undefined : handleClose}
       sx={{
         display: 'flex',
         alignItems: 'center',
@@ -174,11 +182,11 @@ const MFAModal: React.FC<MFAModalProps> = ({
           position: 'relative',
         }}
       >
-        {!isEnforced && (
+        {showCloseIcon && (
           <IconButton
             className="mfa-modal-close-button"
             aria-label={isSetupMode ? 'Cancel MFA setup' : 'Close MFA verification'}
-            onClick={isSetupMode ? handleCancel : handleClose}
+            onClick={isSetupMode ? onCancel : handleClose}
             sx={{ position: 'absolute', top: 8, right: 8, zIndex: 10 }}
           >
             <CloseIcon />
@@ -330,6 +338,23 @@ const MFAModal: React.FC<MFAModalProps> = ({
                 {isSetupMode ? 'Verify & Enable MFA' : 'Verify'}
               </Button>
             </>
+          )}
+          {showSignOut && (
+            <Box sx={{ textAlign: 'center' }}>
+              <Button
+                data-testid="mfa-modal-sign-out-btn"
+                variant="plain"
+                color="neutral"
+                onClick={onSignOut}
+                loading={signOutLoading}
+                disabled={busy}
+              >
+                Sign out
+              </Button>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {MFA_SETUP_SIGN_OUT_HINT}
+              </Typography>
+            </Box>
           )}
           {!showVerify && !isEnforced && (
             <Button
