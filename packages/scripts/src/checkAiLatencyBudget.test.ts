@@ -4,23 +4,28 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertBudgetConfig,
+  buildCorrelation,
+  CompletionRecorder,
   completedResult,
+  correlationStatus,
   describeStall,
   gatedMedianFirstTokenSec,
   gatedMedianSec,
   hasFirstAnswerText,
   incompleteResult,
+  isAttributable,
   isLatencyObservation,
   isStreamComplete,
   latencyBreach,
   mergeResults,
   msToSec,
+  parseCompletionResponse,
   StreamingTimeoutError,
   textStreamBudgetMs,
   TurnTimer,
   unexpectedArtifactIds,
 } from '../../../apps/client/e2e/ai-latency-budget';
-import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-latency-helpers';
+import type { PromptScenario, PromptResult, CompletionRef } from '../../../apps/client/e2e/ai-latency-helpers';
 
 /**
  * Guard: the ai-latency suite's time budgets and result bookkeeping.
@@ -122,8 +127,8 @@ describe('module boundary', () => {
     const factory = fs.readFileSync(FACTORY, 'utf8');
     expect(factory).toContain('new TurnTimer()');
     expect(factory).not.toMatch(/startMs/);
-    expect(factory).toMatch(/sendImageMessageAndWaitForResponse\([^)]*, timer\)/);
-    expect(factory).toMatch(/sendMessageAndWaitForResponse\([^)]*, timer\)/);
+    expect(factory).toMatch(/sendImageMessageAndWaitForResponse\([^)]*, timer, recorder\)/);
+    expect(factory).toMatch(/sendMessageAndWaitForResponse\([^)]*, timer, recorder\)/);
     const chatPage = fs.readFileSync(CHAT_PAGE, 'utf8');
     expect(chatPage.match(/keyboard\.press\('Enter'\);\n\s+timer\?\.markSent\(\);/g) ?? []).toHaveLength(2);
     expect(chatPage.match(/timer\?\.markSent\(/g) ?? []).toHaveLength(2);
@@ -758,5 +763,112 @@ describe('ChatPage artifact detector', () => {
     expect(readSource(CHAT_PAGE)).toContain("getByTestId('generating-artifact-indicator')");
     expect(readSource(PROMPT_REPLIES)).toContain('data-testid="generating-artifact-indicator"');
     expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid="artifact-loading"');
+  });
+});
+
+describe('completion correlation', () => {
+  const ref = (questId: string, extra: Partial<CompletionRef> = {}): CompletionRef => ({
+    questId,
+    receivedAt: '2026-01-01T00:00:00.000Z',
+    ...extra,
+  });
+  const timerSentAt = (ms: number) => {
+    const t = new TurnTimer();
+    t.markSent(ms);
+    return t;
+  };
+
+  it('parses a completion response into all three ids', () => {
+    expect(
+      parseCompletionResponse({ quest: { id: 'q1' }, session: { id: 's1' } }, { 'x-request-id': 'r1' }, 'T')
+    ).toEqual({ questId: 'q1', sessionId: 's1', requestId: 'r1', receivedAt: 'T' });
+  });
+
+  it('returns null, not a guessed id, for a body without a string quest id', () => {
+    for (const body of [null, {}, { error: 'nope' }, { quest: {} }, { quest: { id: 7 } }, { quest: { id: '' } }]) {
+      expect(parseCompletionResponse(body, {}, 'T')).toBeNull();
+    }
+  });
+
+  it('maps captured refs to missing, captured and ambiguous, keeping order', () => {
+    expect(correlationStatus([])).toBe('missing');
+    expect(correlationStatus([ref('a')])).toBe('captured');
+    const recorder = new CompletionRecorder();
+    recorder.record(ref('a'));
+    recorder.record(ref('b'));
+    const c = buildCorrelation(recorder, timerSentAt(0), 1000);
+    expect(c.status).toBe('ambiguous');
+    expect(c.completions.map(r => r.questId)).toEqual(['a', 'b']);
+    expect(c).toMatchObject({
+      sentAt: '1970-01-01T00:00:00.000Z',
+      streamEndAt: '1970-01-01T00:00:01.000Z',
+      fallback: 'unknown',
+      routingSource: 'unknown',
+      effort: 'unknown',
+    });
+  });
+
+  it('never puts the bearer header into the snapshot', () => {
+    const recorder = new CompletionRecorder();
+    recorder.record(ref('a'), 'Bearer secret');
+    expect(JSON.stringify(buildCorrelation(recorder, timerSentAt(0), 1))).not.toContain('secret');
+    expect(recorder.authorization()).toBe('Bearer secret');
+  });
+
+  it('keeps correlation on an incomplete row so a timed-out attempt still joins', () => {
+    const recorder = new CompletionRecorder();
+    recorder.record(ref('qa'));
+    const correlation = buildCorrelation(recorder, timerSentAt(0), undefined);
+    const row = incompleteResult(scenario({ id: 'p' }), 5000, { correlation });
+    expect(row.correlation?.completions[0].questId).toBe('qa');
+    expect(row.correlation?.streamEndAt).toBeUndefined();
+  });
+
+  it('keeps each retry attempt with its own quest id', () => {
+    const mk = (n: number, q: string) => {
+      const recorder = new CompletionRecorder();
+      recorder.record(ref(q));
+      return completedResult(scenario({ id: 'p' }), {
+        response: 'x',
+        responseTimeMs: 1000,
+        renderTimeMs: 0,
+        attempt: n,
+        correlation: buildCorrelation(recorder, timerSentAt(0), 1),
+      });
+    };
+    const merged = mergeResults([mk(0, 'qA')], [mk(1, 'qB')]);
+    expect(merged.map(r => r.correlation?.completions[0].questId)).toEqual(['qA', 'qB']);
+    expect(merged[0].retried).toBe(true);
+  });
+
+  it('keeps concurrent cells separate', () => {
+    const a = new CompletionRecorder();
+    const b = new CompletionRecorder();
+    a.record(ref('a1'));
+    b.record(ref('b1'));
+    a.record(ref('a2'));
+    expect(a.snapshot().map(r => r.questId)).toEqual(['a1', 'a2']);
+    expect(b.snapshot().map(r => r.questId)).toEqual(['b1']);
+  });
+
+  it('attributes only a captured row with exactly one completion', () => {
+    const rec = (...ids: string[]) => {
+      const r = new CompletionRecorder();
+      ids.forEach(i => r.record(ref(i)));
+      return buildCorrelation(r, timerSentAt(0), 1);
+    };
+    expect(isAttributable({})).toBe(false);
+    expect(isAttributable({ correlation: rec() })).toBe(false);
+    expect(isAttributable({ correlation: rec('a', 'b') })).toBe(false);
+    expect(isAttributable({ correlation: rec('a') })).toBe(true);
+  });
+
+  it('wires the recorder into the send helpers and the persisted run identity', () => {
+    const chatPage = fs.readFileSync(CHAT_PAGE, 'utf8');
+    expect(chatPage).toContain("pathname.endsWith('/api/ai/llm')");
+    expect(chatPage.match(/this\.captureCompletions\(recorder\)/g) ?? []).toHaveLength(2);
+    const factory = fs.readFileSync(path.join(REPO, 'apps/client/e2e/ai-latency-suite-factory.ts'), 'utf8');
+    expect(factory.match(/correlation: buildCorrelation\(/g) ?? []).toHaveLength(2);
+    expect(factory).toContain('GITHUB_RUN_ID');
   });
 });

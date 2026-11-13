@@ -21,6 +21,8 @@ import {
   latencyBreach,
   unexpectedArtifactIds,
   TurnTimer,
+  CompletionRecorder,
+  buildCorrelation,
 } from './ai-latency-budget';
 
 // Title of the per-cell latency gate. The workflow's Quality column excludes it by this exact
@@ -104,9 +106,16 @@ export function createAiLatencySuite({
     const results = mergeResults(priorResults, newResults);
 
     // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
+    const resolved = model !== 'unknown' ? model : priorModel;
     const output = {
-      model: model !== 'unknown' ? model : priorModel,
+      model: resolved,
       timestamp: new Date().toISOString(),
+      run: {
+        runId: process.env.GITHUB_RUN_ID ?? null,
+        runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+        spec: resultsFilename,
+        model: resolved,
+      },
       thresholdSec,
       medianResponseTimeSec: gatedMedianSec(results),
       medianFirstTokenSec: gatedMedianFirstTokenSec(results),
@@ -128,6 +137,7 @@ export function createAiLatencySuite({
       await modelSelector.selectTextModel(resolvedModel, disableSmartTools ? { disableSmartTools: true } : undefined);
 
       const timer = new TurnTimer();
+      const recorder = new CompletionRecorder();
       const attempt = test.info().retry;
       let imageAsserted = false;
       let artifactRendered = false;
@@ -136,7 +146,7 @@ export function createAiLatencySuite({
       // image render and artifact settle that follow are a separate, much longer measurement, so
       // latency and streaming rate below are taken over the stream window only and the
       // render/settle tail is recorded separately as renderTimeMs.
-      let streamEndMs: number;
+      let streamEndMs: number | undefined;
       try {
         if (scenario.expectsImage) {
           // The image is tool-produced around the stream (the stop button can hide only once
@@ -144,7 +154,12 @@ export function createAiLatencySuite({
           // image-generation budget, not just the render wait - a short send budget would throw
           // before the render budget is ever used. Do not gate on the text container (it only mounts
           // with the image); assert the image as the success signal.
-          await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION, timer);
+          await chatPage.sendImageMessageAndWaitForResponse(
+            scenario.prompt,
+            TIMEOUTS.IMAGE_GENERATION,
+            timer,
+            recorder
+          );
           streamEndMs = Date.now();
           imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
         } else {
@@ -154,7 +169,7 @@ export function createAiLatencySuite({
           const sendBudget = scenario.generatesArtifact
             ? TIMEOUTS.IMAGE_GENERATION
             : textStreamBudgetMs(thresholdSec, scenario);
-          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget, timer);
+          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget, timer, recorder);
           streamEndMs = Date.now();
           // Streaming completing does not mean the artifact resolved; wait out the placeholders so
           // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
@@ -183,6 +198,7 @@ export function createAiLatencySuite({
           const result = incompleteResult(scenario, timer.elapsedSinceSendMs(), {
             attempt,
             firstTokenMs: timer.firstTokenMs(),
+            correlation: buildCorrelation(recorder, timer, streamEndMs),
           });
           collectedResults.push(result);
           persistResults(resolvedModel, [result]);
@@ -190,6 +206,8 @@ export function createAiLatencySuite({
         throw err;
       }
       const settleEndMs = Date.now();
+      // After the timed windows; reads fallback/routing from the quest and cannot fail the cell.
+      const provenance = await chatPage.readQuestProvenance(recorder);
 
       // Measure latency and streaming rate over the token-stream window only; keep the image
       // render / artifact settle as a separate number so a 6-minute artifact mount neither reads
@@ -241,6 +259,7 @@ export function createAiLatencySuite({
         artifactRendered,
         attempt,
         firstTokenMs: timer.firstTokenMs(),
+        correlation: buildCorrelation(recorder, timer, streamEndMs, provenance),
       });
       if (result.unexpectedArtifact) {
         test.info().annotations.push({

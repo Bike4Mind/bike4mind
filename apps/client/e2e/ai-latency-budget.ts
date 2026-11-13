@@ -1,5 +1,5 @@
 import { TIMEOUTS } from './constants';
-import type { PromptScenario, PromptResult } from './ai-latency-helpers';
+import type { PromptScenario, PromptResult, PromptCorrelation, CompletionRef } from './ai-latency-helpers';
 
 // The ai-latency suite's time budgets and result bookkeeping, plus the error type that decides
 // which failures count as a latency observation. Kept apart from ai-latency-suite-factory.ts and
@@ -117,6 +117,11 @@ export class TurnTimer {
     if (this.sentAtMs !== undefined) this.firstTextAtMs ??= atMs;
   }
 
+  /** Epoch ms of the (first) send, or undefined before it. */
+  sentAtEpochMs(): number | undefined {
+    return this.sentAtMs;
+  }
+
   /** ms from send to `atMs`. Throws if the turn was never sent - there is no timing to report. */
   elapsedSinceSendMs(atMs: number = Date.now()): number {
     if (this.sentAtMs === undefined) throw new Error('TurnTimer read before the message was sent');
@@ -128,6 +133,81 @@ export class TurnTimer {
     if (this.sentAtMs === undefined || this.firstTextAtMs === undefined) return undefined;
     return this.firstTextAtMs - this.sentAtMs;
   }
+}
+
+/**
+ * Parses a `POST /api/ai/llm` response into a completion ref, or null when the body carries no
+ * string `quest.id` (error JSON, null): an id is never guessed.
+ */
+export function parseCompletionResponse(
+  body: unknown,
+  headers: Record<string, string>,
+  receivedAt: string
+): CompletionRef | null {
+  const { quest, session } = (body ?? {}) as { quest?: { id?: unknown }; session?: { id?: unknown } };
+  if (typeof quest?.id !== 'string' || quest.id === '') return null;
+  const requestId = headers['x-request-id'];
+  return {
+    questId: quest.id,
+    ...(typeof session?.id === 'string' && { sessionId: session.id }),
+    ...(requestId && { requestId }),
+    receivedAt,
+  };
+}
+
+export function correlationStatus(refs: CompletionRef[]): PromptCorrelation['status'] {
+  return refs.length === 0 ? 'missing' : refs.length === 1 ? 'captured' : 'ambiguous';
+}
+
+/** Whether a row can be joined to exactly one completion's logs. Legacy and missing rows cannot. */
+export function isAttributable(row: Pick<PromptResult, 'correlation'>): boolean {
+  return row.correlation?.status === 'captured' && row.correlation.completions.length === 1;
+}
+
+/**
+ * Collects the completions one page made during a timed attempt, in order. One per page, so
+ * concurrent cells cannot feed each other. `authorization` is the bearer header the page sent, kept
+ * for the post-stream quest read and never part of the snapshot, so it cannot reach an artifact.
+ */
+export class CompletionRecorder {
+  private readonly refs: CompletionRef[] = [];
+  private auth?: string;
+
+  record(ref: CompletionRef | null, authorization?: string): void {
+    if (!ref) return;
+    this.refs.push(ref);
+    if (authorization) this.auth = authorization;
+  }
+
+  snapshot(): CompletionRef[] {
+    return this.refs.map(r => ({ ...r }));
+  }
+
+  authorization(): string | undefined {
+    return this.auth;
+  }
+}
+
+/** Provenance read from the quest after the stream; absent keys mean it was not read. */
+export type QuestProvenance = Pick<PromptCorrelation, 'fallback' | 'routingSource'>;
+
+export function buildCorrelation(
+  recorder: CompletionRecorder,
+  timer: TurnTimer,
+  streamEndMs: number | undefined,
+  provenance?: QuestProvenance
+): PromptCorrelation {
+  const completions = recorder.snapshot();
+  const sentAt = timer.sentAtEpochMs();
+  return {
+    status: correlationStatus(completions),
+    completions,
+    ...(sentAt !== undefined && { sentAt: new Date(sentAt).toISOString() }),
+    ...(streamEndMs !== undefined && { streamEndAt: new Date(streamEndMs).toISOString() }),
+    fallback: provenance?.fallback ?? 'unknown',
+    routingSource: provenance?.routingSource ?? 'unknown',
+    effort: 'unknown',
+  };
 }
 
 /**
@@ -187,18 +267,24 @@ export function assertBudgetConfig(prompts: PromptScenario[]): void {
  * measuresDeliverable cannot drift between the two paths - an abandoned artifact prompt must be
  * classified exactly like a completed one, or it would leak into the gated median.
  */
-function baseResult(scenario: PromptScenario, attempt: number, firstTokenMs: number | undefined) {
+function baseResult(
+  scenario: PromptScenario,
+  attempt: number,
+  firstTokenMs: number | undefined,
+  correlation?: PromptCorrelation
+) {
   return {
     id: scenario.id,
     prompt: scenario.prompt,
     attempt,
     measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
     ...(firstTokenMs !== undefined && { firstTokenMs, firstTokenSec: msToSec(firstTokenMs) }),
+    ...(correlation && { correlation }),
   };
 }
 
 /** Per-attempt fields both builders take. `attempt` is Playwright's retry index (0 = first run). */
-type AttemptTiming = { attempt?: number; firstTokenMs?: number };
+type AttemptTiming = { attempt?: number; firstTokenMs?: number; correlation?: PromptCorrelation };
 
 /**
  * `artifactRendered` is whether an artifact card (or its placeholder) was on the newest reply. On a
@@ -214,7 +300,7 @@ export function completedResult(
   const responseTimeSec = msToSec(args.responseTimeMs);
   const unexpectedArtifact = Boolean(args.artifactRendered) && !scenario.generatesArtifact && !scenario.expectsImage;
   return {
-    ...baseResult(scenario, args.attempt ?? 0, args.firstTokenMs),
+    ...baseResult(scenario, args.attempt ?? 0, args.firstTokenMs, args.correlation),
     ...(unexpectedArtifact && { measuresDeliverable: true, unexpectedArtifact: true }),
     response: args.response,
     responseTimeMs: args.responseTimeMs,
@@ -237,7 +323,7 @@ export function incompleteResult(
   timing: AttemptTiming = {}
 ): PromptResult {
   return {
-    ...baseResult(scenario, timing.attempt ?? 0, timing.firstTokenMs),
+    ...baseResult(scenario, timing.attempt ?? 0, timing.firstTokenMs, timing.correlation),
     response: '',
     responseTimeMs: elapsedMs,
     responseTimeSec: msToSec(elapsedMs),
