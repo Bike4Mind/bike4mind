@@ -168,7 +168,13 @@ export async function applySignupDomainGrant(params: {
   if (grantPackageId) {
     try {
       const grantPackage = await grantPackageRepository.findById(grantPackageId);
-      const refusal = !grantPackage?.active ? 'inactive' : isGrantPackageExpired(grantPackage) ? 'expired' : null;
+      const refusal = !grantPackage
+        ? 'missing'
+        : !grantPackage.active
+          ? 'inactive'
+          : isGrantPackageExpired(grantPackage)
+            ? 'expired'
+            : null;
       signupCredits = refusal || !grantPackage ? 0 : grantPackage.credits;
       if (refusal) {
         result.packageRefusal = refusal;

@@ -90,7 +90,7 @@ export default function HeldSignupGrantsTab() {
         budget; Revoke takes back the credits a release paid (balances already spent are skipped) and returns the
         account to this list.
       </Typography>
-      {release.error && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
+      {release.error && !confirmRelease && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
       {revoke.error && <Alert color="danger">{getErrorMessage(revoke.error)}</Alert>}
       {release.data && (
         <Alert color="success" data-testid="held-signup-grants-release-result">
@@ -133,7 +133,14 @@ export default function HeldSignupGrantsTab() {
             setConfirmRelease(false);
           }}
           data-testid="held-signup-grants-release-dialog"
-        />
+        >
+          {/* The dialog stays open on failure, so the error has to show inside it. */}
+          {release.error && (
+            <Alert color="danger" data-testid="held-signup-grants-release-dialog-error">
+              {getErrorMessage(release.error)}
+            </Alert>
+          )}
+        </ActionDialog>
       )}
       {confirmRevoke && (
         <AdminDialog

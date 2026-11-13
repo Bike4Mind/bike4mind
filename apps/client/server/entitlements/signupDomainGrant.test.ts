@@ -773,9 +773,12 @@ describe('applySignupDomainGrant - rule linked to a grant package', () => {
     expect(grantPackages.reserveRedemption).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(result.joinedOrganizationId).toBe('org-1');
+    expect(result.packageRefusal).toBe('inactive');
 
     grantPackages.findById.mockResolvedValue(null);
-    expect((await run()).creditsGranted).toBe(0);
+    const missing = await run();
+    expect(missing.creditsGranted).toBe(0);
+    expect(missing.packageRefusal).toBe('missing');
   });
 
   it('refuses an expired package explicitly, withholding only the credits', async () => {

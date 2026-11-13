@@ -31,7 +31,7 @@ export interface IGrantPackageDocument extends IGrantPackage {
   updatedAt?: Date;
 }
 
-export type GrantPackageRefusalReason = 'total_cap' | 'daily_cap' | 'inactive' | 'expired';
+export type GrantPackageRefusalReason = 'total_cap' | 'daily_cap' | 'inactive' | 'expired' | 'missing';
 
 /**
  * `already` means this account redeemed the package earlier (a retried signup), so it is not

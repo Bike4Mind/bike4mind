@@ -173,7 +173,12 @@ describe('HeldSignupGrantsTab', () => {
     const invalidate = renderTab();
     fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
     await releaseSelected();
-    expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
+    expect(await screen.findByTestId('held-signup-grants-release-dialog-error')).toHaveTextContent(
+      'Request interrupted'
+    );
+    expect(screen.getByTestId('held-signup-grants-release-dialog')).toContainElement(
+      screen.getByTestId('held-signup-grants-release-dialog-error')
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
   });
 

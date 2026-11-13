@@ -86,6 +86,7 @@ export function grantPackageRefusalMessage(reason: GrantPackageRefusalReason): s
     case 'daily_cap':
       return 'This invite code has reached its signup limit for today, please try again tomorrow';
     case 'inactive':
+    case 'missing':
       return 'This invite code is no longer active';
     case 'expired':
       return 'This invite code has expired';
@@ -102,5 +103,7 @@ export function signupDomainGrantRefusalNotice(reason: GrantPackageRefusalReason
       return 'Signup credits for your email domain are no longer available, so none were added';
     case 'expired':
       return 'Signup credits for your email domain have expired, so none were added';
+    case 'missing':
+      return 'Signup credits for your email domain could not be found, so none were added';
   }
 }
