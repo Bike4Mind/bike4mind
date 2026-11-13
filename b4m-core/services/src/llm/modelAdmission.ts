@@ -10,6 +10,7 @@ import {
   type IAdminSettingsRepository,
   type LLMModelConfig,
   type ModelInfo,
+  type ModelBackend,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isModelAccessible } from '@bike4mind/utils';
 import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
@@ -41,13 +42,20 @@ export type ModelAdmissionInput = {
    * unrestricted. Admins are held to it too: it is the org's compliance choice, not a platform gate.
    */
   orgModelPolicy?: ReadOrgModelPolicy;
+  /** Provider evidence only: does not change catalog pricing, disabled or free-tier classification. */
+  getOrgModelBackend?: (modelId: string) => ModelBackend | null | undefined;
+};
+
+export type ModelAdmissionCallOptions = {
+  /** Actual provider for this call; null explicitly denotes an unrepresentable provider. */
+  orgModelBackend?: ModelBackend | null;
 };
 
 export type ModelAdmission = {
   /** Throws ForbiddenError when the user's AI access is revoked, so fallback selection surfaces the real reason. */
-  admits(modelId: string): Promise<boolean>;
+  admits(modelId: string, options?: ModelAdmissionCallOptions): Promise<boolean>;
   /** Throws BadRequestError (disabled) or ForbiddenError (AI access revoked / not accessible / paid-only / unpriced). */
-  assert(modelId: string): Promise<void>;
+  assert(modelId: string, options?: ModelAdmissionCallOptions): Promise<void>;
 };
 
 /** The llmModelConfigurations admin setting; an unreadable or missing setting reads as no configs. */
@@ -135,6 +143,7 @@ export function createModelAdmission({
   enforceCredits,
   freeTierAllowedModels,
   orgModelPolicy,
+  getOrgModelBackend,
 }: ModelAdmissionInput): ModelAdmission {
   const isAdmin = user.isAdmin || false;
   let entitlementKeys: Promise<string[]> | undefined;
@@ -157,18 +166,17 @@ export function createModelAdmission({
     if (message) throw new ForbiddenError(message);
   };
 
-  const refusal = async (modelId: string): Promise<Error | null> => {
+  const refusal = async (modelId: string, options?: ModelAdmissionCallOptions): Promise<Error | null> => {
     const model = models?.find(m => m.id === modelId);
     if (model?.disabled) {
       return new BadRequestError(
         `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
       );
     }
-    // Without a catalog entry only a media model's backend is known; any other model fails a provider allowlist.
-    if (
-      orgModelPolicy &&
-      !isModelAllowedByOrgPolicy(orgModelPolicy, { id: modelId, backend: model?.backend }, resolveSuccessorChain)
-    ) {
+    const trustedBackend =
+      options?.orgModelBackend === undefined ? getOrgModelBackend?.(modelId) : options.orgModelBackend;
+    const backend = trustedBackend === undefined ? model?.backend : trustedBackend;
+    if (orgModelPolicy && !isModelAllowedByOrgPolicy(orgModelPolicy, { id: modelId, backend }, resolveSuccessorChain)) {
       return new ForbiddenError(`Model "${modelId}" is not allowed by your organization`, {
         errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       });
@@ -197,13 +205,13 @@ export function createModelAdmission({
   };
 
   return {
-    async admits(modelId) {
+    async admits(modelId, options) {
       assertAiAccess();
-      return (await refusal(modelId)) === null;
+      return (await refusal(modelId, options)) === null;
     },
-    async assert(modelId) {
+    async assert(modelId, options) {
       assertAiAccess();
-      const error = await refusal(modelId);
+      const error = await refusal(modelId, options);
       if (error) throw error;
     },
   };

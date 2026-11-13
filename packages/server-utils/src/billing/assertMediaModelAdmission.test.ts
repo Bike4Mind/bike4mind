@@ -111,4 +111,18 @@ describe('media model admission', () => {
     mocks.entitlements.mockRejectedValue(new Error('unavailable'));
     await expect(assertMediaModelAdmission('user-1', 'image-model')).rejects.toMatchObject({ statusCode: 503 });
   });
+
+  it('admits Gemini music consistently in job admission and picker filtering', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['gemini'] } });
+    const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];
+    await expect(assertMediaModelAdmission(user, 'lyria-3.5', false, 'org-1')).resolves.toBeUndefined();
+    expect(
+      await filterAdmittedMediaModels(
+        user,
+        [{ id: 'lyria-3.5' }, { id: 'lyria-3-clip-preview' }, { id: 'music_v2_5' }, { id: 'test-music' }],
+        'org-1'
+      )
+    ).toEqual([{ id: 'lyria-3.5' }, { id: 'lyria-3-clip-preview' }]);
+  });
 });

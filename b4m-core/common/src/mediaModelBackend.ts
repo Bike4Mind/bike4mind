@@ -3,6 +3,8 @@ import { IMAGE_MODEL_CATALOG } from './image/catalog';
 import type { ImageProviderId } from './image/types';
 import { VIDEO_MODEL_CATALOG } from './video/catalog';
 import type { VideoProviderId } from './video/types';
+import { MUSIC_MODEL_CATALOG } from './music/catalog';
+import type { MusicProviderId } from './music/types';
 import { ttsVendorOfModel } from './voicePricing';
 import type { VoiceGenerationVendor } from './voiceGeneration';
 
@@ -28,20 +30,32 @@ const TTS_VENDOR_BACKEND: Record<VoiceGenerationVendor, ModelBackend | null> = {
   elevenlabs: null,
 };
 
+const MUSIC_PROVIDER_BACKEND: Record<MusicProviderId, ModelBackend | null> = {
+  'gemini-lyria': ModelBackend.Gemini,
+  elevenlabs: null,
+  test: null,
+};
+
+/** Actual dispatch vendor; null cannot be replaced by a guess based on its requested model id. */
+export function resolveAudioVendorBackend(vendor: VoiceGenerationVendor): ModelBackend | null {
+  return TTS_VENDOR_BACKEND[vendor];
+}
+
 /**
  * The backend serving a media (image, video, TTS, music, sound) model, for callers that have no catalog
- * entry for it. Undefined when the model is not a known media model or its vendor is not a ModelBackend.
+ * entry for it. Undefined means unknown; null means a known provider outside ModelBackend.
  */
-export function resolveMediaModelBackend(modelId: string): ModelBackend | undefined {
+export function resolveMediaModelBackend(modelId: string): ModelBackend | null | undefined {
   if (Object.hasOwn(IMAGE_MODEL_CATALOG, modelId)) {
     return IMAGE_PROVIDER_BACKEND[IMAGE_MODEL_CATALOG[modelId as keyof typeof IMAGE_MODEL_CATALOG].provider];
   }
   if (Object.hasOwn(VIDEO_MODEL_CATALOG, modelId)) {
-    return (
-      VIDEO_PROVIDER_BACKEND[VIDEO_MODEL_CATALOG[modelId as keyof typeof VIDEO_MODEL_CATALOG].provider] ?? undefined
-    );
+    return VIDEO_PROVIDER_BACKEND[VIDEO_MODEL_CATALOG[modelId as keyof typeof VIDEO_MODEL_CATALOG].provider];
+  }
+  if (Object.hasOwn(MUSIC_MODEL_CATALOG, modelId)) {
+    return MUSIC_PROVIDER_BACKEND[MUSIC_MODEL_CATALOG[modelId as keyof typeof MUSIC_MODEL_CATALOG].provider];
   }
   const ttsVendor = ttsVendorOfModel(modelId);
-  if (ttsVendor) return TTS_VENDOR_BACKEND[ttsVendor] ?? undefined;
+  if (ttsVendor) return resolveAudioVendorBackend(ttsVendor);
   return undefined;
 }

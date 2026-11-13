@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IMAGE_MODELS } from './models';
 import { VIDEO_MODEL_IDS } from './video/catalog';
+import { MUSIC_MODEL_IDS } from './music/catalog';
 import { TTS_DEFAULT_MODEL } from './voicePricing';
 import { resolveMediaModelBackend } from './mediaModelBackend';
 
@@ -10,16 +11,25 @@ describe('resolveMediaModelBackend', () => {
     expect(unresolved).toEqual([]);
   });
 
-  it('resolves every video model except the non-production test provider', () => {
+  it('recognizes every video model and explicitly marks the unrepresentable test provider', () => {
     const unresolved = VIDEO_MODEL_IDS.filter(id => resolveMediaModelBackend(id) === undefined);
-    expect(unresolved).toEqual(['test-video']);
+    expect(unresolved).toEqual([]);
+    expect(resolveMediaModelBackend('test-video')).toBeNull();
   });
 
-  it('resolves OpenAI TTS models and leaves vendors with no ModelBackend unresolved', () => {
+  it('resolves OpenAI TTS models and explicitly marks vendors with no ModelBackend', () => {
     expect(resolveMediaModelBackend(TTS_DEFAULT_MODEL.openai)).toBe('openai');
     expect(resolveMediaModelBackend('tts-1-hd')).toBe('openai');
-    expect(resolveMediaModelBackend(TTS_DEFAULT_MODEL.elevenlabs)).toBeUndefined();
-    expect(resolveMediaModelBackend('music_v1')).toBeUndefined();
+    expect(resolveMediaModelBackend(TTS_DEFAULT_MODEL.elevenlabs)).toBeNull();
+    expect(resolveMediaModelBackend('music_v1')).toBeNull();
+  });
+
+  it('recognizes every music model, admitting Lyria under Gemini while retaining unknown-provider refusals', () => {
+    expect(MUSIC_MODEL_IDS.filter(id => resolveMediaModelBackend(id) === undefined)).toEqual([]);
+    expect(resolveMediaModelBackend('lyria-3.5')).toBe('gemini');
+    expect(resolveMediaModelBackend('lyria-3-clip-preview')).toBe('gemini');
+    expect(resolveMediaModelBackend('test-music')).toBeNull();
+    expect(resolveMediaModelBackend('music_v2_5')).toBeNull();
   });
 
   it('ignores unknown ids and inherited object keys', () => {

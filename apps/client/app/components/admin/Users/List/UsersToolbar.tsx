@@ -148,7 +148,7 @@ export function UsersToolbar({
           label="Search name, email, user ID or provider ID"
           data-testid="admin-users-search-input"
         />
-        <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>
+        <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1} sx={{ ml: { md: 'auto' } }}>
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
             Group by
           </Typography>

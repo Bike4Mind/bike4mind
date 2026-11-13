@@ -95,7 +95,7 @@ export function isModelAllowedByOrgPolicy(
     return false;
   }
   if (policy.allowedProviders !== null) {
-    const backend = model.backend || resolveMediaModelBackend(model.id);
+    const backend = model.backend === undefined ? resolveMediaModelBackend(model.id) : model.backend;
     if (!backend) return false;
     if (!(policy.allowedProviders as readonly string[]).includes(backend)) return false;
   }

@@ -13,7 +13,7 @@ import { apiKeyBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { getCallerModelList } from '@server/utils/callerModelList';
 
 const handler = baseApi({
-  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+  requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ, ApiKeyScope.ADMIN],
   grandfatherLegacyKeys: true,
 }).get(async (req, res) => {
   // The SPA sends its active org; an org-billed key always lists under its own org.

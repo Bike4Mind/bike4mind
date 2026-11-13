@@ -34,6 +34,7 @@ import {
   type AuthOrigin,
   type CitableSource,
   type DecisionResponse,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 
 /**
@@ -275,6 +276,8 @@ export interface ToolContext {
    * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
    */
   organizationId?: string;
+  /** Policy scope is independent of the tool's personal/organization data-write scope. */
+  governingOrgModelPolicy?: ReadOrgModelPolicy;
   /**
    * How the turn was authenticated (see AuthOrigin). Required so that every door that runs tools
    * has to decide it: a tool that must refuse non-session turns checks `authOrigin === 'session'`

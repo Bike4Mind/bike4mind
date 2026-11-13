@@ -17,7 +17,13 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import { DATA_LAKES, STATIC_LAKE_IDS, getAccessibleDataLakes, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  STATIC_LAKE_IDS,
+  getAccessibleDataLakes,
+  hasDeveloperUserTag,
+  readableGroupIds,
+} from '@bike4mind/common';
 import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -336,7 +342,7 @@ export async function queryDataLakeArticles(
     // (see SearchFabFilesServerOptions).
     {
       includeShared: true,
-      userGroups: user.groups ?? [],
+      userGroups: readableGroupIds(user),
       dataLakeTags,
       dataLakeTagPrefixes: openTagPrefixes,
       lakeMemberships,
@@ -399,7 +405,7 @@ export async function queryDataLakeTagCounts(
   // The tree counts are multi-lake like the browse, so they take only the creator-anchored arms:
   // without them a prefix-only member listed on open would be missing from these counts.
   const countOptions = {
-    userGroups: user.groups ?? [],
+    userGroups: readableGroupIds(user),
     dataLakeTags,
     dataLakeTagPrefixes: openTagPrefixes,
     lakeMemberships: dynamicMembershipScopesFor(membershipScopes),
@@ -468,7 +474,7 @@ export async function queryScopedDataLakeTagCounts(
     user.id,
     [...openTagPrefixes, ...scopedTagPrefixes],
     {
-      userGroups: user.groups ?? [],
+      userGroups: readableGroupIds(user),
       dataLakeTags: selected.map(dl => dl.datalakeTag),
       dataLakeTagPrefixes: openTagPrefixes,
       lakeMemberships: dynamicMembershipScopesFor(membershipScopes),

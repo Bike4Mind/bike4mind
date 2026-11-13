@@ -444,6 +444,7 @@ export function buildSharedTools(
       sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
+      governingOrgModelPolicy: options.orgToolPolicy,
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,

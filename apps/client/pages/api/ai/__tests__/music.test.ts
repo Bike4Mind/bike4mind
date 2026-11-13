@@ -255,7 +255,7 @@ describe('POST /api/ai/music', () => {
     expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, false, {
       organizationId: undefined,
     });
-    expect(assertAdmission).toHaveBeenCalledWith('music_v1');
+    expect(assertAdmission).toHaveBeenCalledWith('music_v1', { orgModelBackend: null });
     expect(userIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });

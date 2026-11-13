@@ -39,11 +39,10 @@ const pools = async () => {
 
 describe('seed-signup-grant-pools migration', () => {
   it('sorts after every other signup-grant seed and below the fail-closed backfill', () => {
-    const ids = AvailableMigrations.map(m => m.id);
     const signupSeeds = AvailableMigrations.filter(m => m !== migration && /signup/.test(m.name));
     expect(signupSeeds.length).toBeGreaterThan(0);
     for (const seed of signupSeeds) expect(migration.id).toBeGreaterThan(seed.id);
-    expect(Math.max(...ids)).toBe(20260922000001);
+    expect(migration.id).toBeLessThan(20260922000001);
   });
 
   it.each([

@@ -37,6 +37,7 @@ import {
   loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
+  type ModelAdmissionInput,
 } from '@bike4mind/services/llm/modelAdmission';
 import {
   executedModelFields,
@@ -78,7 +79,10 @@ export async function createModelAdmission(
   user: IUserDocument,
   models?: ModelInfo[],
   systemModel = false,
-  opts: { organizationId?: string | null } = {}
+  opts: {
+    organizationId?: string | null;
+    getOrgModelBackend?: ModelAdmissionInput['getOrgModelBackend'];
+  } = {}
 ): Promise<ModelAdmission> {
   const [configs, enforceCredits, freeTierAllowedModels, org] = await Promise.all([
     systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
@@ -94,12 +98,13 @@ export async function createModelAdmission(
     enforceCredits,
     freeTierAllowedModels,
     orgModelPolicy: readOrgModelPolicy(org?.modelPolicy),
+    getOrgModelBackend: opts.getOrgModelBackend,
   });
   return {
-    admits: modelId => admission.admits(modelId),
-    async assert(modelId) {
+    admits: (modelId, options) => admission.admits(modelId, options),
+    async assert(modelId, options) {
       try {
-        await admission.assert(modelId);
+        await admission.assert(modelId, options);
       } catch (error) {
         await recordPaidPlanRefusal(user.id, modelId, error);
         throw error;

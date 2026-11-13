@@ -1,3 +1,4 @@
+import { resolveAudioVendorBackend } from '@bike4mind/common';
 import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
@@ -62,7 +63,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
 
   await (
     await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
-  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
+  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID, { orgModelBackend: resolveAudioVendorBackend(provider) });
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,

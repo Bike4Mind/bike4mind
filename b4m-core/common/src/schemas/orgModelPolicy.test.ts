@@ -125,6 +125,15 @@ describe('isModelAllowedByOrgPolicy', () => {
     expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-image-1' })).toBe(false);
   });
 
+  it('never replaces an authoritative unrepresentable provider with an OpenAI-looking model id', () => {
+    const p = policy({ allowedProviders: [ModelBackend.OpenAI] });
+    expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-image-1' })).toBe(true);
+    expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-image-1', backend: null })).toBe(false);
+    expect(
+      isModelAllowedByOrgPolicy(policy({ allowedModels: ['gpt-image-1'] }), { id: 'gpt-image-1', backend: null })
+    ).toBe(true);
+  });
+
   it('matches an allowlisted retired id against its successor only when a resolver is given', () => {
     const p = policy({ allowedModels: ['old-model'] });
     const resolve = (id: string) => (id === 'old-model' ? 'new-model' : id);

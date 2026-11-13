@@ -1,5 +1,10 @@
 import type { ToolContext } from '../base/types';
-import { isModelRequiresSubscriptionError, isOrgModelNotAllowedError, type ModelAdmission } from '../../modelAdmission';
+import {
+  isModelRequiresSubscriptionError,
+  isOrgModelNotAllowedError,
+  type ModelAdmission,
+  type ModelAdmissionCallOptions,
+} from '../../modelAdmission';
 
 /**
  * A free-tier or org-policy refusal is the caller's plan or org choice, not a fault: it becomes the tool result
@@ -45,10 +50,12 @@ export async function toolModelRefusal(
   context: Pick<ToolContext, 'logger'>,
   admission: Pick<ModelAdmission, 'assert'>,
   modelId: string,
-  toolName: string
+  toolName: string,
+  options?: ModelAdmissionCallOptions
 ): Promise<string | null> {
   try {
-    await admission.assert(modelId);
+    if (options === undefined) await admission.assert(modelId);
+    else await admission.assert(modelId, options);
     return null;
   } catch (error) {
     const note = isOrgModelNotAllowedError(error) ? ORG_POLICY_MODEL_NOTE : SETTINGS_MODEL_NOTE;

@@ -275,7 +275,7 @@ describe('POST /api/ai/sound-effects', () => {
     expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), undefined, false, {
       organizationId: null,
     });
-    expect(assertAdmission).toHaveBeenCalledWith('eleven_text_to_sound_v2');
+    expect(assertAdmission).toHaveBeenCalledWith('eleven_text_to_sound_v2', { orgModelBackend: null });
     expect(userIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });

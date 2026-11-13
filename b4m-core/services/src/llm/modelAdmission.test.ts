@@ -446,6 +446,44 @@ describe('organization model policy', () => {
     ...p,
   });
 
+  it('checks the actual provider for each call even when candidates share one model id', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.OpenAI] }),
+    });
+    const id = 'gpt-4o-mini-tts';
+    await expect(admission.admits(id, { orgModelBackend: null })).resolves.toBe(false);
+    await expect(admission.assert(id, { orgModelBackend: null })).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    await expect(admission.admits(id, { orgModelBackend: ModelBackend.OpenAI })).resolves.toBe(true);
+    await expect(
+      admission.assert('future-openai-tts', { orgModelBackend: ModelBackend.OpenAI })
+    ).resolves.toBeUndefined();
+  });
+
+  it('uses provider-only metadata without treating an absent catalog row as priced or free-tier text', async () => {
+    const base = {
+      user: {},
+      configs: [],
+      enforceCredits: true,
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.OpenAI] }),
+      getOrgModelBackend: () => ModelBackend.OpenAI,
+    };
+    await expect(createModelAdmission(base).assert('unknown')).resolves.toBeUndefined();
+    const freeTierAllowedModels = Object.assign(new Set<string>(), { textModelsOpen: true as const });
+    await expect(createModelAdmission({ ...base, freeTierAllowedModels }).assert('unknown')).rejects.toMatchObject({
+      additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+    });
+    await expect(createModelAdmission({ ...base, models: [disabled] }).assert('disabled')).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    await expect(createModelAdmission({ ...base, models: [unpriced] }).assert('unpriced')).rejects.toThrow(
+      'no price configured'
+    );
+  });
+
   it('refuses a model from a provider outside allowedProviders with org_model_not_allowed', async () => {
     const admission = createModelAdmission({
       user: {},

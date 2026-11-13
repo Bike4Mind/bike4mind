@@ -1,4 +1,10 @@
-import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  CreditHolderType,
+  getTextModelCost,
+  ModelBackend,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 
@@ -563,6 +569,23 @@ describe('createModelAdmission', () => {
       { id: 'claude', backend: 'anthropic' } as unknown as ModelInfo,
     ];
     const policy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+
+    it('forwards authoritative provider metadata through both methods without reloading the org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: { allowedProviders: ['openai'] } });
+      const backend = vi.fn(() => ModelBackend.OpenAI);
+      const scoped = await createModelAdmission(user(), undefined, false, {
+        organizationId: 'org1',
+        getOrgModelBackend: backend,
+      });
+      await expect(scoped.assert('future-tts')).resolves.toBeUndefined();
+      await expect(scoped.admits('future-tts', { orgModelBackend: null })).resolves.toBe(false);
+      await expect(scoped.assert('tts-1', { orgModelBackend: null })).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.admits('tts-1', { orgModelBackend: ModelBackend.OpenAI })).resolves.toBe(true);
+      expect(backend).toHaveBeenCalledExactlyOnceWith('future-tts');
+      expect(m.orgFindById).toHaveBeenCalledExactlyOnceWith('org1');
+    });
 
     it('refuses a model the given org does not allow, and admits it with no org', async () => {
       m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });

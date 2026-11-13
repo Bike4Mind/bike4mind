@@ -48,6 +48,7 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    governingOrgModelPolicy,
     authOrigin,
     apiKeyId,
     questId,
@@ -73,6 +74,7 @@ export const generateTools = (
     sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
+    governingOrgModelPolicy?: ToolContext['governingOrgModelPolicy'];
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
@@ -138,6 +140,7 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    governingOrgModelPolicy,
     authOrigin,
     apiKeyId,
     codeMinifier,

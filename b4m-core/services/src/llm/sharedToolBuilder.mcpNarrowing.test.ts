@@ -19,9 +19,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import type { IUserDocument } from '@bike4mind/common';
+import {
+  ModelBackend,
+  PAID_PLAN_ENTITLEMENT_KEY,
+  type IUserDocument,
+  type ModelInfo,
+  type ReadOrgModelPolicy,
+} from '@bike4mind/common';
 import { buildSharedTools, type ToolBuilderDeps, type ToolBuilderCallbacks } from './sharedToolBuilder';
 import { createDelegateToAgentTool } from './tools/implementation/delegateToAgent';
+import { b4mTools } from './tools';
+import { createToolModelAdmission } from './tools/helpers/modelAdmission';
 
 // The `deps.agentStore` branch (sharedToolBuilder.ts:478-486) is where parentTools - the array
 // captured by the delegate tool's closure, never part of the array buildSharedTools returns -
@@ -103,6 +111,67 @@ const build = (options: Parameters<typeof buildSharedTools>[2]) =>
   (buildSharedTools(deps, callbacks, options) ?? []).map(tool => tool.toolSchema.name);
 
 const mcpNames = (names: string[]) => names.filter(name => name.includes('__'));
+
+describe('governing model policy through the real shared builder', () => {
+  const cases: Array<[string, ReadOrgModelPolicy, boolean]> = [
+    ['forbidden provider', { allowedProviders: [ModelBackend.Gemini], allowedModels: null, allowedTools: null }, false],
+    ['allowed provider', { allowedProviders: [ModelBackend.OpenAI], allowedModels: null, allowedTools: null }, true],
+    ['explicit unrestricted policy', null, true],
+  ];
+
+  it.each(cases)('%s governs model execution while data writes remain personal', async (_name, policy, allowed) => {
+    const provider = vi.fn(async () => 'generated');
+    const findOrganization = vi.fn(async () => {
+      throw new Error('An explicit governing policy must not trigger another organization lookup');
+    });
+    const tools = buildSharedTools(
+      {
+        ...deps,
+        organizationId: undefined,
+        getEntitlements: async () => [PAID_PLAN_ENTITLEMENT_KEY],
+        precomputed: {
+          adminSettingsEnforceCredits: false,
+          models: [{ id: 'org-model', backend: ModelBackend.OpenAI }] as ModelInfo[],
+        },
+        db: {
+          ...deps.db,
+          organizations: { findById: findOrganization },
+          adminSettings: { findOne: async () => null, findBySettingNames: async () => [], findAll: async () => [] },
+        } as unknown as ToolBuilderDeps['db'],
+      },
+      callbacks,
+      {
+        enabledTools: ['dice_roll'],
+        orgToolPolicy: policy,
+        externalTools: {
+          dice_roll: {
+            ...b4mTools.dice_roll,
+            implementation: (context, config) => ({
+              ...b4mTools.dice_roll.implementation(context, config),
+              toolFn: async () => {
+                expect(context.organizationId).toBeUndefined();
+                expect(context.governingOrgModelPolicy).toBe(policy);
+                const admission = await createToolModelAdmission(context);
+                await admission.assert('org-model');
+                return provider();
+              },
+            }),
+          },
+        },
+      }
+    );
+    const governed = tools?.find(tool => tool.toolSchema.name === 'dice_roll');
+    expect(governed).toBeDefined();
+    if (allowed) {
+      await expect(governed!.toolFn({})).resolves.toBe('generated');
+      expect(provider).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(governed!.toolFn({})).rejects.toThrow('not allowed by your organization');
+      expect(provider).not.toHaveBeenCalled();
+    }
+    expect(findOrganization).not.toHaveBeenCalled();
+  });
+});
 
 describe('buildSharedTools: offerOnlyNamedTools withholds unnamed MCP tools', () => {
   it('offers nothing at all when the caller named no tools and MCP servers are connected', () => {
