@@ -54,6 +54,10 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
       const parsed = RedeemBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: INVALID_CODE });
       const browser = parsed.data.session === 'browser';
+      // Browsers label a cross-site form POST; a page on another site must not sign this browser in.
+      if (browser && req.headers['sec-fetch-site'] === 'cross-site') {
+        return res.status(403).json({ error: 'Cross-site sign-in is not allowed' });
+      }
       // Checked before the code is spent: replacing a signed-in browser's session with a persona's
       // is how a forwarded link would swap someone into a test account, or drop an impersonation.
       if (browser && (readRefreshCookie(req) || readAdminReturnCookie(req))) {

@@ -87,7 +87,7 @@ beforeEach(() => {
 describe('POST /api/personas/redeem with session: browser', () => {
   const BROWSER = { code: CODE, session: 'browser' };
 
-  it('serves POST only, so a code in the query string is answered 405 and never redeemed', () => {
+  it('is configured POST-only, with no GET handler that could redeem a code from the query string', () => {
     expect(h.baseApiOptions).toMatchObject({ allowedMethods: ['POST'] });
     expect(h.routes.GET).toBeUndefined();
   });
@@ -136,6 +136,23 @@ describe('POST /api/personas/redeem with session: browser', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(h.issueBrowserSession).not.toHaveBeenCalled();
     expect(res.getHeader('Cache-Control')).toBe('no-store');
+  });
+
+  it('answers 403 for a cross-site browser sign-in, without redeeming', async () => {
+    const { req, res } = fire('POST', { body: BROWSER });
+    req.headers['sec-fetch-site'] = 'cross-site';
+    await h.routes.POST(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
+    expect(h.issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for a browser session with no code, without redeeming', async () => {
+    const res = await run('POST', { body: { session: 'browser' } });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.redeemPersonaLoginCode).not.toHaveBeenCalled();
   });
 
   it('answers 400 for an unknown session kind, without redeeming', async () => {
@@ -187,6 +204,14 @@ describe('POST /api/personas/redeem', () => {
       PERSONA.id,
       expect.objectContaining({ createdVia: 'persona-mint' })
     );
+  });
+
+  it('still answers a headless code with tokens when the caller holds a session cookie', async () => {
+    h.readRefreshCookie.mockReturnValue('rt');
+    const res = await run('POST', { body: { code: CODE } });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.issueBrowserSession).not.toHaveBeenCalled();
   });
 
   it('caps the refresh token at the persona expiry when that is sooner than the idle TTL', async () => {
