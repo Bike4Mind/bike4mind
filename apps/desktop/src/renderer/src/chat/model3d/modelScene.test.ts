@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { ModelPartMesh } from '@shared/model3d';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -80,6 +80,41 @@ describe('exportGlb', () => {
     expect(loaded.size[1]).toBeCloseTo(0.5);
     expect(loaded.size[2]).toBeCloseTo(0.25);
     expect(loaded.units).toBe('m');
+  });
+
+  it('exports a procedurally textured part as one metallic-roughness texture', async () => {
+    // jsdom has no canvas: stand in for the 2D context the exporter writes its images through.
+    // Like a real one, drawImage rejects anything that is not an image or canvas.
+    const context = {
+      putImageData: vi.fn(),
+      drawImage: vi.fn(() => {
+        throw new TypeError('drawImage: not an image source');
+      }),
+    };
+    vi.stubGlobal(
+      'ImageData',
+      class {
+        constructor(
+          public data: Uint8ClampedArray,
+          public width: number,
+          public height: number
+        ) {}
+      }
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback =>
+      callback(new Blob([new Uint8Array(4)]))
+    );
+    try {
+      const glb = await exportGlb(buildModelObject([{ ...box('plank', 100, 20, 10), texture: 'wood' }], 'mm'));
+      const jsonLength = new DataView(glb.buffer, glb.byteOffset).getUint32(12, true);
+      const json = JSON.parse(new TextDecoder().decode(glb.slice(20, 20 + jsonLength)));
+      expect(json.materials[0].pbrMetallicRoughness.metallicRoughnessTexture).toBeDefined();
+      expect(context.drawImage).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('hands the exporter one packed map for a textured part, leaving the viewer material alone', () => {
