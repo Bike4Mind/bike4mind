@@ -16,10 +16,11 @@ const { getSettingsMapMock, findActiveUserSubscriptions, findActiveSubscriptions
     };
   });
 
-const { findBySidMock } = vi.hoisted(() => ({ findBySidMock: vi.fn() }));
+const { findBySidMock, findByClientIds } = vi.hoisted(() => ({ findBySidMock: vi.fn(), findByClientIds: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   authSessionRepository: { findBySid: findBySidMock },
+  oauthClientRepository: { findByClientIds },
   organizationRepository: { findPlanHolderOrgIds },
 }));
 vi.mock('@bike4mind/utils', async () => {
@@ -284,6 +285,76 @@ describe('isApiKeyAccessAllowed', () => {
       findActiveSubscriptionsByOwners.mockRejectedValue(new Error('billing org down'));
       await expect(gate.isApiKeyAccessAllowed(USER, ORG_BILLING)).rejects.toThrow('billing org down');
     });
+  });
+});
+
+describe('federated exchange keys', () => {
+  const EXCHANGE = { oauthExchangeClientId: 'client-1' };
+  const clientRow = (doc: Record<string, unknown> | undefined) =>
+    findByClientIds.mockResolvedValue(new Map(doc ? [['client-1', doc]] : []));
+
+  it.each([
+    ['unset', {}, true],
+    ['true', { unpaidAccountsAllowed: true }, true],
+    ['false', { unpaidAccountsAllowed: false }, false],
+  ])('paid mode, unpaid owner, flag %s -> %s', async (_label, doc, allowed) => {
+    clientRow({ clientId: 'client-1', ...doc });
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(allowed);
+    expect(findByClientIds).toHaveBeenCalledWith(['client-1']);
+  });
+
+  it('refuses a missing client and ignores isActive and federatedIdp', async () => {
+    clientRow(undefined);
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(false);
+    clientRow({ clientId: 'client-1', isActive: false });
+    gate.clearExchangeClientAdmitsCache();
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(true);
+  });
+
+  it('never looks the client up for a paid owner, so a failing lookup cannot affect them', async () => {
+    findByClientIds.mockRejectedValue(new Error('db down'));
+    expect(await gate.isApiKeyAccessAllowed(CREDIT_BUYER, EXCHANGE)).toBe(true);
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plans.TEAM_PLAN.priceId }]);
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(true);
+    expect(findByClientIds).not.toHaveBeenCalled();
+  });
+
+  it('propagates a lookup failure for an unpaid owner and re-queries on the next call', async () => {
+    findByClientIds.mockRejectedValueOnce(new Error('db down'));
+    await expect(gate.isApiKeyAccessAllowed(USER, EXCHANGE)).rejects.toThrow('db down');
+    clientRow({ clientId: 'client-1' });
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(true);
+    expect(findByClientIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches per client for 30 seconds and shares one in-flight lookup', async () => {
+    clientRow({ clientId: 'client-1' });
+    await Promise.all([
+      gate.isApiKeyAccessAllowed(USER, EXCHANGE),
+      gate.isApiKeyAccessAllowed(USER, EXCHANGE),
+      gate.isApiKeyAccessAllowed(USER, EXCHANGE),
+    ]);
+    expect(findByClientIds).toHaveBeenCalledTimes(1);
+    await gate.isApiKeyAccessAllowed(USER, EXCHANGE);
+    expect(findByClientIds).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_001);
+    clientRow({ clientId: 'client-1', unpaidAccountsAllowed: false });
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(false);
+    expect(findByClientIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('still refuses under disabled and never consults the client', async () => {
+    setMode('disabled');
+    clientRow({ clientId: 'client-1' });
+    expect(await gate.isApiKeyAccessAllowed(USER, EXCHANGE)).toBe(false);
+    expect(findByClientIds).not.toHaveBeenCalled();
+  });
+
+  it('leaves a key without the marker paid-only and skips the lookup', async () => {
+    clientRow({ clientId: 'client-1' });
+    expect(await gate.isApiKeyAccessAllowed(USER, {})).toBe(false);
+    expect(await gate.isApiKeyAccessAllowed(USER)).toBe(false);
+    expect(findByClientIds).not.toHaveBeenCalled();
   });
 });
 
