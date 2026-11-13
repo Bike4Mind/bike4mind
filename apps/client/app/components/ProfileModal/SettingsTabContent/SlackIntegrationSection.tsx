@@ -45,6 +45,13 @@ const AGENTS = [
   { key: 'agent', label: '@agent', emoji: '🤖', description: 'General Agent' },
 ] as const;
 
+/**
+ * Joy's Select drops a controlled value its options do not hold yet (a stored id that renders
+ * before its notebook, agent or project list loads) and reports that with a null event. Only a
+ * user's pick carries an event, so only that may change the stored setting.
+ */
+const isUserPick = (event: React.SyntheticEvent | null): boolean => event !== null;
+
 const SlackIntegrationSection = () => {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
@@ -587,8 +594,10 @@ const SlackIntegrationSection = () => {
               <Select
                 disabled={updateSlackSettings.isPending}
                 placeholder="Select project (optional)"
+                data-testid="slack-settings-default-project-select"
                 value={defaultProjectId || null}
-                onChange={(_, newValue) => {
+                onChange={(event, newValue) => {
+                  if (!isUserPick(event)) return;
                   setDefaultProjectId(newValue || '');
                 }}
                 sx={{
@@ -629,7 +638,8 @@ const SlackIntegrationSection = () => {
                 data-testid="slack-custom-agent-select"
                 placeholder="Use default general-purpose agent"
                 value={customAgentId || null}
-                onChange={(_, newValue) => {
+                onChange={(event, newValue) => {
+                  if (!isUserPick(event)) return;
                   setCustomAgentId(newValue || '');
                 }}
                 sx={{
@@ -675,8 +685,10 @@ const SlackIntegrationSection = () => {
                   <Select
                     disabled={updateSlackSettings.isPending}
                     placeholder="Use default routing"
+                    data-testid={`slack-settings-agent-routing-${agent.key}-select`}
                     value={agentNotebookRouting[agent.key] || null}
-                    onChange={(_, newValue) => {
+                    onChange={(event, newValue) => {
+                      if (!isUserPick(event)) return;
                       setAgentNotebookRouting(prev => ({
                         ...prev,
                         [agent.key]: newValue || undefined,
