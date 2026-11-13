@@ -95,7 +95,14 @@ public final class StudioCreateViewModel {
     inputs = seed.inputs
     await loadModels()
     if !seed.prompt.isEmpty { prompt = seed.prompt }
-    if !seed.params.isEmpty { paramsByKind[kind] = seed.params }
+    if let modelID = seed.modelID, let wanted = availableModels.first(where: { $0.id == modelID }) {
+      selectedModelIDs[kind] = wanted.id
+    }
+    if !seed.params.isEmpty {
+      let (kept, dropped) = seed.params.carried(to: selectedModel?.capabilities)
+      paramsByKind[kind] = kept
+      paramsNote = dropped.isEmpty ? nil : "Some settings aren't available on \(selectedModel?.name ?? "this model")."
+    }
     reconcileModelWithInputs()
   }
 

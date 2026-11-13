@@ -1,5 +1,4 @@
-#!/usr/bin/env swift  // Renders the placeholder app icon and launch mark into the asset catalog. Run from apps/ios:
-//
+#!/usr/bin/env swift  // Renders the placeholder app icon and launch mark into the asset catalog. Run from apps/ios:  //
 //   swift Tools/GenerateAppIcon.swift
 //
 // The mark is three connected nodes (a small network) on a brand-blue gradient, no text. It is a
