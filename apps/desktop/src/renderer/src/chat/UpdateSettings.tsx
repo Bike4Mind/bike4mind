@@ -128,7 +128,7 @@ export function UpdateRestartConfirm({
           </Typography>
         </Stack>
       </Alert>
-      {/* Wraps in the narrow sidebar notice instead of overflowing it. */}
+      {/* Wraps in the narrow update notice instead of overflowing it. */}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
         <Button size="sm" variant="plain" color="neutral" onClick={onKeep} data-testid="update-keep-btn">
           Keep working
