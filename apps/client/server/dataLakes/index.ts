@@ -32,16 +32,16 @@ import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/in
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fileContentUrl } from '@server/files/browserFileSigner';
-import { toAccessContext, toMemberAccessContext, toCompleteMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import {
-  grantingLakes,
-  isFileInAccessibleLake,
-  normalizedLakePrefix,
-} from '@bike4mind/server-utils/dataLakes/grantingLakes';
+  toAccessContext,
+  toMemberAccessContext,
+  toCompleteMemberAccessContext,
+} from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { grantingLakes, normalizedLakePrefix } from '@bike4mind/server-utils/dataLakes/grantingLakes';
 import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
 import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 
-export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
+export { grantingLakes, firstQueryValue };
 
 /**
  * The subset of `lakeIds` a platform admin could read only through the admin bypass, i.e. lakes

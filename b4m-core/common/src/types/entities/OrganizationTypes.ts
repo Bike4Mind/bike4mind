@@ -89,6 +89,11 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Absent or null is unrestricted; read it through readOrgModelPolicy, which fails closed on a bad row.
    */
   modelPolicy?: OrgModelPolicy | null;
+
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
