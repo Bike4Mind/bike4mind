@@ -49,6 +49,29 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     return result?.toJSON() ?? null;
   }
 
+  async setOwnedGroupReadAccess(projectId: string, ownerId: string, groupId: string, enabled: boolean) {
+    if (!mongoose.isObjectIdOrHexString(projectId)) return false;
+    const result = await this.projectModel.updateOne({ _id: convertId(projectId), userId: ownerId, deletedAt: null }, [
+      {
+        $set: {
+          groups: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ['$groups', []] },
+                  as: 'group',
+                  cond: { $ne: ['$$group.groupId', { $literal: groupId }] },
+                },
+              },
+              { $literal: enabled ? [{ groupId, permissions: ['read'] }] : [] },
+            ],
+          },
+        },
+      },
+    ]);
+    return result.matchedCount === 1;
+  }
+
   async removeSession(sessionId: string) {
     await this.projectModel.updateMany({ sessionIds: sessionId }, { $pull: { sessionIds: sessionId } });
   }

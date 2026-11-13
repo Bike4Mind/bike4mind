@@ -11,12 +11,16 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
-    post: () => chain,
+    post: (fn: typeof mockRefs.postHandler) => {
+      mockRefs.postHandler = fn;
+      return chain;
+    },
     put: () => chain,
     delete: () => chain,
     get: (fn: any) => {
@@ -28,6 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const listOrganizationGroups = vi.hoisted(() => vi.fn());
+const createStandardGroup = vi.hoisted(() => vi.fn());
+const withTransaction = vi.hoisted(() => vi.fn(async (fn: () => Promise<unknown>) => fn()));
+vi.mock('@bike4mind/database', () => ({ withTransaction }));
 const repos = vi.hoisted(() => ({
   organizations: { repo: 'organizations' },
   groups: { repo: 'groups' },
@@ -36,7 +43,7 @@ const repos = vi.hoisted(() => ({
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: repos.organizations }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: repos.groups }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: repos.users }));
-vi.mock('@bike4mind/services', () => ({ organizationService: { listOrganizationGroups } }));
+vi.mock('@bike4mind/services', () => ({ organizationService: { listOrganizationGroups, createStandardGroup } }));
 
 import '@pages/api/organizations/[id]/groups/index';
 
@@ -96,5 +103,27 @@ describe('GET /api/organizations/[id]/groups', () => {
     const { promise } = call({ id: 'owner1' }, null);
     await expect(promise).rejects.toThrow(/Organization not found/);
     expect(listOrganizationGroups).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/organizations/[id]/groups', () => {
+  it('delegates creation with the acting user inside a transaction', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { type: 'team' } });
+    const user = { id: 'owner1' };
+    Object.assign(req, { user });
+    createStandardGroup.mockResolvedValue({ added: ['team'], removed: [], revokedGroupIds: [] });
+    await mockRefs.postHandler!(req, res);
+    expect(withTransaction).toHaveBeenCalled();
+    expect(createStandardGroup).toHaveBeenCalledWith(user, { organizationId: 'org1', type: 'team' }, { db: repos });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('rejects a body that tries to replace the staff grants', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { id: 'org1' },
+      body: { type: 'team', allowedGroupTypes: ['sales'] },
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
   });
 });

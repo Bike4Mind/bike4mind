@@ -52,6 +52,31 @@ async function collectAllPages(limit: number) {
 }
 
 describe('ProjectRepository.listAccessibleAfterId', () => {
+  it('grants and revokes group read access without changing other shares', async () => {
+    const project = await makeProject('group-management', {
+      groups: [{ groupId: 'other-group', permissions: ['read', 'update'] }],
+      users: [{ userId: 'direct-member', permissions: ['read'] }],
+    });
+    const member = { id: OTHER, groups: [GROUP] };
+    expect(await projectRepository.shareable.findAccessibleById(member, project.id)).toBeNull();
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OTHER, GROUP, true)).toBe(false);
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(true);
+    await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true);
+    expect(await projectRepository.shareable.findAccessibleById(member, project.id)).not.toBeNull();
+    expect(await projectRepository.shareable.findAccessibleById({ id: OTHER, groups: [] }, project.id)).toBeNull();
+    expect(await projectRepository.shareable.findUpdateAccessById(member, project.id)).toBeNull();
+    const shared = await projectRepository.findById(project.id);
+    expect(shared?.groups).toHaveLength(2);
+    expect(shared?.users).toEqual(expect.arrayContaining([expect.objectContaining({ userId: 'direct-member' })]));
+    await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, false);
+    expect(await projectRepository.shareable.findAccessibleById(member, project.id)).toBeNull();
+    expect((await projectRepository.findById(project.id))?.groups).toEqual([
+      expect.objectContaining({ groupId: 'other-group', permissions: ['read', 'update'] }),
+    ]);
+    await Project.deleteOne({ _id: project._id });
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(false);
+  });
+
   it('walks every accessible project once, in ascending _id order, across keyset pages', async () => {
     const created = [];
     for (let index = 0; index < 5; index++) created.push(await makeProject(`p${index}`));
