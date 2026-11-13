@@ -182,7 +182,7 @@ type FirecrawlFetchOptions = {
   /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
   mobile?: boolean;
   /** Probe the page's origin for /llms-full.txt and /llms.txt after a first read that comes back
-   *  truncated, and return the one found as WebFetchResult.llmsTxtUrl (the web_fetch hint, #497).
+   *  truncated, and return the one found as WebFetchResult.llmsTxtUrl (the web_fetch hint).
    *  Defaults to true. Pass false when the caller never reads llmsTxtUrl: the probe is two direct
    *  GETs to the site, with Node's default user agent and no robots.txt check, and the read waits up
    *  to LLMS_TXT_PROBE_TIMEOUT_MS for them. */
@@ -349,14 +349,10 @@ export async function firecrawlFetch(
     throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(
-    result.markdown,
-    result.metadata?.title,
-    url,
-    options?.offset,
-    durationMs,
-    { screenshot: wantScreenshot ? result.screenshot : undefined, llmsTxtHint: options?.llmsTxtHint }
-  );
+  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs, {
+    screenshot: wantScreenshot ? result.screenshot : undefined,
+    llmsTxtHint: options?.llmsTxtHint,
+  });
 }
 
 /**
