@@ -139,6 +139,37 @@ describe('StripeCheckoutSuccessHandler', () => {
     expect(mockBootstrapSession).not.toHaveBeenCalled();
     expect(mockGet).not.toHaveBeenCalled();
   });
+
+  it('opens the newly created team after verified checkout', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    try {
+      mockGet.mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/organizations/org1?team_created=true'));
+      expect(mockToastSuccess).toHaveBeenLastCalledWith('Team created successfully!', { id: 'cs_test_1' });
+    } finally {
+      replace.mockRestore();
+    }
+  });
+
+  it('waits for team provisioning without reporting the purchase twice', async () => {
+    const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGet
+        .mockResolvedValueOnce({ data: { ...SUMMARY, teamCheckout: true } })
+        .mockResolvedValue({ data: { ...SUMMARY, teamCheckout: true, organizationId: 'org1' } });
+      returnTo(CHECKOUT_RETURN);
+      await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+      expect(replace).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(replace).toHaveBeenCalledWith('/organizations/org1?team_created=true');
+      expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      replace.mockRestore();
+    }
+  });
 });
 
 describe('checkoutConfirmation', () => {

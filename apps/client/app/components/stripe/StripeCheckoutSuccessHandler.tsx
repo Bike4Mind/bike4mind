@@ -59,7 +59,11 @@ export function releaseSessionClaim(sessionId: string): void {
 
 const GENERIC_CONFIRMATION = 'Subscription completed successfully!';
 
-export type CheckoutSessionSummary = PurchaseConversion & { credits?: number };
+export type CheckoutSessionSummary = PurchaseConversion & {
+  credits?: number;
+  teamCheckout?: boolean;
+  organizationId?: string;
+};
 
 export function checkoutConfirmation({
   planName,
@@ -99,8 +103,34 @@ async function confirmCheckout(sessionId: string): Promise<void> {
     return;
   }
 
-  toast.success(checkoutConfirmation(summary), { id: sessionId });
+  toast.success(
+    summary.teamCheckout ? 'Team checkout completed. Preparing your team...' : checkoutConfirmation(summary),
+    { id: sessionId }
+  );
   if (claimed) trackPurchaseConversion(summary);
+
+  if (summary.teamCheckout) {
+    for (let attempt = 0; !summary.organizationId && attempt < 6; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      try {
+        summary = (
+          await api.get<CheckoutSessionSummary>('/api/subscriptions/checkout-session', { params: { id: sessionId } })
+        ).data;
+      } catch {
+        break;
+      }
+    }
+    if (summary.organizationId) {
+      toast.success('Team created successfully!', { id: sessionId });
+      checkoutReturnNavigator.replace(`/organizations/${encodeURIComponent(summary.organizationId)}?team_created=true`);
+    } else {
+      toast.success('Your payment is complete. Your team is still being prepared.', {
+        id: sessionId,
+        duration: Infinity,
+        action: { label: 'Check again', onClick: () => void confirmCheckout(sessionId) },
+      });
+    }
+  }
 }
 
 /** How long the confirmation stays on screen before a checkout started elsewhere returns there. */
