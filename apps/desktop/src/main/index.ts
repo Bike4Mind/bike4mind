@@ -15,6 +15,7 @@ import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
 import { registerLoopRunner } from './loops';
+import { registerLocalLoops } from './loops/local';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerModelScheme } from './chat/model3d/engineProtocol';
@@ -167,16 +168,26 @@ void app.whenReady().then(async () => {
     observeStream: event => {
       fleet.observe(event);
       loops.runner.observe(event);
+      localLoops?.scheduler.observe(event);
     },
-    loopUnattended: sessionId => loops.runner.unattended(sessionId),
-    loopMerge: (sessionId, prUrl) => loops.runner.merge(sessionId, prUrl),
+    loopUnattended: sessionId =>
+      chat.isLocalLoopRun(sessionId) ? localLoops?.scheduler.unattended(sessionId) : loops.runner.unattended(sessionId),
+    loopMerge: (sessionId, prUrl) =>
+      chat.isLocalLoopRun(sessionId)
+        ? (localLoops?.scheduler.merge(sessionId, prUrl) ?? Promise.reject(new Error('Loops are unavailable.')))
+        : loops.runner.merge(sessionId, prUrl),
+    localLoopTickets: async (sessionId, tool, input) => {
+      if (!localLoops) throw new Error('Loops are unavailable.');
+      return localLoops.scheduler.ticketTool(sessionId, tool, input);
+    },
     observeSessionStatus: event => needsYou.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
-  const loops = registerLoopRunner(auth, chat, background);
+  const loops = registerLoopRunner(auth, chat, background, () => localLoops?.scheduler.busy ?? 0);
+  const localLoops = registerLocalLoops(auth, chat, background, loops.runner, loops.store);
   const models = registerModels(
     modelServers,
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
@@ -229,6 +240,7 @@ void app.whenReady().then(async () => {
     quitState = 'cleaning-up';
     const results = await Promise.allSettled([
       loops.runner.releaseAll(),
+      localLoops?.scheduler.releaseAll(),
       background.shutdown(),
       mcp.shutdown(),
       terminals.shutdown(),

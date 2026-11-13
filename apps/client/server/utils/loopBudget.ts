@@ -120,7 +120,8 @@ export async function p2RunsLeft(loop: Pick<ILoop, 'id' | 'p2RunsPerDay'>, now: 
  * and the owner's all-loops budget each have one iteration left, and their paced allowances cover one. Side-effect
  * free: the scheduler's `admit` (apps/workers/src/cron/loopScheduler.ts) pauses or defers on a refusal, the desktop
  * runner claim (loopRunner.ts) only refuses. On admission, `creditCap` is the run's cap (undefined: none) and
- * `iterationCredits` the one-iteration price the budget checks used (0 with no budget).
+ * `iterationCredits` the one-iteration price the budget checks used (0 with no budget). Must stay in sync with
+ * Desktop loops' localAdmission (apps/desktop/src/main/loops/local/admission.ts).
  */
 export async function loopAdmission(loop: ILoop, model: string, now: Date): Promise<LoopAdmission> {
   let pricing: Promise<number> | undefined;

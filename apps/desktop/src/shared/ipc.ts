@@ -1,6 +1,17 @@
 import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
+import type {
+  AnswerLocalEventRequest,
+  CreateLocalLoopRequest,
+  CreateLocalTicketRequest,
+  LocalLoopDetail,
+  LocalLoopsResult,
+  LocalLoopSummary,
+  LocalTicket,
+  UpdateLocalLoopRequest,
+  UpdateLocalTicketRequest,
+} from './localLoops';
 import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
@@ -381,6 +392,22 @@ export const IPC_CHANNELS = {
   loopRunnerRevoke: 'loops:revoke',
   /** main -> renderer push of the whole LoopRunnerState. */
   loopRunnerStateChanged: 'loops:state-changed',
+  /** Desktop-owned loops (shared/localLoops.ts), `localloops:` (lowercase: ipc.test.ts). Every reply is a LocalLoopsResult. */
+  localLoopsList: 'localloops:list',
+  localLoopsGet: 'localloops:get',
+  localLoopsCreateLoop: 'localloops:create-loop',
+  localLoopsUpdateLoop: 'localloops:update-loop',
+  localLoopsDeleteLoop: 'localloops:delete-loop',
+  localLoopsSetStatus: 'localloops:set-status',
+  localLoopsRunNow: 'localloops:run-now',
+  localLoopsCreateTicket: 'localloops:create-ticket',
+  /** Edit, move, re-prioritize, block, close or delete a ticket. */
+  localLoopsUpdateTicket: 'localloops:update-ticket',
+  localLoopsAnswerEvent: 'localloops:answer-event',
+  localLoopsGetBudget: 'localloops:get-budget',
+  localLoopsSetBudget: 'localloops:set-budget',
+  /** main -> renderer push: these loops changed; refetch them. */
+  localLoopsChanged: 'localloops:changed',
   modelsGetStatus: 'models:get-status',
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
@@ -723,6 +750,22 @@ export interface DesktopApi {
     approve(request: LoopApproveRequest): Promise<LoopApproveResult>;
     revoke(loopId: string): Promise<LoopRunnerState>;
     onStateChanged(listener: (state: LoopRunnerState) => void): () => void;
+  };
+  /** Desktop-owned loops. See shared/localLoops.ts. */
+  localLoops: {
+    list(): Promise<LocalLoopsResult<LocalLoopSummary[]>>;
+    get(loopId: string): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    createLoop(request: CreateLocalLoopRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    updateLoop(request: UpdateLocalLoopRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    deleteLoop(loopId: string): Promise<LocalLoopsResult<LocalLoopSummary[]>>;
+    setStatus(request: { id: string; status: 'live' | 'paused' }): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    runNow(loopId: string): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    createTicket(request: CreateLocalTicketRequest): Promise<LocalLoopsResult<LocalTicket>>;
+    updateTicket(request: UpdateLocalTicketRequest): Promise<LocalLoopsResult<LocalTicket | null>>;
+    answerEvent(request: AnswerLocalEventRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    getBudget(): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
+    setBudget(dailyCredits: number | null): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
+    onChanged(listener: (change: { loopIds: string[] }) => void): () => void;
   };
   /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {
