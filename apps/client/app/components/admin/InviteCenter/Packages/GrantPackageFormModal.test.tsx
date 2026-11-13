@@ -235,6 +235,18 @@ describe('GrantPackageFormModal inline code edit', () => {
     expect(screen.queryByTestId('grant-package-code-edit')).not.toBeInTheDocument();
     expect(api.updateRegInvite).not.toHaveBeenCalled();
   });
+
+  it('keeps a mid-day expiry and asks for no reason when only unlimited use is turned off', async () => {
+    api.fetchGrantPackageLinks.mockResolvedValue(
+      links([{ id: 'i2', code: 'BRAVO', unlimitedUse: true, expiresAt: '2030-03-10T08:15:00.000Z' }])
+    );
+    renderModal(pkg);
+    fireEvent.click(await screen.findByTestId('grant-package-code-edit-btn-BRAVO'));
+    fireEvent.click(screen.getByTestId('grant-package-code-edit-unlimited-switch'));
+    expect(screen.queryByTestId('grant-package-code-edit-reason')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('grant-package-code-edit-save-btn'));
+    await waitFor(() => expect(api.updateRegInvite).toHaveBeenCalledWith('i2', { unlimitedUse: false }));
+  });
 });
 
 describe('GrantPackageFormModal expiry on edit', () => {

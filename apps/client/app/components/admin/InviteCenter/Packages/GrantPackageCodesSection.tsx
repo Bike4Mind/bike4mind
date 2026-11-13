@@ -116,7 +116,15 @@ function CodesManager({ pkg, queued, onQueuedChange }: Props) {
   });
 
   const [editing, setEditing] = useState<CodeEdit | null>(null);
-  const editExpiresAt = editing ? expiresAtFromDay(editing.expiresOn) : null;
+  // A code created unlimited carries an arbitrary instant; leaving its day alone must not push it to end of day.
+  const editExpiryChanged = editing !== null && editing.expiresOn !== dayOf(editing.stored.expiresAt);
+  const editExpiresAt = !editing
+    ? null
+    : editExpiryChanged
+      ? expiresAtFromDay(editing.expiresOn)
+      : editing.stored.expiresAt != null
+        ? new Date(editing.stored.expiresAt)
+        : null;
   const editInvalid = editExpiresAt !== null && Number.isNaN(editExpiresAt.getTime());
   const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   // Mirrors widensRedemption in pages/api/reg-invites/update.ts, which refuses these without a reason.
@@ -131,7 +139,7 @@ function CodesManager({ pkg, queued, onQueuedChange }: Props) {
     mutationFn: (edit: CodeEdit) =>
       updateRegInvite(edit.id, {
         unlimitedUse: edit.unlimitedUse,
-        expiresAt: expiresAtFromDay(edit.expiresOn),
+        ...(edit.expiresOn !== dayOf(edit.stored.expiresAt) ? { expiresAt: expiresAtFromDay(edit.expiresOn) } : {}),
         ...(editWidens ? { reason: composeAdminReason(reason) } : {}),
       }),
     onSuccess: () => {
