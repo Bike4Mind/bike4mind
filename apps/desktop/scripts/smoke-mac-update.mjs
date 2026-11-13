@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { createServer as createNetServer } from 'node:net';
@@ -46,6 +46,8 @@ const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mac-update-')));
 const keychain = join(root, 'signing.keychain-db');
 const launched = new Set();
 let server;
+let searchListBefore = null;
+let searchListChanged = false;
 
 const run = (command, args, options = {}) =>
   execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
@@ -54,6 +56,7 @@ const cdhash = target => /^CDHash=(\w+)$/m.exec(describe(target))?.[1];
 const plist = (app, key) => run('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, join(app, 'Contents/Info.plist')]).trim();
 const packageJson = app => JSON.parse(asar.extractFile(join(app, 'Contents/Resources/app.asar'), 'package.json'));
 const searchList = () => run('security', ['list-keychains', '-d', 'user']);
+const keychainPaths = listing => [...listing.matchAll(/"([^"\n]+)"/g)].map(match => match[1]);
 const shipItJobLoaded = () => run('launchctl', ['list']).split('\n').some(line => line.endsWith(`\t${SHIPIT_JOB}`));
 
 async function until(probe, timeoutMs, message) {
@@ -98,6 +101,29 @@ async function makeCertificate(label) {
   await rm(key);
   const sha1 = new X509Certificate(await readFile(pem)).fingerprint.replaceAll(':', '').toLowerCase();
   return { label, sha1 };
+}
+
+// Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
+// through the user search list. The list is changed only where the probe says it has to be, and
+// the finally block puts it back.
+async function exposeSigningKeychain(sha1) {
+  const probe = join(root, 'probe');
+  await copyFile('/usr/bin/true', probe);
+  const sign = () => spawnSync('codesign', ['--sign', sha1, '--force', '--keychain', keychain, probe], { encoding: 'utf8' });
+  if (sign().status === 0) {
+    assert.equal(searchList(), searchListBefore, 'The signing keychain must stay off the keychain search list');
+    console.log('codesign resolves the identity from the keychain file; the search list is untouched.');
+    return;
+  }
+  run('security', ['list-keychains', '-d', 'user', '-s', keychain, ...keychainPaths(searchListBefore)]);
+  searchListChanged = true;
+  const retry = sign();
+  if (retry.status !== 0) {
+    const identities = spawnSync('security', ['find-identity', '-p', 'codesigning', keychain], { encoding: 'utf8' });
+    throw new Error(`codesign cannot use the throwaway identity:\n${retry.stderr}\n${identities.stdout}${identities.stderr}\n` +
+      `${searchList()}\n${run('sw_vers', [])}`);
+  }
+  console.log('codesign needs the signing keychain on the user search list here; it is restored when the check ends.');
 }
 
 async function freePort() {
@@ -251,7 +277,7 @@ function killTree(pid) {
 
 async function main() {
   await removeLeftovers();
-  const searchListBefore = searchList();
+  searchListBefore = searchList();
   const password = randomBytes(24).toString('hex');
   run('security', ['create-keychain', '-p', password, keychain]);
   run('security', ['set-keychain-settings', keychain]);
@@ -259,7 +285,7 @@ async function main() {
   const certificate = await makeCertificate('a');
   const otherCertificate = await makeCertificate('b');
   run('security', ['set-key-partition-list', '-S', 'apple-tool:,apple:', '-s', '-k', password, keychain]);
-  assert.equal(searchList(), searchListBefore, 'The signing keychain must stay off the keychain search list');
+  await exposeSigningKeychain(certificate.sha1);
 
   const feed = new Map();
   server = createServer((request, response) => {
@@ -394,7 +420,11 @@ try {
     spawnSync('pkill', ['-KILL', '-f', path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')]);
   }
   if (server) await new Promise(resolveClose => server.close(resolveClose));
+  if (searchListChanged) spawnSync('security', ['list-keychains', '-d', 'user', '-s', ...keychainPaths(searchListBefore)]);
   spawnSync('security', ['delete-keychain', keychain]);
+  if (searchListBefore !== null && keychainPaths(searchList()).join('\n') !== keychainPaths(searchListBefore).join('\n')) {
+    console.error('The keychain search list differs from before the check.');
+  }
   await rm(root, { recursive: true, force: true });
   const removed = await removeLeftovers();
   if (removed.length) console.log(`Removed test-identity state: ${removed.join(', ')}`);
