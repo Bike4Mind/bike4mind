@@ -2458,13 +2458,13 @@ export default function SreAgentTab() {
           <Tab data-testid="sre-tab-configuration">Configuration</Tab>
         </TabList>
 
-        <TabPanel value={0} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={0} sx={panelSx}>
           <PipelineStatusPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={1} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={1} sx={panelSx}>
           <PatternLibraryPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={2} sx={panelSx} data-admin-self-framed>
+        <TabPanel value={2} sx={panelSx}>
           <SreConfigPanel />
         </TabPanel>
       </Tabs>
