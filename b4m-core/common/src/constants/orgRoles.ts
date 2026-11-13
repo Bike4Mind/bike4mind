@@ -18,7 +18,12 @@
 
 /** Every org-administration capability. Add one only together with the routes it gates. */
 export const ORG_PERMISSIONS = [
-  /** Invite, add and remove members, manage groups, and see the roster's activity. */
+  /**
+   * Invite and remove members, manage groups, and see the roster's activity.
+   * Direct add via organizations/[id]/members POST or addUser.ts intentionally requires a
+   * platform admin, even for owners and managers; they use accepted invitations instead.
+   * The internal organizationService.addMember gate remains manageMembers.
+   */
   'manageMembers',
   /** Subscribe, change seats, open the billing portal, attach the Stripe customer. */
   'manageBilling',
@@ -30,7 +35,13 @@ export const ORG_PERMISSIONS = [
   'manageIntegrations',
   /** Team API keys, including revoking the team-billed keys members hold. */
   'manageKeys',
-  /** Team-scoped content: data lake sources, team skills, work items, storage and feedback analysis. */
+  /**
+   * Team-scoped content: data lake sources, team skills, work items, storage and feedback analysis.
+   * Work-item POST with organizationId and PATCH supplying organizationId intentionally require
+   * manageContent (owner/manager or platform admin), not ordinary membership. Work items remain
+   * caller-owned: reads, PATCH without organizationId and DELETE use the caller's userId scope.
+   * See apps/client/pages/api/work-items/{index.ts,[id]/index.ts}.
+   */
   'manageContent',
   /** The team's audit trail and its CSV export. */
   'viewAudit',
