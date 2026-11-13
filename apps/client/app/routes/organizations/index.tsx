@@ -69,7 +69,7 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
             )}
           </AspectRatio>
           <Box sx={{ flex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Typography level="title-md">{organization.name}</Typography>
               {isOwner && (
                 <Chip size="sm" variant="solid" color="primary">
