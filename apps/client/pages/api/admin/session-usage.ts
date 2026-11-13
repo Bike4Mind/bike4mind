@@ -28,7 +28,7 @@ const QuerySchema = z.object({
  * this session cost what it did?".
  *
  * Access: admins with `support:read` read any session, cross-org. A non-admin must pass
- * the org they can access (verifyOrgPermission (viewUsage)) AND the session's spend must be
+ * the org's `viewUsage` gate (verifyOrgPermission) AND the session's spend must be
  * billed to that org - sessions carry no org of their own, so ownership is
  * proven off the usage events. Mismatches 404 (same as no access, to avoid
  * enumeration).
