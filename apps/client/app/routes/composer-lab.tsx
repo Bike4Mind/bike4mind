@@ -9,11 +9,12 @@ import PromptCacheExpiryHint from '@client/app/components/Session/SessionBottom/
 import { ModelSwitchCostNotice } from '@client/app/components/Session/SessionBottom/ModelSwitchCostNotice';
 import { CreditBalanceChipView } from '@client/app/components/Session/CreditButton';
 import { LowCreditsWarning } from '@client/app/components/Session/SessionWarnings';
+import type { PromptCacheTtlPrices } from '@client/app/components/Session/SessionBottom/promptCacheTtlPrices';
 import type { PromptCacheTtl } from '@bike4mind/common';
 
 /**
  * Every state of the composer's status line and the notes above it, each in isolation with mock
- * props: /composer-lab. Local design work only; nothing here talks to the server.
+ * props: /composer-lab. This authenticated preview ships with the app; its samples use no server data.
  */
 
 const usage = (over: Partial<SessionContextUsage> = {}): SessionContextUsage => ({
@@ -86,7 +87,7 @@ const noop = () => {};
 
 const TtlChip: FC<{
   value?: PromptCacheTtl;
-  prices?: typeof chatPrices | null;
+  prices?: PromptCacheTtlPrices | null;
   disabled?: boolean;
   canChoose?: boolean;
 }> = ({ value = '5m', prices = chatPrices, disabled, canChoose }) => {
@@ -196,10 +197,9 @@ const ComposerLabPage: FC = () => {
             right={
               <>
                 <ContextUsageChip usage={usage()} modelName="Claude Sonnet 5" />
-                <Anchored>
+                <PromptCacheExpiryHint credits={940} expiresAt={1}>
                   <TtlChip />
-                  <PromptCacheExpiryHint credits={940} expiresAt={1} />
-                </Anchored>
+                </PromptCacheExpiryHint>
                 <CreditBalanceChipView credits={2_405} lowCreditsThreshold={500} onClick={noop} answersLeft={40} />
               </>
             }
@@ -208,20 +208,18 @@ const ComposerLabPage: FC = () => {
         <Sample label="large figure" tall>
           <Line
             right={
-              <Anchored>
+              <PromptCacheExpiryHint credits={1_250_000} expiresAt={1}>
                 <TtlChip />
-                <PromptCacheExpiryHint credits={1_250_000} expiresAt={1} />
-              </Anchored>
+              </PromptCacheExpiryHint>
             }
           />
         </Sample>
         <Sample label="null credits: hidden" tall>
           <Line
             right={
-              <Anchored>
+              <PromptCacheExpiryHint credits={null} expiresAt={1}>
                 <TtlChip />
-                <PromptCacheExpiryHint credits={null} expiresAt={1} />
-              </Anchored>
+              </PromptCacheExpiryHint>
             }
           />
         </Sample>
@@ -288,10 +286,9 @@ const ComposerLabPage: FC = () => {
             right={
               <>
                 <ContextUsageChip usage={usage()} modelName="Claude Sonnet 5" />
-                <Anchored>
+                <PromptCacheExpiryHint credits={940} expiresAt={1}>
                   <TtlChip />
-                  <PromptCacheExpiryHint credits={940} expiresAt={1} />
-                </Anchored>
+                </PromptCacheExpiryHint>
                 <CreditBalanceChipView credits={2_405} lowCreditsThreshold={500} onClick={noop} answersLeft={40} />
               </>
             }

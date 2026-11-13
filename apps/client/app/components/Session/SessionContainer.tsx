@@ -204,7 +204,8 @@ const DropFilesOverlay: FC = () => (
       alignItems: 'center',
       backgroundColor: theme => theme.palette.session.overlayBackground,
       backdropFilter: 'blur(10px)',
-      zIndex: 110,
+      // Cover the cache hint (1200) inside this chat; menus remain above (1500).
+      zIndex: 1300,
       outline: '2px dashed',
       outlineColor: 'primary',
       outlineOffset: '-10px',
@@ -478,6 +479,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
         {isVerticalSplit && <ResizableSplitter />}
         <Box
           ref={chatContainerRef}
+          data-chat-overlay-root
           display="flex"
           sx={{
             transition: 'all 0.3s ease',
@@ -620,6 +622,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
           >
             <Box
               ref={containerRef}
+              data-chat-overlay-root
               sx={{
                 width: '100%',
                 height: '100%',
@@ -644,7 +647,8 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
                       position: 'relative',
                       flex: 1,
                       minHeight: 0,
-                      overflow: 'hidden',
+                      // The scroll button extends into the status line below this pane.
+                      overflow: 'visible',
                       display: 'flex',
                       flexDirection: 'column',
                     }}
@@ -691,6 +695,7 @@ const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
           <DockedChatPanel headerActions={floatingChatHeaderActions} title={dockedChatTitle}>
             <Box
               ref={containerRef}
+              data-chat-overlay-root
               sx={{
                 width: '100%',
                 height: '100%',

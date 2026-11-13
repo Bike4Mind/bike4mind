@@ -11,25 +11,22 @@ interface CacheCostNoticeProps {
   dismissLabel: string;
   /** The sentence before ": about N credits for the next message." */
   lead: string;
-  /** Dismissal lasts while this stays the same; defaults to the figure. */
-  dismissKey?: string | number;
 }
 
 /**
  * Non-blocking note in the stack above the composer (SessionBottom) for a next message that has to
  * re-write this conversation's prompt cache. `credits` comes from modelSwitchCost; null hides it.
  */
-export function CacheCostNotice({ credits, testId, dismissLabel, lead, dismissKey }: CacheCostNoticeProps) {
-  const key = dismissKey ?? credits;
-  const [dismissedFor, setDismissedFor] = useState<string | number | null>(null);
-  if (credits === null || dismissedFor === key) return null;
+export function CacheCostNotice({ credits, testId, dismissLabel, lead }: CacheCostNoticeProps) {
+  const [dismissedFor, setDismissedFor] = useState<number | null>(null);
+  if (credits === null || dismissedFor === credits) return null;
 
   return (
     <ComposerNote
       data-testid={testId}
       dismissTestId={`${testId}-dismiss`}
       dismissLabel={dismissLabel}
-      onDismiss={() => setDismissedFor(key)}
+      onDismiss={() => setDismissedFor(credits)}
     >
       <Typography data-testid={`${testId}-text`} sx={{ fontSize: '13px', color: 'text.primary' }}>
         {lead}: about {creditFormat.format(credits)} credits for the next message.

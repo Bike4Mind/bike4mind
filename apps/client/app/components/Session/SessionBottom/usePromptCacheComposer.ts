@@ -20,7 +20,7 @@ const writesPromptCache = (model: ModelInfo | undefined): boolean =>
 
 /**
  * Everything the composer shows about this chat's prompt cache: the model-switch and expired-cache
- * notes (credits or null) and the TTL chip's state (null when the model has one TTL only).
+ * notes (credits or null) and the TTL chip's state (null without a session or a cache-writing model).
  */
 export function usePromptCacheComposer({
   selectedModel,

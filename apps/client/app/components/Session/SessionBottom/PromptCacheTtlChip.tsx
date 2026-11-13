@@ -21,8 +21,8 @@ interface PromptCacheTtlChipProps {
 
 /**
  * How long this chat's prompt cache lives between messages, on the composer's status line. Shown
- * only for models that take the 1-hour TTL (supportsOneHourPromptCache); each option states what
- * one cache write costs there.
+ * for models that write a prompt cache; models supporting the 1-hour TTL offer a choice, while
+ * other models show their fixed 5-minute lifetime. Each option states the cache-write cost.
  */
 const PromptCacheTtlChip: FC<PromptCacheTtlChipProps> = ({ value, prices, onChange, disabled, canChoose = true }) => {
   const priceLine = (ttl: PromptCacheTtl): string | null => {

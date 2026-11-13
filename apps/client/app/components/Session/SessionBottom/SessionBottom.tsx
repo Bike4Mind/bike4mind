@@ -587,10 +587,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     };
   }, [setNotesHeight]);
 
-  const cacheExpiryHint = !creditUi.replaceComposer && (
-    <PromptCacheExpiryHint expiresAt={promptCache.cacheExpiresAt} credits={promptCache.cacheExpiryCredits} />
-  );
-
   // The status line and the account notes above the box are its siblings, so they are sized to match.
   const aboveBoxSx = {
     width: '100%',
@@ -677,10 +673,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             />
             {/* The expired-cache hint hangs off the TTL chip, which every Claude chat has. */}
             {promptCache.ttlChip && (
-              <Box sx={{ position: 'relative', display: 'flex' }}>
+              <PromptCacheExpiryHint
+                expiresAt={promptCache.cacheExpiresAt}
+                credits={creditUi.replaceComposer ? null : promptCache.cacheExpiryCredits}
+              >
                 <PromptCacheTtlChip {...promptCache.ttlChip} />
-                {cacheExpiryHint}
-              </Box>
+              </PromptCacheExpiryHint>
             )}
             <CreditBalanceChip session={currentSession} />
           </>
