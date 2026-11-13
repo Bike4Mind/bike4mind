@@ -1629,6 +1629,11 @@ export interface SendMessageRequest {
   text: string;
   /** Descriptors returned by `addAttachments`; their bytes are already on disk. */
   attachments?: ChatAttachment[];
+  /**
+   * App-written context for this turn only, sent to the model and never drawn (ChatMessage.notes);
+   * e.g. the part a point-and-edit request in the 3D pane is about.
+   */
+  notes?: string[];
 }
 
 /**

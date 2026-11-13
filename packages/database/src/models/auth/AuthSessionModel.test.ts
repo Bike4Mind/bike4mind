@@ -26,7 +26,7 @@ describe('AuthSessionModel repository', () => {
   it('findBySid returns the session (or null)', async () => {
     await authSessionRepository.create(base({ sid: 'a' }));
     expect((await authSessionRepository.findBySid('a'))?.userId).toBe('user-1');
-    expect(await authSessionRepository.findBySid('missing')).toBeFalsy(); // base repo yields undefined for a miss
+    expect(await authSessionRepository.findBySid('missing')).toBeNull();
   });
 
   it('persists clientId and reads it back as null when absent', async () => {

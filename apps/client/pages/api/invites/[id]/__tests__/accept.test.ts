@@ -25,10 +25,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const acceptInvite = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
-    id: 'inv1',
-    type: 'Session', // not Project/FabFile, so the extra branches are skipped
-    documentId: 'doc1',
-    recipients: { pending: [], accepted: ['me@x.com', 'other@x.com'], refused: [] },
+    invite: {
+      id: 'inv1',
+      type: 'Session', // not Project/FabFile, so the extra branches are skipped
+      documentId: 'doc1',
+      recipients: { pending: [], accepted: ['me@x.com', 'other@x.com'], refused: [] },
+    },
+    outcome: 'accepted',
   })
 );
 const tagMocks = vi.hoisted(() => ({
@@ -62,6 +65,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
+const reserveInviteAccept = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 
 import '@pages/api/invites/[id]/accept';
 
@@ -77,6 +82,30 @@ describe('POST /api/invites/[id]/accept - recipient filtering', () => {
     const body = res._getJSONData();
     expect(body.recipients.accepted).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
+    expect(body.acceptOutcome).toBe('accepted');
+  });
+
+  it('reports an existing member accepting a named org invite as already-member', async () => {
+    acceptInvite.mockResolvedValueOnce({
+      invite: {
+        id: 'inv1',
+        type: 'Organization',
+        documentId: 'org1',
+        recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      },
+      outcome: 'already-member',
+    });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {}, logger: { error: vi.fn() } });
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({
+      id: 'inv1',
+      type: 'Organization',
+      documentId: 'org1',
+      acceptOutcome: 'already-member',
+    });
   });
 });
 
@@ -88,10 +117,13 @@ describe('POST /api/invites/[id]/accept - recipient filtering', () => {
 describe('POST /api/invites/[id]/accept - file tag transfer', () => {
   const acceptFileInvite = () => {
     acceptInvite.mockResolvedValueOnce({
-      id: 'inv1',
-      type: 'FabFile',
-      documentId: 'file1',
-      recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      invite: {
+        id: 'inv1',
+        type: 'FabFile',
+        documentId: 'file1',
+        recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      },
+      outcome: 'accepted',
     });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
     (req as any).user = { id: 'u1', email: 'me@x.com' };
@@ -171,10 +203,13 @@ describe('POST /api/invites/[id]/accept - file tag transfer', () => {
 describe('POST /api/invites/[id]/accept - organization invite bonus', () => {
   const accept = (type: string, apiKeyInfo?: object) => {
     acceptInvite.mockResolvedValueOnce({
-      id: 'inv1',
-      type,
-      documentId: 'doc1',
-      recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      invite: {
+        id: 'inv1',
+        type,
+        documentId: 'doc1',
+        recipients: { pending: [], accepted: ['me@x.com'], refused: [] },
+      },
+      outcome: 'accepted',
     });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
     (req as any).user = { id: 'u1', email: 'me@x.com' };
@@ -226,5 +261,31 @@ describe('POST /api/invites/[id]/accept - organization invite bonus', () => {
       'Organization invite bonus remains unpaid',
       expect.any(Error)
     );
+  });
+});
+
+describe('POST /api/invites/[id]/accept - accept rate limit', () => {
+  beforeEach(() => {
+    acceptInvite.mockClear();
+    reserveInviteAccept.mockClear();
+  });
+
+  const post = () => {
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {} });
+    return mockRefs.postHandler!(req, res);
+  };
+
+  it('charges the caller before resolving the invite', async () => {
+    await post();
+    expect(reserveInviteAccept).toHaveBeenCalledWith('u1');
+    expect(reserveInviteAccept.mock.invocationCallOrder[0]).toBeLessThan(acceptInvite.mock.invocationCallOrder[0]);
+  });
+
+  it('refuses with 429 and never reaches the accept service once the window is spent', async () => {
+    const { TooManyRequestsError } = await import('@bike4mind/utils');
+    reserveInviteAccept.mockRejectedValueOnce(new TooManyRequestsError('Too many invite accepts. Try again later.'));
+    await expect(post()).rejects.toMatchObject({ statusCode: 429 });
+    expect(acceptInvite).not.toHaveBeenCalled();
   });
 });

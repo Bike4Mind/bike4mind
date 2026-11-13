@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   // Configurable per test: settings this set blocks with a 403, matching requireFeatureEnabled's
   // real shape - lets the model-only gate be exercised without disabling EnableDataLakes too.
   blockedFeatureKeys: new Set<string>(),
+  record: vi.fn(),
+  adminBypassLakeIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -75,8 +77,11 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
     (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => unknown } }, next: () => unknown) =>
       h.blockedFeatureKeys.has(key) ? res.status(403).json({ error: 'forbidden' }) : next(),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
+    recordLakeAccessEvent: (
+      await import('../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
     assertLakeWriteAccess: h.assertLakeWriteAccess,
     detectLakeInconsistencies: h.detectLakeInconsistencies,
     recordLakeFindings: h.recordLakeFindings,
@@ -84,7 +89,13 @@ vi.mock('@bike4mind/services', () => ({
     INCONSISTENCY_DETECTOR: 'lexical',
   },
 }));
+vi.mock('@server/dataLakes', () => ({ adminBypassLakeIds: h.adminBypassLakeIds }));
 vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   withTransaction: async (fn: () => unknown) => {
     h.tx.push('enter');
     try {
@@ -106,6 +117,7 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl:
 
 import { ForbiddenError, MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';
+import { describeLakeReadAudit } from '../../__tests__/lakeReadAuditCases';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme' };
 const makeRes = () => {
@@ -160,6 +172,8 @@ beforeEach(() => {
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.listByLake.mockResolvedValue([]);
+  h.record.mockResolvedValue(undefined);
+  h.adminBypassLakeIds.mockResolvedValue([]);
   h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 1000) });
 });
 
@@ -309,7 +323,7 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     // list fewer findings than the count beside them describes - see the docblock on
     // `renderStoredReport`. `resolved` is included for that reason; `dismissed` never is, since a
     // dismissed subject is dropped before the run counts it at all.
-    const row = { id: 'finding-1', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
+    const row = { id: 'finding-1', kind: 'expired-claim', subject: 'roadmap', status: 'open', sources: [] };
     h.assertLakeWriteAccess.mockResolvedValue({
       ...lake,
       inconsistencyReport: report({ memberCount: 3 }),
@@ -366,7 +380,14 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
   it('lists only lexical rows on a lake that has also run the model pass', async () => {
     // The lexical summary's `countsByKind` has `narrative-contradiction: 0`, so a model row served here
     // would sit beside a count that does not include it, and could take a slot under the findings cap.
-    const lexicalRow = { id: 'f-lex', detector: 'lexical', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
+    const lexicalRow = {
+      id: 'f-lex',
+      detector: 'lexical',
+      kind: 'expired-claim',
+      subject: 'roadmap',
+      status: 'open',
+      sources: [],
+    };
     const modelRow = {
       id: 'f-model',
       detector: 'model',
@@ -838,5 +859,45 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     await done;
 
     expect(h.recordLakeFindings).not.toHaveBeenCalled();
+  });
+});
+
+const runGet = async (lakeDoc: Record<string, unknown>) => {
+  h.assertLakeWriteAccess.mockResolvedValue({ ...lake, ...lakeDoc });
+  const { json, done } = invoke({}, 'GET');
+  await done;
+  return json.mock.calls.length > 0;
+};
+
+const storedLake = {
+  inconsistencyReport: report(),
+  inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+};
+
+describeLakeReadAudit({
+  surface: 'data-lake-inconsistencies',
+  lakeId: 'lakeDoc1',
+  record: h.record,
+  bypass: h.adminBypassLakeIds,
+  run: () => {
+    h.listByLake.mockResolvedValue([{ id: 'f1', kind: 'expired-claim', sources: [{ fabFileId: 'a' }] }]);
+    return runGet(storedLake);
+  },
+  runEmpty: () => runGet({}),
+});
+
+describe('GET inconsistencies audit file ids', () => {
+  it('records nothing for a stored report with no findings', async () => {
+    h.listByLake.mockResolvedValue([]);
+    expect(await runGet(storedLake)).toBe(true);
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('records the sources of the returned findings', async () => {
+    h.listByLake.mockResolvedValue([
+      { id: 'f1', kind: 'expired-claim', sources: [{ fabFileId: 'a' }, { fabFileId: 'b' }] },
+    ]);
+    await runGet(storedLake);
+    expect(h.record.mock.calls[0][0].fileIds.sort()).toEqual(['a', 'b']);
   });
 });

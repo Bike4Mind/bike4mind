@@ -198,6 +198,17 @@ jobs:
         env:
           SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
+      # Added core migrations must carry a generator-made id (fresh UTC timestamp), so two PRs
+      # cannot pick the same one. PR-only: the PR head gives the real fork point, and on push the
+      # squash commit would make a long-lived PR's id look stale after it already passed here.
+      # The whole-directory uniqueness test in packages/scripts still runs on push.
+      - name: Check added core migration ids are generated
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-migration-ids.mjs --base "$MIGRATION_IDS_BASE" --head "$MIGRATION_IDS_HEAD"
+        env:
+          MIGRATION_IDS_BASE: ${{ steps.ascii-base.outputs.base }}
+          MIGRATION_IDS_HEAD: ${{ github.event.pull_request.head.sha }}
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
