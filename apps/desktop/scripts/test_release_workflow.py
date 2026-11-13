@@ -228,7 +228,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
         build = job('build')
         self.assertIn('B4M_UPDATE_PUBLIC_KEYS: ${{ vars.DESKTOP_UPDATE_PUBLIC_KEYS }}', build)
         check = 'node scripts/sign-update-manifests.mjs check-build out'
-        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
+        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers',
+                     '- name: Sign macOS installers with the self-signed certificate'):
             body = build.split(step, 1)[1].split('- name:', 1)[0]
             with self.subTest(step=step):
                 self.assertLess(body.rindex('pnpm build'), body.index(check))

@@ -255,6 +255,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
           pnpm build
           pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
+          node scripts/sign-update-manifests.mjs check-build out
           B4M_MAC_SIGN_KEYCHAIN="$keychain" B4M_MAC_SIGN_IDENTITY="$sha1" pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.mac.sign=./scripts/sign-mac-selfsigned.cjs -c.forceCodeSigning=true -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           app_dir=release/mac
           if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
