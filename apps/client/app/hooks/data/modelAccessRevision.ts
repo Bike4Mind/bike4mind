@@ -15,6 +15,8 @@ interface RevisionWatch {
   pushed?: string;
   /** The pushed revision a refetch already landed for; one per revision, so a lagging read cannot loop it. */
   refetchedFor?: string;
+  /** The pushed revision whose timer found someone else's read in flight; a failure of that read re-checks it once. */
+  skippedFor?: string;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -51,8 +53,11 @@ function reconcile(queryClient: QueryClient, random: () => number): void {
     // Another path (this tab's own write, an admission refusal) may have refetched during the wait.
     const target = watch.pushed;
     if (!target || readRevision(queryClient) === target) return;
-    // A read in flight is checked again when it lands.
-    if (queryClient.getQueryState(MODEL_CONFIGURATIONS_QUERY_KEY)?.fetchStatus === 'fetching') return;
+    // A read in flight is checked again when it lands or fails.
+    if (queryClient.getQueryState(MODEL_CONFIGURATIONS_QUERY_KEY)?.fetchStatus === 'fetching') {
+      watch.skippedFor = target;
+      return;
+    }
     watch.refetchedFor = target;
     // Inactive queries too: a closed picker that stays mounted would otherwise show the old access when reopened.
     void queryClient
@@ -81,12 +86,16 @@ export function handleModelAccessRevisionSetting(
   reconcile(queryClient, random);
 }
 
-/** Re-checks the pushed revision each time the access entries land. Returns the unsubscribe, which also drops a pending refetch. */
+/** Re-checks the pushed revision each time the access entries land or a read of them fails. Returns the unsubscribe, which also drops a pending refetch. */
 export function watchModelAccessArrivals(queryClient: QueryClient, random: () => number = Math.random): () => void {
   const entriesHash = hashKey(MODEL_CONFIGURATIONS_QUERY_KEY);
   const unsubscribe = queryClient.getQueryCache().subscribe(event => {
-    if (event.type !== 'updated' || event.action.type !== 'success') return;
-    if (event.query.queryHash !== entriesHash) return;
+    if (event.type !== 'updated' || event.query.queryHash !== entriesHash) return;
+    if (event.action.type === 'error') {
+      const watch = watchOf(queryClient);
+      if (!watch.skippedFor || watch.skippedFor !== watch.pushed) return;
+      watch.skippedFor = undefined;
+    } else if (event.action.type !== 'success') return;
     reconcile(queryClient, random);
   });
   return () => {
