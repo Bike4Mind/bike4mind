@@ -1,7 +1,9 @@
 import type { IWorkItem, WorkItemPriority } from '../types/entities/WorkItemTypes';
 import { workItemPriorityRank } from '../types/entities/WorkItemTypes';
 
-type Pickable = Pick<IWorkItem, 'id' | 'status' | 'stage' | 'priority' | 'dependencies' | 'createdAt'>;
+/** `createdAt` may be an ISO string: Desktop stores tickets as JSON. */
+type Created = { createdAt: Date | string };
+type Pickable = Pick<IWorkItem, 'id' | 'status' | 'stage' | 'priority' | 'dependencies'> & Created;
 
 /**
  * A loop's ready tickets in the order its scheduler takes them: open, triaged, not in the last stage, every
@@ -38,7 +40,7 @@ export function pickReady<T extends Pickable>(
 }
 
 /** Open tickets with no priority yet, oldest first: a triage run sets theirs. An epic waits on its children instead. */
-export const untriaged = <T extends Pick<IWorkItem, 'status' | 'priority' | 'epic' | 'createdAt'>>(tickets: T[]): T[] =>
+export const untriaged = <T extends Pick<IWorkItem, 'status' | 'priority' | 'epic'> & Created>(tickets: T[]): T[] =>
   tickets
     .filter(ticket => ticket.status === 'open' && ticket.priority === undefined && !ticket.epic)
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
