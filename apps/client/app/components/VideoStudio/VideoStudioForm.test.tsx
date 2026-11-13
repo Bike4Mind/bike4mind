@@ -78,6 +78,15 @@ beforeEach(() => {
   useSelectedAccount.setState({ selectedAccount: null });
 });
 
+// Opens the model panel on every model (the shortlist hides the rest), then finds one model's option.
+const modelOption = (suffix: string) => {
+  if (!screen.queryByTestId('video-form-model-panel'))
+    fireEvent.click(screen.getByTestId('video-form-model-change-btn'));
+  const showAll = screen.queryByTestId('video-form-model-show-all-btn');
+  if (showAll?.textContent?.startsWith('Show all')) fireEvent.click(showAll);
+  return screen.getByTestId(`video-form-model-option-${suffix}`);
+};
+
 describe('VideoStudioForm duration control', () => {
   it('renders a slider bounded by a range model', () => {
     render(tree([rangeModel]));
@@ -218,15 +227,17 @@ describe('VideoStudioForm in Create v2', () => {
   it('picks models from cards and draws the aspect ratio as tiles', () => {
     render(v2Tree([rangeModel, discreteModel]));
     expect(screen.queryByTestId('video-form-model-select')).not.toBeInTheDocument();
-    expect(screen.getByTestId(`video-form-model-card-${rangeModel.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(modelOption(`${rangeModel.id}`)).toHaveAttribute('data-selected', 'true');
     expect(screen.getByTestId('video-form-aspect-1:1-btn')).toBeInTheDocument();
   });
 
   it('keeps the values on a model switch, marks the ones it rejects, and submits after the fix', () => {
-    render(v2Tree([rangeModel, discreteModel]));
+    // Veo is retired, so the ranker makes it unpickable; the same discrete shape under a live catalog id.
+    const liveDiscrete = { ...discreteModel, id: 'gemini-omni-1.1-flash' };
+    render(v2Tree([rangeModel, liveDiscrete]));
     typePrompt('a lighthouse');
     fireEvent.click(screen.getByTestId('video-form-aspect-1:1-btn'));
-    fireEvent.click(screen.getByTestId(`video-form-model-card-${discreteModel.id}-radio`));
+    fireEvent.click(modelOption(`${liveDiscrete.id}-radio`));
 
     expect(screen.queryByTestId('video-form-changes')).not.toBeInTheDocument();
     expect(screen.getByTestId('video-form-aspect-1:1-btn')).toHaveAttribute('data-invalid', 'true');
@@ -240,7 +251,7 @@ describe('VideoStudioForm in Create v2', () => {
     fireEvent.click(screen.getByTestId('video-form-submit-btn'));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: discreteModel.id,
+        model: liveDiscrete.id,
         aspect_ratio: '16:9',
         resolution: '720p',
         duration_seconds: 6,

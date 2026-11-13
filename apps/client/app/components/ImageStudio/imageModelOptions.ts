@@ -8,8 +8,9 @@ import {
   IMAGE_MODEL_STRENGTHS,
   IMAGE_MODES,
   IMAGE_PROVIDER_LABELS,
-  ImageModels,
+  type ImageModels,
   getImageModelCatalogEntry,
+  rankImageModels,
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
@@ -21,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { UnsupportedImageModelError, estimateImageUsd, resolveBilledImageQuality } from '@bike4mind/services/imageCost';
 import type { ReferenceFile } from '@client/app/components/Studio/capabilityFields';
-import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
+import { rankedCardFit, type StudioModelCard } from '@client/app/components/Studio/studioModelCard';
 
 /**
  * What the form asks for besides the prompt. size, aspectRatio and quality are absent when left on the model's
@@ -38,13 +39,6 @@ export const EMPTY_IMAGE_INTENT: ImageIntent = { references: [] };
 
 // Offered on a model that takes any ratio within a range; the validator keeps the ones inside it.
 const COMMON_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const;
-
-// Intent first: the form opens on the first of these the user can run, on a visible, swappable card.
-const DEFAULT_MODEL_PREFERENCE: readonly ImageModels[] = [
-  ImageModels.GPT_IMAGE_1_5,
-  ImageModels.GPT_IMAGE_2,
-  ImageModels.GEMINI_3_1_FLASH_IMAGE,
-];
 
 // The providers whose image job adapter is wired; the job route answers model_unavailable for the others. Add a
 // provider here when its adapter lands.
@@ -158,34 +152,44 @@ export const imageCreditsPerImage = (model: ImageModels, intent: ImageIntent): n
   }
 };
 
-/** A card per catalog model the user can run (from /api/models), checked against `intent`. */
+/**
+ * A card per catalog model the user can run (from /api/models), in rankImageModels order for `intent`: the ones that
+ * can make it first, each with why it was picked; the rest sink with the validator's why-not reason.
+ */
 export const imageModelCards = (
   available: readonly { id: string; name: string }[],
   intent: ImageIntent
-): StudioModelCard[] =>
-  available.flatMap(({ id, name }) => {
-    if (!isCatalogImageModel(id)) return [];
-    const entry = getImageModelCatalogEntry(id);
-    const unavailableReason = imageModelUnavailableReason(id);
-    return [
-      {
-        id,
-        name,
-        provider: IMAGE_PROVIDER_LABELS[entry.provider],
-        strength: IMAGE_MODEL_STRENGTHS[id],
-        creditsPerOutput: imageCreditsPerImage(id, intent),
-        outputNoun: 'image',
-        modes: IMAGE_MODES.filter(mode => entry.modes[mode]).map(mode => MODE_LABELS[mode]),
-        unavailableReason,
-        mismatchReason: unavailableReason === null ? imageModelWhyNot(id, intent) : null,
-      },
-    ];
+): StudioModelCard[] => {
+  const names = new Map<ImageModels, string>();
+  for (const { id, name } of available) if (isCatalogImageModel(id)) names.set(id, name);
+  const ids = [...names.keys()];
+  const unavailable = Object.fromEntries(
+    ids.flatMap(id => {
+      const reason = imageModelUnavailableReason(id);
+      return reason === null ? [] : [[id, reason]];
+    })
+  );
+  return rankImageModels(ids, toCapabilityRequest(intent), { unavailable }).map(ranked => {
+    const entry = getImageModelCatalogEntry(ranked.id);
+    return {
+      id: ranked.id,
+      name: names.get(ranked.id) ?? ranked.id,
+      provider: IMAGE_PROVIDER_LABELS[entry.provider],
+      strength: IMAGE_MODEL_STRENGTHS[ranked.id],
+      creditsPerOutput: imageCreditsPerImage(ranked.id, intent),
+      outputNoun: 'image',
+      modes: IMAGE_MODES.filter(mode => entry.modes[mode]).map(mode => MODE_LABELS[mode]),
+      ...rankedCardFit(ranked),
+      // Every reason, not just the ranker's first, so the picker says all a switch would mark.
+      mismatchReason: ranked.status === 'mismatch' ? imageModelWhyNot(ranked.id, intent) : null,
+    };
   });
+};
 
-/** The model the form opens on: the first preferred model that can run, else the first that can. */
+/** The model the form opens on: the best-ranked model that can run, so it follows the request until the user picks. */
 export const pickDefaultImageModel = (cards: readonly StudioModelCard[]): ImageModels | undefined => {
-  const usable = cards.filter(card => card.unavailableReason === null).map(card => card.id);
-  const preferred = DEFAULT_MODEL_PREFERENCE.find(model => usable.includes(model));
-  const first = usable.find(isCatalogImageModel);
-  return preferred ?? first;
+  for (const card of cards) {
+    if (card.unavailableReason === null && isCatalogImageModel(card.id)) return card.id;
+  }
+  return undefined;
 };

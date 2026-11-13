@@ -272,13 +272,15 @@ describe('CapabilityForm', () => {
     expect(apply).toHaveBeenCalled();
   });
 
-  it('picks the model from cards, greying a mismatch but keeping it pickable, and an unavailable one not', () => {
+  it('shows the model as one compact row and picks another from the panel', () => {
     const card = {
       provider: 'Acme',
       strength: 'Good at things.',
       creditsPerOutput: 12,
       outputNoun: 'image',
       modes: ['Generate'],
+      pickedFor: 'photoreal',
+      whyNotCode: null,
       unavailableReason: null,
       mismatchReason: null,
     };
@@ -286,16 +288,14 @@ describe('CapabilityForm', () => {
       models: undefined,
       modelCards: [
         { ...card, id: 'a', name: 'Model A' },
-        { ...card, id: 'b', name: 'Model B', mismatchReason: 'Model B takes no aspect ratio' },
-        { ...card, id: 'c', name: 'Model C', unavailableReason: 'Temporarily unavailable in Studio.' },
+        { ...card, id: 'b', name: 'Model B', pickedFor: null, mismatchReason: 'Model B takes no aspect ratio' },
       ],
     });
     expect(screen.queryByTestId('demo-form-model-select')).not.toBeInTheDocument();
-    expect(screen.getByTestId('demo-form-model-card-a')).toHaveAttribute('data-selected', 'true');
-    expect(screen.getByTestId('demo-form-model-card-a-cost')).toHaveTextContent('credits per image');
-    expect(screen.getByTestId('demo-form-model-card-b-reason')).toHaveTextContent('takes no aspect ratio');
-    expect(screen.getByTestId('demo-form-model-card-c-radio')).toBeDisabled();
-    fireEvent.click(screen.getByTestId('demo-form-model-card-b-radio'));
+    expect(screen.getByTestId('demo-form-model-row-name')).toHaveTextContent('Model A');
+    expect(screen.getByTestId('demo-form-model-row-picked-for')).toHaveTextContent('Picked for: photoreal');
+    fireEvent.click(screen.getByTestId('demo-form-model-change-btn'));
+    fireEvent.click(screen.getByTestId('demo-form-model-option-b-radio'));
     expect(props.onModelChange).toHaveBeenCalledWith('b');
   });
 });

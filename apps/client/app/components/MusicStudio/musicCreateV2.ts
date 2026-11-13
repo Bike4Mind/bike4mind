@@ -3,9 +3,15 @@
  * is reported here with its why-not reason (musicFailureReason, the same text the server refuses with) and the value
  * the user can move to in one click. The model cards read the same problems to grey out the models that do not fit.
  */
-import { musicFailureReason, type PublicMusicModel } from '@bike4mind/common';
+import {
+  musicFailureReason,
+  rankMusicModels,
+  type MusicRankingRequest,
+  type PublicMusicModel,
+} from '@bike4mind/common';
 import type { FieldProblem } from '@client/app/components/Studio/capabilityFields';
-import type { StudioModelCard } from '@client/app/components/Studio/StudioModelCards';
+import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
+import { rankedCardFit, type StudioModelCard } from '@client/app/components/Studio/studioModelCard';
 import { clampDuration, estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 export type MusicProblemField = 'instrumental' | 'lyrics' | 'duration';
@@ -65,19 +71,43 @@ const capabilitiesOf = (model: PublicMusicModel): string[] => [
   ...(model.lyrics !== null && model.vocals !== 'never' ? ['Your lyrics'] : []),
 ];
 
-/** A card per music model, each priced at its own default length and greyed with the first value it does not take. */
-export const musicModelCards = (models: readonly PublicMusicModel[], form: MusicFormState): StudioModelCard[] =>
-  models.map(model => {
-    const [firstProblem] = Object.values(musicFieldProblems(model, form));
-    return {
-      id: model.id,
-      name: model.display_name,
-      provider: model.provider_label ?? model.provider,
-      strength: model.blurb ?? '',
-      creditsPerOutput: estimateCredits(initialFormFor(model)),
-      outputNoun: 'song',
-      modes: capabilitiesOf(model),
-      unavailableReason: null,
-      mismatchReason: firstProblem?.reason ?? null,
-    };
+/** The form as the ranker reads it: lyrics only while the song has vocals, a length only when one is set. */
+export const musicRankingRequest = (form: MusicFormState): MusicRankingRequest => {
+  const lyrics = form.lyrics.trim();
+  return {
+    instrumental: form.instrumental,
+    ...(!form.instrumental && lyrics.length > 0 && { lyrics }),
+    ...(form.durationSeconds !== null && { durationSeconds: form.durationSeconds }),
+  };
+};
+
+/**
+ * A card per music model in rankMusicModels order for the form: the ones that fit first with why they were picked,
+ * the rest after with the validator's why-not reason. Each is priced at its own default length.
+ */
+export const musicModelCards = (models: readonly PublicMusicModel[], form: MusicFormState): StudioModelCard[] => {
+  const byId = new Map(models.map(model => [model.id, model]));
+  return rankMusicModels([...byId.keys()], musicRankingRequest(form)).flatMap(ranked => {
+    const model = byId.get(ranked.id);
+    if (!model) return [];
+    return [
+      {
+        id: model.id,
+        name: model.display_name,
+        provider: model.provider_label ?? model.provider,
+        strength: model.blurb ?? '',
+        creditsPerOutput: estimateCredits(initialFormFor(model)),
+        outputNoun: 'song',
+        modes: capabilitiesOf(model),
+        ...rankedCardFit(ranked),
+      },
+    ];
   });
+};
+
+/** `models` with the ranker's pick for a fresh form first, so Create v2 opens on it (the form state opens on [0]). */
+export const withRankedDefaultFirst = (models: NonEmptyList<PublicMusicModel>): NonEmptyList<PublicMusicModel> => {
+  const pick = musicModelCards(models, initialFormFor(models[0])).find(card => card.unavailableReason === null);
+  const first = models.find(model => model.id === pick?.id);
+  return first ? [first, ...models.filter(model => model !== first)] : models;
+};

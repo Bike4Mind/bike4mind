@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PublicMusicModel } from '@bike4mind/common';
-import { musicFieldProblems, musicModelCards } from './musicCreateV2';
+import { musicFieldProblems, musicModelCards, withRankedDefaultFirst } from './musicCreateV2';
 import { estimateCredits, initialFormFor, type MusicFormState } from './musicForm';
 
 const model = (overrides: Partial<PublicMusicModel> = {}): PublicMusicModel => ({
@@ -69,15 +69,37 @@ describe('musicModelCards', () => {
       creditsPerOutput: estimateCredits(initialFormFor(exact)),
       outputNoun: 'song',
       modes: ['Vocals', 'Instrumental', 'Your lyrics'],
+      pickedFor: 'exact-length songs + 60s length',
+      whyNotCode: null,
       unavailableReason: null,
       mismatchReason: null,
     });
+    expect(cards[1]).toMatchObject({ id: fixed.id, pickedFor: null, whyNotCode: 'unsupported_duration' });
     expect(cards[1]?.unavailableReason).toBeNull();
     expect(cards[1]?.mismatchReason).toEqual(expect.any(String));
+  });
+
+  it('ranks the models that fit the form above the preferred one that does not', () => {
+    const cards = musicModelCards([fixed, exact], form({ durationSeconds: 60 }));
+    expect(cards.map(card => card.id)).toEqual([exact.id, fixed.id]);
+  });
+
+  it('names your lyrics or instrumental in the picked-for line', () => {
+    const [withLyrics] = musicModelCards([exact], form({ lyrics: 'hello', durationSeconds: null }));
+    expect(withLyrics?.pickedFor).toBe('exact-length songs + your lyrics');
+    const [instrumental] = musicModelCards([exact], form({ instrumental: true, durationSeconds: null }));
+    expect(instrumental?.pickedFor).toBe('exact-length songs + instrumental');
   });
 
   it('falls back to the provider id and no strength when the server sends no card copy', () => {
     const [card] = musicModelCards([model({ provider_label: undefined, blurb: undefined })], form());
     expect(card).toMatchObject({ provider: 'elevenlabs', strength: '' });
+  });
+});
+
+describe('withRankedDefaultFirst', () => {
+  it('moves the ranker pick for a fresh form to the front', () => {
+    const lyria = model({ id: 'lyria-3.5', display_name: 'Lyria' });
+    expect(withRankedDefaultFirst([exact, lyria]).map(candidate => candidate.id)).toEqual(['lyria-3.5', 'music_v2']);
   });
 });

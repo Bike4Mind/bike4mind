@@ -27,13 +27,13 @@ const cardOf = (cards: ReturnType<typeof imageModelCards>, id: string) => {
 };
 
 describe('imageModelCards', () => {
-  it('keeps catalog models only, with the name, provider, strength and modes', () => {
+  it('keeps catalog models only, ranked for the request, with the name, provider, strength and modes', () => {
     const cards = imageModelCards(available, EMPTY_IMAGE_INTENT);
     expect(cards.map(card => card.id)).toEqual([
-      ImageModels.FLUX_KONTEXT_PRO,
-      ImageModels.FLUX_PRO_ULTRA,
-      ImageModels.GEMINI_3_1_FLASH_IMAGE,
       ImageModels.GPT_IMAGE_1_5,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
+      ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.FLUX_KONTEXT_PRO,
     ]);
     expect(cardOf(cards, ImageModels.GPT_IMAGE_1_5)).toMatchObject({
       name: 'GPT Image 1.5',
@@ -41,8 +41,31 @@ describe('imageModelCards', () => {
       strength: IMAGE_MODEL_STRENGTHS[ImageModels.GPT_IMAGE_1_5],
       outputNoun: 'image',
       modes: ['Generate', 'Edit'],
+      pickedFor: 'sharp detail and text',
+      whyNotCode: null,
       unavailableReason: null,
       mismatchReason: null,
+    });
+  });
+
+  it('says what each fitting model was picked for, naming attached references', () => {
+    const intent = { ...EMPTY_IMAGE_INTENT, references: [{ fileId: 'f1', fileName: 'mug.png' }] };
+    const [top] = imageModelCards(available, intent);
+    expect(top).toMatchObject({ id: ImageModels.GPT_IMAGE_1_5, pickedFor: 'sharp detail and text + reference' });
+  });
+
+  it('ranks a model that cannot honour the request below the ones that can, with the validator code', () => {
+    const cards = imageModelCards(available, { ...EMPTY_IMAGE_INTENT, size: '1024x1536' });
+    expect(cards.map(card => card.id)).toEqual([
+      ImageModels.GPT_IMAGE_1_5,
+      ImageModels.GEMINI_3_1_FLASH_IMAGE,
+      ImageModels.FLUX_PRO_ULTRA,
+      ImageModels.FLUX_KONTEXT_PRO,
+    ]);
+    expect(cardOf(cards, ImageModels.GEMINI_3_1_FLASH_IMAGE)).toMatchObject({
+      pickedFor: null,
+      whyNotCode: 'unsupported_size',
+      mismatchReason: expect.any(String),
     });
   });
 
@@ -104,7 +127,7 @@ describe('imageFieldProblems', () => {
 });
 
 describe('pickDefaultImageModel', () => {
-  it('opens on the first preferred model that can run', () => {
+  it('opens on the top-ranked model that can run', () => {
     expect(pickDefaultImageModel(imageModelCards(available, EMPTY_IMAGE_INTENT))).toBe(ImageModels.GPT_IMAGE_1_5);
   });
 
@@ -117,7 +140,7 @@ describe('pickDefaultImageModel', () => {
       EMPTY_IMAGE_INTENT
     );
     expect(pickDefaultImageModel(cards)).toBe(ImageModels.GEMINI_3_PRO_IMAGE);
-    expect(pickDefaultImageModel(cards.slice(0, 1))).toBeUndefined();
+    expect(pickDefaultImageModel(cards.filter(card => card.id === ImageModels.FLUX_KONTEXT_PRO))).toBeUndefined();
   });
 });
 
