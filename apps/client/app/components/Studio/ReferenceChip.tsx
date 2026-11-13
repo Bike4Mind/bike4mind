@@ -17,7 +17,8 @@ type ReferenceChipProps = {
 
 // GET /api/files/:id signs the file, so the cutout renders straight from its record.
 const CutoutPreview = ({ fileId, alt, testId }: { fileId: string; alt: string; testId: string }) => {
-  const file = useGetFabFile(fileId);
+  // Saved moments before the job succeeded, so its signed URL appears only once upload moderation clears.
+  const file = useGetFabFile(fileId, { pollUntilViewable: true });
   return (
     <Sheet
       variant="outlined"
@@ -26,6 +27,12 @@ const CutoutPreview = ({ fileId, alt, testId }: { fileId: string; alt: string; t
     >
       {file.data?.fileUrl ? (
         <img src={file.data.fileUrl} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      ) : file.data?.moderationStatus === 'blocked' ? (
+        <Stack alignItems="center" justifyContent="center" height="100%" sx={{ px: 1 }}>
+          <Typography level="body-xs" textAlign="center" data-testid={`${testId}-preview-unavailable`}>
+            Preview unavailable
+          </Typography>
+        </Stack>
       ) : (
         <Stack alignItems="center" justifyContent="center" height="100%">
           <CircularProgress size="sm" />

@@ -21,16 +21,27 @@ const jobCaption = (job: StudioImageJob): string => {
   return job.state === 'succeeded' ? 'Background removed' : 'Background removal';
 };
 
-const ImageJobPreview = ({ fileId, prompt }: { fileId: string; prompt: string }) => {
-  const file = useGetFabFile(fileId);
+type ImageFit = 'contain' | 'cover';
+
+// The fit is set on the <img> itself: AspectRatio's objectFit only reaches its first child, which is JobBody.
+const ImageJobPreview = ({ fileId, prompt, fit }: { fileId: string; prompt: string; fit: ImageFit }) => {
+  const file = useGetFabFile(fileId, { pollUntilViewable: true });
   if (!file.data?.fileUrl) return <CircularProgress size="sm" data-testid="image-job-image-loading" />;
-  return <img src={file.data.fileUrl} alt={prompt} loading="lazy" data-testid="image-job-image" />;
+  return (
+    <img
+      src={file.data.fileUrl}
+      alt={prompt}
+      loading="lazy"
+      style={{ width: '100%', height: '100%', objectFit: fit }}
+      data-testid="image-job-image"
+    />
+  );
 };
 
 // A socket frame marks the row 'succeeded' before the gallery refetch brings its output.
 const isAwaitingOutput = (job: StudioImageJob) => job.state === 'succeeded' && job.output === null;
 
-const JobBody = ({ job }: { job: StudioImageJob }) => {
+const JobBody = ({ job, fit }: { job: StudioImageJob; fit: ImageFit }) => {
   const liveLabel = isAwaitingOutput(job) ? LIVE_LABELS.storing : LIVE_LABELS[job.state];
   if (liveLabel) {
     return (
@@ -42,7 +53,7 @@ const JobBody = ({ job }: { job: StudioImageJob }) => {
   }
   if (job.state === 'succeeded') {
     return job.output?.fileId ? (
-      <ImageJobPreview fileId={job.output.fileId} prompt={jobCaption(job)} />
+      <ImageJobPreview fileId={job.output.fileId} prompt={jobCaption(job)} fit={fit} />
     ) : (
       // Final: the worker kept the image outside Files (imageJobHandler's fallback), so there is no file to show.
       <Typography level="body-sm" textAlign="center" sx={{ px: 2 }} data-testid="image-job-unviewable">
@@ -71,13 +82,8 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
   return (
     <Card variant="outlined" data-testid={`image-job-card-${job.id}`} data-state={job.state}>
       {/* A cutout is shown whole, on a checkerboard, so its transparent background reads as transparent. */}
-      <AspectRatio
-        ratio="1"
-        objectFit={deliveredCutout ? 'contain' : 'cover'}
-        variant="soft"
-        sx={deliveredCutout ? { '& > div': CHECKERBOARD_SX } : undefined}
-      >
-        <JobBody job={job} />
+      <AspectRatio ratio="1" variant="soft" sx={deliveredCutout ? { '& > div': CHECKERBOARD_SX } : undefined}>
+        <JobBody job={job} fit={deliveredCutout ? 'contain' : 'cover'} />
       </AspectRatio>
       <CardContent>
         <Typography
