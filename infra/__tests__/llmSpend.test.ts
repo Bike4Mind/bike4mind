@@ -419,7 +419,6 @@ describe('LLM spend alarms', () => {
     await expect(load()).rejects.toThrow('ChatCompletion container log group');
   });
 
-
   it('fails loudly when the Slack quest processor log group cannot be resolved', async () => {
     resources.slackQuestLogGroup = undefined;
     await expect(load()).rejects.toThrow('SlackQuestProcessor function is missing its CloudWatch log group');
