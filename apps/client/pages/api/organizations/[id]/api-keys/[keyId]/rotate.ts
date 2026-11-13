@@ -3,34 +3,31 @@
 // service account (rotateUserApiKey never re-owns an org-owned key). Owner, current manager or
 // platform admin (manageKeys).
 
-import { ApiKeyStatus, type IOrgApiKeySecretResponse, type IUserApiKeyDocument } from '@bike4mind/common';
+import { type IOrgApiKeySecretResponse } from '@bike4mind/common';
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { loadOrgOwnedKey, resolveCreatorNames, toOrgApiKeyView } from '@server/organizations/orgApiKeys';
+import {
+  assertOrgApiKeyLive,
+  loadOrgOwnedKey,
+  resolveCreatorNames,
+  toOrgApiKeyView,
+} from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 
 const stringParam = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-function assertRotatable(key: Pick<IUserApiKeyDocument, 'status' | 'expiresAt'>): void {
-  const expired = !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
-  if (key.status !== ApiKeyStatus.ACTIVE || expired) {
-    throw new BadRequestError('Only an active key can be rotated');
-  }
-}
-
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
     const user = req.user!;
     const org = await verifyOrgPermission(user, stringParam(req.query.id), 'manageKeys');
     const { serviceAccount, apiKey } = await loadOrgOwnedKey(org.id, stringParam(req.query.keyId));
-    assertRotatable(apiKey);
+    assertOrgApiKeyLive(apiKey, 'rotated');
 
     // Rotation mints a fresh secret, so it is a mint for the admin paid-only switch.
     await assertApiKeyAccessAllowed(
@@ -42,7 +39,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     // The new secret and its strict audit row commit together: a failed audit leaves the old secret working.
     const rotated = await withTransaction(async () => {
       // Re-read under the transaction so a revoke that committed since the check above is refused.
-      assertRotatable((await loadOrgOwnedKey(org.id, apiKey.id)).apiKey);
+      assertOrgApiKeyLive((await loadOrgOwnedKey(org.id, apiKey.id)).apiKey, 'rotated');
       const result = await userApiKeyService.rotateUserApiKey(
         serviceAccount.id,
         { keyId: apiKey.id },

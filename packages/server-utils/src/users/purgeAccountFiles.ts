@@ -32,7 +32,7 @@ const BATCH_SIZE = 50;
 
 /**
  * Preserve legacy org uploads which predate the organizationId ownership stamp. Also decides what
- * the data subject export treats as a personal file (`server/dataSubject/subjectRecordExport.ts`).
+ * the data subject walks treat as a personal file (`apps/client/server/dataSubject/subjectMatcher.ts`).
  */
 export async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
   return (await findOrganizationFileIds([file], userId)).has(file.id);

@@ -3,7 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   DialogContent,
@@ -24,9 +23,16 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import AddIcon from '@mui/icons-material/Add';
 import { ApiKeyStatus, type IOrgApiKeyView } from '@bike4mind/common';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
-import { ORG_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import {
+  EditOrgApiKeyAccessModal,
+  OrgApiKeyAccessFields,
+  accessValueOf,
+  describeReach,
+  isAccessComplete,
+} from './OrgApiKeyAccessFields';
 import {
   useCreateOrgApiKey,
+  useOrgApiKeyOptions,
   useOrgApiKeys,
   useRevokeOrgApiKey,
   useRotateOrgApiKey,
@@ -106,17 +112,14 @@ const CreateKeyModal: FC<{
 }> = ({ open, onClose, organizationId, onCreated }) => {
   const createKey = useCreateOrgApiKey(organizationId);
   const [name, setName] = useState('');
-  const [scopes, setScopes] = useState<string[]>([]);
+  const [access, setAccess] = useState(() => accessValueOf([], []));
   const [expiresOn, setExpiresOn] = useState('');
 
   const reset = () => {
     setName('');
-    setScopes([]);
+    setAccess(accessValueOf([], []));
     setExpiresOn('');
   };
-
-  const toggleScope = (value: string) =>
-    setScopes(current => (current.includes(value) ? current.filter(scope => scope !== value) : [...current, value]));
 
   const close = () => {
     reset();
@@ -127,7 +130,8 @@ const CreateKeyModal: FC<{
     const created = await createKey
       .mutateAsync({
         name: name.trim(),
-        scopes,
+        scopes: access.scopes,
+        grants: access.grants,
         ...(expiresOn ? { expiresAt: new Date(`${expiresOn}T23:59:59`).toISOString() } : {}),
       })
       .catch(() => null);
@@ -154,23 +158,7 @@ const CreateKeyModal: FC<{
                 slotProps={{ input: { maxLength: 100, 'data-testid': 'org-api-key-name-input' } }}
               />
             </FormControl>
-            <FormControl required>
-              <FormLabel>Scopes</FormLabel>
-              <Sheet variant="outlined" sx={{ borderRadius: 'sm', p: 1.5, maxHeight: 240, overflow: 'auto' }}>
-                <Stack spacing={1}>
-                  {ORG_API_KEY_SCOPES.map(option => (
-                    <Checkbox
-                      key={option.value}
-                      size="sm"
-                      label={option.label}
-                      checked={scopes.includes(option.value)}
-                      onChange={() => toggleScope(option.value)}
-                      slotProps={{ input: { 'data-testid': `org-api-key-scope-${option.value}` } }}
-                    />
-                  ))}
-                </Stack>
-              </Sheet>
-            </FormControl>
+            {open && <OrgApiKeyAccessFields organizationId={organizationId} value={access} onChange={setAccess} />}
             <FormControl>
               <FormLabel>Expires on</FormLabel>
               <Input
@@ -188,7 +176,7 @@ const CreateKeyModal: FC<{
               <Button
                 onClick={submit}
                 loading={createKey.isPending}
-                disabled={!name.trim() || scopes.length === 0}
+                disabled={!name.trim() || !isAccessComplete(access)}
                 data-testid="org-api-key-create-submit-btn"
               >
                 Create key
@@ -209,8 +197,11 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
   const { data: keys, isLoading, isError } = useOrgApiKeys(organizationId);
   const rotateKey = useRotateOrgApiKey(organizationId);
   const revokeKey = useRevokeOrgApiKey(organizationId);
+  const { data: options } = useOrgApiKeyOptions(organizationId);
+  const groupNames = options ? new Map(options.groups.map(group => [group.id, group.name])) : undefined;
   const [createOpen, setCreateOpen] = useState(false);
   const [secret, setSecret] = useState<{ name: string; key: string } | null>(null);
+  const [editing, setEditing] = useState<IOrgApiKeyView | null>(null);
   const [pending, setPending] = useState<{ action: 'rotate' | 'revoke'; key: IOrgApiKeyView } | null>(null);
 
   const confirm = async () => {
@@ -261,12 +252,13 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
       )}
       {keys && keys.length > 0 && (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table size="sm" data-testid="org-api-keys-table" sx={{ minWidth: 840 }}>
+          <Table size="sm" data-testid="org-api-keys-table" sx={{ minWidth: 960 }}>
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Key</th>
                 <th>Scopes</th>
+                <th>Access</th>
                 <th>Created by</th>
                 <th>Created</th>
                 <th>Last used</th>
@@ -297,6 +289,7 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                         ))}
                       </Stack>
                     </td>
+                    <td data-testid={`org-api-key-reach-${key.id}`}>{describeReach(key.grants, groupNames)}</td>
                     <td>{key.createdBy ? (key.createdBy.name ?? 'Deleted user') : '\u2014'}</td>
                     <td>{formatDate(key.createdAt)}</td>
                     <td>{key.lastUsedAt ? formatDate(key.lastUsedAt) : 'Never'}</td>
@@ -309,6 +302,16 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                     <td>
                       {revocable && (
                         <Stack direction="row" gap={0.5} justifyContent="flex-end">
+                          {active && (
+                            <Button
+                              size="sm"
+                              variant="plain"
+                              onClick={() => setEditing(key)}
+                              data-testid={`org-api-key-edit-btn-${key.id}`}
+                            >
+                              Edit access
+                            </Button>
+                          )}
                           {active && (
                             <Button
                               size="sm"
@@ -346,6 +349,7 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
         onCreated={setSecret}
       />
       <SecretModal secret={secret} onClose={() => setSecret(null)} />
+      <EditOrgApiKeyAccessModal organizationId={organizationId} apiKey={editing} onClose={() => setEditing(null)} />
       <ConfirmationModal
         open={!!pending}
         onClose={() => setPending(null)}

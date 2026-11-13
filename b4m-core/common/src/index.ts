@@ -210,6 +210,7 @@ export * from './utils/dataLakeTaxonomy';
 export * from './utils/dataLakeSlug';
 export * from './utils/includeLibraryFiles';
 export * from './utils/dataLakeAccessContext';
+export * from './utils/orgApiKeyReach';
 export * from './utils/tagName';
 export * from './utils/tagPaths';
 export * from './utils/generatedMedia';

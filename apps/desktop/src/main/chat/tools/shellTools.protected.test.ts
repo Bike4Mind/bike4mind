@@ -7,6 +7,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -195,7 +196,7 @@ describe('shell commands that reach a protected location', () => {
     ).catch(() => null);
     return {
       auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
-      full: !prompt.askInFull,
+      full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
   };
@@ -235,6 +236,19 @@ describe('shell commands that reach a protected location', () => {
       'IFS=,; v=.cl,aude; cp -r payload/. $v',
     ])('asks in every mode before %s', async command => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
+    });
+
+    it('asks before an opaque write to the project settings in full access, marked unchecked', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+        unchecked: true,
+      });
     });
 
     it('asks before a brace list too long to read', async () => {

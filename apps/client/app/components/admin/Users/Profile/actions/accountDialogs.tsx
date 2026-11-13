@@ -518,6 +518,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
   const loginAs = useLoginAsUser();
   const [mfaToken, setMfaToken] = useState('');
   const name = displayName(user);
+  // Login-as verifies an authenticator-app code, so a passkey alone does not qualify.
   const adminHasMfa = !!currentUser?.mfa?.totpEnabled;
 
   const handleConfirm = async (reason: string) => {
@@ -535,7 +536,7 @@ export const LoginAsDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) =
       confirmLabel={`Log in as ${name}`}
       blockedReason={
         !adminHasMfa
-          ? 'Set up two-factor on your own account first.'
+          ? 'Set up an authenticator app on your own account first.'
           : mfaToken.trim()
             ? null
             : 'Enter your 6-digit authenticator code.'

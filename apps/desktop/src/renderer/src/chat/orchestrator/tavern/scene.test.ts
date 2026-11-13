@@ -372,6 +372,17 @@ describe('nameLabelLayout', () => {
     expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.front - 0.1 }, 2)).toBe(100);
   });
 
+  it('keeps every label inside the scene, so a seat by the wall never has its name cut off', () => {
+    const points = allSeats();
+    const layout = nameLabelLayout(points);
+    for (const [id, label] of layout) {
+      const { x } = points.get(id)!;
+      expect(x - label.maxWidth / 2).toBeGreaterThanOrEqual(0);
+      expect(x + label.maxWidth / 2).toBeLessThanOrEqual(100);
+    }
+    expect(nameLabelLayout(new Map([['wall', { x: 95, y: 50 }]])).get('wall')?.maxWidth).toBeCloseTo(9);
+  });
+
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {
     const points = new Map<string, SlotPoint>([
       ['left', { x: 50, y: 50 }],

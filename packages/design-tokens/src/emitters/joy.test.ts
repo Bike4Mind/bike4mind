@@ -52,4 +52,23 @@ describe('joy emitter', () => {
     expect(fragment.fontFamily.body).toContain('Libre Franklin');
     expect(fragment.borderRadius).toBe(8);
   });
+
+  it('emits the metric slots Joy reads, plus motion as a custom key', () => {
+    expect(fragment.fontSize).toEqual(designTokens.typography.fontSize);
+    expect(fragment.fontWeight).toEqual(designTokens.typography.fontWeight);
+    expect(fragment.lineHeight).toEqual(designTokens.typography.lineHeight);
+    expect(fragment.spacing).toBe(8);
+    expect(fragment.radius).toEqual({ xs: '2px', sm: '6px', md: '8px', lg: '12px', xl: '16px' });
+    const ring = 'var(--joy-shadowRing, 0 0 #000)';
+    const layer = (y: number, blur: number, spread: number) =>
+      `0px ${y}px ${blur}px ${spread}px rgba(var(--joy-shadowChannel, 21 21 21) / var(--joy-shadowOpacity, 0.08))`;
+    expect(fragment.shadow).toEqual({
+      xs: `${ring}, ${layer(1, 2, 0)}`,
+      sm: `${ring}, ${layer(1, 2, 0)}, ${layer(2, 4, 0)}`,
+      md: `${ring}, ${layer(2, 8, -2)}, ${layer(6, 12, -2)}`,
+      lg: `${ring}, ${layer(2, 8, -2)}, ${layer(12, 16, -4)}`,
+      xl: `${ring}, ${layer(2, 8, -2)}, ${layer(20, 24, -4)}`,
+    });
+    expect(fragment.motion).toEqual({ duration: { fast: '150ms', standard: '200ms', slow: '300ms', slower: '500ms' } });
+  });
 });
