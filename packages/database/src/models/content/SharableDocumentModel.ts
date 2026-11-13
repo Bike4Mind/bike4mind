@@ -8,6 +8,7 @@ import {
   UserShareGrant,
   UserShareMatch,
   UserSharesChange,
+  readableGroupIds,
 } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
 import {
@@ -94,6 +95,15 @@ export const updateAccessArms = (
 ];
 
 /**
+ * readAccessArms without the owner arm. The group arm reads `readableGroupIds`, which adds an
+ * org-owned key's granted groups (b4m-core/common utils/orgApiKeyReach.ts) to the caller's own.
+ */
+const sharedReadArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Record<string, unknown>[] => [
+  { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
+  { groups: { $elemMatch: { groupId: { $in: readableGroupIds(user) }, permissions: { $in: ['read', 'write'] } } } },
+];
+
+/**
  * The `$or` arms granting read access: owner, users[] read|write, groups[] read|write. Deliberately
  * no `isGlobalRead` arm. Shared by findAccessibleById/findAllAccessibleByIds and the public project
  * list (ProjectRepository.listAccessibleAfterId), so every id that list returns is one the by-id
@@ -101,8 +111,7 @@ export const updateAccessArms = (
  */
 export const readAccessArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Record<string, unknown>[] => [
   { userId: user.id },
-  { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-  { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
+  ...sharedReadArms(user),
 ];
 
 // Pipeline updates skip Mongoose casting, so values go in as `$literal` and stored ids compare via
@@ -183,22 +192,11 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   }
 
   async findAllAccessible(user: IUserDocument): Promise<T[]> {
-    return this.model.find({
-      $or: [
-        { userId: user.id },
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
-      ],
-    });
+    return this.model.find({ $or: readAccessArms(user) });
   }
 
   async findAllShared(user: IUserDocument): Promise<T[]> {
-    return this.model.find({
-      $or: [
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
-      ],
-    });
+    return this.model.find({ $or: sharedReadArms(user) });
   }
 
   /**

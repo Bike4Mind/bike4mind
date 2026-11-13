@@ -27,6 +27,7 @@ import {
   FEEDBACK_AI_SEVERITIES,
   FEEDBACK_RESOLUTIONS,
   FEEDBACK_RESOLUTION_LABELS,
+  FeedbackStatus,
 } from '@bike4mind/common';
 import FeedbackCloseDialog from './FeedbackCloseDialog';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -54,6 +55,7 @@ import { useFeedbackPagination } from './hooks/useFeedbackPagination';
 import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './types';
 import FeedbackDetailDrawer from './FeedbackDetailDrawer';
 import { useFeedbackDetailNavigation } from './hooks/useFeedbackDetailNavigation';
+import { useFeedbackKeyboard } from './hooks/useFeedbackKeyboard';
 import { copyFeedbackRecordLink, feedbackConversationPath, feedbackReporterMailto } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
 import FeedbackTrendStrip from './FeedbackTrendStrip';
@@ -347,6 +349,20 @@ const FeedbackTab: React.FC = () => {
   // the row that opened the drawer. Ids are compared rather than put in a selector: a deep-linked
   // id is arbitrary text.
   const tableRegionRef = useRef<HTMLDivElement>(null);
+  useFeedbackKeyboard({
+    rootRef: tableRegionRef,
+    enabled: !openFeedbackId && !loading,
+    onAction: (key, rowId) => {
+      const row = currentFeedback.find(row => row._id === rowId);
+      if (!row) return;
+      if (key === 'e') {
+        const mailto = feedbackReporterMailto(row);
+        if (mailto) window.location.assign(mailto);
+      } else {
+        void handleStatusChange(row, key === 'i' ? FeedbackStatus.InProgress : FeedbackStatus.Closed);
+      }
+    },
+  });
   const selectionScope = JSON.stringify({ filterParams, currentPage, itemsPerPage });
   const selection = useFeedbackSelection({
     pageIds: currentFeedback.map(row => row._id),
@@ -455,7 +471,7 @@ const FeedbackTab: React.FC = () => {
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
     { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
-    { id: 'content', label: 'Feedback', render: row => <ContentCell row={row} /> },
+    { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
       label: 'Status',
@@ -610,7 +626,7 @@ const FeedbackTab: React.FC = () => {
         tabIndex={-1}
         data-testid="feedback-table-region"
         gap={1}
-        sx={{ minWidth: 0, outline: 'none' }}
+        sx={{ minWidth: 0, ...adminFocus }}
       >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable

@@ -37,6 +37,14 @@ export class RegistrationInviteRepository
       { $unset: { used: 1 }, $set: { status } }
     );
   }
+
+  /** Marks the code open unless an admin closed it; conditional so a close racing a signup holds. */
+  async reopenUnlessClosed(inviteId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: inviteId, status: { $ne: RegInviteStatusType.used } },
+      { $set: { status: RegInviteStatusType.open } }
+    );
+  }
   async createMany(invites: Omit<IRegInviteDocument, 'id'>[]) {
     return this.model.insertMany(invites);
   }
@@ -67,10 +75,19 @@ export class RegistrationInviteRepository
     return updatedInvites;
   }
 
+  /** Newest codes linked to a grant package, at most `limit`, plus whether more exist. */
+  async listByGrantPackage(grantPackageId: string, limit: number) {
+    const rows = await this.model
+      .find({ grantPackageId })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1);
+    return { data: rows.slice(0, limit).map(row => row.toJSON()), truncated: rows.length > limit };
+  }
+
   /**
    * Per-package code counts for the grant packages admin list. A code is active while register()
-   * in b4m-core/services/src/userService/register.ts would still accept it: not past expiresAt,
-   * and no used date unless unlimited-use. status is not consulted there, so not here either.
+   * in b4m-core/services/src/userService/register.ts would still accept it (see resolveRegistrationInvite):
+   * not past expiresAt, no used date unless unlimited-use, and status not used (an admin-closed code).
    * nextExpiry is the soonest expiry among active codes that carry one.
    */
   async usageByGrantPackage(ids: string[], now: Date = new Date()) {
@@ -81,6 +98,7 @@ export class RegistrationInviteRepository
       $and: [
         { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gte: ['$expiresAt', now] }] },
         { $or: [{ $eq: [{ $ifNull: ['$used', null] }, null] }, { $eq: ['$unlimitedUse', true] }] },
+        { $ne: ['$status', RegInviteStatusType.used] },
       ],
     };
     const rows = await this.model.aggregate<{

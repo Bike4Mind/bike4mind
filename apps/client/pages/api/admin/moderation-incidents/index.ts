@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { Request } from 'express';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { imageModerationIncidentRepository, userRepository } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin-only work-queue endpoint for image-moderation incidents.
@@ -41,11 +40,10 @@ const withUserEmails = async <T extends QueueIncident>(lists: T[][]) => {
   return lists.map(list => list.map(incident => ({ ...incident, userEmail: emailById.get(incident.userId) ?? null })));
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(async (req: Request, res) => {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid query', details: parsed.error.issues });

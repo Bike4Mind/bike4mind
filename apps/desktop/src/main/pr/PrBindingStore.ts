@@ -19,7 +19,8 @@ function normalize(value: unknown): PrBinding | null {
     source: raw.source === 'manual' || raw.source === 'agent' || raw.source === 'branch' ? raw.source : 'shell',
     boundAt: typeof raw.boundAt === 'string' ? raw.boundAt : new Date(0).toISOString(),
     ...(Array.isArray(raw.autoFixHandled) ? { autoFixHandled: raw.autoFixHandled.slice(-MAX_HANDLED) } : {}),
-    // A damaged budget is dropped so the default applies; kept only when it is a whole positive count.
+    // A damaged budget is dropped so the legacy fallback applies; any positive integer is kept so
+    // a saved budget survives the Settings maximum changing.
     ...(typeof autoFixMax === 'number' && Number.isInteger(autoFixMax) && autoFixMax > 0 ? { autoFixMax } : {}),
     // Dropped when it is not a finished read, so a damaged one costs a single re-read, not a broken bar.
     ...(finalSnapshot && isFinishedState(finalSnapshot.state) && Array.isArray(finalSnapshot.checks)
@@ -86,6 +87,23 @@ export class PrBindingStore {
     const next = change(current);
     await this.set(sessionId, next);
     return next;
+  }
+
+  /**
+   * One write for a change across every binding; `change` answers null to leave one as it is.
+   * Returns the sessions whose binding changed.
+   */
+  async updateEach(change: (binding: PrBinding) => PrBinding | null): Promise<string[]> {
+    const all = await this.all();
+    const changed: string[] = [];
+    for (const [sessionId, binding] of all) {
+      const next = change(binding);
+      if (!next) continue;
+      all.set(sessionId, next);
+      changed.push(sessionId);
+    }
+    if (changed.length > 0) await this.flush();
+    return changed;
   }
 
   private flush(): Promise<void> {

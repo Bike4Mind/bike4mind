@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { IUserDocument } from '@bike4mind/common';
+import { attachOrgApiKeyReach, type IUserDocument } from '@bike4mind/common';
 
 // The ability builder pulls in the Mongoose models purely as CASL subject types;
 // stub them so this stays a pure permission-rule unit test (no DB).
@@ -133,6 +133,62 @@ describe('db-core defineAbilitiesFor - group-shared document access', () => {
     const ability = defineAbilitiesFor(makeUser({ groups: [] }));
     const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
     expect(ability.can('read', doc)).toBe(false);
+  });
+});
+
+// An org-owned API key's service account owns nothing and is in no group; its per-key grants
+// (b4m-core/common utils/orgApiKeyReach.ts) widen only the READ arm, never update/delete/share.
+describe('db-core defineAbilitiesFor - org-owned API key reach', () => {
+  type GroupShare = { groupId: string; permissions: string[] };
+  const keyUser = (readGroupIds: string[]) =>
+    attachOrgApiKeyReach(makeUser({ id: 'svc', groups: [] }), {
+      organizationId: 'org-1',
+      readGroupIds,
+      dataLakeOrgIds: [],
+    });
+  const fullAccess = ['read', 'update', 'delete', 'share'];
+  const projectSharedWith = (groups: GroupShare[]) =>
+    Object.assign(new Project(), { userId: 'member', users: [], groups });
+  const fileSharedWith = (groups: GroupShare[]) =>
+    Object.assign(new FabFile(), { userId: 'member', users: [], groups });
+
+  it('reads a project and a file shared with a granted group', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g1', permissions: fullAccess }]))).toBe(true);
+    expect(ability.can('read', fileSharedWith([{ groupId: 'g1', permissions: fullAccess }]))).toBe(true);
+  });
+
+  it('never updates, deletes or shares through a granted group, even when the share allows it', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    const project = projectSharedWith([{ groupId: 'g1', permissions: fullAccess }]);
+    expect(ability.can('update', project)).toBe(false);
+    expect(ability.can('delete', project)).toBe(false);
+    expect(ability.can('share', project)).toBe(false);
+  });
+
+  it("cannot read a member's private project or one shared only with an ungranted group", () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(ability.can('read', projectSharedWith([]))).toBe(false);
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g2', permissions: ['read'] }]))).toBe(false);
+  });
+
+  it('loses read once the project is unshared from the granted group', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    const project = projectSharedWith([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', project)).toBe(true);
+    project.groups = [];
+    expect(ability.can('read', project)).toBe(false);
+  });
+
+  it('denies by default with an empty reach', () => {
+    const ability = defineAbilitiesFor(keyUser([]));
+    expect(ability.can('read', projectSharedWith([{ groupId: 'g1', permissions: ['read'] }]))).toBe(false);
+  });
+
+  it('compiles the granted groups into the read query only', () => {
+    const ability = defineAbilitiesFor(keyUser(['g1']));
+    expect(JSON.stringify(accessibleBy(ability, 'read').ofType(Project))).toContain('"g1"');
+    expect(JSON.stringify(accessibleBy(ability, 'update').ofType(Project))).not.toContain('"g1"');
   });
 });
 

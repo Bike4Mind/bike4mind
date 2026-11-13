@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
+import OrganizationLibrarySection from '@client/app/components/organizations/OrganizationLibrarySection';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
@@ -281,6 +282,9 @@ const OrganizationPage: FC = () => {
               <GroupOutlinedIcon sx={{ fontSize: 16 }} />
               {t('organization.tabs.members')}
             </Tab>
+            <Tab value={OrganizationTabs.Library} data-testid="organization-library-tab">
+              Library
+            </Tab>
             {canManageGroups && (
               <Tab value={OrganizationTabs.Groups} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />
@@ -364,6 +368,15 @@ const OrganizationPage: FC = () => {
               <OrganizationOverviewSection organization={organization} />
               <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
+            {selectedTab === OrganizationTabs.Library && (
+              <TabPanel value={OrganizationTabs.Library}>
+                <OrganizationLibrarySection
+                  key={organization.id}
+                  organizationId={organization.id}
+                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}

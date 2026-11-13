@@ -19,6 +19,16 @@ describe('organization retention personal-data policy', () => {
   });
 });
 
+describe('organization library personal-data policy', () => {
+  it('keeps organization-owned snapshots independent of an individual author erasure', () => {
+    expect(DATA_HOLDER_REGISTRY.OrganizationLibrary).toEqual({
+      kind: 'noUserData',
+      note: 'Organization-owned definition snapshots with no author identity or personal source reference.',
+    });
+    expect(findUnclassifiedModels(['OrganizationLibrary'])).toEqual([]);
+  });
+});
+
 describe('organization audit personal-data policy', () => {
   it('classifies membership target IDs in analytics as attribution on another account record', () => {
     const holder = DATA_HOLDER_REGISTRY.CounterLog;

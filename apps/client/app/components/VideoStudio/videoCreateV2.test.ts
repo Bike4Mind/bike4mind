@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import { videoFieldProblems, videoModelCards } from './videoCreateV2';
+import { videoFieldProblems, videoModelCards, withRankedVideoDefaultFirst } from './videoCreateV2';
 import { estimateCredits, initialFormFor, type VideoFormState } from './videoForm';
 
 const form = (overrides: Partial<VideoFormState> = {}): VideoFormState => ({
@@ -34,24 +34,67 @@ describe('videoFieldProblems', () => {
   });
 });
 
+// Real catalog ids, so the ranker checks them against VIDEO_MODEL_CATALOG as it does in production.
+const omniModel = { ...rangeModel, id: 'gemini-omni-1.1-flash', display_name: 'Gemini Omni Flash' };
+// Values both Gemini Omni Flash and Grok Imagine take.
+const sharedForm = () => form({ durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' });
+
 describe('videoModelCards', () => {
-  it('describes each model and greys the ones that do not fit the current values', () => {
-    const cards = videoModelCards([rangeModel, discreteModel], form({ durationSeconds: 10 }));
-    expect(cards[0]).toMatchObject({
+  it('describes each model, ranked for the form, with why the fitting ones were picked', () => {
+    const cards = videoModelCards([omniModel, rangeModel], sharedForm());
+    expect(cards.map(card => card.id)).toEqual([omniModel.id, rangeModel.id]);
+    expect(cards[1]).toMatchObject({
       id: rangeModel.id,
       name: 'Grok Imagine Video 1.5',
       provider: 'xAI',
       strength: 'Stylised clips with sound, from text or an image.',
       creditsPerOutput: estimateCredits(initialFormFor(rangeModel)),
       outputNoun: 'clip',
+      pickedFor: 'stylised motion',
+      whyNotCode: null,
       unavailableReason: null,
       mismatchReason: null,
     });
-    expect(cards[1]?.mismatchReason).toMatch(/you asked for 10s/);
+  });
+
+  it('sinks a model that does not take a value, keeping it pickable with the validator code', () => {
+    const cards = videoModelCards([omniModel, rangeModel], { ...sharedForm(), aspectRatio: '4:3' });
+    expect(cards.map(card => card.id)).toEqual([rangeModel.id, omniModel.id]);
+    expect(cards[1]).toMatchObject({
+      pickedFor: null,
+      whyNotCode: 'unsupported_aspect_ratio',
+      unavailableReason: null,
+    });
+    expect(cards[1]?.mismatchReason).toMatch(/4:3/);
+  });
+
+  it('names a starting image in the picked-for line, even before the image is chosen', () => {
+    const [top] = videoModelCards([rangeModel], { ...sharedForm(), mode: 'image_to_video', inputImage: null });
+    expect(top?.pickedFor).toBe('stylised motion + your starting image');
+  });
+
+  it('marks a retired model unavailable', () => {
+    const [, veo] = videoModelCards([rangeModel, discreteModel], sharedForm());
+    expect(veo).toMatchObject({
+      id: discreteModel.id,
+      whyNotCode: 'model_unavailable',
+      unavailableReason: expect.any(String),
+    });
   });
 
   it('falls back to the provider id and no strength when the server sends no card copy', () => {
     const [card] = videoModelCards([optionalAudioModel], form());
     expect(card).toMatchObject({ provider: 'test', strength: '' });
+  });
+});
+
+describe('withRankedVideoDefaultFirst', () => {
+  it('moves the model that ranks first against its own defaults to the front', () => {
+    // Omni ranks first at Veo's defaults, but this fixture's own 480p default does not fit it; Grok's does.
+    expect(withRankedVideoDefaultFirst([discreteModel, rangeModel, omniModel]).map(model => model.id)).toEqual([
+      rangeModel.id,
+      discreteModel.id,
+      omniModel.id,
+    ]);
   });
 });

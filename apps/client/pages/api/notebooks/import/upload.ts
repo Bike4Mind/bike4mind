@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { UploadTooLargeError, spoolRequestToFile } from '@server/utils/spoolRequestToFile';
-import { buildNotebookImportKeys, isValidNotebookImportId } from '@server/utils/notebookImportKeys';
+import { buildNotebookImportKeys, isValidNotebookImportId } from '@bike4mind/server-utils/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
 

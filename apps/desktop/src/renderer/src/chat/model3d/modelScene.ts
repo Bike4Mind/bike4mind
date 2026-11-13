@@ -417,6 +417,24 @@ function scaleThickness(root: THREE.Object3D, factor: number): void {
 }
 
 /**
+ * GLTFExporter merges a separate roughness and metalness map with canvas drawImage, which cannot
+ * draw a DataTexture's raw pixels, so a textured part failed to export. The procedural roughness
+ * maps are already packed the glTF way (roughness in G, B at full so the metalness factor applies
+ * as is; see textureBytes in proceduralTextures.ts), so the exporter gets that one map for both and
+ * writes it unchanged. Materials are shared with the viewer's object by clone(), so each is copied.
+ */
+export function shareMetalRoughMaps(root: THREE.Object3D): void {
+  root.traverse(node => {
+    if (!(node instanceof THREE.Mesh) || !(node.material instanceof THREE.MeshStandardMaterial)) return;
+    const { roughnessMap, metalnessMap } = node.material;
+    if (!(roughnessMap instanceof THREE.DataTexture) || metalnessMap) return;
+    const material = node.material.clone();
+    material.metalnessMap = roughnessMap;
+    node.material = material;
+  });
+}
+
+/**
  * GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. Always
  * in the modelled pose, whatever the pane's joint sliders show, plus one animation clip per joint.
  */
@@ -428,6 +446,7 @@ export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
     copy.scale.setScalar(0.001);
     scaleThickness(copy, 0.001);
   }
+  shareMetalRoughMaps(copy);
   bakeTopTransforms(copy);
   scene.add(copy);
   // TRS rather than a matrix: glTF forbids `matrix` on a node an animation targets, and these

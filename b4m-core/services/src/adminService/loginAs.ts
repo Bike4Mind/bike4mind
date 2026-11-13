@@ -35,9 +35,10 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
     throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
-  // MFA is required for loginAs - compromised admin account must not enable free impersonation
-  if (!adminUser.mfa?.totpEnabled) {
-    throw new ForbiddenError('MFA must be enabled to use loginAs');
+  // MFA is required for loginAs - compromised admin account must not enable free impersonation.
+  // Authenticator app specifically: the code is verified below as a TOTP, so a passkey cannot serve.
+  if (!mfaService.userHasTotpConfigured(adminUser)) {
+    throw new ForbiddenError('An authenticator app must be enabled to use loginAs');
   }
 
   // Get fresh admin user data (incl. select:false MFA secrets) for the MFA verification below;

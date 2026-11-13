@@ -195,6 +195,8 @@ export interface ISubscription {
    * date (which leaves `cancelAtPeriodEnd` false), so this is the "will end" signal.
    */
   cancelAt?: Date | null;
+  /** Actual Stripe termination time, distinct from the cancellation request. */
+  endedAt?: Date | null;
   trialEndsAt?: Date | null;
   stripeCustomerId?: string;
   /**

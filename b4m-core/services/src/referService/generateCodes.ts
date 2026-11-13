@@ -1,5 +1,10 @@
 import { IUserDocument } from '@bike4mind/common';
-import { IGrantPackageRepository, IRegistrationInviteRepository, RegInviteStatusType } from '@bike4mind/common';
+import {
+  IGrantPackageRepository,
+  isGrantPackageExpired,
+  IRegistrationInviteRepository,
+  RegInviteStatusType,
+} from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import range from 'lodash/range.js';
@@ -83,11 +88,12 @@ export const generateReferralCodes = async (
   return regInvites;
 };
 
-/** An invite may only point at a package that exists and is active; caps are enforced at redemption. */
+/** An invite may only point at a package that exists, is active and has not expired; caps are enforced at redemption. */
 export async function requireActiveGrantPackage(grantPackageId: string, grantPackages?: IGrantPackageRepository) {
   const grantPackage = grantPackages ? await grantPackages.findById(grantPackageId) : null;
   if (!grantPackage) throw new BadRequestError('Grant package not found');
   if (!grantPackage.active) throw new BadRequestError('Grant package is inactive');
+  if (isGrantPackageExpired(grantPackage)) throw new BadRequestError('Grant package has expired');
   return grantPackage;
 }
 
