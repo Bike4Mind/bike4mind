@@ -309,7 +309,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.SecurityDashboard && <SecurityDashboard />}
           </TabPanel>
           <TabPanel value={AdminTab.Team}>{activeTab === AdminTab.Team && <Team />}</TabPanel>
-          <TabPanel value={AdminTab.SystemHealth} {...selfFramed}>
+          <TabPanel value={AdminTab.SystemHealth}>
             {activeTab === AdminTab.SystemHealth && <AdminSystemHealthTab />}
           </TabPanel>
           <TabPanel value={AdminTab.SlackWorkspaces}>
