@@ -22,8 +22,9 @@ assert.equal(process.platform, 'darwin', 'The Squirrel.Mac update check runs on 
 const TEST_ID = 'com.bike4mind.desktop.updatetest';
 const TEST_PRODUCT = 'B4MUpdateTest';
 const TEST_NAME = 'b4m-update-test';
-const OLD = '0.0.1';
-const NEW = '0.0.2';
+// Versions follow the release line users run: this build's version, else the latest release tag.
+const OLD = (/\d+\.\d+\.\d+/.exec(process.env.DESKTOP_VERSION || latestReleaseTag()) ?? ['0.0.1'])[0];
+const NEW = OLD.replace(/\d+$/, patch => String(Number(patch) + 1));
 const SHIPIT_JOB = `${TEST_ID}.ShipIt`;
 
 const desktop = resolve('apps/desktop');
@@ -106,6 +107,10 @@ async function makeCertificate(label) {
 // Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
 // through the user search list. The list is changed only where the probe says it has to be, and
 // the finally block puts it back.
+function latestReleaseTag() {
+  return spawnSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'desktop-v*'], { encoding: 'utf8' }).stdout ?? '';
+}
+
 async function exposeSigningKeychain(sha1) {
   const probe = join(root, 'probe');
   await copyFile('/usr/bin/true', probe);

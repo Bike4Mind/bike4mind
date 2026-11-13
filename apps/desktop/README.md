@@ -507,9 +507,9 @@ that is never added to the search list and is deleted when the job ends.
 
 The certificate is the app's identity. A new or renewed certificate changes the designated
 requirement: installed builds refuse the next build as an update, and every user reruns the
-install command once. macOS also ties the app's keychain item to its signature, so the first launch
-after any identity change, including the first self-signed build after an ad-hoc one, can ask for
-keychain access. `node apps/desktop/scripts/smoke-mac-update.mjs` (run from the repository root,
+install command once. macOS ties the app's keychain item to the exact build unless the certificate
+is issued by Apple, so in this mode, as with ad-hoc builds, the first launch after every update asks
+for keychain access once. `node apps/desktop/scripts/smoke-mac-update.mjs` (run from the repository root,
 also on every macOS CI run) checks the whole path with throwaway certificates and a test app
 identity: two packaged builds, a loopback feed, check, download, restart into the newer build,
 and a newer build from another certificate that is refused.
