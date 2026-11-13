@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1141 routes: 94 contracted, 11 aliases of another route, 288 with no static caller in `apps/client/app`.
+1138 routes: 94 contracted, 11 aliases of another route, 288 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -129,7 +129,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | research | 8 | 0 | 8 | 0 | 0 | 0 | 1 |
 | roll | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | search-image | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
-| secret-rotations | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
@@ -1445,14 +1444,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/search-image` | GET | jwt | - | - | no | - | 1: `components/Session/SearchResultCards.tsx` |
-
-### secret-rotations
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/secret-rotations` | GET | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/[id]` | PUT | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/renewed` | POST | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
 
 ### security
 

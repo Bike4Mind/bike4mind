@@ -50,7 +50,6 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Revenue]: ADMIN_REVENUE_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
-  [AdminTab.SecretsRotation]: 'secrets-rotation',
   [AdminTab.ModelLogs]: ADMIN_MODEL_LOGS_TAB_SLUG,
   [AdminTab.ModelMetrics]: ADMIN_MODEL_METRICS_TAB_SLUG,
   [AdminTab.EventMetrics]: ADMIN_EVENTS_TAB_SLUG,

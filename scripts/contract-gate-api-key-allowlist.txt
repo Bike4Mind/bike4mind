@@ -647,9 +647,6 @@ apps/client/pages/api/research/agents/[id]/tasks/index.ts
 apps/client/pages/api/research/agents/index.ts
 apps/client/pages/api/research/data/files.ts
 apps/client/pages/api/roll.ts
-apps/client/pages/api/secret-rotations/[id]/index.ts
-apps/client/pages/api/secret-rotations/index.ts
-apps/client/pages/api/secret-rotations/renewed.ts
 apps/client/pages/api/security/api-usage.ts
 apps/client/pages/api/security/blocked-ips.ts
 apps/client/pages/api/security/blocked-ips/evaluate.ts

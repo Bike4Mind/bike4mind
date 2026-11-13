@@ -115,7 +115,7 @@ const handler = baseApi({ auth: false })
     // signed with the previous secret for a 24-hour grace period
     const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     let previousSecret: string | undefined;
-    // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
+    // `previousKey` is stored encrypted at rest (encryptAtRest);
     // decrypt before verifying. Legacy plaintext rows pass through unchanged.
     if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
       previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;

@@ -279,7 +279,7 @@ if (accountDeletionSweep && accountDeletionSweepDeadLetter) {
 
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
-      // Daily check at 9am UTC (4am EST)
+      // Daily at 9am UTC: retires the expired JWT previous key and posts the quarterly access review reminder.
       schedule: 'cron(0 9 * * ? *)',
       function: {
         vpc: lambdaVpc,

@@ -50,7 +50,6 @@ import {
   Package,
   Plug,
   Radar,
-  RotateCcw,
   Scale,
   ScanSearch,
   ScrollText,
@@ -79,7 +78,7 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  // 4, 11 and 17 were tabs with no panel; never reuse them.
+  // 4, 11, 16 and 17 were tabs that no longer exist; never reuse them.
   RegistrationInvites = 5,
   Migrate = 6,
   Modals = 7,
@@ -90,7 +89,6 @@ export enum AdminTab {
   Subscriptions = 13,
   Organizations = 14,
   CreditAnalytics = 15,
-  SecretsRotation = 16,
   ModelLogs = 18,
   ModelMetrics = 19,
   EventMetrics = 20,
@@ -296,7 +294,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },
       { Icon: Key, tab: AdminTab.LegacyApiKeys, label: 'Legacy API keys', testid: 'admin-legacy-api-keys-btn' },
       { Icon: Lock, tab: AdminTab.SystemSecrets, label: 'System secrets' },
-      { Icon: RotateCcw, tab: AdminTab.SecretsRotation, label: 'Secrets rotation', badge: 'secretRotation' },
       {
         Icon: Globe,
         tab: AdminTab.PublishedPages,

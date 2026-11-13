@@ -2477,11 +2477,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/secret-rotations/__tests__/secretRotations.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 13
-    }
-  },
   "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10

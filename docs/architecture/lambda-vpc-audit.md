@@ -126,7 +126,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/revenueSnapshot.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/scheduler.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `researchEngineQueue`, `fabFileBucket`, `generatedImagesBucket` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/secopsTriageWorker.handler` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
-| `apps/workers/src/cron/secretRotationNotifier.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/secretRotationNotifier.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. Retires the expired JWT previous key and posts the quarterly access-review reminder. |
 | `apps/workers/src/cron/securityScanScheduler.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupBaselineReport.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/signupDomainHoldTriage.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
