@@ -177,5 +177,10 @@ export async function handleOrgEvent(event: OrgEvent): Promise<void> {
       await evaluateOrgBudget(event);
       return;
     }
+    case 'member_cap_check': {
+      const { evaluateMemberCap } = await import('./evaluateMemberCap');
+      await evaluateMemberCap(event);
+      return;
+    }
   }
 }

@@ -11,7 +11,9 @@ export type OrgEvent =
   | { type: 'credit_debit'; organizationId: string; balanceAfter: number; actingUserId?: string }
   | { type: 'seat_limit'; organizationId: string; seats: number }
   | { type: 'member_joined'; organizationId: string; userId: string }
-  | { type: 'payment_failed'; organizationId: string; invoiceId: string };
+  | { type: 'payment_failed'; organizationId: string; invoiceId: string }
+  /** After a member's usage is recorded, or when the cap pre-flight refuses their request (`refused`). */
+  | { type: 'member_cap_check'; organizationId: string; userId: string; refused?: boolean };
 
 type OrgEventObserver = (event: OrgEvent) => Promise<void> | void;
 
