@@ -134,6 +134,7 @@ export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
 export * from './adminDataExport';
+export * from './adminDataErasure';
 export * from './adminAuditReview';
 export * from './adminApproval';
 export * from './adminUserActivity';
