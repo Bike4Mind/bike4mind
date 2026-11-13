@@ -1,5 +1,10 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { CreditHolderType, isSignupGrantBlocked } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  isGrantPackageExpired,
+  isSignupGrantBlocked,
+  type GrantPackageRefusalReason,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -36,6 +41,8 @@ export type SignupDomainGrantResult = {
   subscriptionCreditsGranted: number;
   /** Whether this call granted the rule's subscription; false when none applied, already active, or failed. */
   subscriptionGranted: boolean;
+  /** Why the linked package withheld its credits (inactive, expired or capped); null when it did not. */
+  packageRefusal: GrantPackageRefusalReason | null;
 };
 
 const NO_GRANT: SignupDomainGrantResult = {
@@ -45,6 +52,7 @@ const NO_GRANT: SignupDomainGrantResult = {
   tagsApplied: [],
   subscriptionCreditsGranted: 0,
   subscriptionGranted: false,
+  packageRefusal: null,
 };
 
 /**
@@ -57,11 +65,13 @@ async function reservePackageRedemption(
   grantPackageId: string | null,
   userId: string,
   trigger: SeatCeilingRaiseTrigger,
-  logger: Logger
+  logger: Logger,
+  onRefused: (reason: GrantPackageRefusalReason) => void
 ): Promise<(() => Promise<void>) | null> {
   if (!grantPackageId) return async () => {};
   const reservation = await grantPackageRepository.reserveRedemption(grantPackageId, userId);
   if (reservation.outcome !== 'refused') return reservation.release;
+  onRefused(reservation.reason);
   logger.info(
     `Domain-grant signup credits withheld for user ${userId} (${trigger}): grant package ${grantPackageId} ` +
       `refused the redemption (${reservation.reason})`
@@ -154,14 +164,22 @@ export async function applySignupDomainGrant(params: {
   const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
   let coreStepFailed = false;
 
-  // A linked package replaces the rule's own credit amount; a missing or inactive package withholds
-  // the credits only, never the membership, tags or subscription.
+  // A linked package replaces the rule's own credit amount; a missing, inactive or expired package
+  // withholds the credits only, never the membership, tags or subscription.
   if (grantPackageId) {
     try {
       const grantPackage = await grantPackageRepository.findById(grantPackageId);
-      signupCredits = grantPackage?.active ? grantPackage.credits : 0;
-      if (!grantPackage?.active) {
-        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): package unavailable`);
+      const refusal = !grantPackage
+        ? 'missing'
+        : !grantPackage.active
+          ? 'inactive'
+          : isGrantPackageExpired(grantPackage)
+            ? 'expired'
+            : null;
+      signupCredits = refusal || !grantPackage ? 0 : grantPackage.credits;
+      if (refusal) {
+        result.packageRefusal = refusal;
+        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): package ${refusal}`);
       }
     } catch (packageError) {
       logger.error(`Grant package ${grantPackageId} could not be read for user ${userId} (${trigger})`, packageError);
@@ -185,7 +203,9 @@ export async function applySignupDomainGrant(params: {
             `already holds the free-credit claim for this inbox`
         );
       } else {
-        releaseRedemption = await reservePackageRedemption(grantPackageId, userId, trigger, logger);
+        releaseRedemption = await reservePackageRedemption(grantPackageId, userId, trigger, logger, reason => {
+          result.packageRefusal = reason;
+        });
         // Null means a cap refused it: withheld on purpose, so not a failed core step.
         if (releaseRedemption) {
           const holder = await creditService.addCredits(

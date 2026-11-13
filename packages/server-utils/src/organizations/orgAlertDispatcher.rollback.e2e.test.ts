@@ -25,6 +25,8 @@ vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
 
 const orgId = new mongoose.Types.ObjectId();
 const ownerId = new mongoose.Types.ObjectId();
+const memberId = new mongoose.Types.ObjectId().toHexString();
+const joinerId = new mongoose.Types.ObjectId().toHexString();
 const cappedOrgId = new mongoose.Types.ObjectId();
 let replSet: MongoMemoryReplSet;
 
@@ -33,7 +35,11 @@ beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri());
   await settleAutoIndexBuilds(mongoose);
-  await User.collection.insertOne({ _id: ownerId, email: 'owner@example.com' });
+  await User.collection.insertOne({ _id: ownerId, username: 'owner', email: 'owner@example.com' });
+  await User.collection.insertMany([
+    { _id: new mongoose.Types.ObjectId(memberId), username: 'member', email: 'member@example.com' },
+    { _id: new mongoose.Types.ObjectId(joinerId), username: 'joiner', email: 'joiner@example.com' },
+  ]);
   await Organization.collection.insertOne({
     _id: orgId,
     name: 'Acme',
@@ -48,9 +54,9 @@ beforeAll(async () => {
     personal: false,
     userId: ownerId.toHexString(),
     adminUserIds: [],
-    users: [{ userId: 'm1' }],
+    users: [{ userId: memberId }],
     maxCreditsPerMember: 100,
-    userDetails: [{ id: 'm1', name: 'Sam', usedCredits: 0, periodStart: new Date() }],
+    userDetails: [{ id: memberId, name: 'Sam', usedCredits: 0, periodStart: new Date() }],
   });
 });
 
@@ -77,7 +83,7 @@ describe('handleOrgEvent inside an aborted transaction', () => {
   });
 
   it('sends nothing for a member_joined whose transaction rolled back', async () => {
-    const event = { type: 'member_joined' as const, organizationId: orgId.toHexString(), userId: 'joiner' };
+    const event = { type: 'member_joined' as const, organizationId: orgId.toHexString(), userId: joinerId };
 
     await expect(
       withTransaction(async () => {
@@ -100,7 +106,7 @@ describe('handleOrgEvent inside an aborted transaction', () => {
 
     await withTransaction(async () => {
       await Organization.updateOne({ _id: cappedOrgId }, { $set: { 'userDetails.0.usedCredits': 100 } });
-      await handleOrgEvent({ type: 'member_cap_check', organizationId, userId: 'm1' });
+      await handleOrgEvent({ type: 'member_cap_check', organizationId, userId: memberId });
     });
 
     // No wait: a Lambda may freeze as soon as the handler's transaction returns.

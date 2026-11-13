@@ -27,6 +27,8 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
 });
+vi.mock('@bike4mind/database', () => ({ withTransaction: async <T>(callback: () => Promise<T>) => callback() }));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: vi.fn() }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: mocks.findById, update: mocks.update },
 }));

@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { ErasureRecordModel, FeedbackNoteModel, FeedbackModel, FeedbackAiModel, User } from '@bike4mind/database';
+import {
+  ErasureRecordModel,
+  OrgAdminNotificationPrefModel,
+  OrgAlertNotificationModel,
+  Inbox,
+  FeedbackNoteModel,
+  FeedbackModel,
+  FeedbackAiModel,
+  User,
+} from '@bike4mind/database';
 import { erasureIdHash } from '../privacy/erasureHash';
 import {
   createMongoReplSet,
@@ -41,11 +50,26 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await User.collection.deleteMany({});
+  await OrgAdminNotificationPrefModel.collection.deleteMany({});
+  await OrgAlertNotificationModel.collection.deleteMany({});
+  await Inbox.collection.deleteMany({});
   await ErasureRecordModel.deleteMany({});
   await FeedbackNoteModel.deleteMany({});
   await FeedbackAiModel.deleteMany({});
   await FeedbackModel.deleteMany({});
   await User.collection.insertOne({ _id: userId, username: 'erase-me', email: 'erase-me@example.test' });
+  await OrgAdminNotificationPrefModel.collection.insertOne({ organizationId: 'team', userId: id, kinds: {} });
+  await OrgAlertNotificationModel.collection.insertOne({
+    organizationId: 'team',
+    subjectUserId: id,
+    scope: `user:${id}`,
+    kind: 'member_cap',
+    periodKey: '2026-11',
+  });
+  await Inbox.collection.insertMany([
+    { receiverId: id, organizationAlert: true },
+    { receiverId: id, message: 'ordinary retained' },
+  ]);
   const report = await FeedbackModel.create({ userId: id, username: 'Reporter', status: 'New' });
   await FeedbackAiModel.create({
     feedbackId: report.id,
@@ -75,6 +99,10 @@ describe('hardDeleteUser erasure record transaction', () => {
     expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
     expect(await FeedbackNoteModel.countDocuments()).toBe(0);
     expect(await FeedbackAiModel.countDocuments()).toBe(0);
+    expect(await OrgAdminNotificationPrefModel.countDocuments()).toBe(0);
+    expect(await OrgAlertNotificationModel.countDocuments()).toBe(0);
+    expect(await Inbox.collection.countDocuments({ organizationAlert: true })).toBe(0);
+    expect(await Inbox.collection.countDocuments({ message: 'ordinary retained' })).toBe(1);
     const records = await ErasureRecordModel.find().lean();
     expect(records).toHaveLength(1);
     expect(records[0].idHash).toBe(erasureIdHash(id));
@@ -93,6 +121,9 @@ describe('hardDeleteUser erasure record transaction', () => {
     expect(await ErasureRecordModel.countDocuments()).toBe(0);
     expect(await FeedbackNoteModel.countDocuments()).toBe(1);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
+    expect(await OrgAdminNotificationPrefModel.countDocuments()).toBe(1);
+    expect(await OrgAlertNotificationModel.countDocuments()).toBe(1);
+    expect(await Inbox.collection.countDocuments({ organizationAlert: true })).toBe(1);
   });
   it('keeps the user and erasure retry anchor when AI deletion fails, then retries', async () => {
     const failure = vi.spyOn(FeedbackAiModel, 'deleteMany').mockImplementationOnce(() => {
@@ -110,5 +141,13 @@ describe('hardDeleteUser erasure record transaction', () => {
     expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
     expect(await FeedbackAiModel.countDocuments()).toBe(0);
     expect(await ErasureRecordModel.countDocuments()).toBe(1);
+  });
+  it('removes only alert-owned references during the actual admin deletion path', async () => {
+    await hardDeleteUser(id, { deletedBy: 'admin', initiatedBy: 'admin', logger }, users => users.delete(id));
+    expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
+    expect(await OrgAdminNotificationPrefModel.countDocuments()).toBe(0);
+    expect(await OrgAlertNotificationModel.countDocuments()).toBe(0);
+    expect(await Inbox.collection.countDocuments({ organizationAlert: true })).toBe(0);
+    expect(await Inbox.collection.countDocuments({ message: 'ordinary retained' })).toBe(1);
   });
 });

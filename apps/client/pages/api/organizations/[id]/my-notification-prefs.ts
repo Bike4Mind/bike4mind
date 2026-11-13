@@ -3,7 +3,7 @@
 // admins - have prefs; the dispatcher (server-utils organizations/orgAlertDispatcher.ts) reads them.
 
 import { ORG_ALERT_KINDS, resolveOrgAlertOptIn, type OrgAlertKind } from '@bike4mind/common';
-import { orgAdminNotificationPrefRepository } from '@bike4mind/database';
+import { orgAdminNotificationPrefRepository, orgAlertOrganizationIdSchema } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -20,16 +20,18 @@ type Req = { query: { id?: unknown }; user?: { id: string } };
 
 /** Same "current admin" rule as the dispatcher; a platform admin is not a recipient. 404 otherwise. */
 async function loadRecipientRole(req: Req): Promise<{ organizationId: string; role: 'owner' | 'manager' }> {
-  const organizationId = req.query.id;
+  const parsedId = orgAlertOrganizationIdSchema.safeParse(req.query.id);
+  if (!parsedId.success) throw new BadRequestError('Invalid organization id');
+  const organizationId = parsedId.data;
   if (typeof organizationId !== 'string' || !organizationId) throw new BadRequestError('Invalid organization id');
   const organization = await organizationRepository.findById(organizationId);
   const userId = req.user!.id;
   if (organization && !organization.personal) {
-    if (organization.userId === userId) return { organizationId, role: 'owner' };
+    if (organization.userId === userId) return { organizationId: organization.id, role: 'owner' };
     const isCurrentAdmin =
       (organization.adminUserIds ?? []).includes(userId) &&
       (organization.users ?? []).some(member => member.userId === userId);
-    if (isCurrentAdmin) return { organizationId, role: 'manager' };
+    if (isCurrentAdmin) return { organizationId: organization.id, role: 'manager' };
   }
   throw new NotFoundError('Organization not found');
 }

@@ -11,6 +11,9 @@ import {
   FeedbackModel,
   FeedbackAiModel,
   FeedbackNoteModel,
+  OrgAdminNotificationPrefModel,
+  OrgAlertNotificationModel,
+  Inbox,
   erasureRecordRepository,
   realtimeConnectionRepository,
 } from '@bike4mind/database';
@@ -127,6 +130,21 @@ async function seedAccount() {
       },
       { upsert: true }
     );
+    await raw(OrgAdminNotificationPrefModel).updateOne(
+      { userId: String(userId) },
+      { $set: { organizationId: 'team', kinds: {} } },
+      { upsert: true }
+    );
+    await raw(OrgAlertNotificationModel).updateOne(
+      { subjectUserId: String(userId) },
+      { $set: { organizationId: 'team', scope: `user:${userId}`, kind: 'member_cap', periodKey: '2026-11' } },
+      { upsert: true }
+    );
+    await raw(Inbox).updateOne(
+      { receiverId: String(userId), organizationAlert: true },
+      { $set: { message: 'org alert' } },
+      { upsert: true }
+    );
     await raw(Organization).insertOne({ _id: orgId, name: 'Personal', userId: String(userId), personal: true });
     await raw(Session).insertOne({
       _id: new mongoose.Types.ObjectId(),
@@ -179,6 +197,12 @@ describe('reapplyErasure after a simulated restore', () => {
     expect(result.ownedOrganizationIds).toEqual([]);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
     expect(await FeedbackNoteModel.countDocuments()).toBe(1);
+    expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: id })).toBe(0);
+    expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: id })).toBe(0);
+    expect(await Inbox.collection.countDocuments({ receiverId: id, organizationAlert: true })).toBe(0);
+    expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: bystander.id })).toBe(1);
+    expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: bystander.id })).toBe(1);
+    expect(await Inbox.collection.countDocuments({ receiverId: bystander.id, organizationAlert: true })).toBe(1);
     expect((await raw(Connection).findOne({ connectionId: 'erased-connection' }))?.endedAt).toBeInstanceOf(Date);
     expect((await raw(Connection).findOne({ connectionId: 'bystander-connection' }))?.endedAt).toBeUndefined();
     expect((await raw(QuerySubscription).findOne({ queryId: 'restored-query' }))?.subscribers).toEqual([
@@ -295,5 +319,10 @@ describe('reapplyErasure after a simulated restore', () => {
     // The delete rolled back with the failed write: no row gone without its record.
     expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(1);
     expect(await ErasureRecordModel.countDocuments({ idHash: record.idHash })).toBe(0);
+    if (initiatedBy === 'admin') {
+      expect(await OrgAdminNotificationPrefModel.countDocuments({ userId: id })).toBe(1);
+      expect(await OrgAlertNotificationModel.countDocuments({ subjectUserId: id })).toBe(1);
+      expect(await Inbox.collection.countDocuments({ receiverId: id, organizationAlert: true })).toBe(1);
+    }
   });
 });

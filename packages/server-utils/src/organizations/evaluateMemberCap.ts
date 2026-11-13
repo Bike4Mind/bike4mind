@@ -39,7 +39,7 @@ export async function evaluateMemberCap(
     personal: 1,
     maxCreditsPerMember: 1,
     serviceAccountUserId: 1,
-    userDetails: 1,
+    userDetails: { $elemMatch: { id: event.userId } },
   }).lean<MemberCapOrg>();
   const row = org?.userDetails?.find(u => u.id === event.userId);
   const cap =
@@ -56,14 +56,17 @@ export async function evaluateMemberCap(
 
   recentChecks.set(memoKey, nowMs + RECHECK_TTL_MS);
   const who = row?.name || row?.email || 'A member';
-  const detail = `used ${fmt(used)} of their ${fmt(cap)} credit monthly limit, so further requests are blocked until the limit resets next month. You can raise their limit from the Members tab.`;
+  const refusedBelowCap = event.refused && used < cap;
+  const detail = refusedBelowCap
+    ? `used ${fmt(used)} of their ${fmt(cap)} credit monthly limit. A request was refused because its estimated cost exceeds the remaining allowance; smaller requests may still fit. You can raise their limit from the Members tab.`
+    : `used ${fmt(used)} of their ${fmt(cap)} credit monthly limit, so further requests are blocked until the limit resets next month. You can raise their limit from the Members tab.`;
   await dispatchOrgAlert({
     organizationId: event.organizationId,
     kind: 'member_cap',
     scope: `user:${event.userId}`,
     subjectUserId: event.userId,
     periodKey,
-    title: 'Member reached their credit limit',
+    title: refusedBelowCap ? 'Member request exceeds remaining credit limit' : 'Member reached their credit limit',
     message: `${who} has ${detail}`,
     // The Inbox row belongs to the admin, so erasing the member would not reach their name in it.
     inboxMessage: `A member has ${detail}`,

@@ -1,23 +1,31 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Organization, OrgAlertNotificationModel, User, inboxRepository, mongoose } from '@bike4mind/database';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { Inbox, Organization, OrgAlertNotificationModel, User, inboxRepository, mongoose } from '@bike4mind/database';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import { clearMemberCapAlertCache, evaluateMemberCap } from './evaluateMemberCap';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const { publish } = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
 
 const orgId = new mongoose.Types.ObjectId();
 const ownerId = new mongoose.Types.ObjectId();
+const memberId = new mongoose.Types.ObjectId().toHexString();
 const NOV = new Date('2026-11-15T00:00:00Z');
 const periodStart = new Date('2026-11-01T00:00:00Z');
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: MongoMemoryReplSet;
 
 beforeAll(async () => {
   process.env.APP_URL = 'https://app.example.com';
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
@@ -38,16 +46,18 @@ const seed = async (org: Record<string, unknown>) =>
 beforeEach(async () => {
   await mongoose.connection.db!.dropDatabase();
   await OrgAlertNotificationModel.ensureIndexes();
+  await Inbox.createCollection();
   clearMemberCapAlertCache();
   publish.mockReset();
   await User.collection.insertOne({ _id: ownerId, email: 'owner@example.com' });
+  await User.collection.insertOne({ _id: new mongoose.Types.ObjectId(memberId) });
 });
 
-const check = (refused?: boolean, userId = 'm1') =>
+const check = (refused?: boolean, userId = memberId) =>
   evaluateMemberCap({ organizationId: orgId.toHexString(), userId, refused }, NOV);
 const claims = () => OrgAlertNotificationModel.find({ organizationId: orgId.toHexString(), kind: 'member_cap' }).lean();
 const member = (usedCredits: number, maxCredits?: number | null) => ({
-  id: 'm1',
+  id: memberId,
   name: 'Sam',
   usedCredits,
   periodStart,
@@ -62,7 +72,9 @@ describe('evaluateMemberCap', () => {
     clearMemberCapAlertCache();
     await check();
 
-    expect((await claims()).map(c => [c.scope, c.periodKey, c.subjectUserId])).toEqual([['user:m1', '2026-11', 'm1']]);
+    expect((await claims()).map(c => [c.scope, c.periodKey, c.subjectUserId])).toEqual([
+      [`user:${memberId}`, '2026-11', memberId],
+    ]);
     expect(publish).toHaveBeenCalledOnce();
     expect(publish.mock.calls[0][0].body).toContain('Sam has used 100 of their 100 credit monthly limit');
 
@@ -85,6 +97,9 @@ describe('evaluateMemberCap', () => {
     await check(true);
 
     expect(await claims()).toHaveLength(1);
+    expect(publish.mock.calls[0][0].subject).toContain('request exceeds remaining credit limit');
+    expect(publish.mock.calls[0][0].body).toContain('smaller requests may still fit');
+    expect(publish.mock.calls[0][0].body).not.toContain('blocked until');
   });
 
   it('falls back to the org default when the member override is null', async () => {

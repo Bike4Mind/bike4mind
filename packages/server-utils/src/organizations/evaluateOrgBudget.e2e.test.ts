@@ -1,8 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Organization, OrgAlertNotificationModel, User, mongoose } from '@bike4mind/database';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { Inbox, Organization, OrgAlertNotificationModel, User, mongoose } from '@bike4mind/database';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import { clearOrgBudgetAlertCache, evaluateOrgBudget } from './evaluateOrgBudget';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const { publish } = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
@@ -12,12 +18,13 @@ const ownerId = new mongoose.Types.ObjectId();
 const NOV = new Date('2026-11-15T00:00:00Z');
 const DEC = new Date('2026-12-02T00:00:00Z');
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: MongoMemoryReplSet;
 
 beforeAll(async () => {
   process.env.APP_URL = 'https://app.example.com';
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
@@ -28,6 +35,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await mongoose.connection.db!.dropDatabase();
   await OrgAlertNotificationModel.ensureIndexes();
+  await Inbox.createCollection();
   clearOrgBudgetAlertCache();
   publish.mockReset();
   await User.collection.insertOne({ _id: ownerId, email: 'owner@example.com' });
@@ -72,9 +80,32 @@ describe('evaluateOrgBudget', () => {
     expect(await claims({ kind: 'budget_threshold' })).toHaveLength(2);
 
     const findById = vi.spyOn(Organization, 'findById');
+    const aggregate = vi.spyOn(Organization, 'aggregate');
     await evaluate(1900);
     expect(findById).not.toHaveBeenCalled();
+    expect(aggregate).not.toHaveBeenCalled();
+    aggregate.mockRestore();
     findById.mockRestore();
+  });
+
+  it('sums only current-period numeric usage without transferring member rows', async () => {
+    await Organization.collection.updateOne(
+      { _id: orgId },
+      {
+        $set: {
+          userDetails: [
+            { id: 'current', usedCredits: 850, periodStart: new Date('2026-11-01') },
+            { id: 'previous', usedCredits: 5000, periodStart: new Date('2026-10-01') },
+            { id: 'legacy', usedCredits: 9000 },
+            { id: 'future', usedCredits: 70, periodStart: new Date('2026-12-01') },
+            { id: 'empty', usedCredits: null, periodStart: new Date('2026-11-01') },
+          ],
+        },
+      }
+    );
+    await evaluate(2000);
+    expect((await claims({ kind: 'budget_threshold' })).map(row => row.scope).sort()).toEqual(['pct:80', 'pct:90']);
+    expect(publish.mock.calls[0][0].body).toContain('920');
   });
 
   it('fires again in the next period', async () => {

@@ -27,14 +27,15 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
 });
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: mocks.findById } }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
   orgAdminNotificationPrefRepository: { getForUser: mocks.getForUser, upsertForUser: mocks.upsertForUser },
 }));
 
 import '@pages/api/organizations/[id]/my-notification-prefs';
 
 const org = {
-  id: 'org1',
+  id: 'abcdef000000000000000001',
   userId: 'owner1',
   personal: false,
   adminUserIds: ['manager1', 'removed1'],
@@ -42,7 +43,11 @@ const org = {
 };
 
 const call = async (method: 'get' | 'put', user: { id: string; isAdmin?: boolean }, body?: unknown) => {
-  const { req, res } = createMocks({ method: method.toUpperCase() as 'GET' | 'PUT', query: { id: 'org1' }, body });
+  const { req, res } = createMocks({
+    method: method.toUpperCase() as 'GET' | 'PUT',
+    query: { id: 'abcdef000000000000000001' },
+    body,
+  });
   (req as unknown as { user: unknown }).user = user;
   try {
     await mocks.handlers[method](req, res);
@@ -78,7 +83,7 @@ describe('/api/organizations/[id]/my-notification-prefs', () => {
     const { status, json } = await call('put', { id: 'manager1' }, { kinds: { low_balance: true } });
 
     expect(status).toBe(200);
-    expect(mocks.upsertForUser).toHaveBeenCalledWith('org1', 'manager1', { low_balance: true });
+    expect(mocks.upsertForUser).toHaveBeenCalledWith('abcdef000000000000000001', 'manager1', { low_balance: true });
     expect(json.kinds.low_balance).toBe(true);
   });
 

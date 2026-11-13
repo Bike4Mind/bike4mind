@@ -8,6 +8,8 @@ import {
   type IOrgBudgetAlerts,
   type IOrganizationDocument,
 } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/database';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -48,24 +50,39 @@ const handler = baseApi({ auth: 'jwtOnly' })
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const organization = await loadManagedOrg(req);
-      const parsed = bodySchema.safeParse(req.body);
-      if (!parsed.success) throw new BadRequestError('Invalid alert settings');
-
-      const budgetAlerts: IOrgBudgetAlerts = {
-        ...parsed.data,
-        percentThresholds: [...new Set(parsed.data.percentThresholds)].sort((a, b) => a - b),
-      };
-      await organizationRepository.update({ id: organization.id, budgetAlerts });
-      // This instance's evaluator would otherwise keep the old thresholds for its cache TTL.
+      const { organization, budgetAlerts, before } = await withTransaction(async () => {
+        const organization = await loadManagedOrg(req);
+        const parsed = bodySchema.safeParse(req.body);
+        if (!parsed.success) throw new BadRequestError('Invalid alert settings');
+        const previous = organization.budgetAlerts;
+        const before: IOrgBudgetAlerts | null = previous
+          ? {
+              enabled: previous.enabled,
+              monthlyBudgetCredits: previous.monthlyBudgetCredits ?? null,
+              percentThresholds: [...previous.percentThresholds],
+              lowBalanceCredits: previous.lowBalanceCredits ?? null,
+            }
+          : null;
+        const budgetAlerts: IOrgBudgetAlerts = {
+          ...parsed.data,
+          percentThresholds: [...new Set(parsed.data.percentThresholds)].sort((a, b) => a - b),
+        };
+        await organizationRepository.update({ id: organization.id, budgetAlerts });
+        await recordOrganizationAuditEvent({
+          organizationId: organization.id,
+          actorUserId: req.user.impersonatedBy ?? req.user.id,
+          action: 'policy.updated',
+          targetId: 'budget-alerts',
+        });
+        return { organization, budgetAlerts, before };
+      });
       clearOrgBudgetAlertCache(organization.id);
-
       await recordAdminActionFromRequest(req, {
         action: 'org.budget_alerts.updated',
         actorScope: 'organization',
         target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: 'updated the budget alert settings',
-        changes: [{ field: 'budgetAlerts', before: organization.budgetAlerts ?? null, after: budgetAlerts }],
+        changes: [{ field: 'budgetAlerts', before, after: budgetAlerts }],
       });
 
       return res.json({ budgetAlerts });

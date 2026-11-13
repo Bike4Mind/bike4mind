@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
+  Inbox,
+  OrgAdminNotificationPrefModel,
   Organization,
   OrgAlertNotificationModel,
   User,
@@ -8,8 +10,14 @@ import {
   mongoose,
   orgAdminNotificationPrefRepository,
 } from '@bike4mind/database';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import { dispatchOrgAlert, handleOrgEvent, type DispatchOrgAlertInput } from './orgAlertDispatcher';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const { publish } = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
@@ -33,12 +41,13 @@ const alert = (overrides: Partial<DispatchOrgAlertInput> = {}): DispatchOrgAlert
   ...overrides,
 });
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: MongoMemoryReplSet;
 
 beforeAll(async () => {
   process.env.APP_URL = 'https://app.example.com';
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
@@ -49,6 +58,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await mongoose.connection.db!.dropDatabase();
   await OrgAlertNotificationModel.ensureIndexes();
+  await Inbox.createCollection();
+  await OrgAdminNotificationPrefModel.ensureIndexes();
   publish.mockReset();
   await User.collection.insertMany(
     (['owner', 'optedIn', 'silent', 'stale'] as const).map(key => ({ _id: ids[key], email: `${key}@example.com` }))
@@ -80,6 +91,75 @@ describe('dispatchOrgAlert', () => {
     expect(publish.mock.calls.map(([e]) => e.to).sort()).toEqual(['optedIn@example.com', 'owner@example.com']);
     expect((await inboxFor(ids.owner))[0].userId).toBe('SYSTEM');
     expect(publish.mock.calls[0][0].body).toContain(`/organizations/${str(ids.org)}?tab=members`);
+  });
+
+  it('delivers both channels and retains the claim without APP_URL', async () => {
+    vi.stubEnv('APP_URL', undefined);
+    try {
+      const result = await dispatchOrgAlert(alert());
+      expect(result.delivered).toBe(4);
+      expect(publish).toHaveBeenCalledTimes(2);
+      for (const [email] of publish.mock.calls) {
+        expect(email.body).not.toContain('href=');
+        expect(email.body).toContain('The pool is below 500 credits.');
+      }
+      expect(await inboxFor(ids.owner)).toHaveLength(1);
+      expect(await OrgAlertNotificationModel.countDocuments({})).toBe(1);
+      expect((await dispatchOrgAlert(alert())).claimed).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it('does not recreate a receiver-linked Inbox row after the recipient is erased', async () => {
+    let reached: () => void = () => {
+      throw new Error('Barrier uninitialized');
+    };
+    let release: () => void = () => {
+      throw new Error('Barrier uninitialized');
+    };
+    const ready = new Promise<void>(resolve => {
+      reached = resolve;
+    });
+    const barrier = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const update = User.updateOne.bind(User);
+    const spy = vi.spyOn(User, 'updateOne').mockImplementationOnce((...args) => {
+      const query = update(...args);
+      const execute = query.exec.bind(query);
+      vi.spyOn(query, 'exec').mockImplementationOnce(async () => {
+        reached();
+        await barrier;
+        return execute();
+      });
+      return query;
+    });
+    try {
+      const pending = dispatchOrgAlert(alert());
+      await ready;
+      await User.collection.deleteOne({ _id: ids.owner });
+      release();
+      await pending;
+      expect(await inboxFor(ids.owner)).toHaveLength(0);
+      expect(publish.mock.calls.map(([email]) => email.to)).not.toContain('owner@example.com');
+      expect(await inboxFor(ids.optedIn)).toHaveLength(1);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it('honors a legacy organization alias opt-out, with canonical preferences taking precedence', async () => {
+    await OrgAdminNotificationPrefModel.collection.insertOne({
+      organizationId: str(ids.org).toUpperCase(),
+      userId: str(ids.owner),
+      kinds: { low_balance: false },
+    });
+    expect((await dispatchOrgAlert(alert())).recipientUserIds).toEqual([str(ids.optedIn)]);
+    await orgAdminNotificationPrefRepository.upsertForUser(str(ids.org), str(ids.owner), { low_balance: true });
+    expect((await dispatchOrgAlert(alert({ scope: 'low:600' }))).recipientUserIds.sort()).toEqual(
+      [str(ids.owner), str(ids.optedIn)].sort()
+    );
   });
 
   it('sends nothing for a second dispatch of the same key', async () => {

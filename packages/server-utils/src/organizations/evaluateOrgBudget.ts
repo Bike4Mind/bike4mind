@@ -1,5 +1,5 @@
-import { getPeriodUsedCredits, orgAlertPeriodKey, type IOrgBudgetAlerts, type IUserDetails } from '@bike4mind/common';
-import { Organization } from '@bike4mind/database';
+import { getMemberCreditPeriodStart, orgAlertPeriodKey, type IOrgBudgetAlerts } from '@bike4mind/common';
+import { Organization, mongoose } from '@bike4mind/database';
 import { sweepExpiredMemo } from './memoSweep';
 import { dispatchOrgAlert, type DispatchOrgAlertInput } from './orgAlertDispatcher';
 
@@ -88,10 +88,30 @@ export async function evaluateOrgBudget(
   if (!pending) return;
 
   // Member rows only: usage by the org service account (org-owned API keys) is tracked per key, not here.
-  const org = await Organization.findById(event.organizationId, { userDetails: 1 }).lean<{
-    userDetails?: Array<Pick<IUserDetails, 'usedCredits' | 'periodStart'>>;
-  }>();
-  const spent = (org?.userDetails ?? []).reduce((sum, row) => sum + getPeriodUsedCredits(row, now), 0);
+  const [usage] = await Organization.aggregate<{ spent: number }>([
+    { $match: { _id: new mongoose.Types.ObjectId(event.organizationId) } },
+    {
+      $project: {
+        _id: 0,
+        spent: {
+          $sum: {
+            $map: {
+              input: { $ifNull: ['$userDetails', []] },
+              as: 'member',
+              in: {
+                $cond: [
+                  { $gte: ['$$member.periodStart', getMemberCreditPeriodStart(now)] },
+                  { $ifNull: ['$$member.usedCredits', 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+  ]);
+  const spent = usage?.spent ?? 0;
   for (const pct of [...new Set(thresholds)].sort((a, b) => a - b)) {
     if (spent < (budget * pct) / 100) break;
     await dispatchOnce(

@@ -1306,7 +1306,7 @@ async function runExecution(
       await sendWs('failed', { executionId, reason: 'model_not_admitted' });
       return;
     }
-    const reasoningShortfall = runReasoningShortfall(execution, modelInfo, isNewExecution);
+    const reasoningShortfall = runReasoningShortfall(execution, runModelInfo, isNewExecution);
     if (reasoningShortfall) {
       // Honored as set, as on the chat path; logged so an empty answer can be traced to the budget.
       logger.info('[AgentExecutor] max_tokens below reasoning floor', {
@@ -2490,12 +2490,8 @@ async function runExecution(
           })
         : llm;
 
-    // Create or restore ReActAgent. LLM runtime knobs are merged via
-    // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
-    // temperature / maxTokens / thinking so they only override the agent's
-    // built-in defaults when the client actually selected a value. Extracted
-    // for unit-testability (the `{ enabled: false }` guard for `thinking`
-    // prevents a `structuredClone()` failure in `ReActAgent.toCheckpoint()`).
+    // Create or restore ReActAgent. Runtime knobs come from `buildReActAgentRuntimeConfig`,
+    // which leaves unset values out so the agent's defaults apply.
     const agent = new ReActAgent({
       userId: execution.userId,
       logger,
@@ -2512,7 +2508,7 @@ async function runExecution(
       // Appended after persona/base in getSystemPrompt(); undefined on
       // continuations (baked into the checkpoint) and when artifacts are off.
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
-      ...buildReActAgentRuntimeConfig(execution),
+      ...buildReActAgentRuntimeConfig(execution, runModelInfo),
       thinkingVisibility,
       modelBackend: modelInfo?.backend,
       modelAdapterFamily: modelInfo?.adapterFamily,

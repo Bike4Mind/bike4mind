@@ -1,10 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import type { ClaimOrgAlertInput } from '@bike4mind/common';
 import { orgAlertNotificationRepository as repo, OrgAlertNotificationModel } from './OrgAlertNotificationModel';
-import { setupMongoTest } from '../../../__test__/utils';
+import mongoose from 'mongoose';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { User } from '../../auth/UserModel';
+import { createMongoReplSet, MONGO_TEST_TIMEOUT_MS, settleAutoIndexBuilds } from '../../../__test__/createMongoServer';
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+let replica: MongoMemoryReplSet;
+beforeAll(async () => {
+  replica = await createMongoReplSet();
+  await mongoose.connect(replica.getUri());
+  await settleAutoIndexBuilds(mongoose);
+});
+afterAll(async () => {
+  await mongoose.disconnect();
+  await replica.stop();
+});
 
 const input = (overrides: Partial<ClaimOrgAlertInput> = {}): ClaimOrgAlertInput => ({
-  organizationId: 'org-1',
+  organizationId: 'abcdef000000000000000001',
   kind: 'budget_threshold',
   scope: 'pct:80',
   periodKey: '2026-11',
@@ -12,9 +26,13 @@ const input = (overrides: Partial<ClaimOrgAlertInput> = {}): ClaimOrgAlertInput 
 });
 
 describe('OrgAlertNotificationRepository', () => {
-  setupMongoTest();
   // setupMongoTest drops the database (indexes included) before each test.
   beforeEach(async () => {
+    await mongoose.connection.dropDatabase();
+    await User.collection.insertMany([
+      { _id: new mongoose.Types.ObjectId('abcdef100000000000000001') },
+      { _id: new mongoose.Types.ObjectId('abcdef100000000000000002') },
+    ]);
     await OrgAlertNotificationModel.ensureIndexes();
   });
 
@@ -43,7 +61,7 @@ describe('OrgAlertNotificationRepository', () => {
 
     expect((await repo.claim(input({ scope: 'pct:90' }))).claimed).toBe(true);
     expect((await repo.claim(input({ periodKey: '2026-12' }))).claimed).toBe(true);
-    expect((await repo.claim(input({ organizationId: 'org-2' }))).claimed).toBe(true);
+    expect((await repo.claim(input({ organizationId: 'abcdef000000000000000002' }))).claimed).toBe(true);
   });
 
   it('release re-opens the slot', async () => {
@@ -54,8 +72,12 @@ describe('OrgAlertNotificationRepository', () => {
   });
 
   it('records the subject user on a per-person alert', async () => {
-    await repo.claim(input({ kind: 'member_cap', scope: 'user:u1', subjectUserId: 'u1' }));
+    await repo.claim(
+      input({ kind: 'member_cap', scope: 'user:abcdef100000000000000001', subjectUserId: 'abcdef100000000000000001' })
+    );
 
-    expect((await OrgAlertNotificationModel.findOne({ kind: 'member_cap' }))?.subjectUserId).toBe('u1');
+    expect((await OrgAlertNotificationModel.findOne({ kind: 'member_cap' }))?.subjectUserId).toBe(
+      'abcdef100000000000000001'
+    );
   });
 });

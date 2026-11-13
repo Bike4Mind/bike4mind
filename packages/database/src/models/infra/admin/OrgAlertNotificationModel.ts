@@ -5,7 +5,8 @@ import type {
   IOrgAlertNotificationRepository,
 } from '@bike4mind/common';
 import { ORG_ALERT_KINDS, ORG_ALERT_NOTIFICATION_RETENTION_DAYS } from '@bike4mind/common';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { lockLiveOrgAlertUser } from '../../../utils/orgAlertUsers';
 
 const ModelName = 'OrgAlertNotification';
 
@@ -42,33 +43,33 @@ class OrgAlertNotificationRepository
   }
 
   async claim(input: ClaimOrgAlertInput): Promise<{ claimed: boolean; id?: string }> {
+    // Production autoIndex is enabled; await its unique-index build before serving a claim.
+    await this.notificationModel.init();
     const { organizationId, kind, scope, periodKey } = input;
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + ORG_ALERT_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    try {
-      // lastErrorObject.upserted is set only when this call performed the insert.
+    const writeClaim = async (subjectUserId?: string) => {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + ORG_ALERT_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
       const result = await this.notificationModel.findOneAndUpdate(
         { organizationId, kind, scope, periodKey },
-        {
-          $setOnInsert: {
-            organizationId,
-            kind,
-            scope,
-            periodKey,
-            subjectUserId: input.subjectUserId ?? undefined,
-            sentAt: now,
-            expiresAt,
-          },
-        },
+        { $setOnInsert: { organizationId, kind, scope, periodKey, subjectUserId, sentAt: now, expiresAt } },
         { upsert: true, includeResultMetadata: true }
       );
       const upsertedId = result.lastErrorObject?.upserted;
-      if (!upsertedId) return { claimed: false };
-      return { claimed: true, id: String(upsertedId) };
-    } catch (err) {
-      // E11000: a concurrent claimer inserted between our filter match and our insert.
-      if ((err as { code?: number }).code === 11000) return { claimed: false };
-      throw err;
+      return upsertedId ? { claimed: true, id: String(upsertedId) } : { claimed: false };
+    };
+    try {
+      if (!input.subjectUserId) return await writeClaim();
+      const requestedSubjectId = input.subjectUserId;
+      return await withTransaction(async session => {
+        const subjectUserId = await lockLiveOrgAlertUser(requestedSubjectId, session);
+        if (!subjectUserId) return { claimed: false };
+        return writeClaim(subjectUserId);
+      });
+    } catch (error) {
+      // Let a subject transaction abort before converting duplicate-key failure into "lost".
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000)
+        return { claimed: false };
+      throw error;
     }
   }
 

@@ -65,6 +65,7 @@ export type SubscriptionDoc = {
   periodStartsAt?: Date | null;
   periodEndsAt?: Date | null;
   canceledAt?: Date | null;
+  endedAt?: Date | null;
   cancelAt?: Date | null;
   cancelAtPeriodEnd?: boolean;
   createdAt?: Date | null;

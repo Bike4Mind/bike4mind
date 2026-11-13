@@ -5,7 +5,9 @@ import type {
   OrgAlertKindPrefs,
 } from '@bike4mind/common';
 import { ORG_ALERT_KINDS } from '@bike4mind/common';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { NotFoundError } from '@bike4mind/utils';
+import { lockLiveOrgAlertUser, orgAlertOrganizationIdSchema } from '../../../utils/orgAlertUsers';
 
 const ModelName = 'OrgAdminNotificationPref';
 
@@ -42,11 +44,28 @@ class OrgAdminNotificationPrefRepository
   }
 
   async getForOrg(organizationId: string): Promise<IOrgAdminNotificationPrefDocument[]> {
-    return this.prefModel.find({ organizationId }).lean<IOrgAdminNotificationPrefDocument[]>();
+    const canonicalId = orgAlertOrganizationIdSchema.parse(organizationId);
+    const rows = await this.prefModel
+      .find({ organizationId: new RegExp(`^${canonicalId}$`, 'i') })
+      .sort({ organizationId: 1, _id: 1 })
+      .lean<IOrgAdminNotificationPrefDocument[]>();
+    const byUser = new Map<string, IOrgAdminNotificationPrefDocument>();
+    for (const row of rows) {
+      if (!byUser.has(row.userId) || row.organizationId === canonicalId) byUser.set(row.userId, row);
+    }
+    return [...byUser.values()];
   }
 
   async getForUser(organizationId: string, userId: string): Promise<IOrgAdminNotificationPrefDocument | null> {
-    return this.prefModel.findOne({ organizationId, userId }).lean<IOrgAdminNotificationPrefDocument>();
+    const canonicalId = orgAlertOrganizationIdSchema.parse(organizationId);
+    const canonical = await this.prefModel
+      .findOne({ organizationId: canonicalId, userId })
+      .lean<IOrgAdminNotificationPrefDocument>();
+    if (canonical) return canonical;
+    return this.prefModel
+      .findOne({ organizationId: new RegExp(`^${canonicalId}$`, 'i'), userId })
+      .sort({ organizationId: 1, _id: 1 })
+      .lean<IOrgAdminNotificationPrefDocument>();
   }
 
   async upsertForUser(
@@ -54,18 +73,25 @@ class OrgAdminNotificationPrefRepository
     userId: string,
     kinds: OrgAlertKindPrefs
   ): Promise<IOrgAdminNotificationPrefDocument | null> {
-    const set: Record<string, boolean> = {};
-    for (const kind of ORG_ALERT_KINDS) {
-      const value = kinds[kind];
-      if (typeof value === 'boolean') set[`kinds.${kind}`] = value;
-    }
-    return this.prefModel
-      .findOneAndUpdate(
-        { organizationId, userId },
-        { $set: set, $setOnInsert: { organizationId, userId } },
-        { upsert: true, new: true }
-      )
-      .lean<IOrgAdminNotificationPrefDocument>();
+    const canonicalId = orgAlertOrganizationIdSchema.parse(organizationId);
+    await this.prefModel.init();
+    return withTransaction(async session => {
+      const canonicalUserId = await lockLiveOrgAlertUser(userId, session);
+      if (!canonicalUserId) throw new NotFoundError('Account unavailable');
+      const existing = await this.getForUser(canonicalId, canonicalUserId);
+      const merged: OrgAlertKindPrefs = {};
+      for (const kind of ORG_ALERT_KINDS) {
+        const value = kinds[kind] ?? existing?.kinds?.[kind];
+        if (typeof value === 'boolean') merged[kind] = value;
+      }
+      return this.prefModel
+        .findOneAndUpdate(
+          { organizationId: canonicalId, userId: canonicalUserId },
+          { $set: { kinds: merged }, $setOnInsert: { organizationId: canonicalId, userId: canonicalUserId } },
+          { upsert: true, new: true, session }
+        )
+        .lean<IOrgAdminNotificationPrefDocument>();
+    });
   }
 }
 

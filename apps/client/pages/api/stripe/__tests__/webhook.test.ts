@@ -489,12 +489,14 @@ describe('customer.subscription.deleted', () => {
     expect(mocks.emitBillingEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'subscription_ended' }));
   });
 
-  it("writes the subscription's final Stripe mirror with the canceled status", async () => {
-    await deliver(deleted(null));
+  it.each([null, 1_761_000_000])("writes the subscription's final Stripe mirror with ended_at=%s", async endedAt => {
+    const event = deleted(null);
+    await deliver({ ...event, data: { object: { ...event.data.object, ended_at: endedAt } } });
 
     expect(mocks.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_1', {
       status: 'canceled',
       canceledAt: new Date(1_760_000_000 * 1000),
+      endedAt: endedAt === null ? null : new Date(endedAt * 1000),
       unitAmount: 2000,
       currency: 'usd',
       interval: 'month',

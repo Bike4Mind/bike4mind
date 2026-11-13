@@ -1,19 +1,21 @@
 import {
   InboxType,
   orgAlertPeriodKey,
-  requireEnv,
   resolveOrgAlertOptIn,
   type OrgAlertKind,
   type OrgAlertRecipientRole,
 } from '@bike4mind/common';
 import {
   inboxRepository,
+  Inbox,
   mongoose,
   orgAdminNotificationPrefRepository,
   orgAlertNotificationRepository,
   organizationRepository,
   runAfterCommit,
   userRepository,
+  withTransaction,
+  lockLiveOrgAlertUser,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import type { OrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
@@ -69,7 +71,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
     if (!org || org.personal || !org.userId) return none;
 
     const claim = await orgAlertNotificationRepository.claim({
-      organizationId: input.organizationId,
+      organizationId: org.id,
       kind: input.kind,
       scope: input.scope,
       periodKey: input.periodKey ?? orgAlertPeriodKey(),
@@ -86,7 +88,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
         .filter(id => id !== org.userId && memberIds.has(id))
         .map(userId => ({ userId, role: 'manager' as const })),
     ];
-    const prefs = await orgAdminNotificationPrefRepository.getForOrg(input.organizationId);
+    const prefs = await orgAdminNotificationPrefRepository.getForOrg(org.id);
     const prefByUser = new Map(prefs.map(row => [row.userId, row]));
     const excluded = new Set(input.excludeRecipientUserIds ?? []);
     const recipients = candidates.filter(
@@ -95,28 +97,35 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
     if (recipients.length === 0) return { claimed: true, recipientUserIds: [], delivered: 0 };
 
     const title = toOrgAlertSubject(`${input.title} - ${org.name}`);
-    const appUrl = requireEnv('APP_URL', process.env.APP_URL).replace(/\/+$/, '');
+    const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, '');
     const body = buildOrgAlertEmailBody({
       organizationName: org.name,
       heading: input.title,
       message: input.message,
-      settingsUrl: `${appUrl}/organizations/${input.organizationId}?tab=members`,
+      settingsUrl: appUrl ? `${appUrl}/organizations/${org.id}?tab=members` : undefined,
     });
     const skipEmail = new Set<string>(input.excludeOwnerEmail ? [org.userId] : []);
 
+    await Inbox.init();
     let delivered = 0;
     let attempted = 0;
     for (const { userId } of recipients) {
       attempted++;
       try {
-        await inboxRepository.createInboxMessage({
-          userId: 'SYSTEM',
-          receiverId: userId,
-          type: InboxType.COMMON,
-          title,
-          message: input.inboxMessage ?? input.message,
+        const written = await withTransaction(async session => {
+          const canonicalUserId = await lockLiveOrgAlertUser(userId, session);
+          if (!canonicalUserId) return false;
+          await inboxRepository.createInboxMessage({
+            userId: 'SYSTEM',
+            receiverId: canonicalUserId,
+            type: InboxType.COMMON,
+            organizationAlert: true,
+            title,
+            message: input.inboxMessage ?? input.message,
+          });
+          return true;
         });
-        delivered++;
+        if (written) delivered++;
       } catch (error) {
         log().warn('Org alert inbox write failed', { organizationId: input.organizationId, kind: input.kind, error });
       }
@@ -124,7 +133,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
       attempted++;
       try {
         const user = await userRepository.findById(userId);
-        if (!user?.email) continue;
+        if (!user?.email || user.deletion?.purgeStartedAt) continue;
         await EmailEvents.Send.publish({ to: user.email, subject: title, body });
         delivered++;
       } catch (error) {

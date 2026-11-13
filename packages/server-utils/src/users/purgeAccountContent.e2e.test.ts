@@ -61,7 +61,7 @@ vi.mock('../billing/cancelAccountSubscriptions', () => ({
 }));
 
 import { purgeAccountContent } from './purgeAccountContent';
-import { completeAccountDeletion } from './completeAccountDeletion';
+import { completeAccountDeletion, type ErasureRegistry } from './completeAccountDeletion';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let database: MongoMemoryReplSet;
@@ -93,6 +93,12 @@ beforeEach(async () => {
   for (const modelName of mongoose.modelNames()) await collection(modelName).deleteMany({});
 });
 
+// These purges are self-serve, so the erasure registry is never consulted.
+const erasureRegistry: ErasureRegistry = {
+  scope: async () => [],
+  audit: async () => ({ remaining: [], unclassified: [] }),
+};
+
 describe('permanent personal-content purge', () => {
   it('removes a deleted account from shared watches and clears its ownership', async () => {
     const watch = await CampaignWatchModel.create({
@@ -112,6 +118,9 @@ describe('permanent personal-content purge', () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();
     const storedObjects = new Set(['private-upload', 'private-generated']);
+    await collection('OrgAdminNotificationPref').insertOne({ userId: ownerId, organizationId: 'team', kinds: {} });
+    await collection('OrgAlertNotification').insertOne({ subjectUserId: ownerId, organizationId: 'team' });
+    await collection('Inbox').insertOne({ receiverId: ownerId, organizationAlert: true });
     const completionSnapshots: { remainingRows: number[]; remainingObjects: number }[] = [];
     await collection('User').insertOne({
       _id: new mongoose.Types.ObjectId(ownerId),
@@ -131,7 +140,7 @@ describe('permanent personal-content purge', () => {
     });
     await collection('FabFileChunk').insertOne({ fabFileId: String(fileId), content: 'private extracted text' });
     effects.deleteFile.mockRejectedValueOnce(new Error('storage unavailable'));
-    await expect(completeAccountDeletion(ownerId, { logger })).rejects.toThrow('storage unavailable');
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).rejects.toThrow('storage unavailable');
     expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toMatchObject({
       deletion: { purgeStartedAt: expect.any(Date) },
     });
@@ -151,17 +160,20 @@ describe('permanent personal-content purge', () => {
           collection('Quest').countDocuments({ sessionId: String(notebookId) }),
           collection('FabFile').countDocuments({ _id: fileId }),
           collection('FabFileChunk').countDocuments({ fabFileId: String(fileId) }),
+          collection('OrgAdminNotificationPref').countDocuments({ userId: ownerId }),
+          collection('OrgAlertNotification').countDocuments({ subjectUserId: ownerId }),
+          collection('Inbox').countDocuments({ receiverId: ownerId, organizationAlert: true }),
         ]),
         remainingObjects: storedObjects.size,
       });
     });
-    await expect(completeAccountDeletion(ownerId, { logger })).resolves.toEqual({ deleted: true });
-    await expect(completeAccountDeletion(ownerId, { logger })).resolves.toEqual({
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).resolves.toEqual({
       deleted: false,
       reason: 'not_found',
     });
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('purge@example.test');
-    expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0], remainingObjects: 0 }]);
+    expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0, 0, 0, 0], remainingObjects: 0 }]);
   });
   it('hard-deletes notebooks, messages and personal content including tombstones, preserving other owners and org content', async () => {
     const notebookId = new mongoose.Types.ObjectId();
@@ -326,7 +338,7 @@ describe('permanent personal-content purge', () => {
     await collection('Organization').insertOne({ _id: personalOrganizationId, userId: ownerId, personal: true });
     const append = vi.spyOn(adminAuditLogRepository, 'append').mockRejectedValueOnce(new Error('audit unavailable'));
 
-    await expect(completeAccountDeletion(ownerId, { logger })).rejects.toThrow('audit unavailable');
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).rejects.toThrow('audit unavailable');
     expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toMatchObject({
       deletion: { purgeStartedAt: expect.any(Date) },
     });
@@ -334,7 +346,7 @@ describe('permanent personal-content purge', () => {
     expect(await collection('AdminAuditLog').countDocuments({ 'target.id': ownerId })).toBe(0);
     expect(effects.sendCompleteEmail).not.toHaveBeenCalled();
 
-    await expect(completeAccountDeletion(ownerId, { logger })).resolves.toEqual({ deleted: true });
+    await expect(completeAccountDeletion(ownerId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
     expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toBeNull();
     expect(await collection('Organization').findOne({ _id: personalOrganizationId })).toBeNull();
     expect(await collection('AdminAuditLog').countDocuments({ 'target.id': ownerId })).toBe(1);

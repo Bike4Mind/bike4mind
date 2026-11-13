@@ -5,7 +5,7 @@ export interface OrgAlertEmailInput {
   heading: string;
   /** Plain text; escaped here. */
   message: string;
-  settingsUrl: string;
+  settingsUrl?: string;
 }
 
 /** Subjects are plain text; line breaks are dropped so an org name cannot spill into more header lines. */
@@ -23,7 +23,7 @@ export function buildOrgAlertEmailBody({
     <h1 style="color: #1976d2; font-size: 20px;">${escapeHtml(heading)}</h1>
     <p>${escapeHtml(message)}</p>
     <p>You are receiving this because you manage ${escapeHtml(organizationName)} and have this alert turned on.</p>
-    <p><a href="${escapeHtml(settingsUrl)}">Review alert settings</a></p>
+    ${settingsUrl ? `<p><a href="${escapeHtml(settingsUrl)}">Review alert settings</a></p>` : ''}
   </body>
 </html>`;
 }

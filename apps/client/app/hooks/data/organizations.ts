@@ -566,7 +566,7 @@ export function useUpdateOrgAlertSettings() {
     onSuccess: (budgetAlerts, { organizationId }) => {
       queryClient.setQueryData(orgAlertSettingsKey(organizationId), budgetAlerts);
       // budgetAlerts is also on the org document.
-      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId] });
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId], exact: true });
       toast.success('Budget alerts saved');
     },
     onError: (error: unknown) => {

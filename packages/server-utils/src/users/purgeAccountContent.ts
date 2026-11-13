@@ -19,6 +19,7 @@ import {
   campaignWatchRepository,
   withTransaction,
   deleteFeedbackAiForUser,
+  deleteOrgAlertsForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -64,7 +65,7 @@ const ownerFilter = (userId: string) => {
 };
 /**
  * A person's own content, not their organization's: owned with no organization, or in one of their
- * personal workspaces. Shared with the data subject export (`server/dataSubject/subjectRecordExport.ts`),
+ * personal workspaces. Shared with the data subject walks (`server/dataSubject/subjectMatcher.ts`),
  * which passes the owner path of its registry reference.
  */
 export const personalFilter = (userId: string, personalOrganizationIds: readonly string[], ownerPath = 'userId') => ({
@@ -487,6 +488,7 @@ async function purgePersonalMemory(
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
   await deleteFeedbackAiForUser(userId, { assertLease });
+  await deleteOrgAlertsForUser(userId, { assertLease });
   const personalOrganizationIds = await findPersonalOrganizationIds(userId);
   await purgeUserPublishedArtifacts(userId, { deletedBy: userId, logger });
   await withdrawAuthorListings(userId);

@@ -50,7 +50,7 @@ describe('OrgBudgetAlertsCard', () => {
     fireEvent.change(input('org-alerts-low-balance-input'), { target: { value: '0' } });
     fireEvent.click(screen.getByTestId('org-alerts-save-btn'));
 
-    expect(mocks.mutate).toHaveBeenCalledWith({
+    expect(mocks.mutate.mock.calls[0][0]).toEqual({
       organizationId: 'org1',
       budgetAlerts: { enabled: true, monthlyBudgetCredits: 10000, percentThresholds: [25, 90], lowBalanceCredits: 0 },
     });
@@ -64,7 +64,7 @@ describe('OrgBudgetAlertsCard', () => {
     fireEvent.change(input('org-alerts-low-balance-input'), { target: { value: ' ' } });
     fireEvent.click(screen.getByTestId('org-alerts-save-btn'));
 
-    expect(mocks.mutate).toHaveBeenCalledWith({
+    expect(mocks.mutate.mock.calls[0][0]).toEqual({
       organizationId: 'org1',
       budgetAlerts: { enabled: true, monthlyBudgetCredits: null, percentThresholds: [], lowBalanceCredits: null },
     });
@@ -95,5 +95,17 @@ describe('OrgBudgetAlertsCard', () => {
     renderCard();
     fireEvent.change(input('org-alerts-threshold-input'), { target: { value: '60' } });
     expect(input('org-alerts-threshold-add-btn').disabled).toBe(true);
+  });
+  it.each(['9'.repeat(400), '9007199254740992'])('rejects unsafe credit amounts', value => {
+    renderCard();
+    fireEvent.change(input('org-alerts-budget-input'), { target: { value } });
+    expect(input('org-alerts-save-btn')).toBeDisabled();
+    fireEvent.click(input('org-alerts-save-btn'));
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  it('explains enabled alerts without an effective threshold', () => {
+    mocks.saved = { enabled: true, monthlyBudgetCredits: null, percentThresholds: [80], lowBalanceCredits: null };
+    renderCard();
+    expect(screen.getByRole('status')).toHaveTextContent('No effective thresholds');
   });
 });

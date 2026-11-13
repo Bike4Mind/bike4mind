@@ -13,7 +13,7 @@ import {
   Switch,
   Typography,
 } from '@mui/joy';
-import { FC, useEffect, useState } from 'react';
+import { FC, useEffect, useRef, useState } from 'react';
 
 const DEFAULT_PERCENT_THRESHOLDS = [50, 80, 100];
 
@@ -23,13 +23,19 @@ const parseCredits = (value: string, min: number): number | null | undefined => 
   if (trimmed === '') return null;
   if (!/^\d+$/.test(trimmed)) return undefined;
   const parsed = Number(trimmed);
-  return parsed >= min ? parsed : undefined;
+  return Number.isSafeInteger(parsed) && parsed >= min ? parsed : undefined;
 };
 
 /** Owner/manager editor for the org's budget and low-balance alert thresholds. */
 const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId }) => {
   const { data: saved, isSuccess } = useOrgAlertSettings(organizationId);
   const updateSettings = useUpdateOrgAlertSettings();
+  const saving = useRef(false);
+  const locked = !isSuccess || updateSettings.isPending;
+  const editDraft = (update: () => void) => {
+    if (saving.current || locked) return;
+    update();
+  };
 
   const [enabled, setEnabled] = useState(false);
   const [budget, setBudget] = useState('');
@@ -56,20 +62,28 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
   const valid = budgetValue !== undefined && lowBalanceValue !== undefined;
 
   const addThreshold = () => {
-    if (!canAddThreshold || newThresholdValue == null) return;
+    if (saving.current || locked || !canAddThreshold || newThresholdValue == null) return;
     setThresholds([...thresholds, newThresholdValue].sort((a, b) => a - b));
     setNewThreshold('');
   };
 
   const handleSave = () => {
-    if (budgetValue === undefined || lowBalanceValue === undefined) return;
+    if (saving.current || locked || budgetValue === undefined || lowBalanceValue === undefined) return;
     const budgetAlerts: IOrgBudgetAlerts = {
       enabled,
       monthlyBudgetCredits: budgetValue,
       percentThresholds: thresholds,
       lowBalanceCredits: lowBalanceValue,
     };
-    updateSettings.mutate({ organizationId, budgetAlerts });
+    saving.current = true;
+    updateSettings.mutate(
+      { organizationId, budgetAlerts },
+      {
+        onSettled: () => {
+          saving.current = false;
+        },
+      }
+    );
   };
 
   return (
@@ -79,13 +93,14 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
           <Stack spacing={0.5} sx={{ minWidth: 0 }}>
             <Typography level="title-sm">Budget alerts</Typography>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-              Notify the owner and opted-in managers once per month when the credit pool crosses a threshold.
+              Notify the owner and opted-in managers when the credit pool crosses a threshold. Each configured
+              percentage sends at most once per UTC calendar month, even if the budget changes.
             </Typography>
           </Stack>
           <Switch
             checked={enabled}
-            onChange={e => setEnabled(e.target.checked)}
-            disabled={!isSuccess}
+            onChange={e => editDraft(() => setEnabled(e.target.checked))}
+            disabled={locked}
             slotProps={{ input: { 'aria-label': 'Enable budget alerts', 'data-testid': 'org-alerts-enable-switch' } }}
           />
         </Stack>
@@ -93,8 +108,9 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
         <FormControl error={budgetValue === undefined}>
           <FormLabel>Monthly budget (credits)</FormLabel>
           <Input
+            disabled={locked}
             value={budget}
-            onChange={e => setBudget(e.target.value)}
+            onChange={e => editDraft(() => setBudget(e.target.value))}
             placeholder="No budget"
             slotProps={{ input: { inputMode: 'numeric', 'data-testid': 'org-alerts-budget-input' } }}
           />
@@ -113,7 +129,8 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
                   <ChipDelete
                     aria-label={`Remove ${value}%`}
                     data-testid={`org-alerts-threshold-${value}-remove-btn`}
-                    onDelete={() => setThresholds(thresholds.filter(t => t !== value))}
+                    disabled={locked}
+                    onDelete={() => editDraft(() => setThresholds(thresholds.filter(t => t !== value)))}
                   />
                 }
               >
@@ -122,8 +139,9 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
             ))}
             <Input
               size="sm"
+              disabled={locked}
               value={newThreshold}
-              onChange={e => setNewThreshold(e.target.value)}
+              onChange={e => editDraft(() => setNewThreshold(e.target.value))}
               onKeyDown={e => {
                 if (e.key === 'Enter') addThreshold();
               }}
@@ -134,7 +152,7 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
             <Button
               size="sm"
               variant="outlined"
-              disabled={!canAddThreshold}
+              disabled={locked || !canAddThreshold}
               onClick={addThreshold}
               data-testid="org-alerts-threshold-add-btn"
             >
@@ -147,8 +165,9 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
         <FormControl error={lowBalanceValue === undefined}>
           <FormLabel>Low balance (credits)</FormLabel>
           <Input
+            disabled={locked}
             value={lowBalance}
-            onChange={e => setLowBalance(e.target.value)}
+            onChange={e => editDraft(() => setLowBalance(e.target.value))}
             placeholder="Off"
             slotProps={{ input: { inputMode: 'numeric', 'data-testid': 'org-alerts-low-balance-input' } }}
           />
@@ -157,11 +176,18 @@ const OrgBudgetAlertsCard: FC<{ organizationId: string }> = ({ organizationId })
           </FormHelperText>
         </FormControl>
 
+        {enabled && valid && lowBalanceValue === null && (budgetValue === null || thresholds.length === 0) && (
+          <Typography level="body-sm" role="status">
+            No effective thresholds are set. Add a budget with a percentage or a low-balance threshold before alerts can
+            send.
+          </Typography>
+        )}
+
         <Stack direction="row" justifyContent="flex-end">
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={!isSuccess || !valid}
+            disabled={locked || !valid}
             loading={updateSettings.isPending}
             data-testid="org-alerts-save-btn"
           >

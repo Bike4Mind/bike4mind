@@ -17,6 +17,7 @@ const InboxSchema = new mongoose.Schema<IInboxObject>(
     title: { type: String, required: true },
     message: { type: String, required: true },
     readAt: { type: Date, default: null },
+    organizationAlert: { type: Boolean },
   },
   {
     timestamps: true,
@@ -123,6 +124,7 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
     title: string;
     message: string;
     type: InboxType;
+    organizationAlert?: boolean;
   }): Promise<IInboxDocument> {
     const result = await this.model.create(data);
     return result.toJSON();
