@@ -116,6 +116,10 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 
 **Mocking deep import chains:** if a component's transitive imports reach a context provider via a `@/`/`@client` alias, mock it explicitly, e.g. `vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: () => ({ /* … */ }) }))`.
 
+## Database migrations
+
+- Create core migrations with `pnpm migrate generate "<name>"`, which stamps the id from the current UTC time. **Never hand-pick or reuse an id**: CI rejects an added id that is not a fresh generated timestamp. Ordering below the current max is unnecessary, since every unapplied id runs.
+
 ## MongoDB index guidelines
 
 - **Never use `index: true`** on a field definition — it's a query-optimization hint, not a data constraint, and scattering it across fields is the root cause of duplicate-index warnings.
