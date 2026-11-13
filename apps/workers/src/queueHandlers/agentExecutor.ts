@@ -141,6 +141,7 @@ import { createAttachmentLakeAccess } from '@bike4mind/server-utils/dataLakes/at
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
 import { resolveLoopDirectiveTools } from './agentExecutor.loopDirectiveTools';
+import { reflectLoopRun } from './agentExecutor.loopReflection';
 import { requestLoopDispatch } from '@server/utils/loopDispatch';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
@@ -3909,6 +3910,13 @@ async function runExecution(
       return;
     }
 
+    if (execution.loopId) {
+      await reflectLoopRun(
+        { executionId, outcome: 'completed', answer: displayAnswer ?? '', steps: finalCheckpoint.steps },
+        logger
+      );
+    }
+
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
       steps: finalCheckpoint.steps,
@@ -3960,6 +3968,19 @@ async function runExecution(
     const errorStack = err instanceof Error ? err.stack : undefined;
 
     logger.error('[Error] Agent execution failed', { error: errorMessage, stack: errorStack });
+
+    if (loopId) {
+      await reflectLoopRun(
+        {
+          executionId,
+          outcome: 'failed',
+          answer: '',
+          failureReason: toUserFacingFailureMessage(errorMessage, err),
+          error: err,
+        },
+        logger
+      );
+    }
 
     try {
       await agentExecutionRepository.markFailed(executionId, {

@@ -85,6 +85,11 @@ export type LoopCapacityLimit = (typeof LOOP_CAPACITY_LIMITS)[number];
 export const LOOP_MAX_CONCURRENT = 5;
 /** Cap (chars) on a loop's memory notes: the fallback tail of an answer, and the tail kept when parallel runs merge. */
 export const LOOP_MEMORY_TAIL_CHARS = 4000;
+/** Caps (chars) on a run's stored reflection (`AgentExecution.loopReflection`). */
+export const LOOP_REFLECTION_CHARS = 1000;
+export const LOOP_NEXT_ACTION_CHARS = 300;
+/** Output token ceiling of the reflection call made after a cloud run. */
+export const LOOP_REFLECT_MAX_TOKENS = 600;
 
 export const activeLaneCount = (loop: Pick<ILoop, 'activeExecutionIds'>): number =>
   loop.activeExecutionIds?.length ?? 0;
@@ -285,6 +290,19 @@ export const stageConfigOf = (loop: Pick<ILoop, 'stageConfig'>, stage?: string):
 /** Stages whose tickets wait for a desktop runner. */
 export const desktopStagesOf = (loop: Pick<ILoop, 'stageConfig'>): string[] =>
   (loop.stageConfig ?? []).filter(entry => entry.runner === 'desktop').map(entry => entry.stage);
+
+/** What a cloud run's reflection call wrote about it; `credits` is what the call cost, already in the run's total. */
+export interface ILoopRunReflection {
+  reflection: string;
+  nextIntendedAction: string;
+  credits: number;
+  createdAt: Date;
+}
+
+/** An earlier run's reflection as shown in the next run's prompt; `stage` is unset for a goal run. */
+export type LoopReflectionEntry = Pick<ILoopRunReflection, 'reflection' | 'nextIntendedAction' | 'createdAt'> & {
+  stage?: string;
+};
 
 /** State carried from one run to the next. */
 export interface ILoopMemory {

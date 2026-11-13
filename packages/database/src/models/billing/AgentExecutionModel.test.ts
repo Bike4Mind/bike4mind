@@ -202,6 +202,53 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('loop reflections', () => {
+    const reflection = (text: string, createdAt: Date) => ({
+      reflection: text,
+      nextIntendedAction: `next ${text}`,
+      credits: 0.5,
+      createdAt,
+    });
+
+    it('stores the reflection and adds its credits to the run, so sumCreditsByLoop counts them', async () => {
+      const run = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'sr', loopId: 'loopR', totalCreditsUsed: 4 })
+      );
+      await agentExecutionRepository.setLoopReflection(run.id, reflection('r1', new Date(1000)));
+      const stored = await agentExecutionRepository.findById(run.id);
+      expect(stored?.loopReflection).toMatchObject({ reflection: 'r1', nextIntendedAction: 'next r1', credits: 0.5 });
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopR'], ['sr'])).toEqual({ loopR: 4.5 });
+    });
+
+    it("lists a ticket's reflections across stages, or the goal runs' without one, newest first", async () => {
+      const run = async (overrides: Parameters<typeof makeBaseExecution>[0], text?: string, at = 0) => {
+        const created = await agentExecutionRepository.create(
+          makeBaseExecution({ sessionId: 'sr', loopId: 'loopR', createdAt: new Date(at), ...overrides })
+        );
+        if (text) await agentExecutionRepository.setLoopReflection(created.id, reflection(text, new Date(at)));
+        return created;
+      };
+      await run({ workItemId: 't1', loopStage: 'build' }, 'build1', 1000);
+      await run({ workItemId: 't1', loopStage: 'review' }, 'review1', 2000);
+      await run({ workItemId: 't1', loopStage: 'review' }, undefined, 3000);
+      await run({ workItemId: 't2', loopStage: 'build' }, 'other ticket', 4000);
+      await run({}, 'goal1', 5000);
+      await run({ loopRunKind: 'triage' }, 'triage', 6000);
+      const parent = await run({}, undefined, 7000);
+      await run({ parentExecutionId: parent.id }, 'child', 8000);
+      await run({ loopId: 'loopOther' }, 'other loop', 9000);
+
+      const ticket = await agentExecutionRepository.listLoopReflections('loopR', 'sr', 't1', 3);
+      expect(ticket.map(entry => [entry.stage, entry.reflection])).toEqual([
+        ['review', 'review1'],
+        ['build', 'build1'],
+      ]);
+      const goal = await agentExecutionRepository.listLoopReflections('loopR', 'sr', null, 3);
+      expect(goal).toEqual([{ reflection: 'goal1', nextIntendedAction: 'next goal1', createdAt: new Date(5000) }]);
+      expect(await agentExecutionRepository.listLoopReflections('loopR', 'sr', 't1', 1)).toHaveLength(1);
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();

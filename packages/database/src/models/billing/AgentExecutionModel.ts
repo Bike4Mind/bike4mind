@@ -13,7 +13,9 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type ILoopRunReflection,
   type LoopGateOutcome,
+  type LoopReflectionEntry,
   LOOP_RUN_OUTCOMES,
   type LoopRunOutcome,
   WORK_ITEM_PRIORITIES,
@@ -387,6 +389,8 @@ export interface IAgentExecution {
   loopAttempt?: number;
   /** How the loop run ended, stamped at fold. Read only by the loop stats. */
   loopOutcome?: LoopRunOutcome;
+  /** A cloud loop run's reflection, written after it ends (apps/workers agentExecutor.loopReflection.ts). */
+  loopReflection?: ILoopRunReflection;
   /** Loop runs: names of tools the run called but did not have, and of tools that threw (each deduped, at most 20). */
   toolsUnavailable?: string[];
   toolsErrored?: string[];
@@ -897,6 +901,18 @@ const AgentExecutionSchema = new mongoose.Schema(
     loopStage: { type: String },
     loopAttempt: { type: Number },
     loopOutcome: { type: String, enum: LOOP_RUN_OUTCOMES },
+    loopReflection: {
+      type: new mongoose.Schema(
+        {
+          reflection: { type: String, required: true },
+          nextIntendedAction: { type: String, required: true },
+          credits: { type: Number, required: true },
+          createdAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     toolsUnavailable: { type: [String], default: undefined },
     toolsErrored: { type: [String], default: undefined },
     triageWorkItemIds: { type: [String], default: undefined },
@@ -1386,6 +1402,50 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async setLoopOutcome(id: string, loopOutcome: LoopRunOutcome): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { loopOutcome } });
+  }
+
+  /** Stores a run's reflection and adds what the reflection call cost to the run's credits, in one write. */
+  async setLoopReflection(id: string, loopReflection: ILoopRunReflection): Promise<void> {
+    const credits = Number.isFinite(loopReflection.credits) && loopReflection.credits > 0 ? loopReflection.credits : 0;
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { loopReflection: { ...loopReflection, credits } }, $inc: { totalCreditsUsed: credits } }
+    );
+  }
+
+  /**
+   * The newest reflections shown to a loop's next run: with `workItemId`, that ticket's runs in any stage;
+   * without, the loop's goal runs (no ticket, not triage). `sessionId` narrows the scan like `listRecentForLoop`.
+   */
+  async listLoopReflections(
+    loopId: string,
+    sessionId: string,
+    workItemId: string | null,
+    limit: number
+  ): Promise<LoopReflectionEntry[]> {
+    const docs = await this.model
+      .find({
+        sessionId,
+        loopId,
+        parentExecutionId: null,
+        loopReflection: { $exists: true },
+        ...(workItemId ? { workItemId } : { workItemId: null, loopRunKind: null }),
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select({ loopReflection: 1, loopStage: 1 });
+    return docs.flatMap(doc =>
+      doc.loopReflection
+        ? [
+            {
+              reflection: doc.loopReflection.reflection,
+              nextIntendedAction: doc.loopReflection.nextIntendedAction,
+              createdAt: doc.loopReflection.createdAt,
+              ...(workItemId && doc.loopStage && { stage: doc.loopStage }),
+            },
+          ]
+        : []
+    );
   }
 
   /** Merges tool names into the run's failure lists, each deduped and kept to its first 20. */

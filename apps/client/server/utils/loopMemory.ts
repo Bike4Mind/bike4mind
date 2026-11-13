@@ -7,6 +7,7 @@ export {
   buildTriageQuery,
   LOOP_PROMPT_ANSWERS,
   LOOP_PROMPT_DIRECTIVES,
+  LOOP_PROMPT_REFLECTIONS,
   LOOP_TICKET_PROMPT_CHARS,
   type LoopOversight,
   parseLoopMemory,
