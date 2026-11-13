@@ -185,6 +185,16 @@ describe('organizationService - leave', () => {
     expect(result).toEqual(expect.objectContaining({ adminUserIds: ['other-admin'] }));
   });
 
+  it('drops the departing user from the org billingManagerUserIds', async () => {
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(
+      freshOrg({ billingManagerUserIds: ['user1', 'other-biller'] })
+    );
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.billingManagerUserIds).toEqual(['other-biller']);
+  });
+
   // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
   // trigger could be deleted from leave.ts with every test here still green.
   it('lapses the departing user lake grants and passes on a lake they created', async () => {
