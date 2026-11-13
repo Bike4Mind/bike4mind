@@ -66,7 +66,12 @@ const inline = (bytes: Buffer): ProviderTerminalResult => ({
   output: { kind: 'inline', base64: bytes.toString('base64'), contentType: 'image/png' },
 });
 
-const setup = async (generate: Generate, mimeType = 'image/jpeg', sourceBytes?: Buffer) => {
+const setup = async (
+  generate: Generate,
+  mimeType = 'image/jpeg',
+  sourceBytes?: Buffer,
+  providerOverride?: ImageProvider
+) => {
   let clock = new Date('2026-11-12T00:00:00Z');
   const repository = createInMemoryGenerationJobRepository({ now: () => clock });
   const queue: string[] = [];
@@ -81,7 +86,7 @@ const setup = async (generate: Generate, mimeType = 'image/jpeg', sourceBytes?: 
   const deps: CreateImageJobsDeps = {
     assertModelAdmission: vi.fn(async () => {}),
     repository,
-    providers: createImageProviderRegistry([provider]),
+    providers: createImageProviderRegistry([providerOverride ?? provider]),
     getSettings: async () => ({ enforceCredits: true }),
     resolveApiKey: vi.fn(async () => 'key'),
     loadInputFile: vi.fn(async () => ({ bytes: source, mimeType })),
@@ -244,6 +249,26 @@ describe('cutout job through the real engine', () => {
     await t.runToCompletion();
 
     expect(t.jobOf(created).state).toBe('failed');
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('fails a cutout job on an async provider before submit and refunds the hold', async () => {
+    const submit = vi.fn(async () => ({ provider: 'openai' as const, data: {} }));
+    const asyncProvider = {
+      mode: 'async' as const,
+      id: 'openai' as const,
+      models: OPENAI_IMAGE_MODEL_IDS as ImageModelId[],
+      submit,
+      poll: vi.fn(async () => ({ status: 'running' as const })),
+      fetchOutput: vi.fn(async () => Buffer.alloc(0)),
+    } as unknown as ImageProvider;
+    const t = await setup(vi.fn<Generate>(), 'image/jpeg', undefined, asyncProvider);
+    const created = await t.create();
+    await t.runToCompletion();
+
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(submit).not.toHaveBeenCalled();
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
   });

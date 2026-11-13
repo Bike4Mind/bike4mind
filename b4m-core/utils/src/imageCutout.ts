@@ -139,6 +139,15 @@ export async function applyCutoutMatte(source: Buffer, matte: Buffer, size: Cuto
     .crop({ x: layout.offsetX, y: layout.offsetY, w: dimensions.width, h: dimensions.height });
   const pixels = image.bitmap.data;
   const matteAlpha = alpha.bitmap.data;
+  let opaque = 0;
+  let clear = 0;
+  for (let index = 3; index < matteAlpha.length; index += 4) {
+    if (matteAlpha[index] === 255) opaque++;
+    else if (matteAlpha[index] === 0) clear++;
+  }
+  if (opaque === matteAlpha.length / 4 || clear === matteAlpha.length / 4) {
+    throw new CutoutMatteMismatchError('The matte has no usable transparency');
+  }
   for (let index = 3; index < pixels.length; index += 4) {
     pixels[index] = Math.round((pixels[index] * matteAlpha[index]) / 255);
   }

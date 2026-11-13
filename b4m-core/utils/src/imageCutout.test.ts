@@ -31,6 +31,31 @@ const makeMatte = async (width: number, height: number): Promise<Buffer> => {
   return Buffer.from(await image.getBuffer('image/png'));
 };
 
+const solid = async (width: number, height: number): Promise<Buffer> =>
+  Buffer.from(await new Jimp({ width, height, color: 0x336699ff }).getBuffer('image/png'));
+
+const matteWith = async (width: number, height: number, alphaAt: (x: number, y: number) => number): Promise<Buffer> => {
+  const image = new Jimp({ width, height, color: 0xffffffff });
+  image.scan((x, y, index) => {
+    image.bitmap.data[index + 3] = alphaAt(x, y);
+  });
+  return Buffer.from(await image.getBuffer('image/png'));
+};
+
+// A JPEG with an APP1 EXIF segment carrying orientation 6 spliced in after the SOI marker.
+const jpegWithOrientation6 = async (width: number, height: number): Promise<Buffer> => {
+  const jpeg = Buffer.from(await new Jimp({ width, height, color: 0xff0000ff }).getBuffer('image/jpeg'));
+  const tiff = Buffer.from([
+    0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const payload = Buffer.concat([Buffer.from('Exif\0\0', 'binary'), tiff]);
+  const segment = Buffer.alloc(4);
+  segment.writeUInt16BE(0xffe1, 0);
+  segment.writeUInt16BE(payload.length + 2, 2);
+  return Buffer.concat([jpeg.subarray(0, 2), segment, payload, jpeg.subarray(2)]);
+};
+
 describe('cutoutCanvasSizeFor', () => {
   it('picks the canvas closest to the source aspect', () => {
     expect(cutoutCanvasSizeFor({ width: 3000, height: 2000 })).toBe('1536x1024');
@@ -76,9 +101,52 @@ describe('applyCutoutMatte', () => {
     expect(alphaAt(290, 100)).toBe(0);
   });
 
+  it('refuses a fully opaque matte', async () => {
+    await expect(
+      applyCutoutMatte(await makeSource(), await matteWith(1536, 1024, () => 255), '1536x1024')
+    ).rejects.toThrow(CutoutMatteMismatchError);
+  });
+
+  it('refuses a fully transparent matte', async () => {
+    await expect(
+      applyCutoutMatte(await makeSource(), await matteWith(1536, 1024, () => 0), '1536x1024')
+    ).rejects.toThrow(CutoutMatteMismatchError);
+  });
+
+  it('crops the padding off the matte horizontally for a source narrower than the canvas', async () => {
+    // 300x260 pads to a 390x260 canvas: 45px of padding each side. Opaque from canvas x 50 to 200 (matte x 197 to 788).
+    const matte = await matteWith(1536, 1024, x => (x >= 197 && x < 788 ? 255 : 0));
+    const result = await Jimp.read(await applyCutoutMatte(await solid(300, 260), matte, '1536x1024'));
+    expect(result.bitmap.width).toBe(300);
+    expect(result.bitmap.height).toBe(260);
+    const alphaAt = (x: number, y: number) => result.bitmap.data[(y * 300 + x) * 4 + 3];
+    expect(alphaAt(10, 130)).toBe(255);
+    expect(alphaAt(140, 130)).toBe(255);
+    expect(alphaAt(170, 130)).toBe(0);
+    expect(alphaAt(290, 130)).toBe(0);
+  });
+
+  it('crops the padding off the matte vertically for a source wider than the canvas', async () => {
+    // 600x200 pads to a 600x400 canvas: 100px of padding top and bottom. Opaque from canvas y 110 down (matte y 282).
+    const matte = await matteWith(1536, 1024, (_x, y) => (y >= 282 ? 255 : 0));
+    const result = await Jimp.read(await applyCutoutMatte(await solid(600, 200), matte, '1536x1024'));
+    expect(result.bitmap.width).toBe(600);
+    expect(result.bitmap.height).toBe(200);
+    const alphaAt = (x: number, y: number) => result.bitmap.data[(y * 600 + x) * 4 + 3];
+    expect(alphaAt(300, 3)).toBe(0);
+    expect(alphaAt(300, 50)).toBe(255);
+    expect(alphaAt(300, 190)).toBe(255);
+  });
+
   it('refuses a matte in another shape than the canvas it was asked for', async () => {
     await expect(applyCutoutMatte(await makeSource(), await makeMatte(1024, 1024), '1536x1024')).rejects.toBeInstanceOf(
       CutoutMatteMismatchError
     );
+  });
+});
+
+describe('readImageDimensions', () => {
+  it('swaps the sides of a JPEG with a quarter-turn EXIF orientation', async () => {
+    expect(readImageDimensions(await jpegWithOrientation6(40, 20))).toEqual({ width: 20, height: 40 });
   });
 });
