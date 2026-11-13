@@ -240,7 +240,7 @@ void app.whenReady().then(async () => {
     quitState = 'cleaning-up';
     const results = await Promise.allSettled([
       loops.runner.releaseAll(),
-      localLoops?.scheduler.releaseAll(),
+      localLoops?.scheduler.releaseAll(true),
       background.shutdown(),
       mcp.shutdown(),
       terminals.shutdown(),

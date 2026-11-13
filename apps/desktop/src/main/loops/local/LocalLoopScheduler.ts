@@ -6,6 +6,7 @@ import {
   buildLoopQuery,
   buildTriageQuery,
   chooseRunModel,
+  laneCreditCap,
   LOOP_PROMPT_ANSWERS,
   MIN_ITERATION_CREDITS,
   pacedLanes,
@@ -88,6 +89,11 @@ export const SCHEDULER_MS = {
    * Every other start (a ticket, a run ending, a reset) ticks at once.
    */
   recheck: 60_000,
+  /**
+   * After a run stops at its credit cap, the loop waits this long: the cap is a slice of the paced allowance, so
+   * re-admitting at once would turn it into a one-response run every tick (the server's interval does this there).
+   */
+  creditCapBackoff: 10 * 60_000,
 } as const;
 
 /** Runs in a row that error before the loop stops in `error`. */
@@ -151,6 +157,9 @@ export class LocalLoopScheduler {
   private blocker: number | null = null;
   /** loopId -> when pacing next lets it run; in memory only, recomputed every tick. */
   private readonly paced = new Map<string, number>();
+  /** loopId -> no run starts before this, after a run stopped at its credit cap. */
+  private readonly capBackoff = new Map<string, number>();
+  private quitting = false;
   /** Why no run starts now, for the whole machine (lanes busy, battery...). */
   private waitingReason: string | undefined;
   private readonly now: () => number;
@@ -168,6 +177,7 @@ export class LocalLoopScheduler {
   /** Re-queue runs a quit or crash cut off, then tick. Call once the store's scope is known (signed in). */
   start(): void {
     this.running = true;
+    this.quitting = false;
     this.reconcileOpenRuns();
     this.poke();
   }
@@ -193,6 +203,14 @@ export class LocalLoopScheduler {
       if (live.has(run.id)) continue;
       this.endRun(run, { stopReason: 'requeued', reason: 'The app stopped while this run was working' });
     }
+    // A ticket claimed by no open run (its run row went missing) would stay in progress for good.
+    const { store } = this.deps;
+    const claimed = new Set(store.openRuns().map(run => run.ticketId));
+    const now = new Date(this.now());
+    for (const loop of store.loops())
+      for (const ticket of store.tickets(loop.id))
+        if (ticket.status === 'in_progress' && !claimed.has(ticket.id))
+          store.putTicket(applyTicketPatch(ticket, { status: 'open' }, now));
   }
 
   /** One pass over every live loop. Exposed for tests. */
@@ -217,8 +235,15 @@ export class LocalLoopScheduler {
 
   private async pass(): Promise<void> {
     const now = new Date(this.now());
-    const loops = this.deps.store.loops();
-    for (const loop of loops) this.reconcile(loop, now);
+    // Recomputed by fill below; a loop it skips (paused, capped) must not keep a past readyAt that arms a 0 ms timer.
+    this.paced.clear();
+    for (const loop of this.deps.store.loops()) {
+      try {
+        this.reconcile(loop, now);
+      } catch (err) {
+        this.deps.logger.warn(`LOOPS: reconcile of ${loop.id} failed: ${String(err)}`);
+      }
+    }
     const live = this.deps.store.loops().filter(loop => loop.status === 'live' && !loop.cappedUntil);
     if (live.length === 0) return;
 
@@ -281,6 +306,7 @@ export class LocalLoopScheduler {
     this.paced.delete(loop.id);
     const allLoopsCap = this.deps.allLoopsCap();
     for (;;) {
+      if (!this.running) return undefined;
       const fresh = store.loop(loop.id);
       if (!fresh || fresh.status !== 'live' || fresh.cappedUntil) return undefined;
       const mine = [...this.lanes.values()].filter(lane => lane.run.loopId === loop.id);
@@ -297,6 +323,11 @@ export class LocalLoopScheduler {
 
       const work = this.nextWork(fresh, now, mine);
       if (!work) return undefined;
+      const backoff = this.capBackoff.get(loop.id);
+      if (backoff !== undefined && backoff > now.getTime()) {
+        this.paced.set(loop.id, backoff);
+        return undefined;
+      }
 
       const machine = admit(sample, previous, this.lanes.size + this.deps.otherLanes(), settings);
       if (!machine.ok) return machine.reason;
@@ -310,8 +341,11 @@ export class LocalLoopScheduler {
       }
       // After admission, so a spent budget caps the loop rather than reading as zero headroom.
       if (mine.length >= pacedLanes(fresh.maxConcurrent, headroom, mine.length)) return undefined;
+      // As the server: lanes started together share what is left, never each the whole of it.
+      const creditCap = laneCreditCap(admission.creditCap, fresh.maxConcurrent - mine.length, MIN_ITERATION_CREDITS);
+      if (creditCap === 'too_small') return undefined;
       // A run that could not open its session leaves its ticket as it was: try again next tick, not now.
-      if (!(await this.startRun(fresh, work, headroom, admission.creditCap, now))) return undefined;
+      if (!(await this.startRun(fresh, work, headroom, creditCap, now))) return undefined;
     }
   }
 
@@ -407,23 +441,10 @@ export class LocalLoopScheduler {
       }
     });
 
-    const opened = await openLoopSession(this.deps.chat, {
-      directory: loop.directory,
-      approvalMode: loop.approvalMode,
-      model: choice.model,
-    });
-    if (!opened.ok) {
-      this.endRun(
-        run,
-        opened.outcome === 'failed'
-          ? { outcome: 'failed', reason: opened.reason }
-          : { stopReason: 'requeued', reason: opened.reason }
-      );
-      return false;
-    }
+    // Held before the session opens, so the lane pool, a loop delete and a quit all see this run meanwhile.
     const lane: Lane = {
-      run: store.putRun({ ...run, sessionId: opened.sessionId }),
-      sessionId: opened.sessionId,
+      run,
+      sessionId: '',
       tool: { loopId: loop.id, runId: run.id, creates: 0, ...(ticket ? { ticketId: ticket.id } : {}) },
       usage: new Map(),
       ...(creditCap !== undefined ? { creditCap } : {}),
@@ -434,6 +455,25 @@ export class LocalLoopScheduler {
     };
     this.lanes.set(run.id, lane);
     this.updateBlocker();
+
+    const opened = await openLoopSession(this.deps.chat, {
+      directory: loop.directory,
+      approvalMode: loop.approvalMode,
+      model: choice.model,
+    });
+    // ponytail: a quit or loop delete that ended the run meanwhile leaves the opened session as a plain chat.
+    if (lane.finished) return false;
+    if (!opened.ok) {
+      await this.finish(
+        lane,
+        opened.outcome === 'failed'
+          ? { outcome: 'failed', reason: opened.reason }
+          : { stopReason: 'requeued', reason: opened.reason }
+      );
+      return false;
+    }
+    lane.sessionId = opened.sessionId;
+    lane.run = store.putRun({ ...lane.run, sessionId: opened.sessionId });
 
     const prompt = ticket
       ? buildLoopQuery(loop.goal, loop.memory, {
@@ -494,7 +534,7 @@ export class LocalLoopScheduler {
     if (event.type === 'tool-end' && (event.call.status === 'done' || event.call.status === 'error')) lane.ran++;
     if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
       const loop = this.deps.store.loop(lane.run.loopId);
-      if (loop) this.cap(loop, 'credits', new Date(this.now()));
+      if (loop && !loop.cappedUntil) this.cap(loop, 'credits', new Date(this.now()));
       void this.finish(lane, { outcome: 'budget_stopped', reason: 'Out of credits' });
     } else if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
     if (event.type !== 'done') return;
@@ -521,8 +561,14 @@ export class LocalLoopScheduler {
     const repo = this.deps.store.loop(lane.run.loopId)?.repo;
     for (const [url] of text.matchAll(PR_URL)) {
       const ref = parsePullRequestUrl(url);
-      if (ref && (!repo || `${ref.owner}/${ref.repo}`.toLowerCase() === repo)) lane.prUrl = ref.url;
+      if (ref && (!repo || `${ref.owner}/${ref.repo}`.toLowerCase() === repo)) this.notePrUrl(lane, ref.url);
     }
+  }
+
+  /** Stored on the run too, so a run cut off by a quit is not re-run into a second PR after relaunch. */
+  private notePrUrl(lane: Lane, url: string): void {
+    lane.prUrl = url;
+    if (lane.run.prUrl !== url) lane.run = this.deps.store.putRun({ ...lane.run, prUrl: url });
   }
 
   /** ApprovalGate closed a card in a run session: nobody can answer it, so the owner gets the ticket. */
@@ -594,7 +640,7 @@ export class LocalLoopScheduler {
       throw new Error(`${result.reason} The ticket is handed to the user; stop here.`);
     }
     lane.merged = result.merged;
-    lane.prUrl = ref.url;
+    this.notePrUrl(lane, ref.url);
     return result.message;
   }
 
@@ -607,16 +653,16 @@ export class LocalLoopScheduler {
     await Promise.all(
       sessions.map(sessionId => Promise.resolve(this.deps.killSessionProcesses(sessionId)).catch(() => undefined))
     );
-    // A run stopped after it opened a PR would open a second one if re-run: hand the ticket to the owner instead.
-    if (lane.prUrl && UNCOUNTED.has(ended.stopReason ?? ended.outcome)) {
-      ended = {
-        outcome: 'blocked',
-        reason: `${ended.reason ?? 'Stopped'} after opening ${lane.prUrl}; continue that PR`,
-      };
+    if (ended.stopReason === 'credit_cap')
+      this.capBackoff.set(lane.run.loopId, this.now() + SCHEDULER_MS.creditCapBackoff);
+    try {
+      this.endRun(lane.run, ended, lane);
+    } catch (err) {
+      this.deps.logger.warn(`LOOPS: recording run ${lane.run.id} failed: ${String(err)}`);
+    } finally {
+      this.lanes.delete(lane.run.id);
+      this.updateBlocker();
     }
-    this.endRun(lane.run, ended, lane);
-    this.lanes.delete(lane.run.id);
-    this.updateBlocker();
     await this.retire(lane).catch(err => this.deps.logger.warn(`LOOPS: local cleanup failed: ${String(err)}`));
     this.poke();
   }
@@ -627,6 +673,12 @@ export class LocalLoopScheduler {
     const now = new Date(this.now());
     store.transaction(() => {
       const current = store.run(run.id) ?? run;
+      // A run stopped after it opened a PR would open a second one if re-run: hand the ticket to the owner instead.
+      if (current.prUrl && UNCOUNTED.has(ended.stopReason ?? ended.outcome))
+        ended = {
+          outcome: 'blocked',
+          reason: `${ended.reason ?? 'Stopped'} after opening ${current.prUrl}; continue that PR`,
+        };
       store.putRun({
         ...current,
         endedAt: now.toISOString(),
@@ -652,7 +704,8 @@ export class LocalLoopScheduler {
       if (errorStreak === ERROR_STREAK_LIMIT) this.raise(loop, { kind: 'error', runId: run.id, reason: loop.error! });
 
       if (run.kind === 'triage') {
-        // As the server's defaultUntriaged: a ticket the triage run was shown and left untriaged gets p2.
+        // As the server's defaultUntriaged, and only for a run that ended on its own (not a quit or a cap).
+        if (UNCOUNTED.has(ended.stopReason ?? ended.outcome)) return;
         for (const id of lane?.triaged ?? []) {
           const ticket = store.ticket(id);
           if (ticket && ticket.status === 'open' && !ticket.priority && !ticket.epic)
@@ -693,7 +746,8 @@ export class LocalLoopScheduler {
   private async retire(lane: Lane): Promise<void> {
     const sessions = this.deps.chat.loopRunSessions(lane.run.id);
     this.deps.chat.endLoopRun(lane.run.id);
-    if (lane.prUrl) return;
+    // As LoopRunner: no worktree cleanup while quitting, which would hold the quit up to 10 s per session.
+    if (lane.prUrl || this.quitting) return;
     for (const sessionId of sessions) {
       const project = (await this.deps.chat.getSession(sessionId))?.project;
       if (!project?.workspace || !project.workspaceBranch) continue;
@@ -707,8 +761,9 @@ export class LocalLoopScheduler {
     while (this.deps.chat.isSessionBusy(sessionId) && this.now() < deadline) await this.sleep(100);
   }
 
-  /** Quit: stop every run now; their tickets go back uncounted. */
-  async releaseAll(): Promise<void> {
+  /** Quit or account switch: stop every run now; their tickets go back uncounted. */
+  async releaseAll(quitting = false): Promise<void> {
+    this.quitting = quitting;
     this.stop();
     await Promise.all(
       [...this.lanes.values()].map(lane => this.finish(lane, { stopReason: 'requeued', reason: 'The app quit' }))

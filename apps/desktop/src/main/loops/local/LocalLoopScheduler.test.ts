@@ -366,6 +366,107 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(1);
   });
 
+  it('waits before re-running a loop whose run stopped at its credit cap', async () => {
+    // At noon the cap is 1300 of 2400; pacing alone would let the next run start at 12:01.
+    make({ budgetCreditsPerDay: 2400 });
+    ticket('a');
+    scheduler.start();
+    await settle();
+    const sessionId = chat.turns[0].sessionId;
+    scheduler.observe({ type: 'usage', sessionId, messageId: 'm1', usage: { creditsUsed: 1300.5 } } as ChatStreamEvent);
+    await settle();
+    expect(chat.turns).toHaveLength(1);
+    expect(scheduler.summary(store.loop('loop-1')!).idleReason).toBe('paced until 2026-01-02T12:10:00.000Z');
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(chat.turns).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(SCHEDULER_MS.creditCapBackoff);
+    await settle();
+    expect(chat.turns).toHaveLength(2);
+  });
+
+  it('hands the owner a cut-off run that had opened a PR instead of re-running it', async () => {
+    make();
+    const t = ticket('a');
+    store.putTicket({ ...t, status: 'in_progress', runCount: 1 });
+    store.putRun({
+      id: 'cut-off',
+      loopId: 'loop-1',
+      ticketId: t.id,
+      kind: 'ticket',
+      model: 'stage-model',
+      fallback: false,
+      startedAt: new Date().toISOString(),
+      credits: 2,
+      prUrl: 'https://github.com/o/r/pull/1',
+    });
+    scheduler.start();
+    await settle();
+    expect(store.run('cut-off')).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('pull/1') });
+    expect(store.ticket(t.id)?.status).toBe('blocked');
+    expect(chat.turns).toEqual([]);
+  });
+
+  it('reopens a ticket left in progress with no run', async () => {
+    make();
+    const t = ticket('a');
+    store.putTicket({ ...t, status: 'in_progress', runCount: 1 });
+    make({ status: 'paused' });
+    scheduler.start();
+    await settle();
+    expect(store.ticket(t.id)?.status).toBe('open');
+  });
+
+  it('frees the lane even when recording the run end fails', async () => {
+    make();
+    ticket('a');
+    scheduler.start();
+    await settle();
+    expect(scheduler.busy).toBe(1);
+    vi.spyOn(store, 'run').mockImplementation(() => {
+      throw new Error('disk gone');
+    });
+    done(chat.turns[0].sessionId);
+    await settle();
+    expect(scheduler.busy).toBe(0);
+    expect(blocker.stop).toHaveBeenCalledWith(7);
+  });
+
+  it('holds the lane while the session opens, so a quit then re-queues the ticket and starts nothing', async () => {
+    make();
+    const t = ticket('a');
+    let open!: (value: { ok: true; session: { id: string } }) => void;
+    chat.createCodeSession.mockImplementationOnce(() => new Promise(resolve => (open = resolve)));
+    scheduler.start();
+    await settle();
+    expect(scheduler.busy).toBe(1);
+    await scheduler.releaseAll(true);
+    expect(store.ticket(t.id)).toMatchObject({ status: 'open', runCount: 0 });
+    open({ ok: true, session: { id: 'late' } });
+    await settle();
+    expect(chat.turns).toEqual([]);
+    expect(scheduler.busy).toBe(0);
+  });
+
+  it('does not spin on a stale pacing time once its loop is paused', async () => {
+    let changes = 0;
+    const paced = new LocalLoopScheduler({ ...schedulerDeps(), onChange: () => changes++ });
+    make({ budgetCreditsPerDay: 24 });
+    store.putLoop(testLoop({ id: 'loop-2' }));
+    spent(13);
+    ticket('a');
+    paced.start();
+    await settle();
+    expect(paced.summary(store.loop('loop-1')!).idleReason).toMatch(/^paced until/);
+    store.putLoop({ ...store.loop('loop-1')!, status: 'paused' });
+    await paced.tick();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    changes = 0;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(changes).toBe(0);
+    paced.stop();
+  });
+
   it('re-checks the machine gate on a timer while a loop is live', async () => {
     make();
     ticket('a');

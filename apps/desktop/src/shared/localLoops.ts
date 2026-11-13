@@ -113,6 +113,8 @@ export interface LocalRun {
   reason?: string;
   /** Credits the run's sessions (and their spawned children) used so far. */
   credits: number;
+  /** A PR the run opened or merged; a run cut off after this is handed to the owner, never re-run. */
+  prUrl?: string;
 }
 
 export type LocalLoopEventKind = 'asked' | 'capped' | 'blocked' | 'error' | 'requeued';

@@ -33,10 +33,6 @@ export class LocalLoopStore {
     this.db.close();
   }
 
-  scopeKey(): string | null {
-    return this.scope();
-  }
-
   private migrate(): void {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
     if (version > SCHEMA_VERSION) throw new Error('Loops were saved by a newer Bike4Mind version.');

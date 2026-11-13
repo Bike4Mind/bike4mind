@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { Notification, app, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
+import { z } from 'zod';
 import { BadRequestError } from '@bike4mind/common';
 import {
   UNSURE_PREFIX,
@@ -60,8 +61,11 @@ function stageConfigOf(value: unknown, stages: string[]): LocalLoopStageConfig[]
 
 function checkedFields(request: Partial<CreateLocalLoopRequest>, current?: LocalLoop): Partial<LocalLoop> {
   const stages = request.stages !== undefined ? validateLoopStages(request.stages) : current?.stages;
-  if (request.directory !== undefined && !existsSync(request.directory))
-    throw new BadRequestError('That folder does not exist.');
+  if (
+    request.directory !== undefined &&
+    !(isAbsolute(request.directory) && existsSync(join(request.directory, '.git')))
+  )
+    throw new BadRequestError('Pick a local git checkout.');
   return {
     ...(request.name !== undefined && { name: validateLoopName(request.name) }),
     ...(request.goal !== undefined && { goal: validateLoopGoal(request.goal) }),
@@ -112,9 +116,11 @@ export function registerLocalLoops(
     }, 50);
   };
 
+  // The store's scope moves only once the old account's runs are released (follow), so their ends land there.
+  let currentScope = scope();
   let store: LocalLoopStore;
   try {
-    store = new LocalLoopStore(join(app.getPath('userData'), 'local-loops.sqlite'), scope, push);
+    store = new LocalLoopStore(join(app.getPath('userData'), 'local-loops.sqlite'), () => currentScope, push);
   } catch (err) {
     const error = `Loops are unavailable: ${err instanceof Error ? err.message : String(err)}`;
     logger.warn(`LOOPS: ${error}`);
@@ -147,12 +153,11 @@ export function registerLocalLoops(
   /** The all-loops budget, cached so an offline Desktop keeps the last known value. */
   const refreshBudget = async () => {
     const api = auth.getApiClient();
-    if (!api || !scope()) return;
+    if (!api || !currentScope) return;
     const body = await api.get<{ effectiveCap?: number | null }>(BUDGET_PATH).catch(() => null);
     if (body) store.setSetting(ALL_LOOPS_CAP, body.effectiveCap ?? null);
   };
 
-  let currentScope = scope();
   const follow = () => {
     currentScope = scope();
     if (currentScope) {
@@ -163,7 +168,10 @@ export function registerLocalLoops(
   };
   onAuthStateChanged(() => {
     if (scope() === currentScope) return;
-    void scheduler.releaseAll().then(follow);
+    void scheduler
+      .releaseAll()
+      .catch(err => logger.warn(`LOOPS: releasing runs failed: ${String(err)}`))
+      .finally(follow);
   });
 
   const summaries = (): LocalLoopSummary[] => store.loops().map(loop => scheduler.summary(loop));
@@ -197,7 +205,8 @@ export function registerLocalLoops(
     });
 
   handle(IPC_CHANNELS.localLoopsList, () => summaries());
-  handle(IPC_CHANNELS.localLoopsGet, input => detail(String(input)));
+  const idOf = (input: unknown) => z.string().min(1).parse(input);
+  handle(IPC_CHANNELS.localLoopsGet, input => detail(idOf(input)));
   handle(IPC_CHANNELS.localLoopsCreateLoop, async input => {
     const request = createLocalLoopSchema.parse(input);
     const now = new Date().toISOString();
@@ -220,10 +229,12 @@ export function registerLocalLoops(
   });
   handle(IPC_CHANNELS.localLoopsUpdateLoop, async input => {
     const { id, ...request } = updateLocalLoopSchema.parse(input);
+    loopOf(id);
+    // Resolved before the read, so the write below cannot undo what the scheduler stored meanwhile.
+    const repo = request.directory !== undefined ? repoSlug(await originOf(request.directory)) : undefined;
     const current = loopOf(id);
     const next = { ...current, ...checkedFields(request, current), updatedAt: new Date().toISOString() };
     if (request.directory !== undefined) {
-      const repo = repoSlug(await originOf(next.directory));
       if (repo) next.repo = repo;
       else delete next.repo;
     }
@@ -232,7 +243,7 @@ export function registerLocalLoops(
     return detail(id);
   });
   handle(IPC_CHANNELS.localLoopsDeleteLoop, input => {
-    const id = String(input);
+    const id = idOf(input);
     if (scheduler.summary(loopOf(id)).lanesBusy > 0)
       throw new BadRequestError('Pause the loop and let its runs end first.');
     store.deleteLoop(id);
@@ -252,7 +263,7 @@ export function registerLocalLoops(
     return detail(id);
   });
   handle(IPC_CHANNELS.localLoopsRunNow, input => {
-    const id = String(input);
+    const id = idOf(input);
     if (loopOf(id).status !== 'live') throw new BadRequestError('Set the loop live first.');
     scheduler.poke();
     return detail(id);
