@@ -52,6 +52,16 @@ describe('systemPromptRepository.saveToVersion content length', () => {
     expect((await systemPromptRepository.findByPromptId('len-ok'))?.content).toBe(content);
   });
 
+  it('saves a description at the 2,000 character limit', async () => {
+    await seed('desc-ok');
+    const description = 'd'.repeat(2000);
+
+    await systemPromptRepository.saveToVersion('desc-ok', 1, { content: 'edited', description }, 'admin-1', 'Admin');
+
+    expect((await systemPromptHistoryRepository.getVersion('desc-ok', 1))?.description).toBe(description);
+    expect((await systemPromptRepository.findByPromptId('desc-ok'))?.description).toBe(description);
+  });
+
   it('rejects content over 50,000 characters and stores nothing', async () => {
     await seed('len-over');
 
