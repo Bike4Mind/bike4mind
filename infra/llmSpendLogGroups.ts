@@ -6,8 +6,6 @@ export type LlmSpendLogSource = {
   /** Appended to logical and physical filter names; empty keeps the original ChatCompletion resources. */
   key: string;
   logGroupName: $util.Output<string>;
-  /** Set when the log group is an SST node; otherwise the relay looks its arn up by name. */
-  logGroupArn?: $util.Output<string>;
 };
 
 function requireLogGroupName(logGroup: sst.aws.Function['nodes']['logGroup'], label: string): $util.Output<string> {

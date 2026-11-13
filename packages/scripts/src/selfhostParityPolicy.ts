@@ -1224,7 +1224,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '6741fa8daaf749e570b487b2b2d1701549ba9d0bae15c9d4fdfa7afa50b4a4f0',
+    'ad1f3e24fc4d4363c612889929d74def12d50e753fcee4af64995d29e7327a08',
     ['ssm:GetParameter']
   ),
   gap(
