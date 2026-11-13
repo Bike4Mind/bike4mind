@@ -146,7 +146,7 @@ describe('DELETE /api/organizations/[id] with org-owned API keys', () => {
 
     await expect(
       call(orgKeysHandler, 'POST', owner.id, { id: orgId }, { name: 'Again', scopes: [ApiKeyScope.AI_CHAT] })
-    ).rejects.toThrow(/retired/);
+    ).rejects.toThrow('Organization not found');
   });
 
   it('rolls the key revoke back when the org delete fails, so the keys stay live with the org', async () => {
