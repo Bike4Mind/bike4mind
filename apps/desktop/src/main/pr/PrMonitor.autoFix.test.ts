@@ -237,6 +237,18 @@ describe('PrMonitor auto-fix', () => {
     expect(started[0].prompt).toContain('Attempt 3 of 4');
   });
 
+  it('updates what a re-check would allow when the setting changes after it gave up', async () => {
+    const { store, monitor, out } = setup({ attempts: 5 });
+    await monitor.start();
+    await store.set(SESSION, { ...bound, autoFixMax: 5, autoFixAttempts: 5 });
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix.note).toContain('allow 5 more');
+
+    await monitor.setAutoFixAttempts(2);
+    expect(out.last()).toMatchObject({ sessionId: SESSION, autoFix: { status: 'exhausted', max: 5 } });
+    expect(out.last().autoFix.note).toBe('Auto-fix gave up after 5 attempts. Re-check the box to allow 2 more.');
+  });
+
   it('raises a legacy binding too', async () => {
     const { store, monitor } = setup({ attempts: 5 });
     const { autoFixMax: _, ...legacy } = bound;

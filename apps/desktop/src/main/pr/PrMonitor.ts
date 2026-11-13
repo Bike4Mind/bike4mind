@@ -439,14 +439,32 @@ export class PrMonitor {
         ? { ...binding, autoFixMax: limit }
         : null
     );
-    for (const sessionId of raised) {
-      const live = this.live.get(sessionId);
-      if (live?.autoFix?.status !== 'exhausted') continue;
-      live.autoFix = { status: 'watching' };
-      // Whatever it gave up on is still unhandled, so a read now picks it back up.
-      void this.read(sessionId);
+    const changed = new Set(raised);
+    for (const [sessionId, live] of this.live) {
+      if (live.autoFix?.status !== 'exhausted') continue;
+      if (changed.has(sessionId)) {
+        live.autoFix = { status: 'watching' };
+        // Whatever it gave up on is still unhandled, so a read now picks it back up.
+        void this.read(sessionId);
+        continue;
+      }
+      // Its note names what a re-check would grant, which just changed.
+      const binding = await this.deps.store.get(sessionId);
+      if (!binding?.autoFix) continue;
+      live.autoFix = this.exhaustedStatus(autoFixBudget(binding));
+      changed.add(sessionId);
     }
-    for (const sessionId of new Set([...raised, ...this.onScreen.values()])) await this.publish(sessionId);
+    for (const sessionId of this.onScreen.values()) {
+      if (await this.deps.store.get(sessionId)) changed.add(sessionId);
+    }
+    for (const sessionId of changed) await this.publish(sessionId);
+  }
+
+  private exhaustedStatus(budget: number): { status: 'exhausted'; note: string } {
+    return {
+      status: 'exhausted',
+      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow ${this.autoFixLimit} more.`,
+    };
   }
 
   /**
@@ -914,10 +932,7 @@ export class PrMonitor {
       return;
     }
     const budget = autoFixBudget(binding);
-    const exhausted = {
-      status: 'exhausted' as const,
-      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow ${this.autoFixLimit} more.`,
-    };
+    const exhausted = this.exhaustedStatus(budget);
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
       if (live.autoFix?.status === 'started') return;
