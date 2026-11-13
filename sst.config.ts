@@ -49,6 +49,8 @@ export default $config({
     };
   },
   async run() {
+    // TEMPORARY: revert before merge.
+    if ($app.stage === 'pr7505') process.env.ENABLE_MONITORING = 'true';
     // Optional native/heavy peer deps that libraries lazy-import but which no
     // runtime path exercises today — marked external for EVERY Lambda Function
     // so esbuild never tries to bundle/resolve them (external-only, no
