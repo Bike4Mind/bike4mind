@@ -144,6 +144,7 @@ const departureAdapters = {
   db: {
     organizations: organizationRepository,
     users: userRepository,
+    userApiKeys: userApiKeyRepository,
     groups: groupRepository,
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -202,7 +203,11 @@ describe('org-owned API keys', () => {
     const afterRemoval = await authenticate(created.data.key, orgId);
     expect(afterRemoval.ok && afterRemoval.billing).toEqual({ kind: 'org', organizationId: orgId });
     const personalAfterRemoval = await authenticate(personal.key, orgId);
-    expect(personalAfterRemoval.ok && personalAfterRemoval.billing.kind).toBe('stale');
+    expect(personalAfterRemoval).toEqual({ ok: false, reason: 'not_found' });
+    expect(await userApiKeyRepository.findById(personal.id)).toMatchObject({
+      revokedBy: owner.id,
+      revokedReason: 'org-membership-ended',
+    });
 
     await User.deleteOne({ _id: creator.id });
 

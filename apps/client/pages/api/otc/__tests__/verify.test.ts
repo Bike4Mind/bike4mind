@@ -20,6 +20,7 @@ import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__
 
 const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: vi.fn(async () => false) }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
