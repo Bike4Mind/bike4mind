@@ -14,12 +14,11 @@ import {
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
 import {
+  Button,
   Checkbox,
   FormControl,
   Input,
-  LinearProgress,
   Link,
-  Sheet,
   Stack,
   Typography,
   Tabs,
@@ -52,7 +51,8 @@ import { useOpenSettingHome } from './useOpenSettingHome';
 import AdminLogoUpload from './AdminLogoUpload';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
-import { AdminPageHeader, SettingsSection } from './shared';
+import { AdminPageHeader, EmptyState, ErrorState, LoadingState, SettingsSection } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminTabStrip } from './shared/adminStyles';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PsychologyIcon from '@mui/icons-material/Psychology';
@@ -86,8 +86,6 @@ import ChatIcon from '@mui/icons-material/Chat';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import NightsStayIcon from '@mui/icons-material/NightsStay';
 import SpeedIcon from '@mui/icons-material/Speed';
-
-const HEADER_HEIGHT = '100px';
 
 // Minimal searchable shape - the subset of a real setting definition that search
 // inspects. Derived from the definition type so it stays in sync if those fields change.
@@ -589,27 +587,24 @@ const AdminSettingsTab: React.FC = () => {
   };
 
   return (
-    <Sheet sx={{ width: '100%' }}>
+    <Stack
+      gap={ADMIN_REGION_GAP}
+      sx={{ minWidth: 0, maxWidth: ADMIN_DETAIL_MAX_WIDTH }}
+      data-testid="admin-settings-page"
+    >
+      <AdminPageHeader
+        title="Settings"
+        description="Edit configuration, then save or discard your changes."
+        actions={<ContextHelpButton helpId="admin/admin-settings" tooltipText="Admin settings help" />}
+      />
       {settingsFromServer.isLoading ? (
-        <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />
+        <LoadingState label="Loading settings" />
+      ) : settingsFromServer.isError ? (
+        <ErrorState message="Could not load settings." onRetry={() => void settingsFromServer.refetch()} />
       ) : (
         <>
-          <Stack
-            spacing={2}
-            direction={{ xs: 'column', md: 'row' }}
-            alignItems={{ xs: 'stretch', md: 'center' }}
-            sx={{
-              p: '1rem',
-              minHeight: { xs: 'auto', md: HEADER_HEIGHT },
-              borderBottom: '1px dashed',
-              borderColor: 'divider',
-            }}
-          >
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: { xs: 1, md: 0 } }}>
-              <AdminPageHeader title="Settings" description="Edit configuration, then save or discard your changes." />
-              <ContextHelpButton helpId="admin/admin-settings" tooltipText="Admin Settings Help" />
-            </Stack>
-            <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
+          <Stack spacing={2} direction="row" alignItems="center" useFlexGap sx={{ flexWrap: 'wrap' }}>
+            <FormControl sx={{ flex: '1 1 240px', minWidth: 0 }}>
               <Input
                 placeholder="Search by name, description, or non-sensitive value (/)"
                 value={searchTerm}
@@ -664,12 +659,7 @@ const AdminSettingsTab: React.FC = () => {
           )}
 
           {matchedHomes.map(home => (
-            <Typography
-              key={home.id}
-              level="body-sm"
-              sx={{ px: '1rem', pt: 1 }}
-              data-testid={`admin-settings-search-${home.id}-hint`}
-            >
+            <Typography key={home.id} level="body-sm" data-testid={`admin-settings-search-${home.id}-hint`}>
               {home.summary}{' '}
               <Link
                 component="button"
@@ -683,12 +673,24 @@ const AdminSettingsTab: React.FC = () => {
             </Typography>
           ))}
 
-          {allTabs ? (
-            <Stack
-              spacing={3}
-              sx={{ overflowY: 'auto', height: `calc(100vh - ${HEADER_HEIGHT} - 100px)`, p: '1rem' }}
-              data-testid="admin-settings-all-tabs-results"
-            >
+          {filteredSettings.length === 0 && !logoMatchesSearch && matchedHomes.length === 0 ? (
+            <EmptyState
+              title="No settings match these filters"
+              action={
+                <Button
+                  variant="outlined"
+                  data-testid="admin-settings-clear-filters-btn"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setAllTabs(false);
+                  }}
+                >
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : allTabs ? (
+            <Stack spacing={2} data-testid="admin-settings-all-tabs-results">
               {Object.values(groupedSettings).flatMap(tabCategories =>
                 Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))
               )}
@@ -697,51 +699,25 @@ const AdminSettingsTab: React.FC = () => {
             <Tabs
               value={section}
               onChange={(_, value) => setSection(value as SettingSectionKey)}
-              sx={{ bgcolor: 'background.body' }}
+              sx={{ minWidth: 0, gap: ADMIN_REGION_GAP, bgcolor: 'transparent' }}
             >
-              <TabList
-                variant="plain"
-                sx={{
-                  '--List-padding': '0px',
-                  '--List-radius': '0px',
-                  '--ListItem-minHeight': '48px',
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  overflowX: 'auto',
-                }}
-              >
+              <TabList variant="plain" sx={adminTabStrip}>
                 {Object.entries(SETTING_TABS).map(([tabId, tabInfo]) => {
-                  const TabIcon = resolveSettingsIcon(tabInfo.icon);
                   return (
                     <Tab
                       key={tabId}
                       value={tabId}
                       variant={section === tabId ? 'soft' : 'plain'}
                       data-testid={`admin-settings-section-tab-${tabInfo.id}`}
-                      sx={{
-                        borderRadius: 0,
-                        minWidth: { xs: 'auto', md: 'unset' },
-                        px: { xs: 2, md: 3 },
-                      }}
                     >
-                      <Stack direction="row" alignItems="center" spacing={1}>
-                        <TabIcon sx={{ '--Icon-fontSize': '20px' }} />
-                        <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>{tabInfo.name}</Typography>
-                      </Stack>
+                      {tabInfo.name}
                     </Tab>
                   );
                 })}
               </TabList>
               {Object.entries(groupedSettings).map(([tabId, tabCategories]) => (
-                <TabPanel key={tabId} value={tabId}>
-                  <Stack
-                    spacing={2}
-                    sx={{
-                      overflowY: 'auto',
-                      height: `calc(100vh - ${HEADER_HEIGHT} - 100px)`,
-                      p: '1rem',
-                    }}
-                  >
+                <TabPanel key={tabId} value={tabId} sx={{ p: 0, minWidth: 0 }}>
+                  <Stack spacing={2}>
                     {Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))}
                   </Stack>
                 </TabPanel>
@@ -750,7 +726,7 @@ const AdminSettingsTab: React.FC = () => {
           )}
         </>
       )}
-    </Sheet>
+    </Stack>
   );
 };
 

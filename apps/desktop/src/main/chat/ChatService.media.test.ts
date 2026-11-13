@@ -96,6 +96,7 @@ describe('ChatService generation tools', () => {
       'web_fetch',
       'ask_user',
       'request_directory',
+      'loop',
     ]);
   });
 
@@ -119,7 +120,7 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual(['web_search', 'web_fetch', 'ask_user', 'request_directory']);
+    expect(declaredTools()).toEqual(['web_search', 'web_fetch', 'ask_user', 'request_directory', 'loop']);
   });
 
   it('tells the model the output goes to the user and that it costs them', async () => {

@@ -36,6 +36,19 @@ describe('CreditAnalyticsTab', () => {
     expect(screen.getByTestId('admin-page-header').nextElementSibling).toContainElement(
       screen.getByTestId('credit-analysis-ledger-tab')
     );
+    for (const [id, label] of Object.entries({
+      users: 'User credits',
+      pricing: 'Model pricing',
+      margins: 'Margins',
+      'org-usage': 'Org usage',
+      'api-usage': 'API usage',
+      ledger: 'Ledger',
+      adjustments: 'Adjustments',
+    })) {
+      const tab = screen.getByTestId(`credit-analysis-${id}-tab`);
+      expect(tab).toHaveTextContent(label);
+      expect(tab.querySelector('svg')).toBeNull();
+    }
 
     fireEvent.click(screen.getByTestId('credit-analysis-ledger-tab'));
 
