@@ -4,24 +4,39 @@ import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
+import { receiveDlqMessagesByIds } from '@server/utils/dlqTargetedReceive';
 import { dlqReplayLogRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
-const BodySchema = z.object({
-  queueLabel: z.string().min(1),
-  reason: z.unknown().optional(),
-  messages: z
-    .array(
-      z.object({
-        messageId: z.string().min(1),
-        receiptHandle: z.string().min(1),
-        body: z.string().min(1),
-      })
-    )
-    .min(1)
-    .max(100),
+const MAX_MESSAGES = 100;
+const NOT_FOUND_REASON = 'Not found in the dead-letter queue. It may already be gone or held by another receive.';
+
+const DirectMessageSchema = z.object({
+  messageId: z.string().min(1),
+  receiptHandle: z.string().min(1),
+  body: z.string().min(1),
 });
+
+// Either `messages` (receipt handles from a prior receive) or `messageIds`, which the route receives
+// itself: the admin list peeks with visibility 0, so its rows carry no usable receipt handle.
+const BodySchema = z
+  .object({
+    queueLabel: z.string().min(1),
+    reason: z.unknown().optional(),
+    messages: z.array(DirectMessageSchema).min(1).max(MAX_MESSAGES).optional(),
+    messageIds: z.array(z.string().min(1)).min(1).max(MAX_MESSAGES).optional(),
+  })
+  .refine(data => (data.messages === undefined) !== (data.messageIds === undefined), {
+    message: 'Specify exactly one of messages or messageIds',
+  });
+
+type DiscardResult = {
+  messageId: string;
+  status: 'discarded' | 'failed';
+  reason?: string;
+  historyPending?: boolean;
+};
 
 const handler = adminApi({
   auth: 'jwtOnly',
@@ -31,7 +46,7 @@ const handler = adminApi({
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
 
-  const { queueLabel, messages } = parsed.data;
+  const { queueLabel, messageIds } = parsed.data;
   const reason = parseAdminActionReason(parsed.data.reason);
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
@@ -39,12 +54,22 @@ const handler = adminApi({
   if (!entry) throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   const dlqUrl = getDlqUrl(entry.label);
 
-  const results: Array<{
-    messageId: string;
-    status: 'discarded' | 'failed';
-    reason?: string;
-    historyPending?: boolean;
-  }> = [];
+  const results: DiscardResult[] = [];
+  let messages = parsed.data.messages ?? [];
+  if (messageIds) {
+    const requested = new Set(messageIds);
+    const { found } = await receiveDlqMessagesByIds(dlqUrl, queueLabel, requested, '[DLQ Discard]');
+    messages = found.flatMap(message =>
+      message.MessageId && message.ReceiptHandle && message.Body
+        ? [{ messageId: message.MessageId, receiptHandle: message.ReceiptHandle, body: message.Body }]
+        : []
+    );
+    const receivedIds = new Set(messages.map(message => message.messageId));
+    for (const messageId of requested) {
+      if (!receivedIds.has(messageId)) results.push({ messageId, status: 'failed', reason: NOT_FOUND_REASON });
+    }
+  }
+
   for (const message of messages) {
     let logId: string;
     try {

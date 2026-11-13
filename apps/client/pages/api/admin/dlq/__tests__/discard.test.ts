@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   logReplay: vi.fn(),
   finalizeDiscard: vi.fn(),
   deleteFromQueue: vi.fn(),
+  receiveFromQueue: vi.fn(),
+  changeMessageVisibility: vi.fn(),
   audit: vi.fn(),
 }));
 
@@ -32,7 +34,11 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => {
     getDlqUrl: (label: string) => queues[label].url,
   };
 });
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ deleteFromQueue: h.deleteFromQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  deleteFromQueue: h.deleteFromQueue,
+  receiveFromQueue: h.receiveFromQueue,
+  changeMessageVisibility: h.changeMessageVisibility,
+}));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { logReplay: h.logReplay, finalizeDiscard: h.finalizeDiscard },
 }));
@@ -43,7 +49,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   },
   recordAdminActionFromRequest: h.audit,
 }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn() } }));
 
 import '../discard';
 
@@ -59,6 +65,8 @@ beforeEach(() => {
   h.logReplay.mockResolvedValue({ id: 'log-1' });
   h.deleteFromQueue.mockResolvedValue(undefined);
   h.finalizeDiscard.mockResolvedValue(undefined);
+  h.receiveFromQueue.mockResolvedValue([]);
+  h.changeMessageVisibility.mockResolvedValue(undefined);
 });
 
 describe('POST /api/admin/dlq/discard', () => {
@@ -79,6 +87,13 @@ describe('POST /api/admin/dlq/discard', () => {
     ['no messages', { queueLabel: 'quest', messages: [], reason: 'Job obsolete' }],
     ['too many messages', { queueLabel: 'quest', messages: Array(101).fill(message), reason: 'Job obsolete' }],
     ['empty body', { queueLabel: 'quest', messages: [{ ...message, body: '' }], reason: 'Job obsolete' }],
+    ['neither messages nor messageIds', { queueLabel: 'quest', reason: 'Job obsolete' }],
+    [
+      'both messages and messageIds',
+      { queueLabel: 'quest', messages: [message], messageIds: ['m1'], reason: 'Job obsolete' },
+    ],
+    ['no message IDs', { queueLabel: 'quest', messageIds: [], reason: 'Job obsolete' }],
+    ['too many message IDs', { queueLabel: 'quest', messageIds: Array(101).fill('m1'), reason: 'Job obsolete' }],
     [
       'empty receipt handle',
       { queueLabel: 'quest', messages: [{ ...message, receiptHandle: '' }], reason: 'Job obsolete' },
@@ -251,5 +266,47 @@ describe('POST /api/admin/dlq/discard', () => {
       ],
     });
     expect(h.audit.mock.calls[0][1].details.discardedMessageIds).toEqual(['m1']);
+  });
+
+  describe('by message ID', () => {
+    const received = (id: string) => ({ MessageId: id, ReceiptHandle: `receipt-${id}`, Body: `{"id":"${id}"}` });
+
+    it('receives the requested messages itself and deletes them with the fresh receipt handles', async () => {
+      h.receiveFromQueue
+        .mockResolvedValueOnce([received('m1'), received('other')])
+        .mockResolvedValueOnce([received('m2')]);
+      const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1', 'm2'], reason: 'Job obsolete' });
+      await h.post!(req, res);
+
+      expect(h.deleteFromQueue.mock.calls).toEqual([
+        ['dlq-url', 'receipt-m1'],
+        ['dlq-url', 'receipt-m2'],
+      ]);
+      expect(h.logReplay).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'm1', messageBody: '{"id":"m1"}' })
+      );
+      // The message the search picked up but was not asked for is handed straight back.
+      expect(h.changeMessageVisibility).toHaveBeenCalledWith('dlq-url', 'receipt-other', 0);
+      expect(h.deleteFromQueue).not.toHaveBeenCalledWith('dlq-url', 'receipt-other');
+      expect(res._getJSONData()).toMatchObject({ discarded: 2, failed: 0 });
+    });
+
+    it('reports an ID the search cannot reach as failed without retaining or deleting anything for it', async () => {
+      h.receiveFromQueue.mockResolvedValueOnce([received('m1')]).mockResolvedValueOnce([]);
+      const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1', 'gone'], reason: 'Job obsolete' });
+      await h.post!(req, res);
+
+      expect(h.logReplay).toHaveBeenCalledTimes(1);
+      expect(h.deleteFromQueue).toHaveBeenCalledTimes(1);
+      const data = res._getJSONData();
+      expect(data).toMatchObject({ discarded: 1, failed: 1 });
+      expect(data.results).toContainEqual(
+        expect.objectContaining({ messageId: 'gone', status: 'failed', reason: expect.stringContaining('Not found') })
+      );
+      expect(h.audit).toHaveBeenCalledWith(
+        req,
+        expect.objectContaining({ details: expect.objectContaining({ messageCount: 1, failed: 1 }) })
+      );
+    });
   });
 });

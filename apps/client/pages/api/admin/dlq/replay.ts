@@ -8,12 +8,8 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import {
-  receiveFromQueue,
-  sendToQueue,
-  deleteFromQueue,
-  changeMessageVisibility,
-} from '@bike4mind/server-utils/utils/sqs';
+import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
+import { receiveDlqMessagesByIds } from '@server/utils/dlqTargetedReceive';
 import type { Message } from '@aws-sdk/client-sqs';
 import { dlqReplayLogRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -23,8 +19,6 @@ const MAX_REPLAY_ATTEMPTS = DLQ_MAX_REPLAY_ATTEMPTS;
 const MAX_BATCH_SIZE = 100;
 // Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds (including the fallback match).
 const RECEIVE_WAIT_SECONDS = 2;
-// Upper bound on receives while searching the DLQ for specific message IDs.
-const TARGETED_MAX_RECEIVES = 20;
 
 const DirectMessageSchema = z.object({
   messageId: z.string().min(1),
@@ -49,27 +43,6 @@ interface ReplayResult {
   messageId: string;
   status: 'replayed' | 'failed' | 'skipped';
   reason?: string;
-}
-
-async function releaseReceivedMessages(
-  dlqUrl: string,
-  queueLabel: string,
-  messages: readonly Message[],
-  kind: 'untargeted' | 'acquired'
-): Promise<void> {
-  const released = await Promise.allSettled(
-    messages.filter(m => m.ReceiptHandle).map(m => changeMessageVisibility(dlqUrl, m.ReceiptHandle!, 0))
-  );
-  const releaseErrors = released.flatMap(r =>
-    r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
-  );
-  if (releaseErrors.length > 0) {
-    Logger.warn(`[DLQ Replay] Could not release ${releaseErrors.length} ${kind} messages early`, {
-      queueLabel,
-      // Distinct messages only: a missing permission fails every release the same way.
-      errors: [...new Set(releaseErrors)],
-    });
-  }
 }
 
 /**
@@ -273,38 +246,16 @@ const handler = adminApi({
 
   // --- Batch replay path: receive from SQS and replay ---
 
-  const allMessages: Message[] = [];
   const messageIdSet = messageIds ? new Set(messageIds) : null;
   let messagesToReplay: Message[];
+  let receivedCount: number;
 
   if (messageIdSet) {
-    // SQS cannot fetch a message by ID and a receive returns an arbitrary subset, often a
-    // single message on a small queue. Each receive hides what it returned, so the next one
-    // surfaces different messages; keep going until every target is found. Long polling reduces
-    // empty responses caused by short-poll sampling.
-    const found = new Map<string, Message>();
-    const others: Message[] = [];
-    try {
-      for (let i = 0; i < TARGETED_MAX_RECEIVES && found.size < messageIdSet.size; i++) {
-        const messages = await receiveFromQueue(dlqUrl, 10, 60, 1);
-        if (messages.length === 0) break;
-        allMessages.push(...messages);
-        for (const m of messages) {
-          const id = m.MessageId ?? '';
-          if (!messageIdSet.has(id)) others.push(m);
-          else found.set(id, m);
-        }
-      }
-    } catch (error) {
-      await releaseReceivedMessages(dlqUrl, queueLabel, allMessages, 'acquired');
-      throw error;
-    }
-    messagesToReplay = [...found.values()];
-
-    // Hand back the messages the search picked up but was not asked to replay,
-    // so they do not stay hidden for the rest of the visibility timeout.
-    await releaseReceivedMessages(dlqUrl, queueLabel, others, 'untargeted');
+    const targeted = await receiveDlqMessagesByIds(dlqUrl, queueLabel, messageIdSet, '[DLQ Replay]');
+    messagesToReplay = targeted.found;
+    receivedCount = targeted.receivedCount;
   } else {
+    const allMessages: Message[] = [];
     // Each non-empty receive adds at least one message, so batchSize calls is a hard upper bound.
     for (let i = 0; i < batchSize && allMessages.length < batchSize; i++) {
       const toReceive = Math.min(batchSize - allMessages.length, 10);
@@ -316,6 +267,7 @@ const handler = adminApi({
     }
     // At-least-once delivery can return one message twice in a run; keep the latest copy, whose receipt handle is the valid one.
     messagesToReplay = [...new Map(allMessages.map(m => [m.MessageId ?? '', m])).values()];
+    receivedCount = allMessages.length;
   }
 
   // Track which requested messageIds were not found in the received batch
@@ -327,7 +279,7 @@ const handler = adminApi({
       adminUserId,
       queueLabel,
       notFoundIds,
-      totalReceived: allMessages.length,
+      totalReceived: receivedCount,
     });
   }
 
@@ -335,7 +287,7 @@ const handler = adminApi({
     adminUserId,
     batchSize,
     messageIds: messageIds ?? 'all',
-    messagesReceived: allMessages.length,
+    messagesReceived: receivedCount,
     messagesToReplay: messagesToReplay.length,
   });
 

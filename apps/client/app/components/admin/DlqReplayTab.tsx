@@ -23,12 +23,14 @@ import {
   useDlqMessages,
   useDlqReplay,
   useDlqDiscard,
+  DlqDiscardParams,
   DlqMessage,
   DlqQueueInfo,
   DlqReplaySafety,
 } from '@client/app/hooks/data/dlqManagement';
 import {
   AdminPageHeader,
+  BulkActionBar,
   CopyValue,
   ActionDialog,
   DataTable,
@@ -43,6 +45,7 @@ import {
 } from '@client/app/components/admin/shared';
 import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import type { DataColumn } from './shared/DataTable';
+import type { AdminSelection } from './shared/BulkActionBar';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { AdminPermissionAction } from './shared/MissingPermission';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
@@ -250,6 +253,51 @@ const MessageDrawer: React.FC<{
 
 const isOnStage = (queue: DlqQueueInfo) => queue.deployed !== false;
 
+const EMPTY_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
+// Must match the discard route's per-request cap (`pages/api/admin/dlq/discard.ts`).
+const DISCARD_CHUNK_SIZE = 100;
+
+type DiscardOutcome = {
+  messageId: string;
+  status: 'discarded' | 'failed';
+  reason?: string;
+  historyPending?: boolean;
+};
+
+/**
+ * Discards in sequential chunks the route accepts. A chunk whose request fails counts each of its
+ * messages as failed, so one bad chunk does not hide what the others did.
+ */
+async function discardInChunks(
+  queueLabel: string,
+  reason: string,
+  targets: readonly DlqMessage[],
+  discard: (params: DlqDiscardParams) => Promise<{ results: DiscardOutcome[] }>
+): Promise<DiscardOutcome[]> {
+  const outcomes: DiscardOutcome[] = [];
+  for (let start = 0; start < targets.length; start += DISCARD_CHUNK_SIZE) {
+    const chunk = targets.slice(start, start + DISCARD_CHUNK_SIZE);
+    // The list peeks with visibility 0 and carries no receipt handle, so the route receives by ID.
+    const direct = chunk.flatMap(({ messageId, receiptHandle, body }) =>
+      receiptHandle && body ? [{ messageId, receiptHandle, body }] : []
+    );
+    try {
+      const { results } = await discard(
+        direct.length === chunk.length
+          ? { queueLabel, reason, messages: direct }
+          : { queueLabel, reason, messageIds: chunk.map(message => message.messageId) }
+      );
+      outcomes.push(...results);
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : 'Unknown error';
+      outcomes.push(...chunk.map(({ messageId }) => ({ messageId, status: 'failed' as const, reason: failure })));
+    }
+  }
+  return outcomes;
+}
+
+const pluralMessages = (count: number) => `${count.toLocaleString()} ${count === 1 ? 'message' : 'messages'}`;
+
 const DlqReplayTab: React.FC = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -277,7 +325,15 @@ const DlqReplayTab: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
-  const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
+  const [discardTargets, setDiscardTargets] = useState<DlqMessage[] | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [selection, setSelection] = useState<AdminSelection>(EMPTY_SELECTION);
+  // A selection belongs to the queue it was made on.
+  const [selectionQueue, setSelectionQueue] = useState(selectedQueue);
+  if (selectionQueue !== selectedQueue) {
+    setSelectionQueue(selectedQueue);
+    setSelection(EMPTY_SELECTION);
+  }
   const [showHistory, setShowHistory] = useState(false);
 
   const {
@@ -288,6 +344,15 @@ const DlqReplayTab: React.FC = () => {
   } = useDlqMessages(showHistory ? null : selectedQueue);
   const replayMutation = useDlqReplay();
   const discardMutation = useDlqDiscard();
+
+  const loadedMessages = useMemo(() => messages ?? [], [messages]);
+  const selectedMessages =
+    selection.mode === 'allMatching'
+      ? loadedMessages
+      : loadedMessages.filter(message => selection.ids.includes(message.messageId));
+  // Counts only rows still listed, so a refetch that drops a selected message does not inflate the bar.
+  const listedSelection: AdminSelection =
+    selection.mode === 'allMatching' ? selection : { mode: 'explicit', ids: selectedMessages.map(m => m.messageId) };
 
   // Totals and the all-clear cover only queues this stage creates; a queue that exists but could
   // not be read (-1) still counts, so it keeps the all-clear from showing.
@@ -433,8 +498,8 @@ const DlqReplayTab: React.FC = () => {
               size="sm"
               color="danger"
               aria-label="Discard this message"
-              onClick={() => setDiscardConfirm(msg)}
-              disabled={permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending}
+              onClick={() => setDiscardTargets([msg])}
+              disabled={permissionDisabled || discarding}
               data-testid={`dlq-discard-single-${msg.messageId}`}
             >
               <Trash2 size={16} />
@@ -513,37 +578,51 @@ const DlqReplayTab: React.FC = () => {
     },
   ];
   const confirmDiscard = async (reason: string) => {
-    if (!selectedQueue || !discardConfirm?.receiptHandle || !discardConfirm.body) return;
-    try {
-      const result = await discardMutation.mutateAsync({
-        queueLabel: selectedQueue,
-        reason,
-        messages: [
-          {
-            messageId: discardConfirm.messageId,
-            receiptHandle: discardConfirm.receiptHandle,
-            body: discardConfirm.body,
-          },
-        ],
-      });
-      if (result.failed) {
-        toast.error(
-          `Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}${result.results[0]?.historyPending ? '. History outcome is unconfirmed.' : ''}`
-        );
-        return;
-      }
-      setDiscardConfirm(null);
-      if (result.results.some(message => message.historyPending)) {
-        toast.warning(
-          'Deletion acknowledged. History outcome is unconfirmed; the body is kept for 30 days for manual recovery.'
-        );
-      } else {
-        toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
-      }
-    } catch (error) {
-      toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    if (!selectedQueue || !discardTargets?.length) return;
+    const single = discardTargets.length === 1;
+    setDiscarding(true);
+    const outcomes = await discardInChunks(selectedQueue, reason, discardTargets, discardMutation.mutateAsync);
+    setDiscarding(false);
+    // The mutation invalidates on success only; refresh here so a failed chunk still updates the list and counts.
+    void refetchQueues();
+    void refetchMessages();
+
+    const failed = outcomes.filter(outcome => outcome.status === 'failed');
+    const discarded = outcomes.length - failed.length;
+    const historyPending = outcomes.filter(outcome => outcome.historyPending);
+    const firstFailure = failed[0]?.reason ?? 'Unknown error';
+    if (discarded === 0) {
+      const pendingNote = failed.some(outcome => outcome.historyPending) ? '. History outcome is unconfirmed.' : '';
+      toast.error(
+        single
+          ? `Discard failed: ${firstFailure}${pendingNote}`
+          : `Discard failed: all ${pluralMessages(failed.length)} failed. ${firstFailure}${pendingNote}`
+      );
+      return;
+    }
+    setDiscardTargets(null);
+    setSelection(
+      failed.length > 0 ? { mode: 'explicit', ids: failed.map(outcome => outcome.messageId) } : EMPTY_SELECTION
+    );
+    if (failed.length > 0) {
+      toast.warning(
+        `Discard partially complete: ${discarded.toLocaleString()} discarded, ${failed.length.toLocaleString()} failed. First error: ${firstFailure}`
+      );
+    } else if (historyPending.length > 0) {
+      toast.warning(
+        single
+          ? 'Deletion acknowledged. History outcome is unconfirmed; the body is kept for 30 days for manual recovery.'
+          : `${pluralMessages(discarded)} discarded. History outcome is unconfirmed for ${historyPending.length.toLocaleString()}; bodies are kept for 30 days for manual recovery.`
+      );
+    } else {
+      toast.success(
+        single
+          ? 'Message discarded. Its body is kept for 30 days for manual recovery.'
+          : `${pluralMessages(discarded)} discarded. Their bodies are kept for 30 days for manual recovery.`
+      );
     }
   };
+  const discardCount = discardTargets?.length ?? 0;
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
@@ -686,6 +765,22 @@ const DlqReplayTab: React.FC = () => {
                       </Button>
                     )}
                   </AdminPermissionAction>
+                  <AdminPermissionAction requirement="settings:manage">
+                    {permissionDisabled => (
+                      <Button
+                        size="sm"
+                        variant="outlined"
+                        color="danger"
+                        startDecorator={<Trash2 size={16} />}
+                        onClick={() => setDiscardTargets([...loadedMessages])}
+                        loading={discarding}
+                        disabled={permissionDisabled || messagesLoading || loadedMessages.length === 0}
+                        data-testid="dlq-discard-all-loaded"
+                      >
+                        Discard all loaded ({loadedMessages.length.toLocaleString()})
+                      </Button>
+                    )}
+                  </AdminPermissionAction>
                 </Stack>
               }
             >
@@ -743,11 +838,37 @@ const DlqReplayTab: React.FC = () => {
               empty={<EmptyState title="No messages in this queue" action={null} />}
               onRowActivate={openMessage}
               rowActions={messageActions}
-              minWidth="94rem"
+              minWidth="97rem"
               pageResetKey={selectedQueue}
               testId="dlq-messages-table"
               rowTestId={msg => `dlq-message-row-${msg.messageId}`}
+              selection={selection}
+              onSelectionChange={setSelection}
             />
+          )}
+          {selectedQueue && (
+            <BulkActionBar
+              selection={listedSelection}
+              totalMatching={loadedMessages.length}
+              selectAllLabel={`Select all ${loadedMessages.length.toLocaleString()} loaded`}
+              onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+              onClear={() => setSelection(EMPTY_SELECTION)}
+            >
+              <AdminPermissionAction requirement="settings:manage">
+                {permissionDisabled => (
+                  <Button
+                    size="sm"
+                    color="danger"
+                    startDecorator={<Trash2 size={16} />}
+                    onClick={() => setDiscardTargets([...selectedMessages])}
+                    disabled={permissionDisabled || discarding || selectedMessages.length === 0}
+                    data-testid="dlq-discard-selected"
+                  >
+                    Discard selected
+                  </Button>
+                )}
+              </AdminPermissionAction>
+            </BulkActionBar>
           )}
         </>
       )}
@@ -790,17 +911,27 @@ const DlqReplayTab: React.FC = () => {
         <DlqReplaySummary queue={selectedQueueInfo} count={1} messageId={singleReplayConfirm?.messageId} />
       </ActionDialog>
       <ActionDialog
-        open={!!discardConfirm}
-        onClose={() => setDiscardConfirm(null)}
-        title="Discard dead letter?"
-        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept for 30 days for manual recovery."
+        open={discardCount > 0}
+        onClose={() => setDiscardTargets(null)}
+        title={discardCount === 1 ? 'Discard dead letter?' : `Discard ${discardCount.toLocaleString()} dead letters?`}
+        description={
+          discardCount === 1
+            ? 'This removes the message from the DLQ. It cannot be undone from this page. The message body is kept for 30 days for manual recovery.'
+            : 'This removes the messages from the DLQ. It cannot be undone from this page. Message bodies are kept for 30 days for manual recovery.'
+        }
         reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
-        confirmLabel="Discard message"
+        confirmLabel={discardCount === 1 ? 'Discard message' : `Discard ${pluralMessages(discardCount)}`}
         tone="danger"
-        pending={discardMutation.isPending}
+        pending={discarding}
         onConfirm={confirmDiscard}
         data-testid="dlq-discard-dialog"
-      />
+      >
+        <Typography level="body-sm" data-testid="dlq-discard-count">
+          {pluralMessages(discardCount)} from {selectedQueueInfo?.displayName ?? 'this queue'}
+          {discardCount > DISCARD_CHUNK_SIZE &&
+            `, sent in ${Math.ceil(discardCount / DISCARD_CHUNK_SIZE).toLocaleString()} requests of up to ${DISCARD_CHUNK_SIZE}`}
+        </Typography>
+      </ActionDialog>
     </Stack>
   );
 };

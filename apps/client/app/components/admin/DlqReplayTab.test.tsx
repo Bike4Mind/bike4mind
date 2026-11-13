@@ -312,11 +312,11 @@ describe('DlqReplayTab toolkit presentation', () => {
     };
     await renderWithQueueSelected();
     const table = screen.getByTestId('dlq-messages-table');
-    expect(within(table).getAllByRole('columnheader')).toHaveLength(9);
-    expect(table).toHaveStyle({ minWidth: '94rem' });
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(10);
+    expect(table).toHaveStyle({ minWidth: '97rem' });
     expect(screen.getByRole('region', { name: 'Dead-letter messages' })).toHaveStyle({ overflowX: 'auto' });
     const row = screen.getByTestId('dlq-message-row-m1');
-    expect(within(row).getAllByRole('cell')).toHaveLength(9);
+    expect(within(row).getAllByRole('cell')).toHaveLength(10);
     expect(row).toHaveTextContent('m1');
     expect(row).toHaveTextContent('worker timed out');
     expect(within(row).getByTestId('dlq-recommendation-m1')).toHaveTextContent('Recorded transient failure: timeout.');
@@ -689,6 +689,126 @@ describe('DlqReplayTab replay permission', () => {
     await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
     expect(toast.error).toHaveBeenCalledWith(message);
     expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeTruthy();
+  });
+});
+
+describe('DlqReplayTab bulk discard', () => {
+  const peeked = (count: number) =>
+    Array.from({ length: count }, (_unused, index) => ({
+      messageId: `b${index + 1}`,
+      body: '{}',
+      sentTimestamp: '1700000000000',
+      approximateReceiveCount: '1',
+    }));
+  const discardedAll = (params: { messageIds?: string[] }) =>
+    Promise.resolve({
+      discarded: params.messageIds?.length ?? 0,
+      failed: 0,
+      results: (params.messageIds ?? []).map(messageId => ({ messageId, status: 'discarded' })),
+    });
+  const confirmWithReason = async () => {
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+  };
+
+  beforeEach(() => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+  });
+
+  it('discards only the selected rows, by ID, and shows their count in the dialog', async () => {
+    h.messages = peeked(3);
+    h.discard.mockImplementation(discardedAll);
+    await renderWithQueueSelected();
+
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+    await userEvent.click(within(screen.getByTestId('admin-table-select-b1')).getByRole('checkbox'));
+    await userEvent.click(within(screen.getByTestId('admin-table-select-b3')).getByRole('checkbox'));
+    expect(within(screen.getByTestId('admin-bulk-action-bar')).getByText('2 selected')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('dlq-discard-selected'));
+    expect(screen.getByText('Discard 2 dead letters?')).toBeInTheDocument();
+    expect(screen.getByTestId('dlq-discard-count')).toHaveTextContent('2 messages from Queue One');
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toHaveTextContent('Discard 2 messages');
+
+    await confirmWithReason();
+    expect(h.discard).toHaveBeenCalledTimes(1);
+    expect(h.discard).toHaveBeenCalledWith({ queueLabel: 'q1', reason: 'Job obsolete', messageIds: ['b1', 'b3'] });
+    await waitFor(() => expect(screen.queryByTestId('dlq-discard-dialog-confirm-btn')).not.toBeInTheDocument());
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('2 messages discarded'));
+    expect(q.refetch).toHaveBeenCalled();
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+  });
+
+  it('keeps the bulk discard disabled for a support:read viewer', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['support:read'] };
+    h.messages = peeked(2);
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-discard-all-loaded')).toBeDisabled();
+    await userEvent.click(within(screen.getByTestId('admin-table-select-b1')).getByRole('checkbox'));
+    expect(screen.getByTestId('dlq-discard-selected')).toBeDisabled();
+  });
+
+  it('splits more than 100 loaded messages into requests of at most 100', async () => {
+    h.messages = peeked(101);
+    h.discard.mockImplementation(discardedAll);
+    await renderWithQueueSelected();
+
+    await userEvent.click(screen.getByTestId('dlq-discard-all-loaded'));
+    expect(screen.getByText('Discard 101 dead letters?')).toBeInTheDocument();
+    expect(screen.getByTestId('dlq-discard-count')).toHaveTextContent('101 messages from Queue One');
+    expect(screen.getByTestId('dlq-discard-count')).toHaveTextContent('2 requests of up to 100');
+
+    await confirmWithReason();
+    await waitFor(() => expect(h.discard).toHaveBeenCalledTimes(2));
+    const [first, second] = h.discard.mock.calls.map(([params]) => params as { messageIds: string[] });
+    expect(first.messageIds).toHaveLength(100);
+    expect(first.messageIds[0]).toBe('b1');
+    expect(second.messageIds).toEqual(['b101']);
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('101 messages discarded'));
+  });
+
+  it('sums a partial failure across chunks, keeps going after a failed request and reselects the failures', async () => {
+    h.messages = peeked(102);
+    h.discard
+      .mockImplementationOnce((params: { messageIds: string[] }) =>
+        Promise.resolve({
+          discarded: 99,
+          failed: 1,
+          results: params.messageIds.map((messageId, index) =>
+            index === 0
+              ? { messageId, status: 'failed', reason: 'Not found in the dead-letter queue.' }
+              : { messageId, status: 'discarded' }
+          ),
+        })
+      )
+      .mockRejectedValueOnce(new Error('network down'));
+    await renderWithQueueSelected();
+
+    await userEvent.click(screen.getByTestId('dlq-discard-all-loaded'));
+    await confirmWithReason();
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Discard partially complete: 99 discarded, 3 failed. First error: Not found in the dead-letter queue.'
+      )
+    );
+    expect(h.discard).toHaveBeenCalledTimes(2);
+    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('dlq-discard-dialog-confirm-btn')).not.toBeInTheDocument());
+    expect(within(screen.getByTestId('admin-bulk-action-bar')).getByText('3 selected')).toBeInTheDocument();
+  });
+
+  it('keeps the dialog open when every message fails', async () => {
+    h.messages = peeked(2);
+    h.discard.mockRejectedValue(new Error('boom'));
+    await renderWithQueueSelected();
+
+    await userEvent.click(screen.getByTestId('dlq-discard-all-loaded'));
+    await confirmWithReason();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Discard failed: all 2 messages failed. boom'));
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeInTheDocument();
   });
 });
 

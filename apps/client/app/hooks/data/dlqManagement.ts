@@ -131,14 +131,15 @@ export const useDlqReplay = () => {
   });
 };
 
+/** Pass `messages` with live receipt handles, or `messageIds` for the server to receive; at most 100 per call. */
+export type DlqDiscardParams = { queueLabel: string; reason: string } & (
+  { messages: Array<{ messageId: string; receiptHandle: string; body: string }> } | { messageIds: string[] }
+);
+
 export const useDlqDiscard = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: {
-      queueLabel: string;
-      reason: string;
-      messages: Array<{ messageId: string; receiptHandle: string; body: string }>;
-    }) => {
+    mutationFn: async (params: DlqDiscardParams) => {
       const response = await api.post<{
         discarded: number;
         failed: number;
