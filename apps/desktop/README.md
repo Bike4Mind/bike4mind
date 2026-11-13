@@ -503,7 +503,8 @@ Setup, in this order:
    Never add the certificate to a keychain or mark it trusted.
 
 Only trusted main runs receive the secret. The packaging step imports it into a temporary keychain
-that is never added to the search list and is deleted when the job ends.
+that is on the user's keychain search list only while the job runs: the job ends by restoring the
+list and deleting the keychain.
 
 The certificate is the app's identity. A new or renewed certificate changes the designated
 requirement: installed builds refuse the next build as an update, and every user reruns the

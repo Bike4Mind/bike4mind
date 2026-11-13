@@ -113,7 +113,13 @@ class ReleaseWorkflowTest(unittest.TestCase):
         cleanup = build.split('- name: Remove the self-signed signing keychain', 1)[1].split('- name:', 1)[0]
         self.assertIn("if: always() && matrix.platform == 'mac' && needs.version.outputs.mac-mode == 'selfsigned'", cleanup)
         self.assertIn('security delete-keychain "$RUNNER_TEMP/desktop-selfsigned.keychain-db"', cleanup)
-        for command in ('list-keychains', 'default-keychain', 'login.keychain', 'add-trusted-cert', 'trust-settings'):
+        # The keychain joins the user search list for the step only; cleanup puts the saved list back first.
+        self.assertLess(step.index('> "$RUNNER_TEMP/desktop-selfsigned.search-list"'),
+                        step.index('security list-keychains -d user -s "$keychain" "${previous[@]}"'))
+        self.assertLess(cleanup.index('security list-keychains -d user -s "${previous[@]}"'),
+                        cleanup.index('security delete-keychain'))
+        self.assertEqual(WORKFLOW.count('list-keychains'), 3)
+        for command in ('default-keychain', 'login.keychain', 'add-trusted-cert', 'trust-settings'):
             self.assertNotIn(command, WORKFLOW)
 
     def test_self_signed_requirement_check_accepts_only_the_pinned_leaf(self):

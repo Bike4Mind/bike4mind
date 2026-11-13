@@ -253,6 +253,11 @@ jobs:
           security import "$p12" -k "$keychain" -f pkcs12 -P "$SELFSIGNED_P12_PASSWORD" -T /usr/bin/codesign
           rm -f "$p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign on the release runner resolves an identity only through the user search list.
+          previous=()
+          while IFS= read -r line; do previous+=("$line"); done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.*)"$/\1/')
+          printf '%s\n' "${previous[@]}" > "$RUNNER_TEMP/desktop-selfsigned.search-list"
+          security list-keychains -d user -s "$keychain" "${previous[@]}"
           pnpm build
           pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL" --also-scan ../../b4m-core/local-models/dist
           node scripts/sign-update-manifests.mjs check-build out
@@ -266,8 +271,14 @@ jobs:
       - name: Remove the self-signed signing keychain
         if: always() && matrix.platform == 'mac' && needs.version.outputs.mac-mode == 'selfsigned'
         run: |
+          list="$RUNNER_TEMP/desktop-selfsigned.search-list"
+          if [ -f "$list" ]; then
+            previous=()
+            while IFS= read -r line; do if [ -n "$line" ]; then previous+=("$line"); fi; done < "$list"
+            security list-keychains -d user -s "${previous[@]}"
+          fi
           security delete-keychain "$RUNNER_TEMP/desktop-selfsigned.keychain-db" 2> /dev/null || true
-          rm -f "$RUNNER_TEMP/desktop-selfsigned.keychain-db" "$RUNNER_TEMP/desktop-selfsigned.p12"
+          rm -f "$RUNNER_TEMP/desktop-selfsigned.keychain-db" "$RUNNER_TEMP/desktop-selfsigned.p12" "$list"
       - name: Compare Linux builder metadata with embedded blockmap
         if: matrix.platform == 'linux'
         env:
