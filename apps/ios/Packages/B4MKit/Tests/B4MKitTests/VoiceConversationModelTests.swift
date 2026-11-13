@@ -14,18 +14,21 @@ final class VoiceConversationModelTests: XCTestCase {
 
   private func makeModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
-    stallTimeout: Duration = .seconds(30)
+    stallTimeout: Duration = .seconds(30),
+    sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
-      silenceTimeout: silenceTimeout, stallTimeout: stallTimeout)
+      silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, sleep: sleep)
   }
 
   private func startedModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
-    stallTimeout: Duration = .seconds(30)
+    stallTimeout: Duration = .seconds(30),
+    sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) async -> VoiceConversationModel {
-    let model = makeModel(target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout)
+    let model = makeModel(
+      target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, sleep: sleep)
     await model.start()
     await until { await realtime.listenerCount == 1 }
     await until { await listener.startCount == 1 }
@@ -365,5 +368,128 @@ final class VoiceConversationModelTests: XCTestCase {
     await until { await listener.startCount == 2 }
     XCTAssertEqual(model.phase, .listening)
     await model.stop()
+  }
+
+  // MARK: - Failure teardown
+
+  func testASignedOutSendReleasesTheMicAndAudioSession() async throws {
+    await api.setSendResult(.failure(.signedOut))
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { model.phase == .failed(.signedOut) }
+    let deactivations = await audio.deactivations
+    XCTAssertEqual(deactivations, 1)
+    await until { await realtime.listenerCount == 0 }
+
+    // Trying again leaves exactly one realtime subscriber.
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-1", sessionID: "s1")))
+    await model.start()
+    XCTAssertEqual(model.phase, .listening)
+    await until { await realtime.listenerCount == 1 }
+    await model.stop()
+  }
+
+  func testARecognizerThatCannotStartFailsAndReleasesTheAudioSession() async throws {
+    await listener.setFailsToStart(true)
+    let model = makeModel()
+    await model.start()
+    XCTAssertEqual(model.phase, .failed(.recognizerUnavailable))
+    let deactivations = await audio.deactivations
+    XCTAssertEqual(deactivations, 1)
+  }
+
+  func testARecognizerThatKeepsEndingWithoutSpeechFails() async throws {
+    let model = await startedModel()
+    for expected in 2...4 {
+      await listener.endTask()
+      await until { await listener.startCount == expected }
+    }
+    await listener.endTask()
+    await until { model.phase == .failed(.recognizerUnavailable) }
+    let deactivations = await audio.deactivations
+    XCTAssertEqual(deactivations, 1)
+  }
+
+  func testResumeFailsWhenTheAudioSessionCannotBeRetaken() async throws {
+    let model = await startedModel()
+    await audio.emit(.outputRouteLost)
+    await until { model.phase == .paused(.outputLost) }
+    await audio.setFailsToActivate(true)
+    await model.resume()
+    XCTAssertEqual(model.phase, .failed(.audioSessionUnavailable))
+  }
+
+  func testStoppingMidSendDropsTheReplyAndStaysIdle() async throws {
+    await api.holdSends()
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await model.stop()
+    await api.releaseSends()
+    await realtime.emit(frame(reply: longReply, status: .done))
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(model.phase, .idle)
+    let spoken = await speaker.spoken
+    XCTAssertEqual(spoken, [])
+  }
+
+  func testAnErrorFrameMidStreamIsSpokenAndListeningResumes() async throws {
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await until { model.phase == .sending }
+    let quest: JSONObject = [
+      "id": "quest-1", "sessionId": "s1", "type": "error", "status": "error", "reply": "The model hit a problem.",
+    ]
+    await realtime.emit(
+      .frame(
+        ActionFrame(
+          action: "streamed_chat_completion", payload: ["action": "streamed_chat_completion", "quest": .object(quest)])))
+    await until { await speaker.spoken == ["The model hit a problem."] }
+    await until { model.phase == .listening }
+    await model.stop()
+  }
+
+  // MARK: - Stall watchdog
+
+  func testAReplyThatNeverArrivesGivesUpAfterRepeatedStalls() async throws {
+    let model = await startedModel(stallTimeout: .milliseconds(5))
+    await say("Tell me about Paris")
+    await until { await speaker.spoken == ["That took too long. Please try again."] }
+    await until { model.phase == .listening }
+    await model.stop()
+  }
+
+  func testAReplyThatKeepsStreamingIsNotCutOffByTheWatchdog() async throws {
+    let model = await startedModel(sleep: { _ in try await Task.sleep(for: .milliseconds(15)) })
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await until { model.phase == .sending }
+
+    // Far more intervals than the watchdog tolerates, each one with progress.
+    var reply = ""
+    for index in 0..<30 {
+      reply += "Sentence number \(index) is long enough to be spoken. "
+      await realtime.emit(frame(reply: reply, status: .running))
+      try await Task.sleep(for: .milliseconds(8))
+    }
+    await realtime.emit(frame(reply: reply, status: .done))
+    await until { model.phase == .listening }
+    let spoken = await speaker.spoken
+    XCTAssertFalse(spoken.contains("That took too long. Please try again."))
+    XCTAssertEqual(spoken.count, 30)
+    await model.stop()
+  }
+
+  // MARK: - Phase guards
+
+  func testUnmutingWhileFailedDoesNotRestartTheMic() async throws {
+    await listener.setPermission(.denied)
+    let model = makeModel()
+    await model.start()
+    await model.setMuted(true)
+    await model.setMuted(false)
+    let starts = await listener.startCount
+    XCTAssertEqual(starts, 0)
   }
 }

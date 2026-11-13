@@ -5,6 +5,7 @@ import Foundation
 actor FakeSpeechListener: SpeechListening {
   var permissionState: VoicePermission = .granted
   var grantsOnRequest = true
+  var failsToStart = false
   private(set) var startCount = 0
   private(set) var stopCount = 0
   private var continuation: AsyncStream<SpeechRecognitionEvent>.Continuation?
@@ -14,10 +15,13 @@ actor FakeSpeechListener: SpeechListening {
     self.grantsOnRequest = grantsOnRequest
   }
 
+  func setFailsToStart(_ fails: Bool) { failsToStart = fails }
+
   func permission() -> VoicePermission { permissionState }
   func requestPermission() -> Bool { grantsOnRequest }
 
-  func start() -> AsyncStream<SpeechRecognitionEvent> {
+  func start() throws -> AsyncStream<SpeechRecognitionEvent> {
+    if failsToStart { throw VoiceConversationError.recognizerUnavailable }
     let (stream, continuation) = AsyncStream<SpeechRecognitionEvent>.makeStream()
     self.continuation?.finish()
     self.continuation = continuation

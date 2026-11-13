@@ -128,10 +128,10 @@ public final class VoiceConversationModel {
     }
     var permission = await listener.permission()
     if permission == .undetermined { permission = await listener.requestPermission() ? .granted : .denied }
-    guard permission == .granted else { return fail(.permissionDenied) }
+    guard permission == .granted else { return await fail(.permissionDenied) }
 
     let audioEvents = audioSession.events()
-    do { try await audioSession.activate() } catch { return fail(.audioSessionUnavailable) }
+    do { try await audioSession.activate() } catch { return await fail(.audioSessionUnavailable) }
     audioTask = Task { [weak self] in
       for await event in audioEvents { await self?.handle(audio: event) }
     }
@@ -143,8 +143,12 @@ public final class VoiceConversationModel {
   }
 
   /// Ends the conversation and gives the audio session back.
-  public func stop() async {
+  public func stop() async { await tearDown(to: .idle) }
+
+  /// Cancels every task and releases the recognizer, the speaker and the audio session.
+  private func tearDown(to final: Phase) async {
     turnToken += 1
+    listenGeneration += 1
     for task in [audioTask, framesTask, listenTask, silenceTask, speakTask, watchdogTask, turnTask] { task?.cancel() }
     audioTask = nil
     framesTask = nil
@@ -156,7 +160,7 @@ public final class VoiceConversationModel {
     chunkSink?.finish()
     chunkSink = nil
     liveTranscript = ""
-    phase = .idle
+    phase = final
     await listener.stop()
     await speaker.stop()
     await audioSession.deactivate()
@@ -179,7 +183,7 @@ public final class VoiceConversationModel {
       listenGeneration += 1
       listenTask?.cancel()
       await listener.stop()
-    } else if phase != .idle {
+    } else if isLive {
       await beginListening()
     }
   }
@@ -187,26 +191,38 @@ public final class VoiceConversationModel {
   /// Picks the conversation back up after a pause.
   public func resume() async {
     guard case .paused = phase else { return }
-    do { try await audioSession.activate() } catch { return fail(.audioSessionUnavailable) }
+    do { try await audioSession.activate() } catch { return await fail(.audioSessionUnavailable) }
     phase = .listening
     await beginListening()
   }
 
   // MARK: - Listening
 
+  private var isLive: Bool {
+    switch phase {
+    case .listening, .sending, .streaming, .speaking: true
+    default: false
+    }
+  }
+
   private func beginListening() async {
-    guard !isMuted else { return }
+    guard !isMuted, isLive else { return }
     listenGeneration += 1
     let generation = listenGeneration
     listenTask?.cancel()
     do {
       let events = try await listener.start()
+      // The conversation may have ended, paused or failed while the recognizer was starting.
+      guard generation == listenGeneration, isLive, !isMuted else {
+        if generation == listenGeneration { await listener.stop() }
+        return
+      }
       listenTask = Task { [weak self] in
         for await event in events { await self?.handle(speech: event, generation: generation) }
         await self?.recognizerEnded(generation: generation)
       }
     } catch {
-      fail(.recognizerUnavailable)
+      if generation == listenGeneration { await fail(.recognizerUnavailable) }
     }
   }
 
@@ -252,7 +268,7 @@ public final class VoiceConversationModel {
     // A recognition task that ends on its own (time limit, a quiet stretch) is replaced. One that keeps
     // ending without hearing anything is broken, not quiet.
     fruitlessRestarts += 1
-    guard fruitlessRestarts <= 3 else { return fail(.recognizerUnavailable) }
+    guard fruitlessRestarts <= 3 else { return await fail(.recognizerUnavailable) }
     await beginListening()
   }
 
@@ -263,6 +279,8 @@ public final class VoiceConversationModel {
     silenceTask?.cancel()
     liveTranscript = ""
     notice = nil
+    // Invalidates the recognizer this utterance came from, so its ending is not mistaken for a restart.
+    listenGeneration += 1
     turnToken += 1
     let token = turnToken
     questID = nil
@@ -291,7 +309,7 @@ public final class VoiceConversationModel {
       receipt = try await api.sendChatMessage(ChatSendRequest(message: text, target: target))
     } catch {
       guard token == turnToken else { return }
-      if case APIError.signedOut = error { return fail(.signedOut) }
+      if case APIError.signedOut = error { return await fail(.signedOut) }
       return endTurn(saying: "I couldn't send that. Please try again.")
     }
     if let id = receipt.sessionID, sessionID != id {
@@ -396,7 +414,9 @@ public final class VoiceConversationModel {
     watchdogTask?.cancel()
     watchdogTask = Task { [weak self, api, sleep, stallTimeout] in
       var lastSeen = -1
-      for _ in 0..<6 {
+      var stalls = 0
+      // Only silent intervals count against the reply: a long answer that keeps streaming never times out.
+      while stalls < 6 {
         do { try await sleep(stallTimeout) } catch { return }
         guard let self, self.turnIsCurrent(token), !self.replyFinished else { return }
         let count = self.frameCount
@@ -404,6 +424,7 @@ public final class VoiceConversationModel {
           lastSeen = count
           continue
         }
+        stalls += 1
         guard let turn = try? await api.quest(id: questID) else { continue }
         self.handle(
           frame: ChatQuestFrame(
@@ -461,8 +482,8 @@ public final class VoiceConversationModel {
     await listener.stop()
   }
 
-  private func fail(_ error: VoiceConversationError) {
-    phase = .failed(error)
+  private func fail(_ error: VoiceConversationError) async {
+    await tearDown(to: .failed(error))
   }
 
   private static func refusalNotice(_ code: QuestTurn.ErrorCode?) -> String {
