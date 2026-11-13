@@ -147,6 +147,10 @@ const CAP_TEXT: Record<LocalLoopCapReason, string> = {
  * Only ever stops, kills or deletes sessions it started (and their spawned children, which ChatService marks with
  * the same run id).
  */
+
+/** The owner's local HH:MM, as the cap banner and alert show it. */
+const clockTime = (at: Date): string =>
+  at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 export class LocalLoopScheduler {
   private readonly lanes = new Map<string, Lane>();
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -385,7 +389,7 @@ export class LocalLoopScheduler {
         capReason: reason,
         updatedAt: now.toISOString(),
       });
-      this.raise(loop, { kind: 'capped', reason: `Capped until ${until.toISOString()} (${CAP_TEXT[reason]})` });
+      this.raise(loop, { kind: 'capped', reason: `Capped until ${clockTime(until)} (${CAP_TEXT[reason]})` });
     });
   }
 
@@ -807,7 +811,7 @@ export class LocalLoopScheduler {
         : loop.status === 'error'
           ? `error: ${loop.error ?? 'unknown'}`
           : loop.cappedUntil
-            ? `capped until ${loop.cappedUntil} (${CAP_TEXT[loop.capReason ?? 'loop_budget']})`
+            ? `capped until ${clockTime(new Date(loop.cappedUntil))} (${CAP_TEXT[loop.capReason ?? 'loop_budget']})`
             : lanesBusy > 0
               ? undefined
               : paced

@@ -190,8 +190,11 @@ describe('LocalLoopScheduler', () => {
     await settle();
     expect(chat.turns).toEqual([]);
     expect(store.loop('loop-1')).toMatchObject({ cappedUntil: '2026-01-03T00:00:00.000Z', capReason: 'loop_budget' });
-    expect(alerts).toEqual(['capped: Capped until 2026-01-03T00:00:00.000Z (daily budget)']);
-    expect(scheduler.summary(store.loop('loop-1')!).idleReason).toMatch(/^capped until/);
+    expect(alerts).toEqual([
+      `capped: Capped until ${new Date('2026-01-03T00:00:00.000Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} (daily budget)`,
+    ]);
+    expect(alerts[0]).toMatch(/Capped until \d{2}:\d{2} \(/);
+    expect(scheduler.summary(store.loop('loop-1')!).idleReason).toMatch(/^capped until \d{2}:\d{2} \(daily budget\)$/);
 
     await vi.advanceTimersByTimeAsync(12 * 60 * 60_000);
     await settle();
