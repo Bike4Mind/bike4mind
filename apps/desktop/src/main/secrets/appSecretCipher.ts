@@ -16,6 +16,8 @@ export interface AppSecretCipherHost {
   platform: NodeJS.Platform;
   isPackaged: boolean;
   execPath: string;
+  /** Started with Chromium's --use-mock-keychain: nothing may reach the real keychain. */
+  mockKeychain?: boolean;
   appName: string;
   safeStorage: SafeStorage;
   run: ProcessRunner;
@@ -38,9 +40,9 @@ export function macBundlePath(execPath: string): string | null {
  * signature that cannot be read included, keeps `safe-storage`.
  */
 export function selectSecretCipherMode(
-  host: Pick<AppSecretCipherHost, 'platform' | 'isPackaged' | 'execPath' | 'run'>
+  host: Pick<AppSecretCipherHost, 'platform' | 'isPackaged' | 'execPath' | 'run' | 'mockKeychain'>
 ): SecretCipherMode {
-  if (host.platform !== 'darwin' || !host.isPackaged) return 'safe-storage';
+  if (host.platform !== 'darwin' || !host.isPackaged || host.mockKeychain) return 'safe-storage';
   const bundle = macBundlePath(host.execPath);
   if (!bundle) return 'safe-storage';
   const result = host.run(CODESIGN, ['-dv', '--verbose=2', bundle], { timeoutMs: CODESIGN_TIMEOUT_MS });
@@ -93,7 +95,7 @@ export function createAppSecretCipher(host: AppSecretCipherHost): AppSecretCiphe
   const mode = selectSecretCipherMode(host);
   const item = secretKeyItem(host.appName);
   const secretKey = new SecretKeyCipher(() => {
-    if (host.platform !== 'darwin') return null;
+    if (host.platform !== 'darwin' || host.mockKeychain) return null;
     // Only `secret-key` mode creates the key; the other mode reads one only to open its blobs.
     const loaded = loadSecretKey(item, host.run, { create: mode === 'secret-key' });
     if (loaded.state === 'found') return loaded.key;

@@ -86,6 +86,17 @@ describe('selectSecretCipherMode', () => {
     }
   });
 
+  it('keeps safeStorage and runs no tool when the app is started with the mock keychain', () => {
+    const keychain = fakeKeychain({ codesign: signature('not set') });
+    const mocked = host({ mockKeychain: true, run: keychain.run });
+
+    expect(selectSecretCipherMode(mocked)).toBe('safe-storage');
+    const cipher = createAppSecretCipher(mocked);
+    expect(cipher.mode).toBe('safe-storage');
+    expect(() => cipher.decryptString(Buffer.concat([Buffer.from('b4m-sk1'), Buffer.alloc(40)]))).toThrow();
+    expect(keychain.calls).toEqual([]);
+  });
+
   it('keeps safeStorage when the signature cannot be read or says nothing about a team', () => {
     const outcomes: RunResult[] = [
       { status: 1, stdout: '', stderr: 'code object is not signed at all\n' },

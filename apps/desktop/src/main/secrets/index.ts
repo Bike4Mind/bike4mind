@@ -10,6 +10,7 @@ export function appSecretCipher(): AppSecretCipher {
     platform: process.platform,
     isPackaged: app.isPackaged,
     execPath: process.execPath,
+    mockKeychain: app.commandLine.hasSwitch('use-mock-keychain'),
     appName: app.getName(),
     safeStorage,
     run: runProcess,
