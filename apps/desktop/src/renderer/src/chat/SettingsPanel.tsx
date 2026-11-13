@@ -332,7 +332,14 @@ function loopRunnerEntry(state: LoopRunnerState | null, setState: (state: LoopRu
     icon: <ServerIcon />,
     label: 'Loop runner',
     summary: loopRunnerSummary(state),
-    control: <LoopRunnerSettings state={state} onState={setState} />,
+    control: (
+      <>
+        <LoopRunnerSettings state={state} onState={setState} />
+        <Typography level="body-xs" sx={{ mt: 1 }} data-testid="loop-runner-loops-pointer">
+          Loops you create on this Desktop use these settings too: open Loops in the sidebar, then Machine.
+        </Typography>
+      </>
+    ),
   };
 }
 

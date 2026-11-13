@@ -356,3 +356,13 @@ describe('the context ring cold dot', () => {
     expect(dot()).toBeNull();
   });
 });
+
+describe('the Loops screen', () => {
+  it('opens from the sidebar in place of the conversation', async () => {
+    stubBridge({ tools: [] });
+    await openBlankSession();
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-loops-btn"]')?.click());
+    expect(document.querySelector('[data-testid="loops-screen"]')).not.toBeNull();
+    expect(composer()).toBeNull();
+  });
+});

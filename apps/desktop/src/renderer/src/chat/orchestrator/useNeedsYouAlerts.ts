@@ -25,7 +25,9 @@ export function useNeedsYouAlerts(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   loaded: boolean,
-  onOpen: (event: AttentionOpenEvent) => void
+  onOpen: (event: AttentionOpenEvent) => void,
+  /** Other waits added to the dock badge: Desktop loop tickets waiting on the user (loopNeedsYouCount). */
+  extraCount = 0
 ): void {
   const previous = useRef<ReadonlyMap<string, ChatSessionStatus> | null>(null);
   // Refs, so a session-list change between status pushes never re-announces anything.
@@ -43,7 +45,7 @@ export function useNeedsYouAlerts(
     void announce(entered, latestSessions.current);
   }, [statuses, loaded]);
 
-  const count = needsYouCount(statuses, sessions);
+  const count = needsYouCount(statuses, sessions) + extraCount;
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);

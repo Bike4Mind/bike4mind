@@ -146,6 +146,9 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { loopNeedsYouCount } from '@shared/needsYou';
+import { LoopsScreen } from '../localLoops/LoopsScreen';
+import { localLoopsApi, useLocalLoopList } from '../localLoops/useLocalLoops';
 import { SidebarSyncHints } from './SyncHints';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
@@ -209,7 +212,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models' | 'loops';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -904,7 +907,9 @@ export function ChatShell({
     if (sessionId === rootId) setDockOpen(true);
     else setNoticeFocus({ rootId, agentId: sessionId });
   };
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
+  const localLoops = useLocalLoopList();
+  const loopsNeedYou = loopNeedsYouCount(localLoops.summaries);
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, loopsNeedYou);
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
@@ -1486,6 +1491,8 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        onOpenLoops={localLoopsApi() ? () => setScreen('loops') : undefined}
+        loopsNeedYou={loopsNeedYou}
         syncHints={
           onOpenImportSettings
             ? (empty, fallback) => (
@@ -1500,6 +1507,8 @@ export function ChatShell({
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'loops' ? (
+        <LoopsScreen models={catalog.models} onClose={() => setScreen('conversation')} onOpenSession={selectSession} />
       ) : screen === 'models' ? (
         <ModelsScreen
           onClose={() => {

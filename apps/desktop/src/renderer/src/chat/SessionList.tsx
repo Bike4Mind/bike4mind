@@ -58,6 +58,7 @@ import {
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
+  ReloadIcon,
   SearchIcon,
   SubSessionsIcon,
 } from './icons';
@@ -999,6 +1000,8 @@ export function SessionList({
   sectionActions,
   customize,
   onOpenModels,
+  onOpenLoops,
+  loopsNeedYou = 0,
   syncHints,
   footer,
 }: {
@@ -1038,6 +1041,10 @@ export function SessionList({
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
   onOpenModels?: () => void;
+  /** The Desktop Loops screen; absent where main has no Desktop-loops surface. */
+  onOpenLoops?: () => void;
+  /** Desktop loop tickets waiting on the user, shown on the Loops row. */
+  loopsNeedYou?: number;
   /** The sidebar's sync hint; `fallback` is the plain empty-list line, for it to replace or keep. */
   syncHints?: (empty: boolean, fallback: ReactNode) => ReactNode;
   footer?: ReactNode;
@@ -1517,6 +1524,21 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
+        {onOpenLoops && (
+          <NavItem
+            icon={<ReloadIcon />}
+            label="Loops"
+            onClick={onOpenLoops}
+            end={
+              loopsNeedYou > 0 ? (
+                <Chip size="sm" variant="solid" color="warning" data-testid="chat-loops-needs-you">
+                  {loopsNeedYou}
+                </Chip>
+              ) : undefined
+            }
+            testId="chat-loops-btn"
+          />
+        )}
         {customize}
         {onOpenModels && (
           <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />
