@@ -64,10 +64,11 @@ type CodeEdit = {
   stored: Pick<IRegInviteDocument, 'unlimitedUse' | 'expiresAt'>;
 };
 
-const dayOf = (date: Date | string | null | undefined) => (date ? new Date(date).toISOString().slice(0, 10) : '');
+export const dayOf = (date: Date | string | null | undefined) =>
+  date ? new Date(date).toISOString().slice(0, 10) : '';
 
-/** Same end-of-day UTC reading as the package's own expiry field in GrantPackageFormModal. */
-const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
+/** The chosen day stays redeemable through its end in UTC, the same day boundary as a package's daily cap. */
+export const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
 
 const CODE_COLUMNS: readonly DataColumn<IRegInviteDocument>[] = [
   { id: 'code', label: 'Code', render: invite => invite.code },

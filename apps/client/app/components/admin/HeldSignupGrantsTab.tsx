@@ -196,7 +196,11 @@ export default function HeldSignupGrantsTab() {
               data-testid="held-signup-grants-release-btn"
               disabled={missingPermission || busy || selected.size === 0}
               loading={release.isPending}
-              onClick={() => setConfirmRelease(true)}
+              onClick={() => {
+                // A failure from the previous attempt would otherwise reappear inside the fresh dialog.
+                if (release.error) release.reset();
+                setConfirmRelease(true);
+              }}
             >
               Release selected ({selected.size})
             </Button>

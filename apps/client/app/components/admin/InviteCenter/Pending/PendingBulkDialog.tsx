@@ -111,7 +111,6 @@ export function PendingBulkDialog({
       title={`${copy.label} ${preview.data ? plural(wouldApply) : 'accounts'}`}
       description={copy.description}
       reasonPresets={copy.presets}
-      reasonAudited
       confirmLabel={`${kind === 'release' ? 'Release' : 'Block'} ${plural(wouldApply)}`}
       onConfirm={onConfirm}
       tone={kind === 'block' ? 'danger' : 'neutral'}

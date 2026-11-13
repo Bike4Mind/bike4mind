@@ -33,7 +33,7 @@ import {
 import { createGrantPackage, updateGrantPackage } from '@client/app/utils/grantPackageAPICalls';
 import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
-import { GrantPackageCodesSection, type QueuedCode } from './GrantPackageCodesSection';
+import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
 
 type Props = {
   open: boolean;
@@ -54,8 +54,7 @@ type Draft = {
   expiresOn: string;
 };
 
-const expiryDay = (pkg: IGrantPackageDocument | null): string =>
-  pkg?.expiresAt ? new Date(pkg.expiresAt).toISOString().slice(0, 10) : '';
+const expiryDay = (pkg: IGrantPackageDocument | null): string => dayOf(pkg?.expiresAt);
 
 const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   name: pkg?.name ?? '',
@@ -65,9 +64,6 @@ const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   active: pkg?.active ?? true,
   expiresOn: expiryDay(pkg),
 });
-
-/** The chosen day stays redeemable through its end in UTC, the same day boundary as the daily cap. */
-const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
 
 const WHOLE = /^\d+$/;
 
