@@ -192,7 +192,8 @@ export async function reserveCompletionCredits(
 
 /**
  * The allowlisted model a restricted caller runs in place of `requested`, or undefined when the request
- * runs as asked. Callers keep admission, the hold and the response on the requested model.
+ * runs as asked. Only models the billing org allows qualify. Callers keep admission, the hold and the
+ * response on the requested model.
  */
 export async function resolveShadowSubstitute(
   req: MeteredRequest,
@@ -202,8 +203,13 @@ export async function resolveShadowSubstitute(
 ): Promise<ModelInfo | undefined> {
   const user = throttleUser(req);
   if (!user || !isShadowTier(user)) return undefined;
-  const { allowlist } = await loadShadowTierSettings(adminSettingsRepository);
-  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools });
+  const organizationId = resolveRequestBillingOrgId(req);
+  const [{ allowlist }, org] = await Promise.all([
+    loadShadowTierSettings(adminSettingsRepository),
+    organizationId ? organizationRepository.findById(organizationId) : null,
+  ]);
+  const orgModelPolicy = readOrgModelPolicy(org?.modelPolicy);
+  return resolveShadowModelInfo(user, requested, models, allowlist, req.logger, { requireTools, orgModelPolicy });
 }
 
 export { hasReportedUsage, latchUsage, type CompletionUsage };

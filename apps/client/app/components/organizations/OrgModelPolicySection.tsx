@@ -20,7 +20,6 @@ import {
   expandOrgAllowedTools,
   ModelBackend,
   type IOrganizationDocument,
-  type ModelInfo,
   type OrgModelPolicy,
 } from '@bike4mind/common';
 import {
@@ -28,7 +27,7 @@ import {
   useResetOrgModelPolicy,
   useSaveOrgModelPolicy,
 } from '@client/app/hooks/data/useOrgModelPolicy';
-import { useLockedModels, useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useOrgModelChoices } from '@client/app/hooks/data/useModelInfo';
 
 interface PolicyForm {
   restrictProviders: boolean;
@@ -106,23 +105,27 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
   const [form, setForm] = useState<PolicyForm>(saved);
   const save = useSaveOrgModelPolicy(orgId);
   const reset = useResetOrgModelPolicy(orgId);
-  const { data: listedModels } = useModelInfo();
-  const { data: lockedModels } = useLockedModels();
+  const { data: catalogModels } = useOrgModelChoices(orgId);
 
-  // Models the org currently disallows come back locked, so both lists together are the full choice.
+  // Models the org currently disallows come back locked, so listed and locked together are the full choice.
+  // A selected id the catalog no longer lists (a retired model) is kept, labelled by id, so it can be removed.
   const modelChoices = useMemo(() => {
-    const byId = new Map<string, ModelInfo>();
-    for (const model of [...(listedModels ?? []), ...(lockedModels ?? [])]) byId.set(model.id, model);
-    return [...byId.values()]
-      .filter(model => !form.restrictProviders || form.providers.includes(model.backend))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [listedModels, lockedModels, form.restrictProviders, form.providers]);
+    const byId = new Map<string, { id: string; name: string }>();
+    for (const model of catalogModels ?? []) {
+      if (!form.restrictProviders || form.providers.includes(model.backend)) byId.set(model.id, model);
+    }
+    const listed = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const known = new Set<string>((catalogModels ?? []).map(model => model.id));
+    const unlisted = form.models.filter(id => !known.has(id)).map(id => ({ id, name: id }));
+    return [...listed, ...unlisted];
+  }, [catalogModels, form.restrictProviders, form.providers, form.models]);
 
   const update = (patch: Partial<PolicyForm>) => setForm(current => ({ ...current, ...patch }));
   const emptyRestriction =
     (form.restrictProviders && form.providers.length === 0) || (form.restrictModels && form.models.length === 0);
   const busy = save.isPending || reset.isPending;
   const canSave = !busy && !emptyRestriction && (invalidStored || !sameForm(form, saved));
+  const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;
 
   return (
     <Card variant="outlined" data-testid="org-model-policy-section">
@@ -231,7 +234,7 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
             variant="plain"
             color="neutral"
             onClick={() => reset.mutate()}
-            disabled={busy}
+            disabled={busy || (savedUnrestricted && !invalidStored)}
             data-testid="org-model-policy-reset-btn"
           >
             Reset to unrestricted

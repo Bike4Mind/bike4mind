@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelBackend } from '../models';
 import {
   INVALID_ORG_MODEL_POLICY,
@@ -56,10 +56,43 @@ describe('readOrgModelPolicy', () => {
 
   it("returns 'invalid' for a stored row that no longer parses", () => {
     expect(readOrgModelPolicy({ allowedProviders: [] })).toBe(INVALID_ORG_MODEL_POLICY);
-    expect(readOrgModelPolicy({ allowedTools: ['removed_tool'] })).toBe(INVALID_ORG_MODEL_POLICY);
     expect(readOrgModelPolicy({ allowedModels: 'gpt-4o' })).toBe(INVALID_ORG_MODEL_POLICY);
     expect(readOrgModelPolicy('nonsense')).toBe(INVALID_ORG_MODEL_POLICY);
     expect(readOrgModelPolicy([])).toBe(INVALID_ORG_MODEL_POLICY);
+  });
+});
+
+describe('readOrgModelPolicy with stale enum members', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('drops an unknown provider or tool with a warning instead of failing the row closed', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(
+      readOrgModelPolicy({
+        allowedProviders: ['openai', 'retired-provider'],
+        allowedTools: ['web_search', 'removed_tool'],
+      })
+    ).toEqual({ allowedProviders: ['openai'], allowedModels: null, allowedTools: ['web_search'] });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(readOrgModelPolicy({ allowedTools: ['removed_tool'] })).toEqual({
+      allowedProviders: null,
+      allowedModels: null,
+      allowedTools: [],
+    });
+  });
+
+  it('stays deny-all when every listed provider is unknown, and for a structurally broken row', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(readOrgModelPolicy({ allowedProviders: ['retired-provider'] })).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy({ allowedProviders: [1] })).toBe(INVALID_ORG_MODEL_POLICY);
+    expect(readOrgModelPolicy({ allowedTools: 'web_search' })).toBe(INVALID_ORG_MODEL_POLICY);
+  });
+
+  it('does not warn for a policy whose members are all known', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    readOrgModelPolicy({ allowedProviders: ['openai'], allowedTools: ['web_search'], allowedModels: ['gpt-4o'] });
+    readOrgModelPolicy({ allowedTools: null });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
@@ -84,6 +117,20 @@ describe('isModelAllowedByOrgPolicy', () => {
     expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-4o' })).toBe(false);
     expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-4o', backend: null })).toBe(false);
     expect(isModelAllowedByOrgPolicy(policy({ allowedModels: ['gpt-4o'] }), { id: 'gpt-4o' })).toBe(true);
+  });
+
+  it('resolves a media model backend when none is given', () => {
+    const p = policy({ allowedProviders: [ModelBackend.BFL] });
+    expect(isModelAllowedByOrgPolicy(p, { id: 'flux-pro' })).toBe(true);
+    expect(isModelAllowedByOrgPolicy(p, { id: 'gpt-image-1' })).toBe(false);
+  });
+
+  it('matches an allowlisted retired id against its successor only when a resolver is given', () => {
+    const p = policy({ allowedModels: ['old-model'] });
+    const resolve = (id: string) => (id === 'old-model' ? 'new-model' : id);
+    expect(isModelAllowedByOrgPolicy(p, { id: 'new-model' }, resolve)).toBe(true);
+    expect(isModelAllowedByOrgPolicy(p, { id: 'new-model' })).toBe(false);
+    expect(isModelAllowedByOrgPolicy(p, { id: 'other-model' }, resolve)).toBe(false);
   });
 });
 

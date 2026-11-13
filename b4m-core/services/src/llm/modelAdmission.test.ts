@@ -509,6 +509,34 @@ describe('organization model policy', () => {
     await expect(open.assert('gpt')).resolves.toBeUndefined();
   });
 
+  it('resolves a media model backend without a catalog entry, so an allowed provider admits it', async () => {
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.OpenAI] }),
+    });
+    await expect(admission.assert('gpt-image-1')).resolves.toBeUndefined();
+    await expect(admission.assert('tts-1')).resolves.toBeUndefined();
+    expect(isOrgModelNotAllowedError(await admission.assert('flux-pro').catch(e => e))).toBe(true);
+    expect(isOrgModelNotAllowedError(await admission.assert('music_v1').catch(e => e))).toBe(true);
+  });
+
+  it('admits the successor of an allowlisted retired model', async () => {
+    const successor = {
+      ...priced,
+      id: 'global.anthropic.claude-sonnet-4-6',
+      backend: ModelBackend.Bedrock,
+    } as ModelInfo;
+    const admission = createModelAdmission({
+      user: {},
+      configs: [],
+      models: [successor],
+      orgModelPolicy: policy({ allowedModels: ['us.anthropic.claude-3-7-sonnet-20250219-v1:0'] }),
+    });
+    await expect(admission.assert(successor.id)).resolves.toBeUndefined();
+    expect(isOrgModelNotAllowedError(await admission.assert('gpt').catch(e => e))).toBe(true);
+  });
+
   it('does not classify other refusals as the org policy refusal', async () => {
     const err = await createModelAdmission({ user: { tags: [] }, configs: [gated], getEntitlements: async () => [] })
       .assert('priced')

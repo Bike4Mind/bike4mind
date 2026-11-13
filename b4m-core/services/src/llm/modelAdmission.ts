@@ -12,6 +12,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getSettingsMap, getSettingsValue, isModelAccessible } from '@bike4mind/utils';
+import { resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { aiAccessDeniedMessage, type AiAccessStateFields } from '../userService/accountState';
 
@@ -163,8 +164,11 @@ export function createModelAdmission({
         `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
       );
     }
-    // Without a catalog entry the backend is unknown, so a provider allowlist refuses the model.
-    if (orgModelPolicy && !isModelAllowedByOrgPolicy(orgModelPolicy, { id: modelId, backend: model?.backend })) {
+    // Without a catalog entry only a media model's backend is known; any other model fails a provider allowlist.
+    if (
+      orgModelPolicy &&
+      !isModelAllowedByOrgPolicy(orgModelPolicy, { id: modelId, backend: model?.backend }, resolveSuccessorChain)
+    ) {
       return new ForbiddenError(`Model "${modelId}" is not allowed by your organization`, {
         errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       });

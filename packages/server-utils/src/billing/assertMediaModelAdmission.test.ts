@@ -90,6 +90,23 @@ describe('media model admission', () => {
     await expect(assertMediaModelAdmission('user-1', 'image-model', false, null)).resolves.toBeUndefined();
   });
 
+  it('admits an allowed provider media model under a provider allowlist and refuses the others', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['openai'] } });
+    for (const modelId of ['gpt-image-1', 'tts-1-hd', 'gpt-4o-mini-tts']) {
+      await expect(assertMediaModelAdmission('user-1', modelId, false, 'org-1')).resolves.toBeUndefined();
+    }
+    for (const modelId of ['flux-pro', 'music_v1', 'eleven_text_to_sound_v2']) {
+      await expect(assertMediaModelAdmission('user-1', modelId, false, 'org-1')).rejects.toMatchObject({
+        additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+      });
+    }
+    const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['xai'] } });
+    const videos = [{ id: 'grok-imagine-video-1.5' }, { id: 'flux-3-video' }];
+    expect(await filterAdmittedMediaModels(user, videos, 'org-1')).toEqual([{ id: 'grok-imagine-video-1.5' }]);
+  });
+
   it('fails closed with a retryable error if plan lookup fails', async () => {
     mocks.entitlements.mockRejectedValue(new Error('unavailable'));
     await expect(assertMediaModelAdmission('user-1', 'image-model')).rejects.toMatchObject({ statusCode: 503 });

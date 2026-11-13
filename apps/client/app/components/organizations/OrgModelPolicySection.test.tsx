@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     view: undefined as { policy: OrgModelPolicy; invalidStored: boolean } | undefined,
     save: vi.fn(),
     reset: vi.fn(),
+    choicesOrgId: undefined as string | undefined,
   },
 }));
 
@@ -18,8 +19,10 @@ vi.mock('@client/app/hooks/data/useOrgModelPolicy', () => ({
   useResetOrgModelPolicy: () => ({ mutate: mocks.reset, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [{ id: 'gpt', name: 'GPT', backend: ModelBackend.OpenAI }] }),
-  useLockedModels: () => ({ data: [] }),
+  useOrgModelChoices: (orgId: string) => {
+    mocks.choicesOrgId = orgId;
+    return { data: [{ id: 'gpt', name: 'GPT', backend: ModelBackend.OpenAI }] };
+  },
 }));
 
 import OrgModelPolicySection from './OrgModelPolicySection';
@@ -94,11 +97,26 @@ describe('OrgModelPolicySection', () => {
     expect(mocks.reset).toHaveBeenCalledTimes(1);
   });
 
+  it('disables reset when nothing is stored, unless the stored policy is unreadable', () => {
+    renderSection();
+    const resetButton = () => screen.getByTestId('org-model-policy-reset-btn') as HTMLButtonElement;
+    expect(resetButton().disabled).toBe(true);
+  });
+
+  it('offers models from the org being edited and keeps a stored id the catalog no longer lists', () => {
+    mocks.view = { policy: { ...UNRESTRICTED, allowedModels: ['gpt', 'retired-model'] }, invalidStored: false };
+    renderSection();
+
+    expect(mocks.choicesOrgId).toBe('org-1');
+    expect(screen.getByTestId('org-model-policy-models-select').textContent).toContain('retired-model');
+  });
+
   it('warns about an unreadable stored policy and lets it be saved over', () => {
     mocks.view = { policy: UNRESTRICTED, invalidStored: true };
     renderSection();
 
     expect(screen.getByTestId('org-model-policy-invalid-alert')).toBeTruthy();
     expect(saveButton().disabled).toBe(false);
+    expect((screen.getByTestId('org-model-policy-reset-btn') as HTMLButtonElement).disabled).toBe(false);
   });
 });

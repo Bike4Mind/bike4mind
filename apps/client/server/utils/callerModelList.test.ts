@@ -20,6 +20,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: () => ({}),
   getAvailableModels: (...a: unknown[]) => mocks.getAvailableModels(...a),
   getSupersededModels: (...a: unknown[]) => mocks.getSupersededModels(...a),
+  resolveSuccessorChain: (id: string) => (id === 'retired-claude' ? 'claude' : id),
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
@@ -509,5 +510,19 @@ describe('org model policy', () => {
       'claude'
     );
     expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() })).toBe('priced');
+  });
+
+  it('reads the org once per default resolution', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['claude'] }));
+    mocks.findOrg.mockClear();
+    await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' });
+    expect(mocks.findOrg).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps offering the successor of an allowlisted retired model', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['retired-claude'] }));
+    expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' })).toBe(
+      'claude'
+    );
   });
 });

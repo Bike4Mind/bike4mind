@@ -67,6 +67,15 @@ export function useLockedModels() {
   return useQuery({ ...catalogQuery(isFullyAuthenticated, orgId), select: catalog => catalog.lockedModels });
 }
 
+/** Listed plus locked models for a given org rather than the account switcher's, for that org's policy editor. */
+export function useOrgModelChoices(orgId: string) {
+  const isFullyAuthenticated = useIsFullyAuthenticated();
+  return useQuery({
+    ...catalogQuery(isFullyAuthenticated, orgId),
+    select: catalog => [...catalog.models, ...catalog.lockedModels],
+  });
+}
+
 /** Model list straight from the cache, for non-React call sites. Undefined until first fetch. */
 export function getCachedModels(queryClient: QueryClient): ModelInfo[] | undefined {
   return queryClient.getQueryData<ModelCatalog>(activeCatalogQueryKey())?.models;

@@ -1,4 +1,9 @@
-import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
+import {
+  buildApiKeyTable,
+  getAvailableModels,
+  getSupersededModels,
+  resolveSuccessorChain,
+} from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import {
   createModelAdmission,
@@ -181,7 +186,10 @@ export async function resolveCallerDefaultModel(
   const freeTierDefault = await resolveFreeTierDefaultModel(defaultModel, user, logger);
   const policy = await loadOrgModelPolicy(opts.organizationId);
   if (policy === null) return freeTierDefault;
-  const { models } = await getCallerModelList(user, logger, opts);
+  const { models } = withOrgPolicy(
+    await withoutPaidOnlyModels(await getCachedCallerModelList(user.id, logger), user),
+    policy
+  );
   if (models.some(model => model.id === freeTierDefault)) return freeTierDefault;
   // No allowed text model leaves the default in place for admission to refuse with the org reason.
   return models.find(model => model.type === 'text')?.id ?? freeTierDefault;
@@ -229,11 +237,11 @@ function withOrgPolicy(list: CallerModelList, policy: ReadOrgModelPolicy): Calle
   const models: ModelInfo[] = [];
   const orgLocked: ModelInfo[] = [];
   for (const model of list.models) {
-    if (isModelAllowedByOrgPolicy(policy, model)) models.push(model);
+    if (isModelAllowedByOrgPolicy(policy, model, resolveSuccessorChain)) models.push(model);
     else if (!model.disabled && !isModelDeprecated(model)) orgLocked.push({ ...model, access: ORG_POLICY_LOCK });
   }
   const lockedModels = list.lockedModels.map(model =>
-    isModelAllowedByOrgPolicy(policy, model) ? model : { ...model, access: ORG_POLICY_LOCK }
+    isModelAllowedByOrgPolicy(policy, model, resolveSuccessorChain) ? model : { ...model, access: ORG_POLICY_LOCK }
   );
   const offeredIds = new Set<string>(models.map(model => model.id));
   return {

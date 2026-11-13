@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelBackend } from '../models';
+import { resolveMediaModelBackend } from '../mediaModelBackend';
 import { b4mLLMTools, DATA_LAKE_TOOL_NAMES } from './llm';
 
 /**
@@ -24,10 +25,13 @@ export type OrgModelPolicy = z.infer<typeof OrgModelPolicySchema>;
 export const INVALID_ORG_MODEL_POLICY = 'invalid' as const;
 export type ReadOrgModelPolicy = OrgModelPolicy | null | typeof INVALID_ORG_MODEL_POLICY;
 
-/** Parse `organization.modelPolicy` as stored. Absent or null reads as unrestricted (`null`). */
+/**
+ * Parse `organization.modelPolicy` as stored. Absent or null reads as unrestricted (`null`). A provider or
+ * tool that is no longer a known enum member is dropped with a warning, which only narrows the allowlist.
+ */
 export function readOrgModelPolicy(raw: unknown): ReadOrgModelPolicy {
   if (raw === undefined || raw === null) return null;
-  const parsed = OrgModelPolicySchema.safeParse(normalizeStoredPolicy(raw));
+  const parsed = OrgModelPolicySchema.safeParse(dropUnknownMembers(normalizeStoredPolicy(raw)));
   if (!parsed.success) return INVALID_ORG_MODEL_POLICY;
   const { allowedProviders, allowedModels, allowedTools } = parsed.data;
   if (allowedProviders === null && allowedModels === null && allowedTools === null) return null;
@@ -50,20 +54,50 @@ function normalizeStoredPolicy(raw: unknown): unknown {
   return out;
 }
 
+const KNOWN_MEMBERS: Readonly<Record<'allowedProviders' | 'allowedTools', ReadonlySet<string>>> = {
+  allowedProviders: new Set<string>(Object.values(ModelBackend)),
+  allowedTools: new Set<string>(b4mLLMTools.options),
+};
+
+// A provider or tool renamed in code would otherwise fail the whole row closed; an emptied provider list still
+// fails .min(1) and reads as invalid, so dropping can never widen the policy.
+function dropUnknownMembers(normalized: unknown): unknown {
+  if (typeof normalized !== 'object' || normalized === null || Array.isArray(normalized)) return normalized;
+  const out: Record<string, unknown> = { ...normalized };
+  for (const key of ['allowedProviders', 'allowedTools'] as const) {
+    const list = out[key];
+    if (!Array.isArray(list) || !list.every(item => typeof item === 'string')) continue;
+    const unknown = list.filter(item => !KNOWN_MEMBERS[key].has(item));
+    if (unknown.length === 0) continue;
+    console.warn(`readOrgModelPolicy: dropping unknown ${key} entries from a stored org policy`, unknown);
+    out[key] = list.filter(item => KNOWN_MEMBERS[key].has(item));
+  }
+  return out;
+}
+
 /**
- * Whether the org allows a model. Both lists must admit it. A model whose backend is unknown is
- * refused once `allowedProviders` is set, since there is no provider to match it against.
+ * Whether the org allows a model. Both lists must admit it. With no backend given, a media model's backend
+ * comes from resolveMediaModelBackend; a model whose backend is still unknown is refused once
+ * `allowedProviders` is set. `resolveSuccessor` (llm-adapters resolveSuccessorChain) lets an allowlisted
+ * retired id admit the successor it is remapped to.
  */
 export function isModelAllowedByOrgPolicy(
   policy: ReadOrgModelPolicy,
-  model: { id: string; backend?: ModelBackend | string | null }
+  model: { id: string; backend?: ModelBackend | string | null },
+  resolveSuccessor?: (modelId: string) => string
 ): boolean {
   if (policy === null) return true;
   if (policy === INVALID_ORG_MODEL_POLICY) return false;
-  if (policy.allowedModels !== null && !policy.allowedModels.includes(model.id)) return false;
+  if (
+    policy.allowedModels !== null &&
+    !policy.allowedModels.some(id => id === model.id || resolveSuccessor?.(id) === model.id)
+  ) {
+    return false;
+  }
   if (policy.allowedProviders !== null) {
-    if (!model.backend) return false;
-    if (!(policy.allowedProviders as readonly string[]).includes(model.backend)) return false;
+    const backend = model.backend || resolveMediaModelBackend(model.id);
+    if (!backend) return false;
+    if (!(policy.allowedProviders as readonly string[]).includes(backend)) return false;
   }
   return true;
 }

@@ -2845,6 +2845,7 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const requestedModelInfo = models.find(m => m.id === resolvedModelId);
+      const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
       // Substitute only the executing model; see resolveShadowModelInfo.
       const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
         user: this.user,
@@ -2852,6 +2853,7 @@ export class ChatCompletionProcess {
         models,
         adminSettings: this.db.adminSettings,
         logger,
+        orgModelPolicy,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
       // The model id handed to features and tools that call the backend themselves: the
@@ -2895,7 +2897,7 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
-        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+        orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -4943,7 +4945,9 @@ export class ChatCompletionProcess {
 
       const resolveResearchRunModel = (requested: ModelInfo): ModelInfo =>
         shadowSettings
-          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested)
+          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger, {
+              orgModelPolicy,
+            }) ?? requested)
           : requested;
 
       this.turnCreditLimiter = null;
@@ -6344,7 +6348,9 @@ export class ChatCompletionProcess {
             // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
             // A failing allowlisted requested model starts a substitution here.
             if (shadowSettings) {
-              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const next = shadowCandidates(models, shadowSettings.allowlist, { orgModelPolicy }).find(
+                m => !triedModelIds.has(m.id)
+              );
               const nextLlm =
                 next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
               if (!next || !nextLlm) {
