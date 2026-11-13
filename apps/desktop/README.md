@@ -433,13 +433,15 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
+   `DESKTOP_MAC_SELFSIGNED_BETA=true` is a third 0.x path with in-app updates; see
+   Self-signed macOS beta below.
 5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
    `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset. They also
    enable online lists in every npm CLI release and feature-branch snapshot.
 6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for
-   the Developer ID path only). CI logs record
+   the Developer ID and self-signed paths). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
@@ -452,6 +454,66 @@ ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover w
 a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
 Distribution App setup is still required independently of Apple. These opt-ins do
 not enable Sparkle or prove macOS auto-update compatibility.
+
+#### Self-signed macOS beta
+
+`DESKTOP_MAC_SELFSIGNED_BETA=true` selects a third macOS path for 0.x versions: every build is
+signed with one stable self-signed certificate (hardened runtime and the usual entitlements, no
+notarization), the update feed is baked in, and the zip, its blockmap and `latest-mac.yml` are
+published as on the Developer ID path, so in-app updates work. Squirrel.Mac installs an update only
+if it satisfies the running app's designated requirement. An ad-hoc signature pins that to one
+build's own hash; a stable certificate makes it
+`identifier "com.bike4mind.desktop" and certificate leaf = H"<certificate SHA-1>"` for every build.
+macOS does not trust the certificate, so installing stays the install command's job (or Open
+Anyway). `DESKTOP_MAC_SIGNING=true` takes precedence over it, and it over `DESKTOP_MAC_ADHOC_BETA`;
+on a 1.x version it fails. Pull requests still package ad-hoc with updates off.
+
+Setup, in this order:
+
+1. On a trusted machine, outside any repository, generate the certificate and its PKCS#12. The
+   3DES/SHA-1 PKCS#12 profile is the one `security import` reads on every supported macOS:
+
+   ```bash
+   cat > selfsigned.cnf <<'EOF'
+   [req]
+   distinguished_name = dn
+   x509_extensions = ext
+   prompt = no
+   [dn]
+   CN = Bike4Mind Desktop
+   [ext]
+   basicConstraints = critical,CA:FALSE
+   keyUsage = critical,digitalSignature
+   extendedKeyUsage = critical,codeSigning
+   EOF
+   openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes -config selfsigned.cnf \
+     -keyout selfsigned.key -out selfsigned.pem
+   openssl pkcs12 -export -inkey selfsigned.key -in selfsigned.pem -out selfsigned.p12 \
+     -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+   openssl x509 -in selfsigned.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d : | tr A-F a-f
+   ```
+
+2. Secret `DESKTOP_MAC_SELFSIGNED_P12`: the output of `base64 -i selfsigned.p12`.
+3. Secret `DESKTOP_MAC_SELFSIGNED_P12_PASSWORD`: the export password from step 1.
+4. Variable `DESKTOP_MAC_SELFSIGNED_CERT_SHA1`: the fingerprint printed in step 1. The release
+   fails unless the built app's designated requirement names exactly this certificate and every
+   Mach-O inside is signed by it.
+5. Variable `DESKTOP_MAC_SELFSIGNED_BETA=true`.
+6. Keep `selfsigned.key` and `selfsigned.p12` in offline storage and delete the working copies.
+   Never add the certificate to a keychain or mark it trusted.
+
+Only trusted main runs receive the secret. The packaging step imports it into a temporary keychain
+that is on the user's keychain search list only while the job runs: the job ends by restoring the
+list and deleting the keychain.
+
+The certificate is the app's identity. A new or renewed certificate changes the designated
+requirement: installed builds refuse the next build as an update, and every user reruns the
+install command once. macOS ties the app's keychain item to the exact build unless the certificate
+is issued by Apple, so in this mode, as with ad-hoc builds, the first launch after every update asks
+for keychain access once. `node apps/desktop/scripts/smoke-mac-update.mjs` (run from the repository root,
+also on every macOS CI run) checks the whole path with throwaway certificates and a test app
+identity: two packaged builds, a loopback feed, check, download, restart into the newer build,
+and a newer build from another certificate that is refused.
 
 #### GitHub App setup (independent of Apple)
 
@@ -920,10 +982,11 @@ are killed before the app is handed to the installer, not left to the quit handl
 A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
 one quiet state that keeps showing the current version, and none of them can retract an update
 that is already downloaded and waiting. The state machine is in `src/shared/update.ts` and is
-unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned
-app**, so until code-signing certificates exist the full download-and-install cycle cannot be
-exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
-accepts unsigned payloads is a remote code execution path.
+unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned or
+ad-hoc signed app**. The full download-and-install cycle on macOS needs a stable signing
+certificate; `scripts/smoke-mac-update.mjs` exercises it with throwaway ones (see Self-signed
+macOS beta above). Do not "fix" that by relaxing the signature check - an updater that accepts
+unsigned payloads is a remote code execution path.
 
 Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
 packaging config once it lands.
