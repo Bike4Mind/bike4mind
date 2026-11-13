@@ -157,7 +157,6 @@ export interface PromptCorrelation {
   streamEndAt?: string;
   /** Quest `fallbackInfo` (null: none), or 'unknown' when the quest could not be read. */
   fallback?: Record<string, unknown> | null | 'unknown';
-  routingSource?: string | 'unknown';
   /** Quests do not persist the effective reasoning effort. */
   effort: 'unknown';
 }

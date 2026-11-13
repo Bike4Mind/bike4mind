@@ -207,7 +207,9 @@ export function createAiLatencySuite({
       }
       const settleEndMs = Date.now();
       // After the timed windows; reads fallback/routing from the quest and cannot fail the cell.
-      const provenance = await chatPage.readQuestProvenance(recorder);
+      // Bounded by the test's remaining time, like the artifact settle; skipped when none is left.
+      const provenanceTimeoutMs = Math.min(10_000, test.info().timeout - (Date.now() - testStartMs) - 15_000);
+      const provenance = await chatPage.readQuestProvenance(recorder, provenanceTimeoutMs);
 
       // Measure latency and streaming rate over the token-stream window only; keep the image
       // render / artifact settle as a separate number so a 6-minute artifact mount neither reads

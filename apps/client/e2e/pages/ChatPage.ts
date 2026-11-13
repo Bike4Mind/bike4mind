@@ -90,33 +90,31 @@ export class ChatPage extends BasePage {
     this.page.on('response', onResponse);
     return async () => {
       this.page.off('response', onResponse);
-      await Promise.allSettled(pending);
+      // Bounded: this runs inside the timed window's tail and must not stall a row.
+      await Promise.race([Promise.allSettled(pending), new Promise(resolve => setTimeout(resolve, 2_000))]);
     };
   }
 
   /**
-   * Reads the quest's fallback and routing provenance with the bearer the page itself sent.
-   * Never throws: any failure yields 'unknown', since correlation must not fail a latency cell.
+   * Reads the quest's fallback with the bearer the page itself sent. Never throws: any failure
+   * yields 'unknown', since correlation must not fail a latency cell. A timeout of 0 or less skips
+   * the read.
    */
   async readQuestProvenance(recorder: CompletionRecorder, timeoutMs = 10_000): Promise<QuestProvenance> {
-    const unknown: QuestProvenance = { fallback: 'unknown', routingSource: 'unknown' };
+    const unknown: QuestProvenance = { fallback: 'unknown' };
     const refs = recorder.snapshot();
     const authorization = recorder.authorization();
-    if (refs.length !== 1 || !authorization) return unknown;
+    if (refs.length !== 1 || !authorization || timeoutMs <= 0) return unknown;
     try {
       const response = await this.page.request.get(`/api/quests/${encodeURIComponent(refs[0].questId)}`, {
         headers: { Authorization: authorization },
         timeout: timeoutMs,
       });
       if (!response.ok()) return unknown;
-      const body = (await response.json()) as {
-        fallbackInfo?: Record<string, unknown> | null;
-        routingSource?: unknown;
-      };
-      return {
-        fallback: body.fallbackInfo ?? null,
-        routingSource: typeof body.routingSource === 'string' ? body.routingSource : 'unknown',
-      };
+      const body = (await response.json()) as { type?: string; fallbackInfo?: Record<string, unknown> | null };
+      // The poll body drops fallbackInfo on an errored quest, so absence there does not mean none.
+      if (body.type === 'error') return unknown;
+      return { fallback: body.fallbackInfo ?? null };
     } catch {
       return unknown;
     }

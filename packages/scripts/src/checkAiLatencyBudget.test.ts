@@ -127,8 +127,9 @@ describe('module boundary', () => {
     const factory = fs.readFileSync(FACTORY, 'utf8');
     expect(factory).toContain('new TurnTimer()');
     expect(factory).not.toMatch(/startMs/);
-    expect(factory).toMatch(/sendImageMessageAndWaitForResponse\([^)]*, timer, recorder\)/);
-    expect(factory).toMatch(/sendMessageAndWaitForResponse\([^)]*, timer, recorder\)/);
+    // Prettier wraps the image call across lines, so tolerate whitespace around the arguments.
+    expect(factory).toMatch(/sendImageMessageAndWaitForResponse\([^)]*timer,\s*recorder\s*\)/);
+    expect(factory).toMatch(/sendMessageAndWaitForResponse\([^)]*timer,\s*recorder\s*\)/);
     const chatPage = fs.readFileSync(CHAT_PAGE, 'utf8');
     expect(chatPage.match(/keyboard\.press\('Enter'\);\n\s+timer\?\.markSent\(\);/g) ?? []).toHaveLength(2);
     expect(chatPage.match(/timer\?\.markSent\(/g) ?? []).toHaveLength(2);
@@ -784,6 +785,21 @@ describe('completion correlation', () => {
     ).toEqual({ questId: 'q1', sessionId: 's1', requestId: 'r1', receivedAt: 'T' });
   });
 
+  it('ignores a non-string session id and a missing request id, and keeps the bearer out', () => {
+    const parsed = parseCompletionResponse(
+      { quest: { id: 'q' }, session: { id: 5 } },
+      { authorization: 'Bearer secret' },
+      'T'
+    );
+    expect(parsed).toEqual({ questId: 'q', receivedAt: 'T' });
+    expect(JSON.stringify(parsed)).not.toContain('secret');
+  });
+
+  it('returns null for a non-object body', () => {
+    expect(parseCompletionResponse('str', {}, 'T')).toBeNull();
+    expect(parseCompletionResponse([], {}, 'T')).toBeNull();
+  });
+
   it('returns null, not a guessed id, for a body without a string quest id', () => {
     for (const body of [null, {}, { error: 'nope' }, { quest: {} }, { quest: { id: 7 } }, { quest: { id: '' } }]) {
       expect(parseCompletionResponse(body, {}, 'T')).toBeNull();
@@ -803,9 +819,19 @@ describe('completion correlation', () => {
       sentAt: '1970-01-01T00:00:00.000Z',
       streamEndAt: '1970-01-01T00:00:01.000Z',
       fallback: 'unknown',
-      routingSource: 'unknown',
       effort: 'unknown',
     });
+  });
+
+  it('keeps a null fallback as none, an object as is, and only an unread quest as unknown', () => {
+    const recorder = new CompletionRecorder();
+    recorder.record(ref('a'));
+    const build = (p?: { fallback: Record<string, unknown> | null | 'unknown' }) =>
+      buildCorrelation(recorder, timerSentAt(0), 1, p).fallback;
+    expect(build()).toBe('unknown');
+    expect(build({ fallback: null })).toBeNull();
+    expect(build({ fallback: { reason: 'x' } })).toEqual({ reason: 'x' });
+    expect(build({ fallback: 'unknown' })).toBe('unknown');
   });
 
   it('never puts the bearer header into the snapshot', () => {
@@ -861,14 +887,23 @@ describe('completion correlation', () => {
     expect(isAttributable({ correlation: rec() })).toBe(false);
     expect(isAttributable({ correlation: rec('a', 'b') })).toBe(false);
     expect(isAttributable({ correlation: rec('a') })).toBe(true);
+    // The length check is independent of the status label.
+    expect(isAttributable({ correlation: { ...rec('a'), completions: [ref('a'), ref('b')] } })).toBe(false);
   });
 
   it('wires the recorder into the send helpers and the persisted run identity', () => {
     const chatPage = fs.readFileSync(CHAT_PAGE, 'utf8');
     expect(chatPage).toContain("pathname.endsWith('/api/ai/llm')");
-    expect(chatPage.match(/this\.captureCompletions\(recorder\)/g) ?? []).toHaveLength(2);
+    // The listener must attach before Enter, or a fast response is missed and the row reads missing.
+    expect(chatPage).toMatch(/captureCompletions\(recorder\);\s*try \{\s*await this\.page\.keyboard\.press\('Enter'\)/);
+    expect(chatPage).toMatch(/captureCompletions\(recorder\);\s*try \{\s*return await this\.sendAndWait/);
     const factory = fs.readFileSync(path.join(REPO, 'apps/client/e2e/ai-latency-suite-factory.ts'), 'utf8');
-    expect(factory.match(/correlation: buildCorrelation\(/g) ?? []).toHaveLength(2);
+    expect(factory).toMatch(/incompleteResult\([^;]*correlation: buildCorrelation\(recorder, timer, streamEndMs\)/);
+    expect(factory).toMatch(
+      /completedResult\([\s\S]*?correlation: buildCorrelation\(recorder, timer, streamEndMs, provenance\)/
+    );
+    expect(factory).toMatch(/readQuestProvenance\(recorder, provenanceTimeoutMs\)/);
+    expect(factory).toMatch(/provenanceTimeoutMs = Math\.min\(10_000, test\.info\(\)\.timeout/);
     expect(factory).toContain('GITHUB_RUN_ID');
   });
 });

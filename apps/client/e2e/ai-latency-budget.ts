@@ -188,8 +188,8 @@ export class CompletionRecorder {
   }
 }
 
-/** Provenance read from the quest after the stream; absent keys mean it was not read. */
-export type QuestProvenance = Pick<PromptCorrelation, 'fallback' | 'routingSource'>;
+/** Provenance read from the quest after the stream; absent means it was not read. */
+export type QuestProvenance = Pick<PromptCorrelation, 'fallback'>;
 
 export function buildCorrelation(
   recorder: CompletionRecorder,
@@ -204,8 +204,8 @@ export function buildCorrelation(
     completions,
     ...(sentAt !== undefined && { sentAt: new Date(sentAt).toISOString() }),
     ...(streamEndMs !== undefined && { streamEndAt: new Date(streamEndMs).toISOString() }),
-    fallback: provenance?.fallback ?? 'unknown',
-    routingSource: provenance?.routingSource ?? 'unknown',
+    // A supplied null means 'no fallback' and must survive; only an unread quest is 'unknown'.
+    fallback: provenance ? provenance.fallback : 'unknown',
     effort: 'unknown',
   };
 }
