@@ -12,8 +12,11 @@ const API_ROOT = join(__dirname, '../../pages/api');
  * would hand legacy keys access they never had. See baseApi's `grandfatherLegacyKeys` docblock.
  */
 const GRANDFATHERED_ROUTES = [
+  'ai/transcribe/index.ts',
+  'ai/transcribe/init.ts',
   'credits/transactions.ts',
   'gears/status.ts',
+  'generated-content/[ref].ts',
   'identify.ts',
   'models.ts',
   'sessions/[id]/chat/index.ts',

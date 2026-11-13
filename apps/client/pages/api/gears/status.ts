@@ -48,6 +48,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMI
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+    if (req.apiKeyInfo?.oauthExchangeClientId) {
+      return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
+    }
 
     const { evaluations, overrides, minAccountAgeDays } = await evaluateGears(String(userId));
     const gears: GearStatus[] = evaluations.map(evaluation => {
