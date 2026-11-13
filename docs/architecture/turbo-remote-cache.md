@@ -18,9 +18,9 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
 - Managed Function URL CORS is disabled so the handler controls preflight headers.
   Upload preflights omit Authorization from allowed headers; Turbo must not send
   the cache bearer token to S3 alongside the URL signature.
-- The stack deploys only on hosted stages (`production`, `dev`), outside SST dev.
-  Developer and preview stages create no cache resources. Each hosted stage has
-  its own bucket; choose one endpoint for a shared cache.
+- The stack deploys only on the shared staging stage (`dev`), outside SST dev, so
+  CI and developers share one endpoint. Production, developer and preview stages
+  create no cache resources.
 - The Function URL is public with bearer auth in the handler, so the function runs
   under a reserved concurrency cap. The `slug`/`teamId` query value becomes the key
   prefix and must match `[A-Za-z0-9_-]{1,64}`; anything else returns 400.
@@ -51,8 +51,9 @@ regression covers body-independent upload URLs.
 Set two distinct secrets on the hosted stage:
 
 ```bash
-sst secret set TURBO_CACHE_TOKEN "$(openssl rand -hex 32)" --stage production
-sst secret set TURBO_CACHE_READ_TOKEN "$(openssl rand -hex 32)" --stage production
+sst secret set TURBO_CACHE_TOKEN "$(openssl rand -hex 32)" --stage dev
+sst secret set TURBO_CACHE_READ_TOKEN "$(openssl rand -hex 32)" --stage dev
+sst deploy --stage dev
 ```
 
 `TURBO_CACHE_TOKEN` grants read/write access. Keep it in trusted CI secrets only;
@@ -62,8 +63,11 @@ handler rejects both direct writes and upload preflights using this token.
 Unset secrets deny access. Identical secrets receive only read permission.
 Analytics events are accepted without storing data for either token.
 
+Secrets reach the handler at deploy time, so a new value takes effect only after
+`sst deploy --stage dev`; until then the old token keeps working.
+
 Anyone holding the CI token can publish artifacts that CI trusts. Rotate it if
-exposed. Presigned URLs remain usable until their 15-minute expiry, including
+exposed: set the new value and redeploy in the same step. Presigned URLs remain usable until their 15-minute expiry, including
 URLs issued before token rotation. Artifact signatures are not enabled by this
 transport: direct S3 downloads do not supply Turbo's signature response header.
 

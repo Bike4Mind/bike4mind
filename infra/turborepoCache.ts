@@ -1,7 +1,8 @@
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
-import { PRODUCTION_STAGES } from './constants';
 
-const isHostedStage = !$dev && PRODUCTION_STAGES.includes($app.stage);
+// One shared cache, hosted on the staging stage only. CI and developers point at a single
+// endpoint, and production's `removal: 'retain'` would orphan the bucket if it were ever dropped.
+const isHostedStage = !$dev && $app.stage === 'dev';
 
 // Declared here, not in infra/secrets.ts: everything in that map reaches `allSecrets`, which is
 // linked into every app Lambda. The cache tokens are build-supply-chain credentials, so they are
