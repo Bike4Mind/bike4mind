@@ -10,7 +10,9 @@
 export type OrgEvent =
   | { type: 'credit_debit'; organizationId: string; balanceAfter: number; actingUserId?: string }
   | { type: 'seat_limit'; organizationId: string; seats: number }
-  | { type: 'member_joined'; organizationId: string; userId: string }
+  /** `actorUserId` is the admin who added them, if any; neither is notified. */
+  | { type: 'member_joined'; organizationId: string; userId: string; actorUserId?: string }
+  /** Raised only after the owner's own payment-failed email went out, so the owner gets no second email. */
   | { type: 'payment_failed'; organizationId: string; invoiceId: string }
   /** After a member's usage is recorded, or when the cap pre-flight refuses their request (`refused`). */
   | { type: 'member_cap_check'; organizationId: string; userId: string; refused?: boolean };

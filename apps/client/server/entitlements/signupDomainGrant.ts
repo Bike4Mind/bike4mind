@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { entitlementsForEmail, signupCreditsForKeys } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
@@ -369,6 +370,8 @@ async function applyPartnerMembership(
     );
     if (membership.added) {
       logger.info(`Partner-rule org membership: added user ${userId} to org ${organizationId} (${trigger})`);
+      // Here rather than in the service, so the bulk backfill route re-running the rule stays quiet.
+      await notifyOrgEvent({ type: 'member_joined', organizationId, userId });
       if (membership.reason === 'added-seat-raised') {
         // The join and raise already committed; the alert/audit is best-effort and never throws.
         await notifySeatCeilingRaised(
@@ -388,6 +391,7 @@ async function applyPartnerMembership(
       // No auto-raise: a Stripe-billed org (ceiling not raised out of band) or a non-Stripe org
       // already at MAX_SEATS (#1424). Alert an admin to add seats and admit this stranded user.
       await notifyPartnerSignupBlockedAtCapacity({ organizationId, userId, seats: membership.seats, trigger }, logger);
+      await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: membership.seats });
     } else if (membership.reason === 'org-missing') {
       // Surfaces a misconfiguration (dangling org ref) without failing the signup.
       logger.warn(`Partner-rule org membership not applied for user ${userId} (org ${organizationId}): org-missing`);

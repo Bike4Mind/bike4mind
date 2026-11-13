@@ -9,7 +9,7 @@ import {
   orgAdminNotificationPrefRepository,
 } from '@bike4mind/database';
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
-import { dispatchOrgAlert, type DispatchOrgAlertInput } from './orgAlertDispatcher';
+import { dispatchOrgAlert, handleOrgEvent, type DispatchOrgAlertInput } from './orgAlertDispatcher';
 
 const { publish } = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
@@ -138,5 +138,53 @@ describe('dispatchOrgAlert', () => {
     expect(result.claimed).toBe(false);
     expect(await OrgAlertNotificationModel.countDocuments({})).toBe(0);
     expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchOrgAlert exclusions', () => {
+  it('drops excluded recipients entirely', async () => {
+    const result = await dispatchOrgAlert(alert({ excludeRecipientUserIds: [str(ids.optedIn)] }));
+
+    expect(result.recipientUserIds).toEqual([str(ids.owner)]);
+    expect(await inboxFor(ids.optedIn)).toHaveLength(0);
+  });
+
+  it('keeps the owner Inbox entry but skips their email under excludeOwnerEmail', async () => {
+    await dispatchOrgAlert(alert({ excludeOwnerEmail: true }));
+
+    expect(await inboxFor(ids.owner)).toHaveLength(1);
+    expect(publish.mock.calls.map(([e]) => e.to)).toEqual(['optedIn@example.com']);
+  });
+});
+
+describe('handleOrgEvent', () => {
+  it('announces a join once, never to the joiner or the admin who added them', async () => {
+    await orgAdminNotificationPrefRepository.upsertForUser(str(ids.org), str(ids.optedIn), { member_joined: true });
+    await orgAdminNotificationPrefRepository.upsertForUser(str(ids.org), str(ids.silent), { member_joined: true });
+    const joined = {
+      type: 'member_joined' as const,
+      organizationId: str(ids.org),
+      userId: str(ids.silent),
+      actorUserId: str(ids.owner),
+    };
+
+    await handleOrgEvent(joined);
+    await handleOrgEvent(joined);
+
+    expect(await inboxFor(ids.optedIn)).toHaveLength(1);
+    expect(await inboxFor(ids.owner)).toHaveLength(0);
+    expect(await inboxFor(ids.silent)).toHaveLength(0);
+    const [claim] = await OrgAlertNotificationModel.find({}).lean();
+    expect(claim.periodKey).toBe('once');
+  });
+
+  it('gives the owner an Inbox entry but no second email for a failed payment', async () => {
+    await orgAdminNotificationPrefRepository.upsertForUser(str(ids.org), str(ids.optedIn), { payment_failed: true });
+
+    await handleOrgEvent({ type: 'payment_failed', organizationId: str(ids.org), invoiceId: 'in_1' });
+
+    expect(await inboxFor(ids.owner)).toHaveLength(1);
+    expect(await inboxFor(ids.optedIn)).toHaveLength(1);
+    expect(publish.mock.calls.map(([e]) => e.to)).toEqual(['optedIn@example.com']);
   });
 });

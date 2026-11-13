@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import {
   inboxRepository,
+  mongoose,
   orgAdminNotificationPrefRepository,
   orgAlertNotificationRepository,
   organizationRepository,
@@ -36,6 +37,10 @@ export interface DispatchOrgAlertInput {
   message: string;
   /** Recipients who still get the Inbox entry but no email (they were already emailed elsewhere). */
   excludeEmailUserIds?: readonly string[];
+  /** The owner still gets the Inbox entry but no email, e.g. paymentFailureNotice already emailed them. */
+  excludeOwnerEmail?: boolean;
+  /** Never notified, e.g. the member who just joined and the admin who added them. */
+  excludeRecipientUserIds?: readonly string[];
 }
 
 export interface DispatchOrgAlertResult {
@@ -82,7 +87,10 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
     ];
     const prefs = await orgAdminNotificationPrefRepository.getForOrg(input.organizationId);
     const prefByUser = new Map(prefs.map(row => [row.userId, row]));
-    const recipients = candidates.filter(r => resolveOrgAlertOptIn(r.role, prefByUser.get(r.userId), input.kind));
+    const excluded = new Set(input.excludeRecipientUserIds ?? []);
+    const recipients = candidates.filter(
+      r => !excluded.has(r.userId) && resolveOrgAlertOptIn(r.role, prefByUser.get(r.userId), input.kind)
+    );
     if (recipients.length === 0) return { claimed: true, recipientUserIds: [], delivered: 0 };
 
     const title = toOrgAlertSubject(`${input.title} - ${org.name}`);
@@ -94,6 +102,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
       settingsUrl: `${appUrl}/organizations/${input.organizationId}?tab=settings`,
     });
     const skipEmail = new Set(input.excludeEmailUserIds ?? []);
+    if (input.excludeOwnerEmail) skipEmail.add(org.userId);
 
     let delivered = 0;
     let attempted = 0;
@@ -141,8 +150,21 @@ async function releaseQuietly(id: string | undefined): Promise<void> {
   }
 }
 
-/** Maps an org event to its alert. Threshold kinds are evaluated by their own modules, which dispatch. */
-export async function handleOrgEvent(event: OrgEvent): Promise<void> {
+type TransactionStorage = { exit<R>(callback: () => R): R };
+
+/**
+ * Maps an org event to its alert, outside any ambient transaction: events fire from inside
+ * withTransaction (credit holds, roster writes), and joining it would roll back the claim and Inbox
+ * write on abort while the email still went out, so the next attempt would send again.
+ */
+export function handleOrgEvent(event: OrgEvent): Promise<void> {
+  const storage = (mongoose as unknown as { transactionAsyncLocalStorage?: TransactionStorage })
+    .transactionAsyncLocalStorage;
+  return storage ? storage.exit(() => routeOrgEvent(event)) : routeOrgEvent(event);
+}
+
+/** Threshold kinds are evaluated by their own modules, which dispatch. */
+async function routeOrgEvent(event: OrgEvent): Promise<void> {
   switch (event.type) {
     case 'seat_limit':
       await dispatchOrgAlert({
@@ -158,7 +180,10 @@ export async function handleOrgEvent(event: OrgEvent): Promise<void> {
         organizationId: event.organizationId,
         kind: 'member_joined',
         scope: `user:${event.userId}`,
+        // Not month-scoped: a retried accept or a re-add within the claim's retention never repeats it.
+        periodKey: 'once',
         subjectUserId: event.userId,
+        excludeRecipientUserIds: [event.userId, ...(event.actorUserId ? [event.actorUserId] : [])],
         title: 'New member joined',
         message: 'A new member joined your organization. Review the roster from the Members tab.',
       });
@@ -168,6 +193,7 @@ export async function handleOrgEvent(event: OrgEvent): Promise<void> {
         organizationId: event.organizationId,
         kind: 'payment_failed',
         scope: `invoice:${event.invoiceId}`,
+        excludeOwnerEmail: true,
         title: 'Subscription payment failed',
         message: 'A renewal payment for your organization failed. The owner can update the card from the Billing tab.',
       });
