@@ -42,7 +42,10 @@ describe('seed-signup-grant-pools migration', () => {
     const signupSeeds = AvailableMigrations.filter(m => m !== migration && /signup/.test(m.name));
     expect(signupSeeds.length).toBeGreaterThan(0);
     for (const seed of signupSeeds) expect(migration.id).toBeGreaterThan(seed.id);
-    expect(migration.id).toBeLessThan(20260922000001);
+    // Not a cap on the newest id: generated ids are wall-clock stamps and land above any backfill.
+    const failClosed = AvailableMigrations.filter(m => m.failClosed);
+    expect(failClosed.length).toBeGreaterThan(0);
+    for (const backfill of failClosed) expect(migration.id).toBeLessThan(backfill.id);
   });
 
   it.each([
