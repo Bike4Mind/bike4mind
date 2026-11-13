@@ -50,6 +50,7 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
   const preset = activePreset(range);
   const setRange = (next: DayRange) => onChange({ from: next.from, to: next.to, range: undefined });
   // A picked day past the other end moves that end with it; an over-wide range keeps the picked day.
+  // Typed dates bypass the inputs' max, so both ends clamp to today here too.
   const pickFrom = (picked: string) => {
     if (!parseIsoDay(picked)) return;
     const from = picked > today ? today : picked;
@@ -57,8 +58,9 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
     if (spanDays({ from, to }) > MAX_RANGE_DAYS) to = addDays(from, MAX_RANGE_DAYS - 1);
     setRange({ from, to: to > today ? today : to });
   };
-  const pickTo = (to: string) => {
-    if (!parseIsoDay(to)) return;
+  const pickTo = (picked: string) => {
+    if (!parseIsoDay(picked)) return;
+    const to = picked > today ? today : picked;
     let from = range.from > to ? to : range.from;
     if (spanDays({ from, to }) > MAX_RANGE_DAYS) from = addDays(to, -(MAX_RANGE_DAYS - 1));
     setRange({ from, to });

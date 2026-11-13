@@ -78,6 +78,16 @@ describe('StatusFilters', () => {
     expect(onChange).toHaveBeenLastCalledWith({ from: '2026-10-25', to: '2026-10-25', range: undefined });
   });
 
+  it('clamps a typed future date to today on either end', () => {
+    const onChange = vi.fn();
+    const search = { product: 'product-a', from: '2026-11-01', to: '2026-11-10' };
+    render(<StatusFilters search={search} facets={facets} onChange={onChange} />, { wrapper: QaTestWrapper });
+    fireEvent.change(dateInput('qa-filter-to'), { target: { value: '2026-12-26' } });
+    expect(onChange).toHaveBeenLastCalledWith({ from: '2026-11-01', to: '2026-11-13', range: undefined });
+    fireEvent.change(dateInput('qa-filter-from'), { target: { value: '2026-11-25' } });
+    expect(onChange).toHaveBeenLastCalledWith({ from: '2026-11-13', to: '2026-11-13', range: undefined });
+  });
+
   it('ignores a cleared date', () => {
     const onChange = vi.fn();
     render(<StatusFilters search={{ product: 'product-a' }} facets={facets} onChange={onChange} />, {
