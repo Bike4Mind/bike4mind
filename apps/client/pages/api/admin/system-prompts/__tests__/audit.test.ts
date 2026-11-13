@@ -238,6 +238,22 @@ describe('system prompt admin audit', () => {
     expect(JSON.stringify(input)).not.toContain('secret body text');
   });
 
+  it('save-version rejects content over 50000 chars and writes nothing', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'x'.repeat(50001) });
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.repo.saveToVersion).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('save-version accepts content of exactly 50000 chars', async () => {
+    h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 1 });
+    h.repo.saveToVersion.mockResolvedValue({ ok: true });
+    const res = await call(saveVersion, 'POST', { version: 2, content: 'x'.repeat(50000) });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.repo.saveToVersion).toHaveBeenCalledTimes(1);
+  });
+
   it('switch-version records version_switched with the active-version diff', async () => {
     h.repo.findByPromptId.mockResolvedValue({ name: 'P', activeVersion: 2, version: 3 });
     h.repo.switchVersion.mockResolvedValue({ ok: true });

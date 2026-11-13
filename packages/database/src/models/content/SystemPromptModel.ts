@@ -381,7 +381,8 @@ export class SystemPromptRepository extends BaseRepository<IAdminSystemPromptDoc
             lastUpdatedBy: updatedBy,
             lastUpdatedByName: updatedByName,
           },
-        }
+        },
+        { runValidators: true }
       );
     }
 
