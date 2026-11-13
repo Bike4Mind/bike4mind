@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
@@ -566,5 +566,71 @@ describe('ModelDetailPage for a delegate with support:read', () => {
     expect(screen.getByTestId('model-detail-fix-btn')).toBeDisabled();
     expect(requested()).not.toContain('/api/admin/users/tags');
     expect(requested()).not.toContain('/api/admin/llm-models/configurations');
+  });
+});
+
+describe('access editor pending draft', () => {
+  it.each(['success', 'failure'] as const)('holds rank and fallback until deferred %s', async outcome => {
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    let rejectRequest: ((error: Error) => void) | undefined;
+    patch.mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        resolveRequest = resolve;
+        rejectRequest = reject;
+      })
+    );
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    const rank = screen.getByTestId('model-access-rank-input');
+    fireEvent.change(rank, { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(rank).toBeDisabled();
+    expect(screen.getByTestId('model-access-fallback-select')).toBeDisabled();
+    fireEvent.change(rank, { target: { value: '9' } });
+    fireEvent.click(screen.getByTestId('model-access-dialog-close-btn'));
+    expect(screen.getByTestId('model-access-dialog')).toBeInTheDocument();
+    expect(patch.mock.calls[0][1]).toMatchObject({ change: { rank: 3 } });
+    await act(async () => {
+      if (outcome === 'success') resolveRequest?.({ data: { entry: null, changed: true, revision: 'r3' } });
+      else rejectRequest?.(apiFailure(503, { error: 'Deferred access failure' }));
+    });
+    if (outcome === 'success')
+      await waitFor(() => expect(screen.queryByTestId('model-access-dialog')).not.toBeInTheDocument());
+    else {
+      expect(await screen.findByTestId('model-access-error')).toHaveTextContent('Deferred access failure');
+      expect(rank).toHaveValue('3');
+      expect(rank).toBeEnabled();
+    }
+  });
+
+  it('holds tag and entitlement edits while the submitted audience is pending', async () => {
+    let rejectRequest: ((error: unknown) => void) | undefined;
+    patch.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      })
+    );
+    serve([offRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    const tags = screen.getByTestId('model-access-tags-input');
+    fireEvent.change(tags, { target: { value: 'pilot' } });
+    fireEvent.keyDown(tags, { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(tags).toBeDisabled();
+    expect(screen.getByTestId('model-access-entitlements-input')).toBeDisabled();
+    await userEvent.type(tags, 'late{Enter}');
+    expect(patch.mock.calls[0][1]).toMatchObject({ change: { allowedUserTags: ['beta', 'pilot'] } });
+    await act(async () => {
+      rejectRequest?.(apiFailure(503, { error: 'Audience unavailable' }));
+    });
+    expect(await screen.findByTestId('model-access-error')).toHaveTextContent('Audience unavailable');
+    expect(screen.getByTestId('model-access-preview')).toHaveTextContent('Tags: beta, pilot');
+    expect(tags).toBeEnabled();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
   DELEGATE,
   FULL_ADMIN,
@@ -802,5 +802,41 @@ describe('LifecycleSuggestions bulk settle', () => {
     expect(checkbox).toBeDisabled();
     expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).toBeDisabled();
     expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
+  });
+});
+
+describe('lifecycle request ownership', () => {
+  it.each(['success', 'failure'] as const)('holds successor edits and dismissal until deferred %s', async outcome => {
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    let rejectRequest: ((error: unknown) => void) | undefined;
+    m.post.mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        resolveRequest = resolve;
+        rejectRequest = reject;
+      })
+    );
+    renderQueue();
+    await openMenuItem('accept');
+    typeSuccessor('gpt-live');
+    writeReason('accept', 'Confirmed lifecycle evidence');
+    fireEvent.click(confirm('accept'));
+    await waitFor(() => expect(m.post).toHaveBeenCalledOnce());
+    const successor = screen.getByTestId('discovery-accept-successor-input');
+    expect(successor).toBeDisabled();
+    fireEvent.change(successor, { target: { value: 'late-successor' } });
+    fireEvent.click(screen.getByTestId('discovery-accept-dialog-close-btn'));
+    expect(screen.getByTestId('discovery-accept-dialog')).toBeInTheDocument();
+    expect(m.post.mock.calls[0][1]).toMatchObject({ replacedBy: 'gpt-live' });
+    await act(async () => {
+      if (outcome === 'success') resolveRequest?.({ data: {} });
+      else rejectRequest?.(apiError(503, { error: 'Lifecycle write failed' }));
+    });
+    if (outcome === 'success')
+      await waitFor(() => expect(screen.queryByTestId('discovery-accept-dialog')).not.toBeInTheDocument());
+    else {
+      expect(await screen.findByTestId('discovery-accept-error')).toHaveTextContent('Lifecycle write failed');
+      expect(successor).toHaveValue('gpt-live');
+      expect(successor).toBeEnabled();
+    }
   });
 });

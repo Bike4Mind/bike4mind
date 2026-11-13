@@ -311,4 +311,66 @@ describe('ModelPricesSection', () => {
     fireEvent.change(within(dialog).getByTestId('add-price-rate-0-input'), { target: { value: '2' } });
     expect(within(dialog).getByTestId('add-price-markup-0')).toHaveTextContent('a user pays about');
   });
+  it.each(['success', 'failure'] as const)(
+    'freezes the submitted price and tier draft until deferred %s',
+    async outcome => {
+      let resolveRequest: ((value: { data: object }) => void) | undefined;
+      let rejectRequest: ((error: Error) => void) | undefined;
+      mocks.post.mockReturnValueOnce(
+        new Promise<{ data: object }>((resolve, reject) => {
+          resolveRequest = resolve;
+          rejectRequest = reject;
+        })
+      );
+      renderSection();
+      await fillDialog('gpt-new');
+      const rate = screen.getByTestId('add-price-rate-0-input');
+      fireEvent.click(screen.getByTestId('add-price-dialog-confirm-btn'));
+      await waitFor(() => expect(mocks.post).toHaveBeenCalledOnce());
+      expect(rate).toBeDisabled();
+      expect(screen.getByTestId('add-price-model-input')).toBeDisabled();
+      expect(screen.getByTestId('add-price-add-tier-btn')).toBeDisabled();
+      fireEvent.change(rate, { target: { value: '9' } });
+      fireEvent.click(screen.getByTestId('add-price-add-tier-btn'));
+      fireEvent.click(screen.getByTestId('add-price-dialog-close-btn'));
+      await userEvent.keyboard('{Escape}');
+      expect(screen.getByTestId('add-price-dialog')).toBeInTheDocument();
+      expect(screen.queryByTestId('add-price-tier-1')).not.toBeInTheDocument();
+      expect(mocks.post.mock.calls[0][1]).toMatchObject({ pricing: { '0': { input: 2.5e-6, output: 10e-6 } } });
+      await act(async () => {
+        if (outcome === 'success') resolveRequest?.({ data: {} });
+        else rejectRequest?.(new Error('Deferred price failure'));
+      });
+      if (outcome === 'success')
+        await waitFor(() => expect(screen.queryByTestId('add-price-dialog')).not.toBeInTheDocument());
+      else {
+        expect(await screen.findByTestId('add-price-error')).toHaveTextContent('Deferred price failure');
+        expect(rate).toHaveValue('2.5');
+        expect(rate).toBeEnabled();
+        fireEvent.change(rate, { target: { value: '9' } });
+        expect(rate).toHaveValue('9');
+      }
+    }
+  );
+
+  it('does not let an earlier price response close a dialog after its model scope changes', async () => {
+    let finish: ((value: { data: object }) => void) | undefined;
+    mocks.post.mockReturnValueOnce(
+      new Promise<{ data: object }>(resolve => {
+        finish = resolve;
+      })
+    );
+    renderSection();
+    await fillDialog('gpt-new');
+    fireEvent.click(screen.getByTestId('add-price-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledOnce());
+    act(() => {
+      fakeAdminRouter.navigate({ to: '/admin', search: previous => ({ ...previous, model: 'gpt-x' }) });
+    });
+    await act(async () => {
+      finish?.({ data: {} });
+    });
+    expect(screen.getByTestId('add-price-dialog')).toBeInTheDocument();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
 });

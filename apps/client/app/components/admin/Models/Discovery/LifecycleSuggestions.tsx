@@ -793,7 +793,7 @@ export function LifecycleSuggestions() {
           initialBlockers={acceptBlockers}
           onClose={() => setAccepting(null)}
           onAccepted={status => {
-            setAccepting(null);
+            setAccepting(current => (current === accepting ? null : current));
             settle(accepting.modelId, `Recorded ${modelName(index, accepting.modelId)} as ${status}.`, true);
           }}
         />
@@ -805,7 +805,7 @@ export function LifecycleSuggestions() {
           index={index}
           onClose={() => setDismissing(null)}
           onDismissed={() => {
-            setDismissing(null);
+            setDismissing(current => (current === dismissing ? null : current));
             settle(dismissing.modelId, `Dismissed the suggestion for ${modelName(index, dismissing.modelId)}.`, false);
           }}
         />

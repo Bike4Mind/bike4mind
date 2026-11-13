@@ -491,7 +491,7 @@ export function ModelListSection() {
 
   const onBulkApplied = (applied: ModelBulkApplied) => {
     const { request, result, reason, values, alsoRemoveBase } = applied;
-    setBulk(null);
+    setBulk(current => (current === request ? null : current));
     setSelection(NO_SELECTION);
     void invalidate();
     const retry = pendingRetry.current?.request === request ? pendingRetry.current : null;

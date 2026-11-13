@@ -5,6 +5,7 @@ import { adminFocusScope } from './adminStyles';
 export type AdminDialogProps = {
   open?: boolean;
   onClose: () => void;
+  closeDisabled?: boolean;
   title: string;
   children: React.ReactNode;
   /** Max width in px; the dialog never exceeds the viewport minus a 16 px gutter each side. */
@@ -22,6 +23,7 @@ export type AdminDialogProps = {
 export function AdminDialog({
   open = true,
   onClose,
+  closeDisabled = false,
   title,
   children,
   width = 440,
@@ -43,7 +45,7 @@ export function AdminDialog({
           [`& .${dialogContentClasses.root}`]: { overflow: 'visible' },
         }}
       >
-        <ModalClose data-testid={`${testId}-close-btn`} />
+        <ModalClose disabled={closeDisabled} data-testid={`${testId}-close-btn`} />
         <DialogTitle id={titleId} component="h2">
           {title}
         </DialogTitle>

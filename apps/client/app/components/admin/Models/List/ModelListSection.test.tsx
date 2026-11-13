@@ -500,6 +500,59 @@ describe('ModelListSection for a delegate', () => {
 describe('ModelListSection bulk access', () => {
   const twoRows = () => listResponse([listedRow, reviewRow], { total: 129 });
 
+  it.each(['success', 'failure'] as const)('holds bulk tag and base toggles until deferred %s', async outcome => {
+    let resolveRequest: (() => void) | undefined;
+    let rejectRequest: ((error: unknown) => void) | undefined;
+    const gate = new Promise<void>((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = reject;
+    });
+    serveList(twoRows);
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string }) => {
+      if (!body.dryRunToken) return { data: dryRun() };
+      await gate;
+      return {
+        data: {
+          batchId: 'pending',
+          results: [{ id: 'example-text-1', outcome: 'updated' }],
+          counts: { selected: 2, updated: 1, unchanged: 1, failed: 0 },
+          summary: 'Updated 1 of 2.',
+          revision: 'r2',
+        },
+      };
+    });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-add-tag-btn'));
+    const input = screen.getByTestId('models-bulk-values-input');
+    fireEvent.change(input, { target: { value: 'beta' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    await waitFor(() => expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+    await waitFor(() => expect(bulkBodies().some(body => 'dryRunToken' in body)).toBe(true));
+    expect(input).toBeDisabled();
+    const base = screen.getByTestId('models-bulk-also-remove-base-checkbox');
+    expect(base).toBeDisabled();
+    fireEvent.click(base);
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-close-btn'));
+    expect(screen.getByTestId('models-bulk-dialog')).toBeInTheDocument();
+    expect(bulkBodies().at(-1)).toMatchObject({ change: { addTags: ['beta'] } });
+    expect(bulkBodies().at(-1)?.change).not.toHaveProperty('alsoRemoveBase');
+    await act(async () => {
+      if (outcome === 'success') resolveRequest?.();
+      else rejectRequest?.(apiFailure(503, { error: 'Bulk write failed' }));
+    });
+    if (outcome === 'success')
+      await waitFor(() => expect(screen.queryByTestId('models-bulk-dialog')).not.toBeInTheDocument());
+    else {
+      expect(await screen.findByTestId('models-bulk-apply-error')).toHaveTextContent('Bulk write failed');
+      expect(input).toBeEnabled();
+      expect(base).not.toBeChecked();
+    }
+  });
+
   it('adds a tag to every model matching the filter, with the view sent explicitly', async () => {
     serveList(twoRows);
     const result: ModelAccessBulkResult = {

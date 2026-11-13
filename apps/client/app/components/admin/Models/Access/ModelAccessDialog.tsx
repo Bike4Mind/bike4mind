@@ -1,3 +1,4 @@
+import { useDialogRequestScope } from '../useDialogRequestScope';
 import { useState, type ReactNode } from 'react';
 import { Alert, Button, Checkbox, Stack, Typography } from '@mui/joy';
 import { useMutation } from '@tanstack/react-query';
@@ -53,6 +54,7 @@ export function ModelAccessDialog({
   auditInNewTab = false,
   children,
 }: Props) {
+  const captureRequest = useDialogRequestScope(target?.id ?? 'closed');
   const invalidate = useInvalidateModelAccess();
   const showUndo = useUndoToast();
   const { openModel, modelHref } = useModelsNavigation();
@@ -88,16 +90,19 @@ export function ModelAccessDialog({
   };
 
   const confirm = async (reason: string) => {
+    const isCurrent = captureRequest();
     if (!change) return;
     let result: ModelAccessPatchResult;
     try {
       result = await write.mutateAsync({ reason });
     } catch (error) {
+      if (!isCurrent()) return;
       const { status, data } = apiErrorOf(error);
       if (status === 422 && Array.isArray(data.adminOnlyIds)) setServerAskedAdminOnly(true);
       return;
     }
     await invalidate();
+    if (!isCurrent()) return;
     const name = target.name;
     if (!result.changed) {
       showUndo({ message: `Nothing changed: ${name} already had this access.` });

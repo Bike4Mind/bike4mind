@@ -1,3 +1,4 @@
+import { useDialogRequestScope } from '../useDialogRequestScope';
 import { useMemo, useState } from 'react';
 import { Alert, Autocomplete, Box, Button, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { getPriceMargin } from '@bike4mind/common';
@@ -76,6 +77,7 @@ type AddPriceDialogProps = {
  * b4m-core/common/src/modelPriceCatalog.ts), with its tiers and the markup preview.
  */
 export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDialogProps) {
+  const captureRequest = useDialogRequestScope(presetModelId ?? 'new-price');
   const text = useAdminModelsOfType('text');
   const voice = useAdminModelsOfType('realtime-voice');
   const models = {
@@ -115,6 +117,7 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
   const blockedReason = !modelId ? 'Choose a model.' : draftProblem(tiers, isVoice);
 
   const submit = async (reason: string) => {
+    const isCurrent = captureRequest();
     if (!modelId) return;
     const pricing = toPricing(tiers);
     setError(null);
@@ -127,12 +130,14 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
         ...(confirmToken ? { confirm: confirmToken } : {}),
       });
     } catch (err) {
+      if (!isCurrent()) return;
       setError(apiErrorMessage(err, 'Adding the price failed'));
       setConfirmToken(bandConfirmToken(err));
       return;
     }
-    toast.success('Price added. Open pickers update within about 15 seconds.');
     onAdded();
+    if (!isCurrent()) return;
+    toast.success('Price added. Open pickers update within about 15 seconds.');
     onClose();
   };
 
