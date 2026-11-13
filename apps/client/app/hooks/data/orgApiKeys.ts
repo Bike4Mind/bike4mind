@@ -88,6 +88,6 @@ export function useRotateOrgApiKeyCallbackSecret(organizationId: string) {
   return useMutation<OrgApiKeyCallbackSecret, unknown, string>({
     mutationFn: async keyId =>
       (await api.post(`/api/organizations/${organizationId}/api-keys/${keyId}/callback-secret`, {})).data,
-    onError: error => toast.error(errorMessage(error, 'Failed to create the callback signing secret')),
+    onError: error => toast.error(errorMessage(error, 'Failed to generate the callback signing secret')),
   });
 }
