@@ -97,7 +97,8 @@ describe('UpdateNotice', () => {
     const onOpenRelease = vi.fn();
     await mount(offered('0.2.0'), { onOpenRelease });
 
-    expect(byTestId('update-notice-title')?.textContent).toBe('Bike4Mind 0.2.0 is available');
+    expect(byTestId('update-notice-title')?.textContent).toBe('Update available');
+    expect(byTestId('update-notice-version-text')?.textContent).toBe('Bike4Mind 0.2.0');
     act(() => byTestId('update-notice-release-link')?.click());
     expect(onOpenRelease).toHaveBeenCalledWith(RELEASE);
   });
@@ -115,7 +116,7 @@ describe('UpdateNotice', () => {
     expect(byTestId('update-notice')).toBeNull();
 
     await mount(offered('0.3.0', { dismissedVersion: '0.2.0' }));
-    expect(byTestId('update-notice-title')?.textContent).toBe('Bike4Mind 0.3.0 is available');
+    expect(byTestId('update-notice-version-text')?.textContent).toBe('Bike4Mind 0.3.0');
   });
 
   it('renders nothing when updates are off, as in pnpm dev', async () => {
@@ -154,7 +155,8 @@ describe('UpdateNotice with in-app updates', () => {
     });
     await mount(downloading, { actions: actionsFor() });
 
-    expect(byTestId('update-notice-title')?.textContent).toBe('Downloading Bike4Mind 0.2.0...');
+    expect(byTestId('update-notice-title')?.textContent).toBe('Downloading update');
+    expect(byTestId('update-notice-version-text')?.textContent).toBe('Bike4Mind 0.2.0');
     expect(byTestId('update-notice-percent-text')?.textContent).toBe('40%');
     expect(byTestId('update-notice-progress')?.getAttribute('aria-valuenow')).toBe('40');
     expect(byTestId('update-notice-dismiss-btn')).toBeNull();
@@ -165,7 +167,8 @@ describe('UpdateNotice with in-app updates', () => {
     const actions = actionsFor();
     await mount(offered('0.2.0', { status: 'ready', percent: 100 }), { actions });
 
-    expect(byTestId('update-notice-title')?.textContent).toBe('Bike4Mind 0.2.0 is ready to install');
+    expect(byTestId('update-notice-title')?.textContent).toBe('Ready to install');
+    expect(byTestId('update-notice-version-text')?.textContent).toBe('Bike4Mind 0.2.0');
     expect(byTestId('update-notice-dismiss-btn')).toBeNull();
     act(() => byTestId('update-notice-install-btn')?.click());
     expect(actions.install).toHaveBeenCalledWith(false);

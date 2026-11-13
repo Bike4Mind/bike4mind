@@ -28,10 +28,10 @@ export interface UpdateNoticeProps {
 const HEADER_BAR_HEIGHT = 10 + 32 + 10 + 1;
 const EDGE = 12;
 
-function noticeTitle(state: UpdateState, version: string, inApp: boolean): string {
-  if (inApp && state.status === 'downloading') return `Downloading Bike4Mind ${version}...`;
-  if (inApp && state.status === 'ready') return `Bike4Mind ${version} is ready to install`;
-  return `Bike4Mind ${version} is available`;
+function noticeTitle(state: UpdateState, inApp: boolean): string {
+  if (inApp && state.status === 'downloading') return 'Downloading update';
+  if (inApp && state.status === 'ready') return 'Ready to install';
+  return 'Update available';
 }
 
 /**
@@ -58,43 +58,47 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: Updat
         top: HEADER_BAR_HEIGHT + EDGE,
         right: EDGE,
         zIndex: 'snackbar',
-        maxWidth: `min(256px, calc(100vw - ${2 * EDGE}px))`,
-        py: 1,
-        pl: 1.5,
-        pr: 0.5,
+        width: `min(280px, calc(100vw - ${2 * EDGE}px))`,
+        p: 1.5,
         borderRadius: 'md',
         boxShadow: 'md',
       }}
     >
-      <Stack spacing={0.75}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Stack spacing={0.25} sx={{ flex: 1, minWidth: 0 }}>
-            <Typography level="body-sm" fontWeight="md" data-testid="update-notice-title">
-              {noticeTitle(state, version, !!actions)}
+      {/* useFlexGap throughout: a margin-spaced Stack resets its children's own margins. */}
+      <Stack spacing={1.25} useFlexGap>
+        <Stack spacing={0.25} useFlexGap>
+          <Stack direction="row" spacing={1} useFlexGap alignItems="center">
+            <Typography level="title-sm" sx={{ flex: 1, minWidth: 0 }} data-testid="update-notice-title">
+              {noticeTitle(state, !!actions)}
             </Typography>
-            {offer && releaseUrl && (
-              <Link
-                level="body-xs"
-                component="button"
-                onClick={() => onOpenRelease(releaseUrl)}
-                sx={{ alignSelf: 'flex-start' }}
-                data-testid="update-notice-release-link"
+            {offer && (
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={() => onDismiss(version)}
+                aria-label={`Dismiss the notice for Bike4Mind ${version}`}
+                // Puts the glyph, not the 2rem hit area, on the card's padding line and the title's.
+                sx={{ m: -1 }}
+                data-testid="update-notice-dismiss-btn"
               >
-                {actions ? 'Release notes' : 'Release notes and download'}
-              </Link>
+                <CloseIcon />
+              </IconButton>
             )}
           </Stack>
-          {offer && (
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={() => onDismiss(version)}
-              aria-label={`Dismiss the notice for Bike4Mind ${version}`}
-              data-testid="update-notice-dismiss-btn"
+          <Typography level="body-xs" sx={{ overflowWrap: 'anywhere' }} data-testid="update-notice-version-text">
+            Bike4Mind {version}
+          </Typography>
+          {offer && releaseUrl && (
+            <Link
+              level="body-xs"
+              component="button"
+              onClick={() => onOpenRelease(releaseUrl)}
+              sx={{ alignSelf: 'flex-start' }}
+              data-testid="update-notice-release-link"
             >
-              <CloseIcon />
-            </IconButton>
+              {actions ? 'Release notes' : 'Release notes and download'}
+            </Link>
           )}
         </Stack>
 
@@ -107,7 +111,7 @@ export function UpdateNotice({ state, onOpenRelease, onDismiss, actions }: Updat
 function NoticeActions({ state, actions }: { state: UpdateState; actions: UpdateNoticeActions }) {
   if (state.status === 'downloading') {
     return (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ pr: 1 }}>
+      <Stack direction="row" spacing={1} useFlexGap alignItems="center">
         <LinearProgress
           determinate
           value={state.percent}
@@ -127,7 +131,7 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
   if (state.status === 'ready') {
     if (actions.blockedBy) {
       return (
-        <Stack spacing={1} sx={{ pr: 1 }}>
+        <Stack spacing={1} useFlexGap>
           <UpdateRestartConfirm
             busy={actions.blockedBy}
             onKeep={actions.dismissBlock}
@@ -140,7 +144,7 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
       <Button
         size="sm"
         onClick={() => void actions.install(false)}
-        sx={{ alignSelf: 'flex-end', mr: 1 }}
+        sx={{ alignSelf: 'flex-end' }}
         data-testid="update-notice-install-btn"
       >
         Restart to update
@@ -158,7 +162,7 @@ function NoticeActions({ state, actions }: { state: UpdateState; actions: Update
       <Button
         size="sm"
         onClick={actions.download}
-        sx={{ alignSelf: 'flex-end', mr: 1 }}
+        sx={{ alignSelf: 'flex-end' }}
         data-testid="update-notice-download-btn"
       >
         {actions.downloadFailed ? 'Try again' : 'Update'}
