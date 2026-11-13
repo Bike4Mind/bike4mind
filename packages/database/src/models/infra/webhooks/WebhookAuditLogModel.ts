@@ -213,9 +213,6 @@ class WebhookAuditLogRepository extends BaseRepository<IWebhookAuditLogDocument>
   }
 
   /**
-   * Add an action to an existing audit log.
-   */
-  /**
    * Find an audit log by delivery ID.
    */
   async findByDeliveryId(deliveryId: string): Promise<IWebhookAuditLogDocument | null> {
