@@ -3,8 +3,8 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
-import { usersBulkPreviewDeps, usersBulkResolveDeps } from '@server/admin/usersBulk/adapters';
-import { previewAdminUsersBulk, resolveAdminUsersBulk } from '@server/admin/usersBulk/resolve';
+import { usersBulkPreviewDeps, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
+import { previewAdminUsersBulk, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import {
   ADMIN_USERS_BULK_ROUTE_PERMISSIONS,
   AdminUsersBulkPreviewRequestSchema,

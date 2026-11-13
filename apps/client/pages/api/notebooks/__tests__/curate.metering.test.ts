@@ -15,7 +15,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (h: unknown) => h }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (h: unknown) => h }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertRequestCanAfford: m.assertRequestCanAfford }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  assertRequestCanAfford: m.assertRequestCanAfford,
+}));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   NotebookCurationEvents: { Start: { publish: m.publish } },
 }));

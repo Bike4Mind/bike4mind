@@ -1,4 +1,4 @@
-import { FeedbackAiModel, FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
@@ -26,7 +26,7 @@ import type {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -34,9 +34,9 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { FEEDBACK_RECEIVED_WINDOWS, feedbackReceivedSince } from '@client/app/components/admin/Feedback/feedbackTrends';
+import { FEEDBACK_RECEIVED_WINDOWS } from '@client/app/components/admin/Feedback/feedbackTrends';
 import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
-import { feedbackAiVisible } from '@server/admin/ai/feedbackVisibility';
+import { buildFeedbackListFilter } from '@server/utils/feedbackListFilter';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -151,12 +151,6 @@ async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<st
   return names
     .filter((name): name is string => typeof name === 'string' && name.length > 0)
     .sort((a, b) => a.localeCompare(b));
-}
-
-/** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
-function toArray<T>(value: T | T[] | undefined): T[] {
-  if (value === undefined) return [];
-  return Array.isArray(value) ? value : [value];
 }
 
 const CreateFeedbackRequestSchema = z.object({
@@ -287,80 +281,11 @@ const handler = baseApi()
       });
     }
 
-    const clauses: FilterQuery<unknown>[] = [readable];
-
-    if (query.userId) clauses.push({ userId: query.userId });
-    if (query.sessionId) clauses.push({ sessionId: query.sessionId });
-    if (query.questId) clauses.push({ questId: query.questId });
-    if (query.organizationId) clauses.push({ organizationId: query.organizationId });
-    if (query.subject) clauses.push({ subject: query.subject });
-    if (query.area || query.severity) {
-      if (!req.user?.isAdmin || !(await feedbackAiVisible())) {
-        clauses.push({ _id: { $in: [] } });
-      } else {
-        const labelClauses = Object.entries({ area: query.area, severity: query.severity })
-          .filter(([, value]) => value)
-          .map(([key, value]) => ({
-            $or: [{ [`override.${key}`]: value }, { override: { $exists: false }, [`labels.${key}`]: value }],
-          }));
-        const matches = await FeedbackAiModel.find({ expiresAt: { $gt: new Date() }, $and: labelClauses })
-          .select('feedbackId')
-          .lean();
-        clauses.push({ _id: { $in: matches.map(row => row.feedbackId) } });
-      }
-    }
-    if (query.resolution) clauses.push({ status: FeedbackStatus.Closed, resolution: query.resolution });
-
-    const organizations = toArray(query.organization);
-    if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
-
-    const statuses = toArray(query.status);
-    if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
-
-    // Reports from the help modal and older ones carry no type and are shown as Feedback, so that
-    // filter also matches a missing type (`null` in `$in` matches an absent field).
-    const types = toArray(query.type);
-    if (types.length > 0) {
-      clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
-    }
-
-    if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
-    if (query.createdFrom || query.createdTo) {
-      clauses.push({
-        createdAt: {
-          ...(query.createdFrom ? { $gte: new Date(query.createdFrom) } : {}),
-          ...(query.createdTo ? { $lte: new Date(query.createdTo) } : {}),
-        },
-      });
-    }
-
-    // "Has comment" means text was submitted, which `contentStored` records permanently. It is not
-    // hasFeedbackComment(): a report whose only text is the legacy placeholder counts as having one,
-    // since on older rows the text that would tell them apart has expired. `false`, not `$ne: true`:
-    // the field is always present (schema default, and the text-split migration backfilled it), and
-    // an equality keeps feedback_status_contentStored_createdAt usable.
-    if (query.hasComment) clauses.push({ contentStored: query.hasComment === 'true' });
-
-    if (query.search) {
-      const pattern = new RegExp(escapeRegex(query.search), 'i');
-
-      // `content` lives on the TTL'd FeedbackText sibling rather than on the report, so a text
-      // search has to resolve ids over there first and cannot be expressed as one filter. The
-      // regex is unindexed, but this is an admin triage surface and the path it replaces shipped
-      // the entire collection to the browser to search it client-side. Projecting only _id keeps
-      // the intermediate small; FeedbackText is itself bounded by the 90-day content TTL.
-      const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();
-
-      const searchClauses: FilterQuery<unknown>[] = [{ username: pattern }, { userEmail: pattern }];
-      if (matchingText.length > 0) {
-        searchClauses.push({ _id: { $in: matchingText.map(text => text._id) } });
-      }
-      clauses.push({ $or: searchClauses });
-    }
-
-    // $and rather than a merged object literal: the CASL scope carries its own $or arm and a
-    // spread would silently drop one side of it. Same reason as pages/api/files/index.ts.
-    const filter = { $and: clauses };
+    const filter = await buildFeedbackListFilter(
+      { ...query, hasComment: query.hasComment === undefined ? undefined : query.hasComment === 'true' },
+      readable,
+      req.user?.isAdmin === true
+    );
 
     const [items, total, organizationFacet] = await Promise.all([
       FeedbackModel.find(filter)

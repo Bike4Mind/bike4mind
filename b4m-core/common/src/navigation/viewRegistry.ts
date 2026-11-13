@@ -874,6 +874,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.legacy_api_keys',
+    section: 'admin',
+    label: 'Legacy API keys',
+    description: 'See which recently used API keys still rely on legacy access, and their owners',
+    navigationType: 'tab',
+    target: '79', // AdminTab.LegacyApiKeys
+    keywords: ['legacy api keys', 'legacy keys', 'api keys', 'grandfathered', 'scoped key', 'key owners'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.published_pages',
     section: 'admin',
     label: 'Published pages',

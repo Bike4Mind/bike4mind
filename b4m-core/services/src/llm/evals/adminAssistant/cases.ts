@@ -56,6 +56,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.credit_analytics'],
   },
   {
+    id: 'where-legacy-api-keys',
+    category: 'where-is',
+    question: 'Where can I see who still uses legacy API keys before legacy access ends?',
+    expectViewIds: ['admin.legacy_api_keys'],
+  },
+  {
     id: 'where-ai-operations',
     category: 'where-is',
     question: 'Where can I check admin AI spend and agreement or turn all admin AI off?',

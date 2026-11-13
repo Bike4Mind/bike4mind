@@ -21,7 +21,7 @@ import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/v
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';

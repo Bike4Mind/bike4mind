@@ -9,8 +9,10 @@ const mockRequire = vi.fn();
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: (...a: unknown[]) => mockFindById(...a) } }));
 vi.mock('@server/middlewares/adminApi', () => ({ requireAdminPermission: (...a: unknown[]) => mockRequire(...a) }));
 vi.mock('@server/admin/approvals/auditWriter', () => ({ approvalAuditWriter: vi.fn(() => ({})) }));
-vi.mock('./adapters', () => ({ usersBulkExecuteDepsFor: vi.fn(() => ({})) }));
-vi.mock('./execute', () => ({ executeAdminUsersBulk: (...a: unknown[]) => mockExecute(...a) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({ usersBulkExecuteDepsFor: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/execute', () => ({
+  executeAdminUsersBulk: (...a: unknown[]) => mockExecute(...a),
+}));
 
 import { executeApprovedUsersBulk } from './approvalExecutor';
 

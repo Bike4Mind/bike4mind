@@ -860,7 +860,8 @@ describe('FeedbackTab', () => {
       renderFeedbackTab();
 
       expect(screen.getByTestId('feedback-detail-drawer-stub')).toHaveAttribute('data-feedback-id', 'fb-1');
-      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-current', 'true');
+      expect(screen.getByTestId('feedback-row-fb-1')).toHaveAttribute('aria-selected', 'false');
     });
 
     it('clears ?feedbackId= on close and returns focus to the row', async () => {

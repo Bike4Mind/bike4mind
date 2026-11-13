@@ -15,15 +15,15 @@ import {
 } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { applyActionToUser } from '@server/admin/usersBulk/execute';
-import { usersBulkSystemApplyDeps } from '@server/admin/usersBulk/adapters';
+import { applyActionToUser } from '@bike4mind/server-utils/admin/usersBulk/execute';
+import { usersBulkSystemApplyDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import {
   SUBSCRIPTION_CANCEL_GRACE_MS,
   UserUndoSnapshotSchema,
   type UserUndoSnapshot,
-} from '@server/admin/usersBulk/ports';
-import type { BulkUser } from '@server/admin/usersBulk/resolve';
-import { revertUserSnapshot, type RevertDeps } from '@server/admin/usersBulk/undo';
+} from '@bike4mind/server-utils/admin/usersBulk/ports';
+import type { BulkUser } from '@bike4mind/server-utils/admin/usersBulk/resolve';
+import { revertUserSnapshot, type RevertDeps } from '@bike4mind/server-utils/admin/usersBulk/undo';
 import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**

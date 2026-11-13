@@ -43,6 +43,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { useMenuBarSetting } from './menuBarSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
@@ -194,6 +195,25 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
         slotProps={{
           input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
+      />
+    ),
+  };
+}
+
+function menuBarEntry(shown: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'menu-bar',
+    icon: null,
+    label: 'Show in menu bar',
+    summary: shown ? 'Agent status and quick approvals in the menu bar.' : 'Off.',
+    description:
+      'Show how your orchestrations are doing in the menu bar, with quick approvals and the mini Tavern. It appears once you start an orchestration.',
+    control: (
+      <Switch
+        size="sm"
+        checked={shown}
+        onChange={toggle}
+        slotProps={{ input: { 'aria-label': 'Show in menu bar', 'data-testid': 'settings-menu-bar-switch' } }}
       />
     ),
   };
@@ -510,6 +530,7 @@ function useSettingsEntries(
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
+  const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -521,6 +542,7 @@ function useSettingsEntries(
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      menuBarEntry(menuBar, toggleMenuBar),
       {
         id: 'orchestration-policy',
         icon: null,
@@ -583,7 +605,7 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'nested-sessions'],
+    entries: ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
   },
   {
     id: 'conversations',

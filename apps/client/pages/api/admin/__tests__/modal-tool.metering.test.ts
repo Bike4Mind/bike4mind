@@ -33,7 +33,7 @@ vi.mock('@client/server/tools/modalOperations', () => ({
 }));
 vi.mock('@client/server/tools/recordModalChanges', () => ({ recordModalChanges: async () => undefined }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   apiKeyRepository: {},
   adminSettingsRepository: {},
   usageEventRepository: { record: m.record },

@@ -78,7 +78,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModelConfig: async () => null },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async (_user: unknown, _models: unknown, systemModel?: boolean) => {
     m.admissionFlags.push(systemModel);
