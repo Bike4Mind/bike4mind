@@ -140,11 +140,14 @@ export function useAcceptDocument({
   onSettled,
   onError,
   isPublic,
+  toastsError = () => true,
 }: {
   onSuccess?: () => void;
   onError?: () => void;
   onSettled: () => void;
   isPublic?: boolean;
+  // False for a failure the caller shows itself, so it is not reported twice.
+  toastsError?: (error: unknown) => boolean;
 }) {
   const queryClient = useQueryClient();
 
@@ -161,7 +164,7 @@ export function useAcceptDocument({
           invalidateOrganizationInviteeSearch(queryClient, result.documentId);
           queryClient.invalidateQueries({ queryKey: ['organizations', result.documentId] });
           queryClient.invalidateQueries({ queryKey: ['users', 'organization', result.documentId] });
-          toast.success('Successfully joined the organization');
+          if (result.acceptOutcome !== 'already-member') toast.success('Successfully joined the organization');
           break;
         default:
           toast.success('Document share accepted successfully');
@@ -171,6 +174,7 @@ export function useAcceptDocument({
     onError: error => {
       console.error(error);
       if (onError) onError();
+      if (!toastsError(error)) return;
       let message = 'Failed to accept shared document';
       if (isAxiosError(error)) {
         message = error.response?.data?.error || message;

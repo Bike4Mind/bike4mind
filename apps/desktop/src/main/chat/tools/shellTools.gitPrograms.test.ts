@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -25,11 +34,11 @@ const ROWS: [string, string, string][] = [
   ['. ./env5.sh && rm -rf dist', '', 'aaaa'],
   ['source ./env7.sh && rm -rf dist', '', 'aaaa'],
   ['source .venv/bin/activate && rm -rf dist', '', 'aaaa'],
-  ['source .venv/bin/activate && git st', '', 'raar'],
-  ['. .venv/bin/activate && git st', '', 'raar'],
-  ['source .uvenv/bin/activate && git st', '', 'raar'],
-  ['source env1.sh && git st', '', 'raar'],
-  ['source env3.sh && git st', '', 'raar'],
+  ['source .venv/bin/activate && git st', '', 'aaaa'],
+  ['. .venv/bin/activate && git st', '', 'aaaa'],
+  ['source .uvenv/bin/activate && git st', '', 'aaaa'],
+  ['source env1.sh && git st', '', 'aaaa'],
+  ['source env3.sh && git st', '', 'aaaa'],
   ['source env1.sh && git status', '', 'rrrr'],
   ['source ./env1.sh && npm test', '', 'rrrr'],
   ['. ./env3.sh && ls', '', 'rrrr'],
@@ -41,9 +50,9 @@ const ROWS: [string, string, string][] = [
   ['git clone ../origin.git cl && git -C cl status', 'src', 'rrrr'],
   ['git clone blay/.bare cl3 && cd cl3 && ls', '', 'rrrr'],
   ['git worktree add wt3 -b z && cd wt3 && git st', '', 'rrrr'],
-  ['git init newrepo && git -C newrepo st', '', 'rrrr'],
-  ['git clone origin.git cl4 && git -C cl4 st', '', 'rrrr'],
-  ['git clone ../origin.git cl && git -C cl st', 'src', 'rrrr'],
+  ['git init newrepo && git -C newrepo st', '', 'aaaa'],
+  ['git clone origin.git cl4 && git -C cl4 st', '', 'aaaa'],
+  ['git clone ../origin.git cl && git -C cl st', 'src', 'aaaa'],
   ['git clone --template=tpl2 origin.git cl5 && git -C cl5 st', '', 'aaaa'],
   ['git init --template=tpl2 newr2 && git -C newr2 st', '', 'aaaa'],
   ['git -c init.templateDir=tpl2 init newr3 && git -C newr3 st', '', 'aaaa'],
@@ -77,21 +86,21 @@ const ROWS: [string, string, string][] = [
   ['rsync -a --exclude .git --include .git lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ['rsync -a --exclude node_modules lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ['git init && git st', '', 'rrrr'],
-  ['mkdir nr && cd nr && git init && git st', '', 'rrrr'],
-  ['cd src && git init && git st', '', 'rrrr'],
-  ['git clone origin.git cl && cd cl && pnpm install && git st', '', 'rrrr'],
-  ['git clone origin.git cl && cd cl && npm test && git st', '', 'rrrr'],
+  ['mkdir nr && cd nr && git init && git st', '', 'aaaa'],
+  ['cd src && git init && git st', '', 'aaaa'],
+  ['git clone origin.git cl && cd cl && pnpm install && git st', '', 'aaaa'],
+  ['git clone origin.git cl && cd cl && npm test && git st', '', 'aaaa'],
   ['git worktree add wt4 -b y4 && cd wt4 && pnpm install && git st', '', 'rrrr'],
   ['export PATH="$PWD/newtools:$PATH" && git clone srcrepo newtools && git hello', '', 'aaaa'],
-  ['git clone srcrepo ctools && git hello', '', 'rrrr'],
-  ["eval 'echo hi' && git st", '', 'aaar'],
-  ['cd nosuchdir; git st', '', 'raar'],
+  ['git clone srcrepo ctools && git hello', '', 'aaaa'],
+  ["eval 'echo hi' && git st", '', 'aaaa'],
+  ['cd nosuchdir; git st', '', 'aaaa'],
   ['git bang', '', 'aaaa'],
   ['source ./env1.sh && git bang', '', 'aaaa'],
   ['cd nosuchdir; git bang', '', 'aaaa'],
-  ['git constructor -x', '', 'rrrr'],
-  ['git toString -q', '', 'rrrr'],
-  ['git __proto__ -q', '', 'rrrr'],
+  ['git constructor -x', '', 'aaaa'],
+  ['git toString -q', '', 'aaaa'],
+  ['git __proto__ -q', '', 'aaaa'],
   ['git -c safe.bareRepository=all -C origin.git log', '', 'aaaa'],
   ['git -c SAFE.BareRepository=explicit log', '', 'aaaa'],
   ['git --config-env=safe.bareRepository=X log', '', 'aaaa'],
@@ -199,12 +208,12 @@ const ROWS: [string, string, string][] = [
   ['git -C lrepo st', '', 'rrrr'],
   ['git -C src st', '', 'rrrr'],
   ['for d in src lrepo; do git -C "$d" st; done', '', 'arrr'],
-  ['git init np2 && cd np2 && touch a && git st', '', 'rrrr'],
-  ['git init np2 && cd np2 && echo x > README.md && git st', '', 'arrr'],
-  ['git clone origin.git cl8 && cd cl8 && echo x > notes.md && git st', '', 'arrr'],
-  ['mkdir np3 && cd np3 && git init && touch a && git st', '', 'rrrr'],
+  ['git init np2 && cd np2 && touch a && git st', '', 'aaaa'],
+  ['git init np2 && cd np2 && echo x > README.md && git st', '', 'aaaa'],
+  ['git clone origin.git cl8 && cd cl8 && echo x > notes.md && git st', '', 'aaaa'],
+  ['mkdir np3 && cd np3 && git init && touch a && git st', '', 'aaaa'],
   ['git worktree add wt6 -b w6 && cd wt6 && touch a && git st', '', 'rrrr'],
-  ['git init np2 && cd np2 && touch a && git add a && git commit -m x && git lg', '', 'rrrr'],
+  ['git init np2 && cd np2 && touch a && git add a && git commit -m x && git lg', '', 'aaaa'],
   ['pnpm build && cp -r out pub && git st', '', 'rrrr'],
   ['mkdir -p out && cp -r out pub && git st', '', 'rrrr'],
   ['npm run build && cp -r out/ ../deploy/ && git st', '', 'rrrr'],
@@ -325,6 +334,7 @@ const ROWS: [string, string, string][] = [
   ['npm --prefix . exec -- git status', '', 'aaaa'],
   ['git branch --unset-upstream "$B"', '', 'rrrr'],
   ['git log --grep=unset "$X"', '', 'rrrr'],
+  ['export GIT_EXTERNAL_DIFF=./x.sh; git log -1 -p "$X"', '', 'aaaa'],
   ['git log --format="%H unset $x"', '', 'rrrr'],
   ['unset -v GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['unset GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git log', '', 'aaaa'],
@@ -346,15 +356,15 @@ const ROWS: [string, string, string][] = [
   ['builtin -- source <(echo unset GIT_CONFIG_COUNT); git log', '', 'aaaa'],
   ['command -- unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['command -p unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
-  ['source env1.sh && git ext', '', 'raar'],
-  ['cd nosuchdir; git ext', '', 'raar'],
-  ['source env2.sh && git subtree', '', 'raar'],
-  ['source env2.sh && git quiltimport', '', 'raar'],
-  ['source env2.sh && git merge-octopus', '', 'raar'],
-  ['cd nosuchdir; git subtree', '', 'raar'],
-  ['cd nosuchdir; git quiltimport', '', 'raar'],
-  ['source env1.sh && git lfs version', '', 'raar'],
-  ['cd nosuchdir; git lfs version', '', 'raar'],
+  ['source env1.sh && git ext', '', 'aaaa'],
+  ['cd nosuchdir; git ext', '', 'aaaa'],
+  ['source env2.sh && git subtree', '', 'aaaa'],
+  ['source env2.sh && git quiltimport', '', 'aaaa'],
+  ['source env2.sh && git merge-octopus', '', 'aaaa'],
+  ['cd nosuchdir; git subtree', '', 'aaaa'],
+  ['cd nosuchdir; git quiltimport', '', 'aaaa'],
+  ['source env1.sh && git lfs version', '', 'aaaa'],
+  ['cd nosuchdir; git lfs version', '', 'aaaa'],
   ['pnpm --workspace-packages install exec git bang', '', 'aaaa'],
   ['git stage a.ts', '', 'rrrr'],
   ['source env1.sh && git stage a.ts', '', 'rrrr'],
@@ -362,7 +372,7 @@ const ROWS: [string, string, string][] = [
   ['source env1.sh && git sparse-checkout list', '', 'rrrr'],
   ['cd nosuchdir; git sparse-checkout list', '', 'rrrr'],
   ['source env1.sh && git bang', '', 'aaaa'],
-  ['source env1.sh && git nosuchprogram', '', 'raar'],
+  ['source env1.sh && git nosuchprogram', '', 'aaaa'],
   ["find . -name '*.ts' -exec git add {} +", '', 'arrr'],
   ['git pull -ts foo origin main', '', 'aaaa'],
   ['git pull -ps foo origin main', '', 'aaaa'],
@@ -383,11 +393,107 @@ const ROWS: [string, string, string][] = [
   ['git clone foo::x cl9', '', 'aaaa'],
   ['git submodule add foo::x sm', '', 'aaaa'],
   ['git push foo::x main', '', 'aaaa'],
-  ['git fetch bar::x', '', 'rrrr'],
-  ['git fetch https::x', '', 'rrrr'],
+  ['git fetch bar::x', '', 'aaaa'],
+  ['git fetch https::x', '', 'aaaa'],
   ['exec -c git -C origin.git log', '', 'aaaa'],
   ['cp -r evil/.git/. bare/ && exec -c git -C bare log', '', 'aaaa'],
   ['export PATH="$PWD/nt6//:$PATH" && mkdir nt6 && cp srcx/git-hello nt6/ && git hello', '', 'aaaa'],
+  ['git -C rem/helper fetch origin', '', 'aaaa'],
+  ['git -C rem/helper fetch', '', 'aaaa'],
+  ['git -C rem/helper pull', '', 'aaaa'],
+  ['git -C rem/helper ls-remote origin', '', 'aaaa'],
+  ['git -C rem/helper remote show origin', '', 'aaaa'],
+  ['git -C rem/helper remote show -n origin', '', 'rrrr'],
+  ['git -C rem/helper log -1', '', 'rrrr'],
+  ['git fetch origin', 'rem/helper', 'aaaa'],
+  ['git -C rem/rewrite fetch origin', '', 'aaaa'],
+  ['git -C rem/rewrite fetch https://example.com/r.git', '', 'aaaa'],
+  ['git -C rem/vcs fetch origin', '', 'rrrr'],
+  ['git -C rem/vcs fetch upstream', '', 'aaaa'],
+  ['git -C rem/vcs fetch --all', '', 'aaaa'],
+  ['git -C rem/pushurl fetch origin', '', 'rrrr'],
+  ['git -C rem/pushurl push origin main', '', 'aaaa'],
+  ['git -C rem/plain fetch origin', '', 'rrrr'],
+  ['git -C rem/plain fetch --all', '', 'rrrr'],
+  ['git -C rem/vcs fetch https://example.com/r.git', '', 'aaaa'],
+  ['git -C rem/vcs clone https://example.com/r.git cl10', '', 'aaaa'],
+  ['git -C rem/group fetch --multiple grp', '', 'aaaa'],
+  ['git -C rem/group remote update grp', '', 'aaaa'],
+  ['git -C rem/group fetch grp', '', 'aaaa'],
+  ['git -C rem/group fetch origin', '', 'rrrr'],
+  ['git -C rem/branch fetch', '', 'aaaa'],
+  ['git -C rem/branch pull', '', 'aaaa'],
+  ['git -C rem/branch fetch origin', '', 'rrrr'],
+  ['git -C rem/pushdefault push', '', 'aaaa'],
+  ['git -C rem/tracked fetch', '', 'rrrr'],
+  ['git -C rem/tracked pull', '', 'rrrr'],
+  ['git -C rem/tracked push', '', 'raar'],
+  ['echo foo::x | xargs git fetch', '', 'aaaa'],
+  ['git -c remote.origin.url=foo::x fetch origin', '', 'aaaa'],
+  ['git config url.foo::x.insteadOf https://example.com/ && git fetch https://example.com/r.git', '', 'aaaa'],
+  ['git archive --remote=foo::x HEAD', '', 'aaaa'],
+  ['git push --repo=foo::x', '', 'aaaa'],
+  ['cp rem/helper/.git/config rem/plain/.git/config && git -C rem/plain fetch origin', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git fetch origin', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git submodule update --init', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log --format=%G? -1', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log -1 "$X"', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git help commit', '', 'aaaa'],
+  ['export PATH="$PWD/ptools:$PATH" && git log -1', '', 'arrr'],
+  ['export PATH="$PWD/ptools:$PATH" && git help -a', '', 'arrr'],
+  ['HOME=hm git status', '', 'aaaa'],
+  ['HOME=hm2 git status', '', 'arrr'],
+  ['XDG_CONFIG_HOME=xdg git log -1', '', 'aaaa'],
+  ['XDG_CONFIG_HOME=xdg2 git log -1', '', 'arrr'],
+  ['export HOME=hm; git status', '', 'aaaa'],
+  ['git status; export HOME=hm', '', 'arrr'],
+  ['echo x > hm4/.gitconfig && HOME=hm4 git status', '', 'aaaa'],
+  ['HOME="$(mktemp -d)" git status', '', 'aaaa'],
+  ['HOME=hm2 git log --format=%G? -1', '', 'aaaa'],
+  ['git status; export EDITOR=nano', '', 'arrr'],
+  ['export GIT_EDITOR=nano; git commit -m x', '', 'arrr'],
+  ['export GIT_EDITOR=nano; git commit --allow-empty', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log', '', 'arrr'],
+  ['GIT_PAGER=./x.sh unbuffer git log', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -- -mx', '', 'aaaa'],
+  ['export GIT_EDITOR=./x.sh; git commit -- -mx', '', 'aaaa'],
+  ['EDITOR=./x.sh git commit -- -mx', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a --trailer -mx', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git tag -a --trailer -mx v9', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m [+-]*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m *', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git branch -*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git add -*', '', 'aaaa'],
+  ['GIT_EDITOR=./x.sh git commit -a -m x', '', 'arrr'],
+  ['GIT_PAGER=./x.sh git log > /dev/ttys003', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/ttyS0', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/tty1', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > ./o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >| o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log &> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log 1> o', 'ttr', 'aaaa'],
+  ['git log > o', 'ttr', 'arar'],
+  ['GIT_PAGER=./x.sh git log 01> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log 001> o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log 02> o', 'ttr', 'aaaa'],
+  ['git -C rem/shadow fetch origin', '', 'aaaa'],
+  ['git -C rem/shadow fetch --all', '', 'aaaa'],
+  ['git -C rem/nest fetch a', '', 'aaaa'],
+  ['git -C rem/nest fetch origin', '', 'rrrr'],
+  ['git -C rem/mixed fetch A.grp', '', 'aaaa'],
+  ['git -C rem/mixed fetch a.grp', '', 'aaaa'],
+  ['git -C rem/mixed fetch origin', '', 'rrrr'],
+  ['git -C rem/group fetch GRP', '', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log >&2', '', 'aaaa'],
+  ['export GIT_PAGER=./x.sh; exec > o; git log', 'ttr', 'aaaa'],
+  ['{ GIT_PAGER=./x.sh git log; } > o', 'ttr', 'aaaa'],
+  ['GIT_PAGER=./x.sh git log > /dev/null', '', 'arrr'],
+  ['GIT_PAGER=./x.sh git log | head', '', 'arrr'],
+  ['HOME+=/proj/hm git status', '', 'aaaa'],
+  ['export HOME+=/proj/hm; git status', '', 'aaaa'],
+  ['XDG_CONFIG_HOME+=/proj/xdg git status', '', 'aaaa'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
@@ -492,6 +598,38 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     git(join(proj, 'gf', '.bare'), 'config', 'alias.st', '!touch MARK');
     file(join(proj, 'gf', '.git'), 'gitdir: ./.bare\n');
     file(join(proj, 'tpl2', 'f'), 'f');
+    for (const [name, settings] of Object.entries({
+      helper: [['remote', 'add', 'origin', 'foo::x']],
+      rewrite: [['config', 'url.foo::x.insteadOf', 'https://example.com/']],
+      vcs: [['config', 'remote.upstream.vcs', 'svn']],
+      pushurl: [['config', 'remote.origin.pushurl', 'foo::x']],
+      plain: [['config', 'url.https://mirror.example.com/.insteadOf', 'https://example.com/']],
+      group: [['config', 'remotes.grp', 'foo::x']],
+      shadow: [['config', 'remotes.origin', 'origin foo::x']],
+      nest: [
+        ['config', 'remotes.a', 'b c'],
+        ['config', 'remotes.b', 'foo::x foo::y'],
+      ],
+      mixed: [['config', 'remotes.A.grp', 'x foo::y']],
+      branch: [['config', 'branch.main.remote', 'foo::x']],
+      pushdefault: [['config', 'remote.pushDefault', 'foo::x']],
+      tracked: [
+        ['config', 'branch.main.remote', 'origin'],
+        ['config', 'branch.main.merge', 'refs/heads/main'],
+      ],
+    })) {
+      const dir = join(proj, 'rem', name);
+      repository(dir, { 'x.ts': 'x' });
+      if (name !== 'helper') git(dir, 'remote', 'add', 'origin', 'https://example.com/r.git');
+      for (const args of settings) git(dir, ...args);
+    }
+    for (const name of ['ssh', 'gpg', 'man']) file(join(proj, 'ptools', name), '#!/bin/sh\nexit 0\n', 0o755);
+    repository(join(proj, 'ttr'), { 'x.ts': 'x' });
+    symlinkSync('/dev/tty', join(proj, 'ttr', 'o'));
+    file(join(proj, 'hm', '.gitconfig'), '[core]\n\tfsmonitor = ./x.sh\n');
+    file(join(proj, 'hm2', '.gitconfig'), '[user]\n\tname = x\n[color]\n\tui = never\n');
+    file(join(proj, 'xdg', 'git', 'config'), '[core]\n\tpager = ./x.sh\n');
+    file(join(proj, 'xdg2', 'git', 'config'), '[core]\n\tpager = cat\n');
     roots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
     for (const program of [
@@ -561,6 +699,13 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
   it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
+  });
+
+  // GIT_CELLS=<file> appends every row's current cells to that file, to compare two versions of the scan.
+  it.runIf(Boolean(process.env.GIT_CELLS))('writes the cells of every row to GIT_CELLS', async () => {
+    const lines: string[] = [];
+    for (const [command, folder] of ROWS) lines.push([await cells(command, folder), folder, command].join('\t'));
+    appendFileSync(process.env.GIT_CELLS as string, lines.map(line => `${JSON.stringify(line)}\n`).join(''));
   });
 
   describe('with globstar set in the shell environment', () => {
@@ -662,6 +807,23 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     });
   });
 
+  describe('outside a repository', () => {
+    const globalConfig = (): string => join(dirname(proj), '.gitconfig');
+
+    it.each([
+      ['git -C .. ls-remote https://example.com/r.git', '', 'rrrr'],
+      ['git -C .. ls-remote up', '[remote "up"]\n\turl = foo::x\n', 'aaaa'],
+      ['git -C .. ls-remote https://example.com/r.git', '[remote "origin"]\n\tvcs = svn\n', 'aaaa'],
+    ])('decides %s with a user config of %j as %s', async (command, config, expected) => {
+      file(globalConfig(), config);
+      try {
+        expect(await cells(command, '')).toBe(expected);
+      } finally {
+        rmSync(globalConfig(), { force: true });
+      }
+    });
+  });
+
   describe('with a global init.templateDir', () => {
     const globalConfig = (): string => join(dirname(proj), '.gitconfig');
 
@@ -716,7 +878,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           'aaaa'
         );
         expect(await withTemplate('rel-template', {}, 'git clone ../origin.git clt3 && git -C clt3 st', 'src')).toBe(
-          'rrrr'
+          'aaaa'
         );
       } finally {
         rmSync(inProj, { recursive: true, force: true });
@@ -726,8 +888,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     it.each([
       ['a template config holding a ! alias', '[alias]\n\tst = !touch MARK\n', 'aaaa'],
       ['a template config holding a plain alias', '[alias]\n\tst = status\n', 'rrrr'],
-      ['a template config without aliases', '[core]\n\tfilemode = true\n', 'rrrr'],
-      ['no template config', null, 'rrrr'],
+      ['a template config without aliases', '[core]\n\tfilemode = true\n', 'aaaa'],
+      ['no template config', null, 'aaaa'],
     ])('decides a clone then git st with %s as %s', async (_name, config, expected) => {
       const template = join(base, 'template');
       rmSync(template, { recursive: true, force: true });

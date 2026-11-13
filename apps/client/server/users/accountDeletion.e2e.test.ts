@@ -54,6 +54,7 @@ vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.audit }));
 import {
   cancelAccountDeletion,
   clearAccountDeletion,
+  findAccountDeletionOrganizations,
   requestAccountDeletion,
   scheduleAccountDeletion,
 } from './accountDeletion';
@@ -302,6 +303,26 @@ describe('requestAccountDeletion', () => {
     const userId = await seedAccount();
     await expect(requestAccountDeletion(requestFor(userId, { impersonatedBy: 'admin' }))).rejects.toMatchObject({
       statusCode: 403,
+    });
+  });
+});
+
+describe('findAccountDeletionOrganizations', () => {
+  it('splits owned organizations into the ones that block and the ones the purge deletes', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const memberId = new mongoose.Types.ObjectId().toString();
+    const shared = await Organization.create({
+      name: 'Shared',
+      userId,
+      personal: false,
+      users: [{ userId: memberId, permissions: ['read'] }],
+    });
+    const solo = await Organization.create({ name: 'Solo', userId, personal: false });
+    await Organization.create({ name: 'Personal', userId });
+
+    expect(await findAccountDeletionOrganizations(userId)).toEqual({
+      ownedOrganizations: [{ id: shared.id, name: 'Shared' }],
+      soleOwnedOrganizations: [{ id: solo.id, name: 'Solo' }],
     });
   });
 });

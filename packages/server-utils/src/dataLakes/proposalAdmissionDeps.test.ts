@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ User: h.users }));
 vi.mock('@bike4mind/database/content', () => ({ FabFile: h.fabFiles }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { createFabFileByUrl: h.createFabFileByUrl } }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }),
 }));
 
@@ -70,6 +70,17 @@ describe('admitProposedSource', () => {
 
     expect(dbHandedToDoor()).toHaveProperty('scopedSettings');
     expect(dbHandedToDoor().scopedSettings).toBeDefined();
+  });
+
+  // The door strips unknown request keys, so the final-URL predicate only works as an adapter.
+  it('forwards the final-URL predicate to the ingestion door, and nothing when absent', async () => {
+    const assertFinalUrl = vi.fn();
+    await admitProposedSource(actor, { ...(params as object), assertFinalUrl } as never);
+    expect(h.createFabFileByUrl.mock.calls[0][2].assertFinalUrl).toBe(assertFinalUrl);
+
+    h.createFabFileByUrl.mockClear();
+    await admitProposedSource(actor, params);
+    expect(h.createFabFileByUrl.mock.calls[0][2].assertFinalUrl).toBeUndefined();
   });
 
   // Cannot be derived from a user document inside the door, so the two ORG manage rungs are lost

@@ -87,6 +87,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
@@ -186,7 +190,9 @@ export interface IOrganizationRepository
    */
   addMemberIfUnderCeiling(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IOrganizationDocument['users'][number],
+    /** Seats held back for outstanding named invites, so a link join cannot take one. Defaults to 0. */
+    reservedSeats?: number
   ): Promise<IOrganizationDocument | null>;
 
   /**

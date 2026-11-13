@@ -55,6 +55,14 @@ interface BaseAPIOptions {
    */
   alsoRequiredScopes?: ApiKeyScopeValue[];
   /**
+   * Keep admitting legacy API keys that miss `requiredScopes` until the legacy window ends
+   * (LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts). Only for a route keys could reach before it
+   * declared scopes; a route that already enforced them must never opt in, or old keys would
+   * gain access they lack today. Methods narrowed in the handler pass the same flag to
+   * `assertApiKeyScope`.
+   */
+  grandfatherLegacyKeys?: boolean;
+  /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
    * - omitted (default): first-party-only (OAuth tokens rejected 403).
@@ -256,6 +264,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       router.use(
         apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
           recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
+          grandfatherLegacyKeys: resolvedOptions.grandfatherLegacyKeys,
         })
       );
 

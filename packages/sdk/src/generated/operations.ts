@@ -121,6 +121,10 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/files/{id}',
   },
+  deletePersona: {
+    method: 'DELETE',
+    path: '/api/v1/personas/{id}',
+  },
   deleteProject: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}',
@@ -380,6 +384,10 @@ export const operations = {
   listWhatsNew: {
     method: 'GET',
     path: '/api/v1/whats-new',
+  },
+  mintPersona: {
+    method: 'POST',
+    path: '/api/v1/personas',
   },
   postSlackMessage: {
     method: 'POST',

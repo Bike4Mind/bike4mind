@@ -177,7 +177,12 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
   return {
     scopeValues,
     groups: [...groups.values()],
-    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+    presetScopes: {
+      read: readScopes,
+      readwrite: [...readScopes, ...writeScopes],
+      // Minting personas creates accounts, so it is only granted by ticking it explicitly.
+      full: scopeValues.filter(value => value !== ApiKeyScope.PERSONAS_MINT),
+    },
   };
 };
 

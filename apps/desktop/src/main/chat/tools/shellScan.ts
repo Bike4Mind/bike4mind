@@ -12,6 +12,7 @@ import {
 } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
+import { gitListed, listedSetting, plainRemote, type GitContacts, type GitWord } from './gitTable';
 import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
@@ -24,6 +25,7 @@ import {
   operandTargets,
   physicalTarget,
   realpathNearest,
+  resolveOperand,
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
@@ -38,9 +40,12 @@ import {
   GIT_VALUED_OPTIONS,
   gitAliases,
   gitCommandKind,
+  gitConfigFile,
   gitDirectories,
   gitListsBuiltin,
   gitRefusesImplicitBare,
+  gitRemoteSettings,
+  gitRemoteUrls,
   gitSubcommand,
   gitToplevel,
   indexListed,
@@ -52,6 +57,7 @@ import {
   splitGitAlias,
   withGrantedRoots,
   type GitAliases,
+  type GitRemoteSettings,
   type GitScript,
 } from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
@@ -81,6 +87,8 @@ export interface ShellCommand {
   outbound?: { reason: string; target: RepositoryWrite | null };
   /** `.env` files this part names as an argument. */
   envFiles?: string[];
+  /** Why the git form this part runs is not one gitTable.ts lists, e.g. `git cleen`. */
+  gitUnlisted?: string;
 }
 
 export interface ShellScan {
@@ -934,6 +942,8 @@ export interface VariableSet {
   nameref: boolean;
   startIndex: number;
   uncertainOrder: boolean;
+  /** Set with `+=`, so `value` follows whatever the variable held. */
+  appends?: boolean;
 }
 
 /**
@@ -950,13 +960,13 @@ export function scriptVariables(root: Node): ScriptVariables {
   let splits = false;
   let startIndex = 0;
   let uncertainOrder = false;
-  const add = (name: string, value: string | null | undefined, nameref = false): void => {
-    set.push({ name: name.trim(), value, nameref, startIndex, uncertainOrder });
+  const add = (name: string, value: string | null | undefined, nameref = false, appends = false): void => {
+    set.push({ name: name.trim(), value, nameref, startIndex, uncertainOrder, ...(appends ? { appends } : {}) });
   };
   const named = (word: string, value: null | undefined, nameref = false): void => {
     const equals = word.indexOf('=');
     const name = equals === -1 ? word : word.slice(0, equals).replace(/\+$/, '');
-    add(name, value === null || equals === -1 ? value : word.slice(equals + 1), nameref);
+    add(name, value === null || equals === -1 ? value : word.slice(equals + 1), nameref, word[equals - 1] === '+');
     if (nameref && equals !== -1) add(word.slice(equals + 1), null);
   };
   const types = ['variable_assignment', 'expansion', 'for_statement', 'declaration_command', 'command'];
@@ -970,7 +980,8 @@ export function scriptVariables(root: Node): ScriptVariables {
     if (node.type === 'variable_assignment') {
       const name = node.childForFieldName('name');
       const base = name?.type === 'subscript' ? name.childForFieldName('name') : name;
-      add(base?.text ?? '', wordValue(node.childForFieldName('value')?.text ?? ''));
+      const appends = node.children.some(child => child?.type === '+=');
+      add(base?.text ?? '', wordValue(node.childForFieldName('value')?.text ?? ''), false, appends);
       continue;
     }
     if (node.type === 'expansion') {
@@ -1048,6 +1059,29 @@ const EDITOR_VARIABLE = /^(GIT_EDITOR|GIT_SEQUENCE_EDITOR|EDITOR|VISUAL)$/;
 const IDLE_PAGER = new Set(['', 'cat']);
 const IDLE_EDITOR = new Set([':', 'true']);
 
+/**
+ * Script text through which git's output may reach a terminal, the only place it starts its pager (Desktop hands it a
+ * pipe): a terminal device, a /dev path bash fills in, another process's descriptors, or a program that runs a
+ * command in a pseudo-terminal.
+ */
+const TERMINAL_OUTPUT =
+  /\/dev\/[^\s;&|<>()]*[$`{*?[]|\/proc\/|\b(tty|pts|pty|ptmx|console|cons\d+|mknod|unbuffer|script|expect|tmux|screen|socat|faketty|winpty|conpty|openpty|forkpty)\b/i;
+
+/**
+ * Whether a redirect points stdout anywhere but `/dev/null`: a file or device, which may be a terminal, or another
+ * descriptor, which may be one.
+ */
+function redirectsStdout(redirect: Node): boolean {
+  if (redirect.type !== 'file_redirect') return false;
+  const operator = redirectOperator(redirect) ?? '';
+  const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
+  if (descriptor === undefined ? !operator.includes('>') : descriptor !== '1') return false;
+  const targets = redirect.childrenForFieldName('destination');
+  const target = targets.length === 1 ? targets[0] : null;
+  const quotable = target && ['word', 'string', 'raw_string'].includes(target.type);
+  return (quotable ? fixedWords([target.text])?.[0] : undefined) !== '/dev/null';
+}
+
 /** A difftool or mergetool name git reads as a path into its own tool scripts, or one bash fills in. */
 const TOOL_PATH = /[/\\$`]/;
 
@@ -1088,12 +1122,17 @@ const GIT_FALLBACK_READS = new Set([
   'diff-tree',
 ]);
 
+/** Whether a shell word holds a glob bash expands. */
+const hasActiveGlob = (word: string): boolean =>
+  wordPieces(word).some(piece => 'char' in piece && piece.active && '*?['.includes(piece.char));
+
 /** Unknown commands stay conservative; ordinary piped output does not start Git's terminal pager. */
 function usesGitFallback(name: string, tokens: readonly string[], cwd: string): boolean {
-  const raw = withoutWrappers(tokens).slice(1).map(wordValue);
+  const written = withoutWrappers(tokens).slice(1);
+  const raw = written.map(wordValue);
   const git = gitSubcommand(raw, cwd);
   if (git === null) return false;
-  if (git.unread || git.rest.some(isDynamic)) return true;
+  if (git.unread || git.rest.some(isDynamic) || written.some(hasActiveGlob)) return true;
   if (GIT_FALLBACK_READS.has(git.sub)) return false;
   if (name === 'PAGER') {
     if (git.sub === 'grep') return gitRunsGivenCommand(raw);
@@ -1101,18 +1140,39 @@ function usesGitFallback(name: string, tokens: readonly string[], cwd: string): 
       git.sub
     );
   }
+  // A word counts as an option only where the table reads one: not after `--`, nor as another option's value.
+  const listing = gitListed(raw.map(text => ({ text, whole: true, splits: false })));
+  if (!listing.listed) return true;
+  const given = [...listing.given.keys()];
   const args = git.rest;
-  const edits = args.some(arg => arg === '-e' || arg.startsWith('--edit'));
+  const edits =
+    args.some(arg => arg === '-e' || arg.startsWith('--edit')) ||
+    given.some(option => option === '-e' || option.startsWith('--edit'));
   if (git.sub === 'commit' || git.sub === 'tag') {
     if (edits) return true;
-    if (args.includes('--no-edit') || args.some(arg => /^(-[mF]|--message(?:=|$)|--file(?:=|$))/.test(arg)))
-      return false;
-    if (git.sub === 'tag') return args.some(arg => /^(-[asu]|--annotate|--sign|--local-user)/.test(arg));
+    const message =
+      (args.includes('--no-edit') || args.some(arg => /^(-[mF]|--message(?:=|$)|--file(?:=|$))/.test(arg))) &&
+      given.some(option => ['--no-edit', '-m', '--message', '-F', '--file'].includes(option));
+    if (message) return false;
+    if (git.sub === 'tag') {
+      return (
+        args.some(arg => /^(-[asu]|--annotate|--sign|--local-user)/.test(arg)) ||
+        given.some(option => ['-a', '-s', '-u', '--annotate', '--sign', '--local-user'].includes(option))
+      );
+    }
     return true;
   }
   if (['branch', 'config', 'add'].includes(git.sub)) return edits || (git.sub === 'config' && args[0] === 'edit');
   if (git.sub === 'grep') return false;
   return true;
+}
+
+/** Whether git opens its pager whatever its output is: `grep -O`, or a call whose subcommand the scan cannot read. */
+function opensPager(tokens: readonly string[], cwd: string): boolean {
+  const raw = withoutWrappers(tokens).slice(1);
+  const git = gitSubcommand(raw.map(wordValue), cwd);
+  if (git === null) return false;
+  return git.unread || (git.sub === 'grep' && gitRunsGivenCommand(raw));
 }
 
 function loginName(): string {
@@ -1213,6 +1273,61 @@ function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
     return each.some(words => words === null) ? null : each.flatMap(words => words ?? []);
   }
   return expandBraces(wordPieces(raw))?.map(pieces => resolveWord(pieces, scope)) ?? null;
+}
+
+const OPEN_GIT_WORD: GitWord = { text: '', whole: false, splits: true };
+// `"$@"`, `"${a[@]}"` and the like expand to several words even inside double quotes.
+const QUOTED_SPLIT = /^\$\{?[@*]|\[[@*]\]/;
+
+type GitFill = { placeholder: string; prefix: string };
+
+/**
+ * One shell word as the words gitTable reads, one per brace variant. A word holding `fill.placeholder` (an xargs or
+ * find replace string) stands for input starting with `fill.prefix`.
+ */
+function gitWords(raw: string, scope: WordScope, fill?: GitFill): GitWord[] {
+  if (fill !== undefined) {
+    const value = wordValue(raw);
+    const at = value.indexOf(fill.placeholder);
+    if (at !== -1) {
+      const before = isDynamic(raw) || /[*?[{~]/.test(value.slice(0, at)) ? '' : value.slice(0, at);
+      return [{ text: before || fill.prefix, whole: false, splits: false }];
+    }
+  }
+  const variants = expandBraces(wordPieces(raw));
+  if (variants === null) return [OPEN_GIT_WORD];
+  const plain: WordScope = { ...scope, lost: false, homeUsed: () => undefined };
+  return variants.map(pieces => {
+    const { text, glob, expandAt } = resolveWord(pieces, plain);
+    const globAt = glob.indexOf(true);
+    if (expandAt === null && globAt === -1) return { text, whole: true, splits: false };
+    const end = Math.min(expandAt ?? text.length, globAt === -1 ? text.length : globAt);
+    const splits = pieces.some(
+      piece => 'expansion' in piece && (piece.unquoted === true || QUOTED_SPLIT.test(piece.expansion))
+    );
+    return { text: text.slice(0, end), whole: false, splits, ...(globAt === -1 ? {} : { glob: true }) };
+  });
+}
+
+/** The calls git gets from `args`: one per combination of the values each `for` variable among them takes. */
+function gitCalls(args: readonly string[], scope: WordScope, fill?: GitFill): GitWord[][] {
+  let calls: GitWord[][] = [[]];
+  for (const raw of args) {
+    const bound = boundWords(raw, scope.bindings);
+    const choices = bound ? bound.map(word => gitWords(word, scope, fill)) : [gitWords(raw, scope, fill)];
+    calls =
+      calls.length * choices.length > 16
+        ? calls.map(call => [...call, OPEN_GIT_WORD])
+        : calls.flatMap(call => choices.map(choice => [...call, ...choice]));
+  }
+  return calls;
+}
+
+/** The one plain start point a find names before its expression, which each `{}` it fills starts with; else ''. */
+function findStart(args: readonly string[]): string {
+  const [first, second] = args;
+  if (first === undefined || /[$`*?[{~\\'"]/.test(first) || /^[-(!,]/.test(first)) return '';
+  return second === undefined || /^[-(!,]/.test(wordValue(second)) ? first : '';
 }
 
 /** A word already as the program sees it, as a Windows program's operand is: no quotes, and no expansion left. */
@@ -5004,7 +5119,8 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
       const equals = entry.indexOf('=');
       // `--config-env` names a variable to read the value from.
       const value = equals === -1 || arg !== '-c' ? undefined : entry.slice(equals + 1);
-      if (configRunsProgram(equals === -1 ? entry : entry.slice(0, equals), value)) return true;
+      const key = equals === -1 ? entry : entry.slice(0, equals);
+      if (configRunsProgram(key, value) && !(value !== undefined && listedSetting(key, value))) return true;
     }
     if (GIT_GLOBAL_VALUED.has(arg)) at++;
   }
@@ -5042,12 +5158,8 @@ const GIT_COMMAND_OPTIONS: Readonly<
   clone: { long: ['upload-pack'], short: 'u', valued: 'bcjo' },
   fetch: { long: ['upload-pack'], short: '', valued: '' },
   pull: { long: ['upload-pack'], short: '', valued: '' },
-  'fetch-pack': { long: ['upload-pack', 'exec'], short: '', valued: '' },
   archive: { long: ['exec'], short: '', valued: '' },
-  daemon: { long: ['access-hook'], short: '', valued: '' },
   push: { long: ['receive-pack', 'exec'], short: '', valued: '' },
-  'send-pack': { long: ['receive-pack', 'exec'], short: '', valued: '' },
-  difftool: { long: ['extcmd'], short: 'x', valued: 't' },
   grep: { long: ['open-files-in-pager'], short: 'O', valued: 'ABCefm' },
   rebase: { long: ['exec'], short: 'x', valued: 'sX' },
   'send-email': {
@@ -5057,32 +5169,6 @@ const GIT_COMMAND_OPTIONS: Readonly<
     exact: ['to', 'cc'],
   },
 };
-
-/**
- * Subcommands that run command lines their options or config give whenever they run: history filters, a web server,
- * a remote helper that runs its argument.
- */
-const GIT_COMMAND_RUNNERS = new Set(['filter-branch', 'filter-repo', 'instaweb', 'remote-ext']);
-
-/**
- * Whether difftool or mergetool is given a tool name that git reads as a path to a tool script (`-t ../x`), or a word
- * bash fills in that may give one. `raw` are the shell words after the subcommand.
- */
-function gitToolPath(sub: string, raw: readonly string[]): boolean {
-  if (sub !== 'difftool' && sub !== 'mergetool') return false;
-  for (let at = 0; at < raw.length; at++) {
-    const word = raw[at] as string;
-    if (isDynamic(word)) return true;
-    const arg = wordValue(word);
-    if (arg === '--') return false;
-    const option = /^(?:-[A-Za-z]*?t|--tool(?!-help)[^=]*)(=?)([^]*)$/.exec(arg);
-    if (!option) continue;
-    let value = option[2] ?? '';
-    if (!option[1] && !value) value = wordValue(raw[++at] ?? '');
-    if (TOOL_PATH.test(value)) return true;
-  }
-  return false;
-}
 
 /**
  * Commands every git since 2.23 (which the app's own `git switch` needs) runs as a builtin or from its exec path, none
@@ -5653,7 +5739,7 @@ function aliasWord(word: string): string | null {
 
 /**
  * Whether a git call runs a command line its words give with no file to check: a subcommand option such as
- * `--upload-pack`, a subcommand that runs one, or an `ext::` remote. `raw` are the shell words after `git`.
+ * `--upload-pack`, or an `ext::` remote. `raw` are the shell words after `git`.
  */
 function gitRunsGivenCommand(raw: readonly string[]): boolean {
   if (raw.some(word => /(^|=)ext::/i.test(wordValue(word)))) return true;
@@ -5661,8 +5747,6 @@ function gitRunsGivenCommand(raw: readonly string[]): boolean {
   if (at === null) return false;
   if (at === 'open') return true;
   const sub = wordValue(raw[at] ?? '');
-  if (GIT_COMMAND_RUNNERS.has(sub)) return true;
-  if (gitToolPath(sub, raw.slice(at + 1))) return true;
   const options = own(GIT_COMMAND_OPTIONS, sub);
   if (options === undefined) return false;
   const { long, short, valued, exact = [] } = options;
@@ -6229,13 +6313,21 @@ export async function scanShell(
       anyName ||
       variableNames(/GIT_/).test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
+    const terminalOutput =
+      TERMINAL_OUTPUT.test(gateText) ||
+      tree.rootNode.descendantsOfType('file_redirect').some(redirect => redirect !== null && redirectsStdout(redirect));
     const programEnvironment = (node: Node, tokens: readonly string[], runsString = false): boolean =>
       setsGitVariable(
         variables.set.filter(setting => {
           const name = setting.name.replace(/\[[^]*$/, '');
-          if (!/^(EDITOR|VISUAL|PAGER)$/.test(name)) return true;
           if (branching === 0 && !setting.uncertainOrder && setting.startIndex > node.endIndex) return false;
-          return runsString || usesGitFallback(name, tokens, state.cwd);
+          if (runsString) return true;
+          if (variableNames(PAGER_VARIABLE).test(name)) {
+            if (!terminalOutput) return opensPager(tokens, state.cwd);
+            return name !== 'PAGER' || usesGitFallback(name, tokens, state.cwd);
+          }
+          if (variableNames(EDITOR_VARIABLE).test(name)) return usesGitFallback(name, tokens, state.cwd);
+          return true;
         })
       );
     // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
@@ -6378,6 +6470,220 @@ export async function scanShell(
           if (!homeKnown) homeGuessed = true;
         },
       };
+    };
+
+    /**
+     * Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list or
+     * contacts a remote the scan cannot check; the programs a listed form looks up on PATH go through checkPathPrograms.
+     */
+    const gitUnlistedReason = async (
+      node: Node,
+      tokens: readonly string[],
+      args: readonly string[]
+    ): Promise<string | null> => {
+      const feeds = xargsFeeds(tokens) !== null;
+      const replace = feeds ? xargsReplace(tokens) : null;
+      const [first = '', ...rest] = withoutWrappers(tokens);
+      const fill =
+        replace !== null
+          ? { placeholder: replace, prefix: '' }
+          : programName(unquote(first)) === 'find'
+            ? { placeholder: '{}', prefix: findStart(rest) }
+            : undefined;
+      for (const words of gitCalls(args, scope(), fill)) {
+        // xargs adds the words it reads after the ones it was given.
+        const listing = gitListed(feeds && replace === null ? [...words, OPEN_GIT_WORD] : words);
+        if (!listing.listed) return listing.reason;
+        const folder = gitFolder(words);
+        const programs = [...listing.programs, ...(listing.contacts ? ['ssh'] : [])];
+        if (programs.length > 0) await checkPathPrograms(node, folder ?? state.cwd, programs);
+        const moved = movedUserConfig(node, folder);
+        if (moved === null) return `${listing.form} with a user config the scan cannot place`;
+        if (moved.length > 0) {
+          if (programs.length > 0) return `${listing.form} with HOME or XDG_CONFIG_HOME set`;
+          const reason = await userConfigReason(node, folder as string, moved);
+          if (reason !== null) return `${listing.form} ${reason}`;
+        }
+        if (listing.contacts === undefined) continue;
+        if (folder === null || sourced || aliasEnvironment || dropsGitConfig(tokens)) {
+          return `${listing.form} with a remote in config the scan cannot read`;
+        }
+        if (!(await configSettled(node, folder))) return `${listing.form} after a config change in the same script`;
+        if (!(await remotesPlain(folder, listing.contacts))) {
+          return `${listing.form} with a remote git reaches through a program of its own`;
+        }
+      }
+      return null;
+    };
+
+    /** The folder git runs in for a call with `words` (those after `git`); null when the scan cannot place its repository. */
+    const gitFolder = (words: readonly GitWord[]): string | null => {
+      if (state.lost) return null;
+      let folder = state.cwd;
+      for (let at = 0; at < words.length; at++) {
+        const { text } = words[at] as GitWord;
+        if (!text.startsWith('-')) break;
+        if (/^--(git-dir|work-tree)(=|$)/.test(text)) return null;
+        if (text === '-C') {
+          const value = words[++at];
+          if (value === undefined || !value.whole) return null;
+          folder = resolveOperand(folder, value.text);
+        } else if (text === '-c' || text === '--config-env') {
+          at++;
+        }
+      }
+      return folder;
+    };
+
+    const remoteSettings = new Map<string, Promise<GitRemoteSettings | null>>();
+    const remoteUrls = new Map<string, Promise<string[] | 'none' | null>>();
+
+    /**
+     * Whether every remote `contacts` names in `folder`, with the groups and defaults git may pick in its place, leads
+     * somewhere git reaches with its own transports, its URL rewrites applied: no `<helper>::` or unknown scheme, and
+     * no `remote.<name>.vcs`.
+     */
+    const remotesPlain = async (folder: string, contacts: GitContacts): Promise<boolean> => {
+      let settings = remoteSettings.get(folder);
+      if (settings === undefined) remoteSettings.set(folder, (settings = gitRemoteSettings(folder)));
+      const known = await settings;
+      if (known === null || known.rewrites.some(rule => !plainRemote(rule.base))) return false;
+      // git rewrites by the longest matching prefix, a push URL by a pushInsteadOf one first.
+      const rewritten = (url: string, push: boolean): string => {
+        const longest = (pushRules: boolean) =>
+          known.rewrites
+            .filter(rule => rule.push === pushRules && url.startsWith(rule.prefix))
+            .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+        const rule = (push ? longest(true) : undefined) ?? longest(false);
+        return rule ? rule.base + url.slice(rule.prefix.length) : url;
+      };
+      const pushes = contacts.push ? [false, true] : [false];
+      // A default or group member of `.` is the repository itself.
+      const elsewhere = (name: string): boolean => name !== '.';
+      const everything = [...known.remotes, ...known.helpers, ...known.defaults.filter(elsewhere)];
+      // A group may shadow a remote of its name and hold other groups, so a name any group has is checked against all.
+      const namesGroup = (name: string): boolean =>
+        known.groups.some(group => group.name.toLowerCase() === name.toLowerCase());
+      const names =
+        contacts.remotes === 'all'
+          ? everything
+          : contacts.remotes.flatMap(name => (namesGroup(name) ? [name, ...everything] : [name]));
+      for (const name of names) {
+        if (known.helpers.includes(name)) return false;
+        // Outside a repository `git remote get-url` cannot run to resolve a remote the user config names.
+        if (known.outside && known.remotes.includes(name)) return false;
+        for (const push of pushes) {
+          const key = JSON.stringify([folder, name, push]);
+          let urls = remoteUrls.get(key);
+          // No remote name holds a `:`, so such a word is an address.
+          if (urls === undefined) {
+            remoteUrls.set(
+              key,
+              (urls = name.includes(':') || known.outside ? Promise.resolve('none') : gitRemoteUrls(folder, name, push))
+            );
+          }
+          const listed = await urls;
+          if (listed === null) return false;
+          // A clone reads the `vcs` of the remote it files the address under, `origin` by default.
+          if (listed === 'none' && known.helpers.length > 0) return false;
+          if ((listed === 'none' ? [rewritten(name, push)] : listed).some(url => !plainRemote(url))) return false;
+        }
+      }
+      return true;
+    };
+
+    /**
+     * Whether no write before `node` may have changed the config git reads in `folder`; one that may race it is
+     * checked after the walk, as for an alias.
+     */
+    const configSettled = async (node: Node, folder: string): Promise<boolean> => {
+      const { folder: read, user, from } = await aliasSource(folder);
+      const config = await aliasesAt(read, user, from);
+      if (config === null) return false;
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd: read,
+        places: await aliasPlaces(config.includes),
+        folders: [],
+        programs: false,
+        legacy: !(await gitRefusesImplicitBare(read)),
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) return false;
+      }
+      aliasChecks.push(check);
+      return true;
+    };
+
+    /**
+     * The user config files git run by `node` in `folder` reads in place of the shell's, as the script gives HOME or
+     * XDG_CONFIG_HOME a value before it; null when the scan cannot place one.
+     */
+    const movedUserConfig = (node: Node, folder: string | null): string[] | null => {
+      const values = (pattern: RegExp): (string | null)[] =>
+        variables.set.flatMap(({ name, value, uncertainOrder, startIndex, appends }) => {
+          if (!variableNames(pattern).test(name.replace(/\[[^]*$/, '')) || value === undefined) return [];
+          if (branching === 0 && !uncertainOrder && startIndex > node.endIndex) return [];
+          // An append extends the value bash holds at run time, which the scan does not place.
+          return [name.includes('[') || appends ? null : value];
+        });
+      const homes = values(/^HOME$/);
+      const bases = values(/^XDG_CONFIG_HOME$/);
+      if (homes.length + bases.length === 0) return [];
+      const place = (value: string | null): string | null =>
+        value === null || folder === null || sep !== '/' || !/^[\w@%+=:,./-]+$/.test(value)
+          ? null
+          : resolveOperand(folder, value);
+      // git reads `$XDG_CONFIG_HOME/git/config`, or `$HOME/.config/git/config` when that is unset or empty.
+      const xdgFromHome = (process.env.XDG_CONFIG_HOME ?? '') === '' || bases.includes('');
+      const files: string[] = [];
+      for (const home of homes.map(place)) {
+        if (home === null) return null;
+        files.push(join(home, '.gitconfig'));
+        if (xdgFromHome) files.push(join(home, '.config', 'git', 'config'));
+      }
+      for (const base of bases.filter(value => value !== '').map(place)) {
+        if (base === null) return null;
+        files.push(join(base, 'git', 'config'));
+      }
+      return files;
+    };
+
+    /**
+     * Why the moved user config `files` may have git run a program: a setting the table does not list for `-c`, or a
+     * write before `node` that may change one; null when neither. A write that may race it is checked after the walk.
+     */
+    const userConfigReason = async (node: Node, folder: string, files: readonly string[]): Promise<string | null> => {
+      const named = files.map(file => (basename(file) === 'config' ? dirname(file) : file));
+      const followed = await Promise.all(named.map(place => physicalTarget(place).catch(() => null)));
+      if (followed.some(place => place === null)) return 'with a user config the scan cannot place';
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd: folder,
+        places: [...named, ...(followed as string[])].map(place => guardForm(place)),
+        folders: [],
+        programs: false,
+        legacy: false,
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) {
+          return 'after a user config change in the same script';
+        }
+      }
+      aliasChecks.push(check);
+      for (const file of files) {
+        const settings = await gitConfigFile(file);
+        if (settings === null) return 'with a user config the scan cannot read';
+        // A key given without `=` is a boolean set true.
+        if (settings.some(({ key, value }) => !listedSetting(key, value ?? 'true'))) {
+          return 'with a user config setting the table does not list';
+        }
+      }
+      return null;
     };
 
     /**
@@ -7236,10 +7542,7 @@ export async function scanShell(
     /** `<name>::<address>` operands make git run a git-remote-<name> program from PATH, which the scan checks like git-merge-<name>. */
     const checkRemoteHelpers = async (node: Node, sub: string, rest: readonly string[], cwd: string): Promise<void> => {
       const verb = wordValue(rest[0] ?? '');
-      const reads =
-        REMOTE_HELPER_COMMANDS.has(sub) ||
-        (sub === 'remote' && (verb === 'add' || verb === 'set-url')) ||
-        (sub === 'submodule' && verb === 'add');
+      const reads = REMOTE_HELPER_COMMANDS.has(sub) || (sub === 'remote' && (verb === 'add' || verb === 'set-url'));
       if (!reads) return;
       const names = rest.flatMap(word => {
         const name = /^([A-Za-z0-9][\w.+-]*)::/.exec(wordValue(word))?.[1];
@@ -7337,11 +7640,14 @@ export async function scanShell(
       if (expanded === null) unreadOperands++;
       const launches = launchedGitCommands(written);
       if (launches.unread) unreadOperands++;
+      let unlisted: string | null = null;
       for (const launched of launches.runs) {
         const launchedExpansion = await gitAliasExpansion(node, launched);
         const checked = launchedExpansion ?? launched;
         if (launchedExpansion === null || untrackableCommand(checked) || programEnvironment(node, checked))
           unreadOperands++;
+        if (launchedExpansion !== null)
+          unlisted ??= await gitUnlistedReason(node, written, withoutWrappers(launchedExpansion).slice(1));
         const git = gitSubcommand(withoutWrappers(checked).slice(1).map(unquote), state.cwd);
         if (git !== null && !git.unread) await checkGitPrograms(node, git);
         if (expanded !== null && launchedExpansion !== null && launchedExpansion.join(' ') !== launched.join(' ')) {
@@ -7442,6 +7748,7 @@ export async function scanShell(
       if (LAUNCHES_COMMANDS.has(inner) && dropsBareRepositoryBehind(tokens)) unreadOperands++;
       if (inner === 'git') {
         gitCommands.add(node.id);
+        if (expanded !== null) unlisted ??= await gitUnlistedReason(node, tokens, wrappedRest);
         if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || unsetsConfig) {
           unreadOperands++;
         }
@@ -7701,7 +8008,8 @@ export async function scanShell(
             if (passed.length > 0) continue;
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
-          if (value.startsWith('-')) continue;
+          // An option's empty value (`--format=`) names no place, though expandBraces reads it as a dropped alternative.
+          if ((value === '' && arg.startsWith('-')) || value.startsWith('-')) continue;
           const words = operandWords(value, scope());
           // Braces the scan cannot expand as bash does may make any name, so whatever their shape they are unread.
           if (words === null) {
@@ -7770,6 +8078,7 @@ export async function scanShell(
       for (const place of cloned) createdLinks.add(guardForm(place));
       // The window includes any substitution in its words: output the scan cannot read decides this part too.
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      if (unlisted !== null) Object.assign(entry, { coverable: false, words: original, gitUnlisted: unlisted });
       return entry;
     };
 

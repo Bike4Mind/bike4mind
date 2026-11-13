@@ -413,4 +413,99 @@ describe('executeResearchRun', () => {
     expect(result).toMatchObject({ spentMicroUsd: 0, stopReason: 'exhausted' });
     expect(result.totals.searchHits).toBe(0);
   });
+
+  describe('auto-admit', () => {
+    const autoLevers = (overrides: Partial<LegacyResearchRunLevers> = {}) =>
+      levers({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 2, ...overrides });
+    const proposedWith = (priorDisposition?: 'declined' | 'approved' | null): ProposalOutcome =>
+      ({ outcome: 'proposed', proposal: { id: 'p1', priorDisposition } }) as unknown as ProposalOutcome;
+    const autoPorts = (overrides: PortOverrides = {}) => {
+      const autoAdmit = vi.fn(async () => 'admitted' as const);
+      return { autoAdmit, ...makePorts({ autoAdmit, propose: async () => proposedWith(null), ...overrides }) };
+    };
+
+    it('admits nothing when the opt-in is off', async () => {
+      const { ports, autoAdmit } = autoPorts();
+      const result = await executeResearchRun(autoLevers({ autoAdmitTrusted: false }), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals.autoAdmitted).toBe(0);
+    });
+
+    it('admits nothing when the caller supplies no port', async () => {
+      const { ports } = makePorts({ propose: async () => proposedWith(null) });
+      const result = await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(result.totals.proposed).toBe(1);
+      expect(result.totals.autoAdmitted).toBe(0);
+    });
+
+    it('admits trusted hits up to the cap, then leaves the rest queued', async () => {
+      const { ports, autoAdmit } = autoPorts({ candidates: [hit(1), hit(2), hit(3)] });
+      const result = await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).toHaveBeenCalledTimes(2);
+      expect(result.totals).toMatchObject({ proposed: 3, autoAdmitted: 2, autoAdmitSkipped: 0 });
+    });
+
+    it('never admits a review-tier hit', async () => {
+      const { ports, autoAdmit } = autoPorts({ candidates: [hit(1, 'other.org')] });
+      const result = await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals.proposed).toBe(1);
+    });
+
+    it.each(['declined', 'approved'] as const)('queues a re-proposed %s source', async prior => {
+      const { ports, autoAdmit } = autoPorts({ propose: async () => proposedWith(prior) });
+      await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+    });
+
+    it('never calls the port for a tombstoned source', async () => {
+      const { ports, autoAdmit } = autoPorts({
+        propose: async () => ({ outcome: 'suppressed_by_tombstone', proposalId: 'p0' }),
+      });
+      await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+    });
+
+    it('queues a hit whose final URL is not trusted', async () => {
+      const { ports, autoAdmit } = autoPorts({
+        fetchSource: async () => ({ title: 't', finalUrl: 'https://elsewhere.net/x', text: 'b' }),
+      });
+      await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+    });
+
+    it('does not let an entry above the registrable domain cover a host under a shared suffix', async () => {
+      const { ports, autoAdmit } = autoPorts({ candidates: [hit(1, 'evil.s3.amazonaws.com')] });
+      await executeResearchRun(autoLevers({ trustedDomains: ['amazonaws.com'] }), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+    });
+
+    it('queues when the time reserve is spent after the fetch', async () => {
+      const remaining = vi.fn().mockReturnValueOnce(1_000_000).mockReturnValue(1_000);
+      const { ports, autoAdmit } = autoPorts({ remainingTimeMs: remaining });
+      await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+    });
+
+    it('counts a left_pending result as a skip and still proposes', async () => {
+      const { ports } = autoPorts({ autoAdmit: async () => 'left_pending' });
+      const result = await executeResearchRun(autoLevers(), 'run-1', ports);
+      expect(result.totals).toMatchObject({ proposed: 1, autoAdmitted: 0, autoAdmitSkipped: 1 });
+    });
+
+    it('hands the port a predicate keyed to the trusted list', async () => {
+      const { ports, autoAdmit } = autoPorts();
+      await executeResearchRun(autoLevers(), 'run-1', ports);
+      const rule = (autoAdmit.mock.calls[0] as unknown as [unknown, { isTrusted(u: string): string | null }])[1];
+      expect(rule.isTrusted('https://docs.example.com/a')).toBe('example.com');
+      expect(rule.isTrusted('https://other.org/a')).toBeNull();
+    });
+
+    it('counts auto-admits toward the proposal limit', async () => {
+      const { ports } = autoPorts({ candidates: [hit(1), hit(2), hit(3)] });
+      const result = await executeResearchRun(autoLevers({ maxProposals: 2 }), 'run-1', ports);
+      expect(result.stopReason).toBe('proposal_limit');
+      expect(result.totals.proposed).toBe(2);
+    });
+  });
 });

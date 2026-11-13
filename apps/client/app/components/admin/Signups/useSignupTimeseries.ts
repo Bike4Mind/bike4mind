@@ -41,11 +41,9 @@ export function useSignupVerdicts(
     // invalidating it as well would only classify the range once more for a result thrown away.
     queryKey: ['signup-verdicts', range, asOf, userIds, tzOffset] as const,
     queryFn: async () =>
-      (
-        await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {
-          params: { range, asOf, tzOffset, ids: userIds.join(',') },
-        })
-      ).data,
+      // A body, not query params: a full page of ids makes the URL too long to send reliably.
+      (await api.post<SignupVerdicts>('/api/admin/users/signup-verdicts', { range, asOf, tzOffset, ids: userIds }))
+        .data,
     enabled: !!asOf && userIds.length > 0,
     // Fixed by asOf, so a result never goes stale on its own.
     staleTime: Infinity,

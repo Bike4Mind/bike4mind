@@ -1,7 +1,8 @@
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import { type PurchaseConversion, trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -59,7 +60,11 @@ export function releaseSessionClaim(sessionId: string): void {
 
 const GENERIC_CONFIRMATION = 'Subscription completed successfully!';
 
-export type CheckoutSessionSummary = PurchaseConversion & { credits?: number };
+export type CheckoutSessionSummary = PurchaseConversion & {
+  credits?: number;
+  teamCheckout?: boolean;
+  organizationId?: string;
+};
 
 export function checkoutConfirmation({
   planName,
@@ -71,6 +76,11 @@ export function checkoutConfirmation({
   return credits ? `${onPlan} - ${formatCreditAmount(credits)} credits included` : onPlan;
 }
 
+type CheckoutNavigationScope = {
+  isCurrent: () => boolean;
+  retry: () => void;
+};
+
 /**
  * Confirms the purchase at once, then upgrades the toast in place with the plan Stripe vouches for.
  * The return from Stripe is a full page load and the access token is memory-only, so the lookup
@@ -78,7 +88,7 @@ export function checkoutConfirmation({
  * read server-side (api/subscriptions/checkout-session.ts) so the reported conversion cannot be
  * forged. A failed lookup releases the claim so a reload can report it.
  */
-async function confirmCheckout(sessionId: string): Promise<void> {
+async function confirmCheckout(sessionId: string, scope: CheckoutNavigationScope): Promise<void> {
   toast.success(GENERIC_CONFIRMATION, { id: sessionId });
   const claimed = claimSessionForReporting(sessionId);
 
@@ -87,6 +97,10 @@ async function confirmCheckout(sessionId: string): Promise<void> {
     if (claimed) releaseSessionClaim(sessionId);
     return;
   }
+
+  const userId = useUser.getState().currentUser?.id;
+  const isNavigationCurrent = () =>
+    scope.isCurrent() && !!useAccessToken.getState().accessToken && useUser.getState().currentUser?.id === userId;
 
   let summary: CheckoutSessionSummary;
   try {
@@ -99,8 +113,42 @@ async function confirmCheckout(sessionId: string): Promise<void> {
     return;
   }
 
-  toast.success(checkoutConfirmation(summary), { id: sessionId });
+  toast.success(
+    summary.teamCheckout ? 'Team checkout completed. Preparing your team...' : checkoutConfirmation(summary),
+    { id: sessionId }
+  );
   if (claimed) trackPurchaseConversion(summary);
+
+  if (summary.teamCheckout) {
+    if (!isNavigationCurrent()) return;
+    for (let attempt = 0; !summary.organizationId && attempt < 6; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (!isNavigationCurrent()) return;
+      try {
+        summary = (
+          await api.get<CheckoutSessionSummary>('/api/subscriptions/checkout-session', { params: { id: sessionId } })
+        ).data;
+      } catch {
+        break;
+      }
+    }
+    if (!isNavigationCurrent()) return;
+    if (summary.organizationId) {
+      toast.success('Team created successfully!', { id: sessionId });
+      checkoutReturnNavigator.replace(`/organizations/${encodeURIComponent(summary.organizationId)}?team_created=true`);
+    } else {
+      toast.success('Your payment is complete. Your team is still being prepared.', {
+        id: sessionId,
+        duration: Infinity,
+        action: {
+          label: 'Check again',
+          onClick: () => {
+            if (isNavigationCurrent()) scope.retry();
+          },
+        },
+      });
+    }
+  }
 }
 
 /** How long the confirmation stays on screen before a checkout started elsewhere returns there. */
@@ -114,10 +162,14 @@ export const checkoutReturnNavigator = { replace: (url: string) => window.locati
 
 const StripeCheckoutSuccessHandler = () => {
   const queryClient = useQueryClient();
+  const checkoutReturn = useRef<{ search: string; pageUrl: string } | null>(null);
 
   useEffect(() => {
+    // Retain the return intent across StrictMode's effect replay after URL cleanup.
+    const intent = (checkoutReturn.current ??= { search: window.location.search, pageUrl: window.location.href });
+    if (window.location.href !== intent.pageUrl) return;
     // Use URLSearchParams instead of useSearch to avoid router context dependency
-    const searchParams = new URLSearchParams(window.location.search);
+    const searchParams = new URLSearchParams(intent.search);
     const subscriptionSuccess = searchParams.get('subscription_success');
     const checkoutSessionId = searchParams.get('checkout_session_id');
     // A checkout another Bike4Mind app started (utils/checkoutReturn.ts): re-checked here, because
@@ -130,6 +182,17 @@ const StripeCheckoutSuccessHandler = () => {
       return;
     }
 
+    let active = true;
+    let requestGeneration = 0;
+    const isPageCurrent = () => active && window.location.href === intent.pageUrl;
+    const startConfirmation = (sessionId: string) => {
+      const generation = ++requestGeneration;
+      return confirmCheckout(sessionId, {
+        isCurrent: () => isPageCurrent() && generation === requestGeneration,
+        retry: () => void startConfirmation(sessionId),
+      });
+    };
+
     if (subscriptionSuccess === 'true') {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
@@ -138,14 +201,18 @@ const StripeCheckoutSuccessHandler = () => {
       // reported, since they are not customer-attributable acquisitions.
       const confirmed =
         checkoutSessionId && checkoutSessionId.startsWith('cs_')
-          ? confirmCheckout(checkoutSessionId)
+          ? startConfirmation(checkoutSessionId)
           : Promise.resolve(void toast.success(GENERIC_CONFIRMATION));
 
       // Only once the purchase is confirmed and reported, so leaving cannot cost the conversion.
       if (returnTo) {
         void confirmed
           .catch(() => undefined)
-          .then(() => setTimeout(() => checkoutReturnNavigator.replace(returnTo), CHECKOUT_RETURN_DELAY_MS));
+          .then(() =>
+            setTimeout(() => {
+              if (isPageCurrent()) checkoutReturnNavigator.replace(returnTo);
+            }, CHECKOUT_RETURN_DELAY_MS)
+          );
       }
 
       // Clean up URL without triggering a refresh. Strip only OUR two params and
@@ -160,7 +227,11 @@ const StripeCheckoutSuccessHandler = () => {
       const remaining = searchParams.toString();
       const newUrl = `${window.location.pathname}${remaining ? `?${remaining}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', newUrl);
+      intent.pageUrl = window.location.href;
     }
+    return () => {
+      active = false;
+    };
   }, [queryClient]);
 
   return null;
