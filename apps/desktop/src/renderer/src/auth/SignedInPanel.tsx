@@ -14,9 +14,16 @@ import { updateAttention } from '@shared/update';
 import { BillingIcon, ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import { ControlledUpdateNotice } from '../chat/UpdateNotice';
-import { useAppUpdate } from '../chat/useAppUpdate';
+import { useAppUpdate, type AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
+
+/** What a click on the update chip does, or undefined in a state with no next step to take. */
+export function updateNextStep(update: AppUpdateController): (() => void) | undefined {
+  if (update.state.status === 'available') return update.download;
+  if (update.state.status === 'ready') return () => void update.install(false);
+  return undefined;
+}
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -117,7 +124,7 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
             size="sm"
             variant="soft"
             color="primary"
-            onClick={update.state.status === 'ready' ? () => void update.install(false) : update.download}
+            onClick={updateNextStep(update)}
             data-testid="account-attention-chip"
           >
             {settingsAttention}

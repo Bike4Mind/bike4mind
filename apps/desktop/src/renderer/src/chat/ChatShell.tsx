@@ -75,6 +75,7 @@ import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
+import { AppUpdateNotice } from './UpdateNotice';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { isUntouchedImport, projectForGroup } from './grouping';
 import { useImportedInline } from './importedInline';
@@ -1497,6 +1498,8 @@ export function ChatShell({
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
       />
+      {/* The collapsed rail draws no footer, so the update notice floats lower-left meanwhile. */}
+      {collapsed && <AppUpdateNotice />}
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />

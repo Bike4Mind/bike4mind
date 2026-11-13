@@ -17,7 +17,7 @@ export type UpdateNoticeActions = Pick<
   'blockedBy' | 'downloadFailed' | 'download' | 'install' | 'dismissBlock'
 >;
 
-/** In the flow of the sidebar's account footer, or floating where there is no sidebar. */
+/** In the flow of the sidebar's account footer, or floating where that footer is not drawn. */
 export type UpdateNoticePlacement = 'sidebar' | 'floating';
 
 export interface UpdateNoticeProps {
@@ -42,8 +42,9 @@ function noticeTitle(state: UpdateState, version: string, inApp: boolean): strin
 
 /**
  * The small "a newer version exists" card in the window's lower-left corner: at the top of the
- * sidebar's account footer, or floating there on a screen with no sidebar. The lower-right holds
- * the composer's send and model controls, which a card there would cover.
+ * sidebar's account footer, or floating there when that footer is not drawn (the sign-in screen,
+ * a collapsed sidebar). The lower-right holds the composer's send and model controls, which a
+ * card there would cover.
  *
  * Given `actions` it carries the update through: Update downloads, the card follows the progress,
  * and Restart to update installs, asking first when work would be interrupted. Without them it only

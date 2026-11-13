@@ -11,8 +11,10 @@ import {
   type UpdateBusyReport,
   type UpdateInstallResult,
   type UpdateState,
+  type UpdateStatus,
 } from '@shared/update';
-import { AccountMenu, SignedInPanel } from './SignedInPanel';
+import type { AppUpdateController } from '../chat/useAppUpdate';
+import { AccountMenu, SignedInPanel, updateNextStep } from './SignedInPanel';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
@@ -123,10 +125,15 @@ describe('the account strip with an update waiting', () => {
     host = null;
   });
 
+  let push: (state: UpdateState) => void = () => {};
+
   function stubBridge(state: UpdateState, installResult: UpdateInstallResult = { ok: true }) {
     const update = {
       getState: vi.fn(async () => state),
-      onStateChanged: vi.fn(() => () => {}),
+      onStateChanged: vi.fn((listener: (state: UpdateState) => void) => {
+        push = listener;
+        return () => {};
+      }),
       check: vi.fn(async () => {}),
       download: vi.fn(async () => {}),
       dismiss: vi.fn(async () => {}),
@@ -163,6 +170,52 @@ describe('the account strip with an update waiting', () => {
     expect(byTestId('account-attention-chip')?.textContent).toBe('Update');
     await clickChip();
     expect(update.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers nothing to click while the download runs, so it is never started twice', async () => {
+    const update = stubBridge(available);
+    await mount();
+    await clickChip();
+
+    act(() => push(reduceUpdate(available, { type: 'download-started' })));
+    expect(byTestId('account-attention-chip')?.querySelector('button') ?? null).toBeNull();
+    act(() => byTestId('account-attention-chip')?.click());
+    await clickChip();
+    expect(update.download).toHaveBeenCalledTimes(1);
+    expect(byTestId('update-notice-progress')).not.toBeNull();
+  });
+
+  describe('the next step the label takes', () => {
+    function controllerIn(status: UpdateStatus): AppUpdateController {
+      return {
+        state: { ...available, status },
+        blockedBy: null,
+        downloadFailed: false,
+        check: vi.fn(),
+        download: vi.fn(),
+        install: vi.fn(async () => false),
+        dismissBlock: vi.fn(),
+        dismiss: vi.fn(),
+      };
+    }
+
+    it('downloads an offer and restarts into a downloaded update', () => {
+      const offer = controllerIn('available');
+      updateNextStep(offer)?.();
+      expect(offer.download).toHaveBeenCalledTimes(1);
+
+      const staged = controllerIn('ready');
+      updateNextStep(staged)?.();
+      expect(staged.install).toHaveBeenCalledWith(false);
+      expect(staged.download).not.toHaveBeenCalled();
+    });
+
+    it.each<UpdateStatus>(['downloading', 'checking', 'idle', 'up-to-date', 'unreachable', 'unsupported'])(
+      'has none while %s',
+      status => {
+        expect(updateNextStep(controllerIn(status))).toBeUndefined();
+      }
+    );
   });
 
   it('restarts from the Restart label, confirming in the notice when work is running', async () => {
