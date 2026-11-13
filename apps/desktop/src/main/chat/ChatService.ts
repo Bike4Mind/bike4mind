@@ -1,7 +1,10 @@
 import {
   acceptTask,
   assertReportCoversCriteria,
+  decisionQuestion,
+  MAX_RESOLVED_DECISIONS,
   modelRequestHint,
+  pendingDecisionOf,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
@@ -14,6 +17,11 @@ import {
   type RootPolicy,
   type SpawnOptions,
   type TaskAction,
+  type TaskReport,
+  type DecisionRecord,
+  type PendingTaskDecision,
+  type TaskDecisionAnswer,
+  type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
@@ -103,7 +111,13 @@ import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
-import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
+import {
+  ASK_USER_TOOL_NAME,
+  describeAnswer,
+  parseQuestions,
+  sanitizeAnswers,
+  type ChatQuestionOutcome,
+} from '@shared/questions';
 import {
   REQUEST_DIRECTORY_TOOL_NAME,
   type DirectoryRequestOutcome,
@@ -394,6 +408,24 @@ const RELAY_MID_TURN_NOTE =
   'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
 
 /** Refusal for anything but the user (and auto-fix) starting a turn in a canceled worker session. */
+const DECISION_ASKED_RESULT =
+  'Your decision is now in front of the user as a question card. End your turn now with one short line and do no more work on this task; it resumes in this conversation with their answer.';
+
+const AGENT_IDLE_POLL_MS = 100;
+const AGENT_IDLE_WAIT_MS = 60_000;
+
+/** The task state a worker's report sets; a decision becomes a question card with an id main mints. */
+function reportedState(report: TaskReport): WorkerTask['state'] {
+  if (report.status === 'completed') return { ...report, accepted: false };
+  if (report.status !== 'blocked') return report;
+  const { decision, ...blocked } = report;
+  if (!decision) return blocked;
+  return {
+    ...blocked,
+    decision: { id: randomUUID(), question: decisionQuestion(decision), askedAt: new Date().toISOString() },
+  };
+}
+
 const CANCELED_TASK_REFUSAL =
   'This task was canceled, so nothing automatic runs in it any more. Type a message in that conversation to follow up, or start a new task.';
 
@@ -675,6 +707,8 @@ export interface ChatServiceDeps {
    * sidebar in a window that has the conversation closed. Absent in tests.
    */
   summaryChanged?(summary: ChatSessionSummary): void;
+  /** The decisions workers wait on the user for changed; carries the whole (small) current list. */
+  taskDecisionsChanged?(decisions: PendingTaskDecision[]): void;
   /**
    * A session was archived or deleted, by any path - the sidebar, the agent's host tools, or a
    * spawned child being cleaned up. A notification only: it is how the user's terminals
@@ -1014,6 +1048,14 @@ export class ChatService {
    * gap must still see them as running, or the parent would be woken without them.
    */
   private readonly agentsSettling = new Map<string, { parentId: string; settling: symbol }>();
+
+  /**
+   * Workers waiting on a user decision, by session id, for the store scope they belong to. Kept
+   * current from every task write (syncTaskDecision) so nothing ever scans sessions to find them;
+   * built from the store once per scope, for decisions asked before a restart.
+   */
+  private readonly decisionIndex = new Map<string, PendingTaskDecision & { parentId: string; scope: string | null }>();
+  private decisionIndexLoad: { scope: string | null; ready: Promise<void> } | null = null;
 
   /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
@@ -1832,6 +1874,7 @@ export class ChatService {
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
+      this.syncTaskDecision(updated, scope);
       if (updated) this.deps.summaryChanged?.(updated);
       return updated;
     }
@@ -2011,6 +2054,182 @@ export class ChatService {
 
   private taskDecisions = new Set<string>();
 
+  /** The store's task write, keeping the decision index in step with whatever it wrote. */
+  private async updateTask(
+    sessionId: string,
+    change: (task: WorkerTask) => WorkerTask,
+    expectedScope?: string | null,
+    model?: string
+  ): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.updateWorkerTask(sessionId, change, expectedScope, model);
+    this.syncTaskDecision(updated, expectedScope === undefined ? this.deps.store.scopeKey() : expectedScope);
+    return updated;
+  }
+
+  /** Index (or drop) the decision `session` waits on; a no-op when nothing changed. */
+  private syncTaskDecision(session: ChatSessionSummary | null, scope: string | null): void {
+    if (!session) return;
+    const decision = pendingDecisionOf(session.workerTask);
+    const known = this.decisionIndex.get(session.id);
+    const parentId = session.origin?.parentSessionId;
+    if (decision && parentId) {
+      const title = session.title.trim() || 'Untitled agent';
+      if (known?.decision.id === decision.id && known.title === title) return;
+      this.decisionIndex.set(session.id, {
+        sessionId: session.id,
+        rootId: session.orchestrationPolicy?.rootSessionId ?? parentId,
+        parentId,
+        title,
+        decision,
+        scope,
+      });
+      if (!known) this.deps.activity?.decisionChanged(session.id, true);
+    } else {
+      if (!known) return;
+      this.decisionIndex.delete(session.id);
+      this.deps.activity?.decisionChanged(session.id, false);
+    }
+    this.announceTaskDecisions();
+  }
+
+  private currentTaskDecisions(): PendingTaskDecision[] {
+    const scope = this.deps.store.scopeKey();
+    return [...this.decisionIndex.values()]
+      .filter(entry => entry.scope === scope)
+      .map(({ sessionId, rootId, title, decision }) => ({ sessionId, rootId, title, decision }));
+  }
+
+  private announceTaskDecisions(): void {
+    this.deps.taskDecisionsChanged?.(this.currentTaskDecisions());
+  }
+
+  /**
+   * Every decision a worker in the signed-in scope waits on. The first call for a scope reads the
+   * store once, so a decision asked before a restart still shows, counts and badges.
+   */
+  async listTaskDecisions(): Promise<PendingTaskDecision[]> {
+    const scope = this.deps.store.scopeKey();
+    if (this.decisionIndexLoad?.scope !== scope) {
+      for (const [sessionId, entry] of this.decisionIndex) {
+        if (entry.scope === scope) continue;
+        this.decisionIndex.delete(sessionId);
+        this.deps.activity?.decisionChanged(sessionId, false);
+      }
+      const ready = this.deps.store.list().then(
+        sessions => {
+          if (this.deps.store.scopeKey() !== scope) return;
+          for (const session of sessions) if (session.workerTask) this.syncTaskDecision(session, scope);
+        },
+        (error: unknown) => {
+          this.deps.logger.warn(`CHAT: could not read pending task decisions: ${String(error)}`);
+          if (this.decisionIndexLoad?.ready === ready) this.decisionIndexLoad = null;
+        }
+      );
+      this.decisionIndexLoad = { scope, ready };
+    }
+    await this.decisionIndexLoad?.ready;
+    return this.currentTaskDecisions();
+  }
+
+  /**
+   * The user's answer to a decision a worker asked for: relays it and resumes the same task, or,
+   * on Skip, leaves the task blocked and reports that to the parent. Reached only from the
+   * question card's IPC; no tool can answer for the user. A card that is stale because the other
+   * copy was answered first is a no-op, so a decision never resumes the task twice.
+   */
+  async answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
+    const scope = this.deps.store.scopeKey();
+    const key = `${scope}:${sessionId}`;
+    if (this.taskDecisions.has(key)) return;
+    this.taskDecisions.add(key);
+    try {
+      // The worker's own turn can still be writing its last line after it asked.
+      if ((await this.deps.store.get(sessionId))?.workerTask?.resolvedDecisions.includes(decisionId)) return;
+      await this.untilAgentIdle(sessionId);
+      if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+      const child = await this.deps.store.get(sessionId);
+      const task = child?.workerTask;
+      if (!child || !task) throw new Error('No structured task exists.');
+      if (task.resolvedDecisions.includes(decisionId)) return;
+      const pending = pendingDecisionOf(task);
+      if (pending?.id !== decisionId) throw new Error('This decision is no longer pending.');
+      const question = pending.question;
+      const answers = answer.status === 'answered' ? sanitizeAnswers([question], answer.answers) : [];
+      const answered = describeAnswer(answers[0]);
+      if (answer.status === 'answered' && !answered) throw new Error('Pick an option or type an answer.');
+      const record: DecisionRecord = {
+        id: decisionId,
+        question: question.question,
+        outcome: answer.status,
+        ...(answered ? { answer: answered.slice(0, 5000) } : {}),
+        decidedAt: new Date().toISOString(),
+      };
+      const skipped = answer.status === 'skipped';
+      const updated = await this.updateTask(
+        sessionId,
+        current => {
+          if (current.resolvedDecisions.includes(decisionId)) return current;
+          if (pendingDecisionOf(current)?.id !== decisionId || current.state.status !== 'blocked')
+            throw new Error('This decision is no longer pending.');
+          const resolved = {
+            ...current,
+            resolvedDecisions: [...current.resolvedDecisions, decisionId],
+            decisions: [...(current.decisions ?? []), record].slice(-MAX_RESOLVED_DECISIONS),
+          };
+          if (!skipped) return { ...resolved, state: { status: 'running' } };
+          const { decision: _answered, ...blocked } = current.state;
+          const reason = `The user skipped the decision "${question.question}". ${blocked.reason}`.slice(0, 2000);
+          return { ...resolved, state: { ...blocked, reason } };
+        },
+        scope
+      );
+      if (!updated) throw new Error('Account or task changed. Reopen the conversation.');
+      this.deps.summaryChanged?.(updated);
+      const parentId = child.origin?.parentSessionId;
+      if (!parentId) return;
+      if (skipped) {
+        const latest = (await this.deps.store.get(sessionId)) ?? child;
+        await this.reportSettledAgent(parentId, latest, isLocalModel(latest.model));
+        await this.wakeParentForAgents(parentId);
+        return;
+      }
+      const seed = `The user answered your decision.\n"${question.question}" -> ${answered}\nContinue the same task with this decision; it is recorded in the task evidence.\n\n${renderTaskBrief(task.contract)}`;
+      this.spawnWatch.set(sessionId, { parentSessionId: parentId });
+      const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
+      if (!sent.ok) {
+        this.spawnWatch.delete(sessionId);
+        await this.updateTask(
+          sessionId,
+          current =>
+            current.state.status === 'running'
+              ? {
+                  ...current,
+                  state: {
+                    status: 'blocked',
+                    reason: `The answer could not resume the task: ${sent.error}`.slice(0, 2000),
+                    evidence: [`The user answered "${question.question}" with ${answered}.`.slice(0, 2000)],
+                  },
+                }
+              : current,
+          scope
+        );
+        throw new Error(sent.error);
+      }
+    } finally {
+      this.taskDecisions.delete(key);
+    }
+  }
+
+  /** Waits (bounded) for a worker's turn and its settling to finish, so a resume never lands inside them. */
+  private async untilAgentIdle(sessionId: string): Promise<void> {
+    const busy = () => this.hasTurnInFlight(sessionId) || this.agentsSettling.has(sessionId);
+    for (let waited = 0; busy(); waited += AGENT_IDLE_POLL_MS) {
+      if (waited >= AGENT_IDLE_WAIT_MS)
+        throw new Error('The agent is still finishing its turn. Try again in a moment.');
+      await new Promise(resolve => setTimeout(resolve, AGENT_IDLE_POLL_MS));
+    }
+  }
+
   async actOnTask(callerId: string | null, sessionId: string, value: TaskAction): Promise<ChatSessionSummary> {
     const action = taskActionSchema.parse(value);
     const scope = this.deps.store.scopeKey();
@@ -2051,10 +2270,7 @@ export class ChatService {
         )
           return summarizeSession(child);
         if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
-        next = {
-          ...task,
-          state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,
-        };
+        next = { ...task, state: reportedState(action.report) };
       } else if (action.kind === 'accept') {
         next = acceptTask(task, action.assessment);
       } else if (action.kind === 'cancel') {
@@ -2109,7 +2325,7 @@ export class ChatService {
           ],
         };
       }
-      const updated = await this.deps.store.updateWorkerTask(
+      const updated = await this.updateTask(
         sessionId,
         current => {
           if (action.kind === 'report') {
@@ -2138,7 +2354,7 @@ export class ChatService {
       if (action.kind === 'cancel') this.stop(sessionId);
       if (seed) {
         if (!child.origin) throw new Error('Task lineage is missing.');
-        await this.deps.store.updateWorkerTask(
+        await this.updateTask(
           sessionId,
           current => (current.state.status === 'canceled' ? current : { ...current, state: { status: 'running' } }),
           scope
@@ -2148,7 +2364,7 @@ export class ChatService {
         const sent = await this.send(sessionId, seed, [], { spawnSeed: true });
         if (!sent.ok) {
           this.spawnWatch.delete(sessionId);
-          await this.deps.store.updateWorkerTask(
+          await this.updateTask(
             sessionId,
             current =>
               current.state.status === 'canceled'
@@ -2545,6 +2761,7 @@ export class ChatService {
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
       this.deps.logger.warn(
@@ -2851,7 +3068,7 @@ export class ChatService {
     // turn that will not go out must not cost a summary.
     let taskClosed = reconciled.workerTask?.state.status === 'canceled';
     if (reconciled.workerTask && !options.spawnSeed && !taskClosed) {
-      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+      const updated = await this.updateTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
           : {
@@ -3019,7 +3236,7 @@ export class ChatService {
     }
     // A canceled task stays canceled: the Continue carries the conversation on, not the task.
     if (session.workerTask && session.workerTask.state.status !== 'canceled') {
-      const updated = await this.deps.store.updateWorkerTask(sessionId, task =>
+      const updated = await this.updateTask(sessionId, task =>
         task.state.status === 'canceled'
           ? task
           : {
@@ -5284,6 +5501,7 @@ export class ChatService {
         ? {
             taskAction: async (id: string, action: TaskAction) => {
               const updated = await this.actOnTask(session.id, id, action);
+              if (pendingDecisionOf(updated.workerTask) && action.kind === 'report') return DECISION_ASKED_RESULT;
               return JSON.stringify(updated.workerTask);
             },
           }
@@ -6392,7 +6610,7 @@ export class ChatService {
       if (!failure) {
         this.deps.activity?.preparingStep(child.id, 'starting');
         if (child.workerTask)
-          await this.deps.store.updateWorkerTask(child.id, task =>
+          await this.updateTask(child.id, task =>
             task.state.status === 'canceled' ? task : { ...task, state: { status: 'running' } }
           );
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
@@ -6447,7 +6665,7 @@ export class ChatService {
     const stored = await this.deps.store.get(child.id);
     if (!stored) return;
     if (stored.workerTask)
-      await this.deps.store.updateWorkerTask(child.id, task => ({
+      await this.updateTask(child.id, task => ({
         ...task,
         state: { status: 'canceled', reason: 'Stopped by the user before its first turn.' },
       }));
@@ -6539,7 +6757,7 @@ export class ChatService {
       const pending = this.deps.queue?.list(child.id) ?? [];
       const retained = !!stored.workerTask || pending.some(message => !message.automatic);
       if (stored.workerTask)
-        await this.deps.store.updateWorkerTask(child.id, task =>
+        await this.updateTask(child.id, task =>
           task.state.status === 'canceled'
             ? task
             : {
@@ -6724,7 +6942,7 @@ export class ChatService {
         child.workerTask &&
         (child.workerTask.state.status === 'running' || child.workerTask.state.status === 'queued')
       ) {
-        await this.deps.store.updateWorkerTask(sessionId, task =>
+        await this.updateTask(sessionId, task =>
           task.state.status === 'running' || task.state.status === 'queued'
             ? {
                 ...task,
@@ -6739,27 +6957,33 @@ export class ChatService {
         child = (await this.deps.store.get(sessionId)) ?? child;
       }
       this.deps.summaryChanged?.(summarizeSession(child));
-      await this.deliverChildReport(parentId, {
-        localOnly,
-        content:
-          describeChildOutcome(child) +
-          (child.workerTask
-            ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
-            : ''),
-        display: childOutcomeDisplay(child),
-      });
-      const last = [...child.messages].reverse().find(message => message.role === 'assistant');
-      await this.recordAgentSettled(parentId, {
-        sessionId,
-        title: child.title,
-        outcome: classifyChildOutcome(child),
-        // A device-local child's words never reach a hosted parent; see flushChildReports.
-        lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
-      });
+      // Waiting on the user is not settled: the parent hears once they answer and the task resumes, or skip.
+      if (!pendingDecisionOf(child.workerTask)) await this.reportSettledAgent(parentId, child, localOnly);
     } finally {
       if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
     }
     await this.wakeParentForAgents(parentId);
+  }
+
+  /** Tell the parent how a spawned session ended, and count it toward the parent's next wake. */
+  private async reportSettledAgent(parentId: string, child: ChatSession, localOnly: boolean): Promise<void> {
+    await this.deliverChildReport(parentId, {
+      localOnly,
+      content:
+        describeChildOutcome(child) +
+        (child.workerTask
+          ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
+          : ''),
+      display: childOutcomeDisplay(child),
+    });
+    const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+    await this.recordAgentSettled(parentId, {
+      sessionId: child.id,
+      title: child.title,
+      outcome: classifyChildOutcome(child),
+      // A device-local child's words never reach a hosted parent; see flushChildReports.
+      lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
+    });
   }
 
   /**
@@ -6822,12 +7046,18 @@ export class ChatService {
     return this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0;
   }
 
-  /** The synchronous half of agentStillRunning: agents with a watched turn, or a report not yet recorded. */
+  /**
+   * The synchronous half of agentStillRunning: agents with a watched turn, a report not yet
+   * recorded, or a decision waiting on the user.
+   */
   private agentRunningNow(parentId: string): boolean {
     for (const watch of this.spawnWatch.values()) {
       if (watch.parentSessionId === parentId) return true;
     }
     for (const entry of this.agentsSettling.values()) {
+      if (entry.parentId === parentId) return true;
+    }
+    for (const entry of this.decisionIndex.values()) {
       if (entry.parentId === parentId) return true;
     }
     return false;

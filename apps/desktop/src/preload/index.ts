@@ -1,4 +1,4 @@
-import type { RolePolicy, TaskAction } from '@shared/orchestration';
+import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
@@ -205,6 +205,14 @@ const api: DesktopApi = {
     setRolePolicy: (policy: RolePolicy) => ipcRenderer.invoke(IPC_CHANNELS.chatSetRolePolicy, policy),
     taskAction: (sessionId: string, action: TaskAction) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatTaskAction, sessionId, action),
+    listTaskDecisions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListTaskDecisions),
+    answerTaskDecision: (sessionId: string, decisionId: string, answer: TaskDecisionAnswer) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAnswerTaskDecision, sessionId, decisionId, answer),
+    onTaskDecisions: (listener: (decisions: PendingTaskDecision[]) => void) => {
+      const handler = (_event: unknown, decisions: PendingTaskDecision[]) => listener(decisions);
+      ipcRenderer.on(IPC_CHANNELS.chatTaskDecisions, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatTaskDecisions, handler);
+    },
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>

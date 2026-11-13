@@ -115,7 +115,11 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               data-selected={agent.id === selectedId}
             >
               <td>
-                <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
+                <AgentStateChip
+                  state={agent.state}
+                  preparing={agent.preparing !== undefined}
+                  deciding={agent.decision !== undefined}
+                />
               </td>
               <td title={agent.seedPrompt}>
                 <Typography level="body-sm" sx={{ ...clamp, pl: `${(agent.depth - 1) * INDENT_PX}px` }}>
