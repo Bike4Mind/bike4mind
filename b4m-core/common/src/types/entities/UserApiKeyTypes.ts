@@ -206,7 +206,8 @@ export enum ApiKeyScope {
   SLACK_POST = 'slack:post',
   /**
    * Manage the key owner's own API keys (`/api/user-api-keys/*`): list, create, edit, rotate and
-   * revoke them, and raise a key's rate limit. A key minted or rotated through it can carry only
+   * revoke them, and raise a key's rate limit. Rotating a key's callback signing secret
+   * (`/api/user-api-keys/[id]/callback-secret`) is not covered: that route requires `ai:generate`. A key minted or rotated through it can carry only
    * scopes the calling key already holds (the no-escalation rule in createUserApiKey and
    * rotateUserApiKey). Unsuffixed and left out of every New-Key preset, Full access included: a
    * key that can mint keys outlives its own revocation, so it is granted only by ticking it.

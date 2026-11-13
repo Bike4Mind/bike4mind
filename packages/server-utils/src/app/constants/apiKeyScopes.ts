@@ -411,6 +411,16 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set(
   )
 );
 
+/**
+ * Scopes no bulk selection grants (the profile modal's Full access preset, the admin modal's Select
+ * All): each is offered, but only ticking it adds it. `personas:mint` creates accounts, and an
+ * `api-keys:manage` key can mint its own successors, so it outlives its own revocation.
+ */
+export const EXPLICIT_ONLY_API_KEY_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set([
+  ApiKeyScope.PERSONAS_MINT,
+  ApiKeyScope.API_KEYS_MANAGE,
+]);
+
 /** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)

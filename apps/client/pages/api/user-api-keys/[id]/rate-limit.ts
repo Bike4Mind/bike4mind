@@ -35,8 +35,8 @@ interface UpdateRateLimitRequest {
  * quota: metered on the key's own quota, the escape hatch sat behind the gate
  * it opens, so a headless client holding one exhausted key had no API path
  * back until the window rolled. It changes only which counter is charged -
- * csrfProtection and the findByUserIdAndId scoping above still decide who may
- * call this.
+ * the `api-keys:manage` scope gate, csrfProtection and the findByUserIdAndId
+ * scoping above still decide who may call this.
  */
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.API_KEYS_MANAGE, ApiKeyScope.ADMIN],

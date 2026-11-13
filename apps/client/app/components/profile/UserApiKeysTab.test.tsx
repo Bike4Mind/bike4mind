@@ -783,7 +783,16 @@ describe('UserApiKeysTab - api-keys:manage', () => {
   };
   const minted = () => (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
 
-  it('leaves api-keys:manage out of every preset, Full access included', () => {
+  it.each([
+    ['Read-only (default)', undefined],
+    ['Read & write', 'readwrite'],
+  ] as const)('leaves api-keys:manage out of %s', (_label, preset) => {
+    openModal(preset);
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    expect(minted()).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+  });
+
+  it('leaves api-keys:manage out of Full access', () => {
     openModal('full');
     expect(screen.getByTestId('api-key-scope-api-keys:manage')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('api-key-create-btn'));
