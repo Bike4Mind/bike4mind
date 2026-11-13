@@ -1,4 +1,4 @@
-import { FeedbackStatus, type IFeedbackDocument } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackType, type IFeedbackDocument } from '@bike4mind/common';
 import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -50,7 +50,10 @@ export async function getSimilarFeedback(
 
   const candidates = await FeedbackModel.find({
     _id: { $ne: report._id },
-    type: report.type ?? { $exists: false },
+    type:
+      (report.type ?? FeedbackType.FEEDBACK) === FeedbackType.FEEDBACK
+        ? { $in: [FeedbackType.FEEDBACK, null] }
+        : report.type,
     status: { $in: [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] },
     createdAt: { $gte: from, $lte: now },
   })

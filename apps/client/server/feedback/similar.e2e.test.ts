@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
-import { FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackType } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { getSimilarFeedback } from './similar';
 
@@ -53,4 +53,44 @@ it('finds near-identical retained reports of the same type within 14 days withou
   expect(result.items.map(item => item.id)).toEqual([open.id, closed.id]);
   expect(result.limited).toBe(false);
   expect(audit).toHaveBeenCalledWith([source, open, closed].map(doc => ({ id: doc.id, userId: doc.userId })));
+});
+
+it('matches explicit, missing and null Feedback in both directions while isolating other types', async () => {
+  const now = new Date();
+  const content = 'The billing page repeatedly reloads when I select the annual subscription.';
+  const types = [
+    FeedbackType.FEEDBACK,
+    undefined,
+    null,
+    FeedbackType.BUG,
+    FeedbackType.THUMBS_UP,
+    FeedbackType.THUMBS_DOWN,
+  ];
+  const reports: string[] = [];
+  for (const type of types) {
+    const { insertedId } = await FeedbackModel.collection.insertOne({
+      userId: 'legacy-reporter',
+      username: 'legacy-reporter',
+      subject: 'product',
+      ...(type === undefined ? {} : { type }),
+      status: FeedbackStatus.New,
+      contentStored: true,
+      createdAt: now,
+    });
+    await FeedbackTextModel.create({
+      _id: insertedId,
+      content,
+      expiresAt: new Date(now.getTime() + 86400000),
+    });
+    reports.push(String(insertedId));
+  }
+  for (const [index, id] of reports.entries()) {
+    const result = await getSimilarFeedback(id, {
+      canRead: () => true,
+      audit: vi.fn().mockResolvedValue(undefined),
+      now,
+    });
+    const expected = index < 3 ? reports.slice(0, 3).filter(candidate => candidate !== id) : [];
+    expect(result.items.map(item => item.id).sort()).toEqual(expected.sort());
+  }
 });

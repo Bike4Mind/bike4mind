@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
-import { ApiKeyScope } from '@bike4mind/common';
 const mocks = vi.hoisted(() => ({
   handler: null as null | ((req: Request, res: Response) => Promise<unknown>),
   options: vi.fn(),
@@ -33,7 +32,7 @@ beforeEach(() => {
 it('requires moderation permission and delegates instance authorization and awaited read audit', async () => {
   expect(mocks.options).toHaveBeenCalledWith({
     adminPermissions: { GET: 'users:moderate' },
-    requiredScopes: [ApiKeyScope.ADMIN],
+    auth: 'jwtOnly',
   });
   const { req, res } = createMocks<Request, Response>({ method: 'GET', query: { id: '507f1f77bcf86cd799439011' } });
   const can = vi.fn().mockReturnValue(true);
