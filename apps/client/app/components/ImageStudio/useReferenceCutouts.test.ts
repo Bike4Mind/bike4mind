@@ -79,7 +79,7 @@ describe('useReferenceCutouts', () => {
     );
   });
 
-  it('drops the reply for a cutout turned off before it arrived', async () => {
+  it('hides a cutout turned off before its reply arrived, and reuses that job when turned back on', async () => {
     let resolve: (job: StudioImageJob) => void = () => {};
     h.mutateAsync.mockReturnValue(new Promise<StudioImageJob>(done => (resolve = done)));
     const { result } = renderHook(() => useReferenceCutouts());
@@ -88,5 +88,38 @@ describe('useReferenceCutouts', () => {
     act(() => result.current.toggleCutout('file-1', false));
     await act(async () => resolve(cutoutJob({})));
     expect(result.current.cutoutOf('file-1')).toBeUndefined();
+
+    act(() => result.current.toggleCutout('file-1', true));
+    expect(result.current.cutoutOf('file-1')).toEqual({ status: 'pending' });
+    expect(h.mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a ready cutout when the switch is flipped off and on, without charging again', async () => {
+    h.mutateAsync.mockResolvedValue(cutoutJob({}));
+    const { result, rerender } = renderHook(() => useReferenceCutouts());
+    await act(async () => result.current.toggleCutout('file-1', true));
+    h.jobs = [cutoutJob({ state: 'succeeded', output: { fileId: 'cutout-1', contentType: 'image/png', bytes: 1 } })];
+    rerender();
+    await waitFor(() => expect(result.current.cutoutOf('file-1')).toEqual({ status: 'ready', fileId: 'cutout-1' }));
+
+    act(() => result.current.toggleCutout('file-1', false));
+    expect(result.current.cutoutOf('file-1')).toBeUndefined();
+    act(() => result.current.toggleCutout('file-1', true));
+
+    expect(result.current.cutoutOf('file-1')).toEqual({ status: 'ready', fileId: 'cutout-1' });
+    expect(h.mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failed cutout when it is turned back on', async () => {
+    h.mutateAsync.mockRejectedValueOnce(new Error('422')).mockResolvedValueOnce(cutoutJob({}));
+    const { result } = renderHook(() => useReferenceCutouts());
+    act(() => result.current.toggleCutout('file-1', true));
+    await waitFor(() => expect(result.current.cutoutOf('file-1')?.status).toBe('failed'));
+
+    act(() => result.current.toggleCutout('file-1', false));
+    act(() => result.current.toggleCutout('file-1', true));
+
+    expect(h.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(result.current.cutoutOf('file-1')).toEqual({ status: 'pending' });
   });
 });

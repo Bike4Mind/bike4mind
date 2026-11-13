@@ -9,11 +9,13 @@ import { latchSettledCutouts, resolveCutout, type CutoutRequest } from './refere
 
 /**
  * Background removal per reference, keyed by the original's file id. Turning it on starts a credit-charged cutout
- * job; turning it off forgets it here (the cutout stays in Files). The job's progress is read from the gallery list,
- * which the socket keeps current, so there is no second poller; a terminal outcome is latched here once seen.
+ * job; turning it off only stops using it, so turning it back on reuses a cutout that is running or ready instead of
+ * paying again. Only a failed or refused one is retried. The job's progress is read from the gallery list, which the
+ * socket keeps current, so there is no second poller; a terminal outcome is latched here once seen.
  */
 export function useReferenceCutouts() {
   const [requests, setRequests] = useState<Record<string, CutoutRequest>>({});
+  const [enabled, setEnabled] = useState<ReadonlySet<string>>(() => new Set());
   const attempts = useRef(0);
   const createCutout = useCreateStudioImageCutout();
   const jobs = useStudioImageJobs();
@@ -31,12 +33,6 @@ export function useReferenceCutouts() {
     setRequests(current => latchSettledCutouts(current, jobsById));
   }
 
-  const setRequest = (fileId: string, request: CutoutRequest | undefined) =>
-    setRequests(current => {
-      const { [fileId]: _dropped, ...rest } = current;
-      return request ? { ...rest, [fileId]: request } : rest;
-    });
-
   const settleRequest = (fileId: string, attempt: number, request: CutoutRequest) =>
     setRequests(current => {
       const pending = current[fileId];
@@ -45,11 +41,29 @@ export function useReferenceCutouts() {
         : current;
     });
 
+  const resolvedCutout = (fileId: string): ReferenceCutout | undefined => {
+    const request = requests[fileId];
+    if (!request) return undefined;
+    return resolveCutout(request, request.status === 'started' ? jobsById.get(request.jobId) : undefined);
+  };
+
+  const setCutoutEnabled = (fileId: string, on: boolean) =>
+    setEnabled(current => {
+      if (current.has(fileId) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(fileId);
+      else next.delete(fileId);
+      return next;
+    });
+
   const toggleCutout = (fileId: string, on: boolean) => {
-    if (!on) return setRequest(fileId, undefined);
+    setCutoutEnabled(fileId, on);
+    if (!on) return;
+    const existing = resolvedCutout(fileId);
+    if (existing && existing.status !== 'failed') return;
     attempts.current += 1;
     const attempt = attempts.current;
-    setRequest(fileId, { status: 'starting', attempt });
+    setRequests(current => ({ ...current, [fileId]: { status: 'starting', attempt } }));
     createCutout.mutateAsync(fileId).then(
       job => settleRequest(fileId, attempt, { status: 'started', jobId: job.id }),
       (error: unknown) =>
@@ -57,11 +71,8 @@ export function useReferenceCutouts() {
     );
   };
 
-  const cutoutOf = (fileId: string): ReferenceCutout | undefined => {
-    const request = requests[fileId];
-    if (!request) return undefined;
-    return resolveCutout(request, request.status === 'started' ? jobsById.get(request.jobId) : undefined);
-  };
+  const cutoutOf = (fileId: string): ReferenceCutout | undefined =>
+    enabled.has(fileId) ? resolvedCutout(fileId) : undefined;
 
   return { cutoutOf, toggleCutout };
 }
