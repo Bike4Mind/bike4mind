@@ -134,7 +134,13 @@ export function registerModels(
     privateFile(join(app.getPath('userData'), 'hugging-face-token.json')),
     logger
   );
-  void tokens.reencrypt().catch(() => logger.warn('Models: could not re-save the Hugging Face token'));
+  void tokens
+    .reencrypt()
+    .catch(error =>
+      logger.warn(
+        `Models: could not re-save the Hugging Face token: ${error instanceof Error ? error.name : 'unknown'}`
+      )
+    );
   let blocker: number | null = null;
   const source = curatedSource(() => send(IPC_CHANNELS.modelsCuratedChanged));
   const service = new ModelHubService({

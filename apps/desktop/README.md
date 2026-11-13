@@ -875,7 +875,9 @@ token.
   reads the other's format.
   The trade-off: the item trusts `/usr/bin/security` rather than the app, so any process running
   as the same user can read the key without a prompt. Developer ID builds keep `safeStorage`,
-  whose item only the app itself reads silently.
+  whose item only the app itself reads silently. A build from before this change cannot read the
+  new format: moving back to one signs the user out and leaves stored MCP and model-server
+  secrets unreadable until they are entered again.
 - **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
   the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
   sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
