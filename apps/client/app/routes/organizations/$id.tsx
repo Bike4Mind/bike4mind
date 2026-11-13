@@ -10,12 +10,18 @@ import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
+import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
+import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
+import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
+import { isAxiosError } from 'axios';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
@@ -29,6 +35,7 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Avatar,
+  Alert,
   Box,
   Button,
   Card,
@@ -54,23 +61,25 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
+  canViewOrgAudit,
   OrganizationTabs,
   resolveAccessibleTab,
 } from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { FC, useMemo } from 'react';
+import { FC, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const OrganizationPage: FC = () => {
   const { t } = useTranslation();
   const { id } = useParams({ strict: false });
-  const { data: organization, isLoading } = useGetOrganization(id as string);
+  const { data: organization, isLoading, isError, error, refetch } = useGetOrganization(id as string);
   const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
@@ -106,6 +115,7 @@ const OrganizationPage: FC = () => {
   // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
   // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
+  const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
   const canManageIntegrations = useMemo(
     () => canManageOrgIntegrations(currentUser, organization),
@@ -142,6 +152,7 @@ const OrganizationPage: FC = () => {
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
   const selectedTab = resolveAccessibleTab(requestedTab, {
+    canViewAudit,
     canManageOrg,
     canViewUsage,
     canViewAnalysis,
@@ -152,6 +163,40 @@ const OrganizationPage: FC = () => {
   });
 
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
+
+  useEffect(() => {
+    if (organization && !isError && currentUser) rememberTeam(currentUser.id, organization.id);
+  }, [organization, isError, currentUser]);
+
+  if (isError || (!isLoading && !organization)) {
+    const status = isAxiosError(error) ? error.response?.status : undefined;
+    const knownTeam = currentUser && readTeamPreference(recentTeamsKey(currentUser.id)).includes(id as string);
+    const unavailable = status === 400 || status === 404 || !error;
+    return (
+      <Stack spacing={2} alignItems="center" sx={{ p: 4 }} role="alert" data-testid="organization-error-state">
+        <Typography level="h2">
+          {status === 403 || (unavailable && knownTeam)
+            ? 'You no longer have access'
+            : unavailable
+              ? 'Team not found'
+              : 'Could not load team'}
+        </Typography>
+        <Typography>
+          {unavailable
+            ? 'This team may have been removed or is not available to your account.'
+            : 'Please try again or return to your teams.'}
+        </Typography>
+        {!unavailable && status !== 403 && (
+          <Button onClick={() => refetch()} data-testid="organization-retry-btn">
+            Retry
+          </Button>
+        )}
+        <Button onClick={() => navigate({ to: '/organizations' })} data-testid="organization-back-btn">
+          All teams
+        </Button>
+      </Stack>
+    );
+  }
 
   return isLoading || !organization ? (
     <Box display="flex" justifyContent="center" alignItems="center" height="100%" width="100%">
@@ -178,6 +223,12 @@ const OrganizationPage: FC = () => {
       })}
     >
       <Box sx={{ mx: '24px' }}>
+        {currentUser?.id === organization.userId &&
+          new URLSearchParams(window.location.search).get('team_created') === 'true' && (
+            <Alert color="success" sx={{ mb: 2 }} data-testid="organization-created-confirmation">
+              Team created successfully! Get started with the checklist below.
+            </Alert>
+          )}
         <Breadcrumbs
           items={[{ name: t('organization.organizations'), href: '/organizations' }, { name: organization.name }]}
         />
@@ -272,16 +323,40 @@ const OrganizationPage: FC = () => {
                 {t('organization.tabs.connectors')}
               </Tab>
             )}
+            {canManageConnectors && (
+              <Tab value={OrganizationTabs.ApiKeys} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <KeyOutlinedIcon sx={{ fontSize: 16 }} />
+                API Keys
+              </Tab>
+            )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
                 {t('organization.tabs.settings')}
               </Tab>
             )}
+            {canViewAudit && (
+              <Tab value={OrganizationTabs.Audit} data-testid="organization-audit-tab">
+                Audit
+              </Tab>
+            )}
           </TabList>
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
+            {canViewAudit && selectedTab === OrganizationTabs.Audit && (
+              <TabPanel value={OrganizationTabs.Audit}>
+                <OrganizationAuditSection key={organization.id} organizationId={organization.id} />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Overview}>
+              {currentUser?.id === organization.userId && !organization.personal && (
+                <TeamOnboardingChecklist
+                  key={`${currentUser.id}:${organization.id}`}
+                  organization={organization}
+                  userId={currentUser.id}
+                  onOpen={requestTab}
+                />
+              )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
@@ -347,6 +422,18 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.connectors')}
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageConnectors && (
+              <TabPanel value={OrganizationTabs.ApiKeys}>
+                <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
+                  API Keys
+                </Typography>
+                <OrgApiKeysSection key={organization.id} organizationId={organization.id} />
+                <Typography level="title-md" sx={{ mt: 4, mb: 2 }}>
+                  Member API keys
+                </Typography>
+                <OrgMemberApiKeysSection key={`members-${organization.id}`} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageOrg && (

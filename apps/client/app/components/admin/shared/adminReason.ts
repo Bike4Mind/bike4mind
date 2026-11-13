@@ -42,6 +42,7 @@ export const ADMIN_REASON_PRESETS = {
     'Copyright or trademark claim',
     'Spam or junk content',
   ],
+  appFileDelete: ['Outdated or replaced file', 'Uploaded in error', 'No longer used on the site'],
   publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
@@ -54,6 +55,11 @@ export const ADMIN_REASON_PRESETS = {
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
   deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
   deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
+  dataSubjectExport: [
+    'Access request from the user (GDPR Art. 15)',
+    'Portability request from the user (GDPR Art. 20)',
+    'Request from a legal authority',
+  ],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
@@ -112,6 +118,7 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;

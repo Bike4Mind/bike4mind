@@ -12,12 +12,14 @@ import { MemberCreditUsage } from './memberCreditBudget';
 
 const setOverride = vi.fn();
 const setManager = vi.fn();
+const resend = vi.fn();
 const viewer = vi.hoisted(() => ({ id: 'viewer' }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
   useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
   useSetOrganizationManager: () => ({ mutate: setManager, isPending: false }),
+  useResendOrganizationInvite: () => ({ mutate: resend, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
@@ -27,6 +29,11 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
+vi.mock('./OffboardMemberDialog', () => ({
+  default: ({ member }: { member: { id: string } | null }) =>
+    member ? <div data-testid="offboard-dialog" data-member-id={member.id} /> : null,
+}));
+
 // A real i18next over en.json, so the chip assertions pin the wording users see.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t }) }));
@@ -158,6 +165,14 @@ describe('OrganizationUserCard roster actions', () => {
     expect(await screen.findByTestId('organization-user-card-revoke-access')).toBeTruthy();
   });
 
+  it('opens the offboarding dialog for that member instead of a plain confirm', async () => {
+    renderCard(accepted(), false, { invite: false, revoke: true });
+    expect(screen.queryByTestId('offboard-dialog')).toBeNull();
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-revoke-access'));
+    expect(screen.getByTestId('offboard-dialog').getAttribute('data-member-id')).toBe('a');
+  });
+
   it('withholds Revoke Access from a viewer who may only invite', () => {
     renderCard(accepted(), false, { invite: true, revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
@@ -167,6 +182,15 @@ describe('OrganizationUserCard roster actions', () => {
     renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
     openMenu();
     expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
+  });
+
+  it('resends a pending invite by user id', async () => {
+    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
+    openMenu();
+    const resendAction = await screen.findByTestId('organization-user-card-resend-invite');
+    expect(resendAction.getAttribute('aria-label')).toContain('Resend invitation to ');
+    fireEvent.click(resendAction);
+    expect(resend).toHaveBeenCalledWith({ userId: 'p' });
   });
 
   it('withholds Cancel Invite from a viewer who may only revoke', () => {

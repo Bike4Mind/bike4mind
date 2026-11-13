@@ -8,23 +8,24 @@ name: SST / infra preview gate
 #
 # The trusted trigger has no path filter and decides applicability internally, so
 # that as a required check it reports success on unrelated PRs instead of
-# hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
-# deployer adds/removes the label.
+# hanging pending. Label changes do not start a run here: a job-level filter on the
+# label name is not an option (a skipped required check counts as passing), and
+# every review-state swap would cost a run. sst-infra-preview-gate-relay.yml
+# re-runs the head's latest run when `preview-deployed` or `skip-preview` moves.
 
 # Label cleanup needs a write token on fork PRs. This workflow reads metadata only;
 # never check out or execute the PR head here.
 on:
   # Validate edits to this workflow before its trusted trigger is present on the base branch.
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
     paths: ['.github/workflows/sst-infra-preview-gate.yml']
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
-# A label swap - one label removed and another added in the same instant - emits
-# `unlabeled` and `labeled` together, which starts two identical runs on the same SHA.
-# Keyed per PR so they serialize, and on the PR specifically because a constant key
-# would let one PR cancel another.
+# A reopen right after a push, or a relay re-run beside a fresh push run, can put two
+# runs on the same PR at once. Keyed per PR so they serialize, and on the PR
+# specifically because a constant key would let one PR cancel another.
 #
 # NOT cancel-in-progress. Cancelling the twin saves the minutes but leaves a CANCELLED
 # check run behind, and as a required check GitHub can read that as the current verdict
@@ -42,9 +43,13 @@ jobs:
   preview-gate:
     name: preview gate
     if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # API-only required check; keep it off the pool that CI fan-out saturates.
+    runs-on: ${{ vars.RUNNER_LABEL_LIGHT || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Expire preview waiver on push
+        # A relay re-run replays the original payload. Only the first attempt may expire
+        # the waiver, or re-running after a maintainer sets skip-preview would remove it.
+        if: github.run_attempt == 1
         uses: actions/github-script@v8
         with:
           script: |
@@ -155,7 +160,7 @@ jobs:
           preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
 
           # Maintainers use skip-preview for non-deployment changes. A fresh waiver
-          # is required after every push; labeled events re-evaluate the gate.
+          # is required after every push; the relay re-runs the gate when it moves.
           if grep -qx 'skip-preview' <<< "$preview_labels"; then
             echo "::notice title=Preview skipped::'skip-preview' label is set. Gate satisfied without a preview deploy."
             exit 0

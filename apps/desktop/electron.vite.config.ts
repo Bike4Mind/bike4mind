@@ -63,7 +63,10 @@ function copyManifoldEngine(): Plugin {
  * variable through as ''. It does not for the others: an explicit '' is how the ad-hoc macOS
  * build in desktop-release.yml switches updates off.
  */
-function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_CURATED_MANIFEST_URL'): string {
+function baked(
+  mode: string,
+  name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_UPDATE_PUBLIC_KEYS' | 'B4M_CURATED_MANIFEST_URL'
+): string {
   const shell = process.env[name];
   if (shell !== undefined && (shell !== '' || name !== 'B4M_DEFAULT_API_URL')) return shell;
   // loadEnv lets a prefixed shell value override the file's even when that value is empty.
@@ -111,6 +114,8 @@ export default defineConfig(({ mode }) => {
           baked(mode, 'B4M_DEFAULT_API_URL') || (mode === 'development' ? '' : PRODUCTION_API_URL)
         ),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
+        // The keys the feed's manifest signatures must verify under; empty keeps unsigned manifests.
+        'process.env.B4M_UPDATE_PUBLIC_KEYS': JSON.stringify(baked(mode, 'B4M_UPDATE_PUBLIC_KEYS')),
         'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
         __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),
       },

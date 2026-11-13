@@ -241,7 +241,7 @@
   },
   "apps/client/app/components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 2
     }
   },
   "apps/client/app/components/Project/AddMembersModal.tsx": {
@@ -501,7 +501,7 @@
   },
   "apps/client/app/components/admin/FilesTab/index.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/client/app/components/admin/IdentityProvidersTab.tsx": {
@@ -782,11 +782,6 @@
   "apps/client/app/hooks/data/inbox.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/client/app/hooks/data/llmModelConfig.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/app/hooks/data/mfa.ts": {
@@ -1218,11 +1213,6 @@
   "apps/client/pages/api/admin/liveops-triage-configs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/llm-models/configurations.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 6
     }
   },
   "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {

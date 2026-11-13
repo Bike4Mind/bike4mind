@@ -484,13 +484,20 @@ export interface IUser extends ICreditHolder {
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
-  accountDataExportLease?: { id: string; expiresAt: Date };
+  /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
+  accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
    * Queries for human users must use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
    */
   isSystem?: boolean;
+  /**
+   * Set only on an organization's service account (an `isSystem` user that owns the org's API keys,
+   * see constants/orgServiceAccount.ts). Binds the account to that one org; it never sits on the
+   * org's `users[]` roster, so it takes no seat and is not listed as a member.
+   */
+  serviceAccountOrganizationId?: string;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -914,6 +921,27 @@ export interface IUser extends ICreditHolder {
    */
   isInternal?: boolean;
 
+  /**
+   * Minted through POST /api/v1/personas, never through signup. Only these accounts can be deleted
+   * through the persona routes, and the expiry sweep disables them at `personaExpiresAt`.
+   */
+  isPersona?: boolean;
+
+  /** When the persona expiry sweep disables this persona account; set only on persona accounts. */
+  personaExpiresAt?: Date | null;
+
+  /** The name the persona was minted under; a re-mint of a live name returns this account. */
+  personaName?: string | null;
+
+  /** The user who minted this persona; only they (or an admin) may re-mint or delete it. */
+  personaOwnerId?: string | null;
+
+  /** SHA-256 of the persona's single-use login code. Secret: never serialized. */
+  personaLoginCodeHash?: string | null;
+
+  /** When the persona's login code stops being redeemable. */
+  personaLoginCodeExpiresAt?: Date | null;
+
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
 }
@@ -1115,6 +1143,12 @@ export interface IUserRepository
    * it, so a recalculated absolute value never overwrites an adjustment it did not see.
    */
   setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /**
+   * Sets `planStorageLimit` and re-derives the enforced `storageLimit` in one write, so a manual
+   * `storageLimitOverride` keeps winning (same precedence as resolveUserStorageLimit). A row without the
+   * override field first gets its legacy-derived override written. False when the user does not exist.
+   */
+  setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

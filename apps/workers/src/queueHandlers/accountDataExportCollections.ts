@@ -55,13 +55,17 @@ export const ACCOUNT_ARCHIVE_METADATA_MODELS = [
   'UserUsagePatternSignals',
   'AdminUserNote',
   'AdminUserNoteRevision',
+  'FeedbackNote',
   'ActiveCodeAgent',
   'CodeAgentEvent',
   'SessionAgentConfig',
   'SessionToolApproval',
 ] as const;
 
-const ownerIds = (userId: string) => ({ userId: { $in: [userId, new mongoose.Types.ObjectId(userId)] } });
+const ownerIds = (userId: string) => {
+  const objectId = new mongoose.Types.ObjectId(userId);
+  return { userId: { $in: [userId, objectId.toHexString(), objectId] } };
+};
 const ownerOnly = new Set<string>([
   'AuthSession',
   'TrustedDevice',
@@ -81,6 +85,7 @@ const ownerOnly = new Set<string>([
   'UserUsagePatternSignals',
   'AdminUserNote',
   'AdminUserNoteRevision',
+  'FeedbackNote',
   'ActiveCodeAgent',
   'CodeAgentEvent',
   'SessionAgentConfig',

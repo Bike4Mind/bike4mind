@@ -62,14 +62,14 @@ const ROW: TutorialModuleOverrideRow = {
 const renderEditor = (row: TutorialModuleOverrideRow = ROW, onDirtyChange?: (dirty: boolean) => void) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <TutorialOverrideEditor apiBase={BASE} row={row} choices={CHOICES} onDirtyChange={onDirtyChange} />
+      <TutorialOverrideEditor apiBase={BASE} owner="core" row={row} choices={CHOICES} onDirtyChange={onDirtyChange} />
     </CssVarsProvider>
   );
 
 const rerenderRow = (view: ReturnType<typeof renderEditor>, row: TutorialModuleOverrideRow) =>
   view.rerender(
     <CssVarsProvider theme={appTheme}>
-      <TutorialOverrideEditor apiBase={BASE} row={row} choices={CHOICES} />
+      <TutorialOverrideEditor apiBase={BASE} owner="core" row={row} choices={CHOICES} />
     </CssVarsProvider>
   );
 
@@ -210,7 +210,12 @@ describe('TutorialOverrideEditor', () => {
     const others = [{ kind: 'reply' as const, turn: 1, value: 'Theirs.', repoValue: 'Second reply.' }];
     view.rerender(
       <CssVarsProvider theme={appTheme}>
-        <TutorialOverrideEditor apiBase={BASE} row={{ ...ROW, contentSeq: 5, fields: others }} choices={CHOICES} />
+        <TutorialOverrideEditor
+          apiBase={BASE}
+          owner="core"
+          row={{ ...ROW, contentSeq: 5, fields: others }}
+          choices={CHOICES}
+        />
       </CssVarsProvider>
     );
     fireEvent.click(save());
@@ -225,6 +230,7 @@ describe('TutorialOverrideEditor', () => {
       <CssVarsProvider theme={appTheme}>
         <TutorialOverrideEditor
           apiBase={BASE}
+          owner="core"
           row={{ ...ROW, contentSeq: 5, fields: others }}
           choices={CHOICES}
           onDirtyChange={onDirtyChange}
@@ -265,6 +271,7 @@ describe('TutorialOverrideEditor', () => {
       <CssVarsProvider theme={appTheme}>
         <TutorialOverrideEditor
           apiBase={BASE}
+          owner="core"
           row={{ ...ROW, contentSeq: 5, fields: others }}
           choices={CHOICES}
           onDirtyChange={onDirtyChange}
@@ -365,6 +372,7 @@ describe('TutorialOverrideEditor', () => {
     const bundle = JSON.parse(await blobs[0].text());
     expect(bundle).toMatchObject({
       format: 'tutorial-overrides/1',
+      owner: 'core',
       moduleId: 'alpha',
       version: 8,
       revision: 2,

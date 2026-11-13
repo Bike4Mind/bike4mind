@@ -11,6 +11,9 @@ public final class NewConversationViewModel {
   public private(set) var failure: APIError?
   /// The server's reason when it recorded the turn as refused up front (out of credits, spend cap).
   public private(set) var refusal: String?
+  /// The turn the last successful send started, for the new session's screen to show before its
+  /// transcript loads.
+  public private(set) var startedTurn: QuestTurn?
 
   @ObservationIgnored private let api: any B4MAPI
   @ObservationIgnored private let activities: (any QuestActivityTracking)?
@@ -50,6 +53,8 @@ public final class NewConversationViewModel {
         return nil
       }
       draft = ""
+      startedTurn = QuestTurn(
+        id: receipt.questID, prompt: text, reply: nil, status: .pending, kind: .message, createdAt: now())
       activities?.questStarted(
         QuestActivityStart(
           questID: receipt.questID, sessionID: sessionID, title: QuestActivityTitle.fromPrompt(text),

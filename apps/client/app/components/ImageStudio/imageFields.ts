@@ -1,9 +1,18 @@
-import { IMAGE_JOB_PROMPT_MAX_CHARS, type ImageModels, type OpenAIImageQuality } from '@bike4mind/common';
+import {
+  IMAGE_JOB_PROMPT_MAX_CHARS,
+  SCENE_PRESETS,
+  SCENE_SWATCHES,
+  appliedScenePreset,
+  applyScenePreset,
+  type ImageModels,
+  type OpenAIImageQuality,
+} from '@bike4mind/common';
 import {
   withCurrentValue,
   type CapabilityControl,
   type CapabilityField,
   type CapabilityOption,
+  type ChipsField,
 } from '@client/app/components/Studio/capabilityFields';
 import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
 import {
@@ -135,6 +144,37 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
   return fields;
 };
 
+/**
+ * The scene presets as chips. The selected chip is read from the prompt itself, so editing a preset's words away
+ * clears it; picking one adds its words to the user's own. A chip whose words would not fit in the prompt is disabled.
+ */
+const lookField = (prompt: string, actions: ImageFieldActions): ChipsField => {
+  const promptWith = (presetId: string | null) =>
+    applyScenePreset(
+      prompt,
+      SCENE_PRESETS.find(preset => preset.id === presetId)
+    );
+  const fits = (next: string) => next.length <= IMAGE_JOB_PROMPT_MAX_CHARS;
+  const selected = appliedScenePreset(prompt)?.id ?? null;
+
+  return {
+    kind: 'chips',
+    id: 'look',
+    label: 'Look',
+    value: selected,
+    options: SCENE_PRESETS.map(preset => ({
+      value: preset.id,
+      label: preset.name,
+      swatch: SCENE_SWATCHES[preset.swatch],
+      disabled: preset.id !== selected && !fits(promptWith(preset.id)),
+    })),
+    onChange: presetId => {
+      const next = promptWith(presetId);
+      if (fits(next)) actions.update({ prompt: next });
+    },
+  };
+};
+
 /** The image Create controls for the selected model, in display order. */
 export function imageCapabilityFields(
   model: ImageModels,
@@ -151,6 +191,7 @@ export function imageCapabilityFields(
       maxLength: IMAGE_JOB_PROMPT_MAX_CHARS,
       onChange: prompt => actions.update({ prompt }),
     },
+    lookField(form.prompt, actions),
     ...settingFields(model, form.intent, actions),
     {
       kind: 'segmented',

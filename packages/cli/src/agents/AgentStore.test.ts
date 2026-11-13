@@ -183,19 +183,19 @@ describe('MODEL_ALIASES', () => {
   describe('Anthropic/Claude aliases', () => {
     it('should map short aliases to full model IDs', () => {
       expect(MODEL_ALIASES['opus']).toBe('claude-opus-4-8');
-      expect(MODEL_ALIASES['sonnet']).toBe('claude-sonnet-4-5-20250929');
+      expect(MODEL_ALIASES['sonnet']).toBe('claude-sonnet-5-5');
       expect(MODEL_ALIASES['haiku']).toBe('claude-haiku-4-5-20251001');
     });
 
     it('should map claude-prefixed aliases', () => {
       expect(MODEL_ALIASES['claude-opus']).toBe('claude-opus-4-8');
-      expect(MODEL_ALIASES['claude-sonnet']).toBe('claude-sonnet-4-5-20250929');
+      expect(MODEL_ALIASES['claude-sonnet']).toBe('claude-sonnet-5-5');
       expect(MODEL_ALIASES['claude-haiku']).toBe('claude-haiku-4-5-20251001');
     });
 
     it('should map version-specific Claude aliases', () => {
       expect(MODEL_ALIASES['claude-4.5-opus']).toBe('claude-opus-4-5-20251101');
-      expect(MODEL_ALIASES['claude-3.5-sonnet']).toBe('claude-sonnet-4-5-20250929');
+      expect(MODEL_ALIASES['claude-3.5-sonnet']).toBe('claude-sonnet-5-5');
       expect(MODEL_ALIASES['claude-4.8-opus']).toBe('claude-opus-4-8');
       expect(MODEL_ALIASES['claude-3-opus']).toBe('claude-opus-4-8');
     });
@@ -263,7 +263,7 @@ describe('resolveModelAlias', () => {
   describe('alias resolution', () => {
     it('should resolve known aliases to full model IDs', () => {
       expect(resolveModelAlias('opus', testAgent, testPath).model).toBe('claude-opus-4-8');
-      expect(resolveModelAlias('sonnet', testAgent, testPath).model).toBe('claude-sonnet-4-5-20250929');
+      expect(resolveModelAlias('sonnet', testAgent, testPath).model).toBe('claude-sonnet-5-5');
       expect(resolveModelAlias('haiku', testAgent, testPath).model).toBe('claude-haiku-4-5-20251001');
     });
 
@@ -279,7 +279,7 @@ describe('resolveModelAlias', () => {
 
     it('should be case-insensitive for aliases', () => {
       expect(resolveModelAlias('OPUS', testAgent, testPath).model).toBe('claude-opus-4-8');
-      expect(resolveModelAlias('Sonnet', testAgent, testPath).model).toBe('claude-sonnet-4-5-20250929');
+      expect(resolveModelAlias('Sonnet', testAgent, testPath).model).toBe('claude-sonnet-5-5');
       expect(resolveModelAlias('HaIkU', testAgent, testPath).model).toBe('claude-haiku-4-5-20251001');
     });
 

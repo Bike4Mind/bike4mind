@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 const { authorizeByInviteType } = vi.hoisted(() => ({ authorizeByInviteType: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { authorizeByInviteType } }));
 
-import { canViewInvite, filterInviteRecipientsToSelf, omitInviteToken } from './inviteManager';
+import { canViewInvite, filterInviteRecipientsToSelf, omitInviteToken, toSharerInviteViews } from './inviteManager';
 
 const baseInvite = () => ({
   id: 'inv1',
@@ -145,6 +145,22 @@ describe('canViewInvite', () => {
 
   it('tolerates a link invite with no recipients object at all', async () => {
     await expect(canViewInvite(user, linkInvite({ recipients: undefined }))).resolves.toBe('allowed');
+  });
+
+  it('reports a revoked organization share link as revoked, not as exhausted', async () => {
+    const revoked = linkInvite({ type: 'Organization', isLinkOnly: true, remaining: 0, revokedAt: past() });
+    await expect(canViewInvite(user, revoked)).resolves.toBe('revoked');
+  });
+
+  it('keeps allowedDomains and revokedAt on both invite views', async () => {
+    const revokedAt = past();
+    const invite = linkInvite({ type: 'Organization', isLinkOnly: true, allowedDomains: ['example.com'], revokedAt });
+    expect(filterInviteRecipientsToSelf(invite, 'viewer@x.com')).toMatchObject({
+      allowedDomains: ['example.com'],
+      revokedAt,
+    });
+    const [view] = await toSharerInviteViews([invite], { id: 'admin', email: 'a@x.com', isAdmin: true });
+    expect(view).toMatchObject({ allowedDomains: ['example.com'], revokedAt });
   });
 
   it('refuses an exhausted link invite', async () => {

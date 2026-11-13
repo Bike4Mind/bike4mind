@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
+import { useResendOrganizationInvite } from '@client/app/hooks/data/organizations';
 import { getAppFileUrl } from '@client/app/utils/s3';
 import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, Chip, Typography } from '@mui/joy';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -17,13 +18,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
-  useRemoveMemberFromOrganization,
   useLeaveOrganization,
   useSetMemberCreditOverride,
   useSetOrganizationManager,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import CreditLimitModal from './CreditLimitModal';
+import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 
 interface OrganizationUserCardProps {
@@ -59,6 +60,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const { id: organizationId } = organization;
   const queryClient = useQueryClient();
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
+  const resendInvite = useResendOrganizationInvite(organizationId);
   const { mutateAsync: cancelInvite } = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId, 'pending'] });
@@ -71,7 +73,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   });
   const isOwner = user?.id === organization.userId;
   const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
-  const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
@@ -110,19 +111,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       )}
     </Stack>
   );
-  const handleRemoveMember = useCallback(
-    async (userId: string) => {
-      confirm({
-        title: 'Remove Member',
-        description: 'Are you sure you want to remove this member?',
-        type: 'danger',
-        onOk: async () => {
-          await removeMember({ organizationId, userId });
-        },
-      });
-    },
-    [organizationId, confirm, removeMember]
-  );
+  const [offboarding, setOffboarding] = useState(false);
+  const handleRemoveMember = useCallback(() => setOffboarding(true), []);
 
   const handleLeaveOrganization = useCallback(async () => {
     confirm({
@@ -197,6 +187,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         )}
         {!isOwner && canCancelInvite && (
           <MenuItem
+            onClick={() => resendInvite.mutate({ userId: user.id })}
+            disabled={resendInvite.isPending}
+            data-testid="organization-user-card-resend-invite"
+            aria-label={`Resend invitation to ${user.name || user.username || user.id}`}
+          >
+            Resend Invite
+          </MenuItem>
+        )}
+        {!isOwner && canCancelInvite && (
+          <MenuItem
             onClick={() =>
               confirm({
                 title: 'Cancel Invite',
@@ -218,7 +218,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           </MenuItem>
         )}
         {!isOwner && canRevoke && (
-          <MenuItem onClick={() => handleRemoveMember(user.id)} data-testid="organization-user-card-revoke-access">
+          <MenuItem onClick={handleRemoveMember} data-testid="organization-user-card-revoke-access">
             Revoke Access
           </MenuItem>
         )}
@@ -229,6 +229,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         )}
       </Menu>
     </Dropdown>
+  );
+
+  const offboardDialog = canRevoke && (
+    <OffboardMemberDialog
+      organizationId={organizationId}
+      member={offboarding ? { id: user.id, name: user.name } : null}
+      onClose={() => setOffboarding(false)}
+    />
   );
 
   const creditLimitModal = canSetCreditLimit && (
@@ -284,6 +292,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
         </Stack>
         {creditLimitModal}
+        {offboardDialog}
       </Box>
     );
   }
@@ -335,6 +344,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {actionsMenu}
       </Box>
       {creditLimitModal}
+      {offboardDialog}
     </Box>
   );
 };
