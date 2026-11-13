@@ -37,6 +37,10 @@ export const getOrCreateOrgServiceAccount = async (
       `Account at the service-account address of organization ${organization.id} is not its service account`
     );
   }
+  // Set when the org was deleted. A create that passed its org check before the delete committed lands here.
+  if (user.serviceAccountRetiredAt) {
+    throw new Error(`Service account of organization ${organization.id} was retired when the organization was deleted`);
+  }
   // The per-member credit cap reads this to exempt the account (creditService/memberCreditCap.ts).
   if (organization.serviceAccountUserId !== user.id) {
     await adapters.db.organizations.update({ id: organization.id, serviceAccountUserId: user.id });

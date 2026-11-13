@@ -291,6 +291,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     riskEvidenceCoverage: vi.fn(),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
+    retireOrgServiceAccount: vi.fn(),
     addGroupToUser: vi.fn(),
     addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),

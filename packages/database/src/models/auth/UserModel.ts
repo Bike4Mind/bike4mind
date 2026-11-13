@@ -409,6 +409,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
   }
 
+  async retireOrgServiceAccount(userId: string, organizationId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, isSystem: true, serviceAccountOrganizationId: organizationId },
+      { $set: { serviceAccountRetiredAt: new Date() } }
+    );
+  }
+
   /** Add one group id to one user (idempotent via $addToSet). */
   async addGroupToUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
@@ -1763,6 +1770,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSystem: { type: Boolean, default: false },
     // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
     serviceAccountOrganizationId: { type: String },
+    serviceAccountRetiredAt: { type: Date },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },

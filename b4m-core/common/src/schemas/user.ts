@@ -178,6 +178,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   disputePending: true,
   isSystem: true,
   serviceAccountOrganizationId: true,
+  serviceAccountRetiredAt: true,
   subscribedUntil: true,
   photoUrl: true,
   systemFiles: true,

@@ -2,12 +2,14 @@ import type { IOrganizationDocument, WithId } from '@bike4mind/common';
 import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
+  realtimeConnectionRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
-import { organizationService } from '@bike4mind/services';
+import { authSessionService, organizationService } from '@bike4mind/services';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -66,7 +68,7 @@ export async function deleteSoleOwnedOrganizations(
     // it, so it is closed here in the delete's transaction, the same way the admin revoke does.
     const removed = await withTransaction(async () => {
       const current = (await organizationRepository.findById(org.id)) as WithId<IOrganizationDocument> | null;
-      if (!current || String(current.userId) !== userId || hasOtherMembers(current, userId)) return false;
+      if (!current || String(current.userId) !== userId || hasOtherMembers(current, userId)) return null;
       const activeSubscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
         SubscriptionOwnerType.Organization,
         org.id
@@ -75,7 +77,7 @@ export async function deleteSoleOwnedOrganizations(
         if (resolveSubscriptionSource(subscription) !== SubscriptionSource.AdminGrant) continue;
         await subscriptionRepository.update({ id: subscription.id, status: 'canceled', canceledAt: new Date() });
       }
-      await organizationService.deleteOrganization(
+      return organizationService.deleteOrganization(
         owner,
         { id: org.id },
         {
@@ -83,6 +85,7 @@ export async function deleteSoleOwnedOrganizations(
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            userApiKeys: userApiKeyRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             ...lakeConfigAuditDb,
@@ -90,11 +93,18 @@ export async function deleteSoleOwnedOrganizations(
           logger,
         }
       );
-      return true;
     });
     if (!removed) continue;
     deleted.push(org);
     await clearDeletedOrganizationReferences(org.id, logger);
+    await Promise.all(
+      removed.revokedApiKeyIds.map(apiKeyId =>
+        authSessionService.endRealtimeConnections(
+          { apiKeyId },
+          { db: { realtimeConnections: realtimeConnectionRepository } }
+        )
+      )
+    );
     logger.info(`[AccountDeletion] Deleted sole-owner organization ${org.id} for user ${userId}`);
   }
   return deleted;

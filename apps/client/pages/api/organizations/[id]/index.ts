@@ -11,10 +11,12 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@server/organizations/clearDeletedOrganizationReferences';
+import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -146,7 +148,7 @@ const handler = baseApi()
     // must commit together, or a partial failure leaves dangling group or lake access or an org that
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(() =>
+    const { revokedApiKeyIds } = await withTransaction(() =>
       organizationService.deleteOrganization(
         req.user!,
         { id },
@@ -155,6 +157,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            userApiKeys: userApiKeyRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             ...lakeConfigAuditDb,
@@ -178,6 +181,7 @@ const handler = baseApi()
     );
 
     await clearDeletedOrganizationReferences(id, req.logger);
+    await Promise.all(revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger)));
 
     return res.json({ id });
   });
