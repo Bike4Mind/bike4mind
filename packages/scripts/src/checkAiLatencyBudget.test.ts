@@ -903,9 +903,7 @@ describe('completion correlation', () => {
       /completedResult\([\s\S]*?correlation: buildCorrelation\(recorder, timer, streamEndMs, provenance\)/
     );
     expect(factory).toMatch(/readQuestProvenance\(recorder, provenanceTimeoutMs\)/);
-    expect(factory).toMatch(
-      /Math\.min\(10_000, test\.info\(\)\.timeout - \(Date\.now\(\) - testStartMs\) - 15_000\)/
-    );
+    expect(factory).toMatch(/Math\.min\(10_000, test\.info\(\)\.timeout - \(Date\.now\(\) - testStartMs\) - 15_000\)/);
     expect(chatPage).toMatch(/if \(body\.type === 'error'\) return unknown;/);
     expect(chatPage).toMatch(/timeoutMs <= 0\) return unknown/);
     expect(factory).toContain('GITHUB_RUN_ID');
