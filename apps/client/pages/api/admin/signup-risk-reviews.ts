@@ -255,11 +255,16 @@ async function recordApprovalOverride(
   overrideReason: string
 ): Promise<void> {
   try {
-    await recordUserAssessmentOverride(suggestion, {
+    const decided = await recordUserAssessmentOverride(suggestion, {
       overrideAction: { action: 'approve' },
       overrideReason,
       decidedBy: { userId: req.user.impersonatedBy ?? req.user.id, name: req.user.username || 'Admin' },
     });
+    // Decided by a concurrent accept after the pre-check: the approval stands but is not recorded as an override.
+    if (!decided)
+      req.logger.warn('AI suggestion already decided; approval not recorded as an override', {
+        suggestionId: suggestion.id,
+      });
   } catch (error) {
     req.logger.error('AI suggestion override failed for signup risk approval', { suggestionId: suggestion.id, error });
   }

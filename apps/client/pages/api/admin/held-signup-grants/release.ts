@@ -95,11 +95,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
       if (aiSuggestion && reason && released) {
         // The payout already committed; a failed suggestion write is logged rather than failing it.
         try {
-          await recordUserAssessmentOverride(aiSuggestion, {
+          const decided = await recordUserAssessmentOverride(aiSuggestion, {
             overrideAction: { action: 'release' },
             overrideReason: aiDecision?.overrideReason ?? reason,
             decidedBy: { userId: req.user.impersonatedBy ?? req.user.id, name: req.user.username || 'Admin' },
           });
+          // Decided by a concurrent accept after the pre-check: the release stands but is not recorded as an override.
+          if (!decided)
+            req.logger.warn('AI suggestion already decided; release not recorded as an override', {
+              suggestionId: aiSuggestion.id,
+            });
         } catch (error) {
           req.logger.error('AI suggestion override failed for held grant release', {
             suggestionId: aiSuggestion.id,
