@@ -786,7 +786,8 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 );
 
 // Account and organization exports share a consumer and retry policy, with a payload discriminator.
-// Both write under the expiring exports/ prefix and email an authenticated app download page.
+// All write under the expiring exports/ prefix. Self-serve and organization exports email an
+// authenticated app link; admin data subject exports are fetched from the admin user profile.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',
@@ -804,7 +805,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
     // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
     storage: '5 GB',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi],
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi, accountDataExportQueue],
     permissions: [
       {
         actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],

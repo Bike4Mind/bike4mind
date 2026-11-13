@@ -82,6 +82,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
