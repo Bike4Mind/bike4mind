@@ -116,7 +116,7 @@ struct VoiceConversationView: View {
               .lineLimit(8)
           }
           if let credits = last.creditsUsed, credits > 0 {
-            Text("Credits used: \(credits.formatted(.number.precision(.fractionLength(0...2))))")
+            Text("Credits used: \(CreditsViewModel.formatted(credits))")
               .font(Tokens.Typography.meta)
               .foregroundStyle(Tokens.Palette.secondaryText)
               .accessibilityIdentifier("voice-conversation-credits")
@@ -209,7 +209,6 @@ struct VoiceConversationView: View {
       // send and the streamed reply still go through the real API and socket.
       if FixtureServices.isEnabled || ProcessInfo.processInfo.environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
         model = VoiceFixtures.makeModel(target: request.target, api: services.api, realtime: services.realtime)
-        model.onSessionStarted = { _ in }
         return model
       }
     #endif

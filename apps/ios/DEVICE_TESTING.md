@@ -102,7 +102,7 @@ Simulator (fixture run, `B4M_UI_FIXTURES=1`, scripted utterance, no microphone):
 
 Device only:
 
-- [ ] First start shows the microphone and then the speech recognition prompts; denying either shows the Open Settings message.
+- [ ] First start shows the speech recognition and then the microphone prompts; denying either shows the Open Settings message.
 - [ ] Ask a question without touching the screen, hear the whole reply, follow up twice; the transcript shows normal turns.
 - [ ] Talk over a long reply: speech stops within about a second and your new question is the next turn. On the loudspeaker
       with no headset, confirm the reply does not interrupt itself (echo); if it does, note the model and volume.
