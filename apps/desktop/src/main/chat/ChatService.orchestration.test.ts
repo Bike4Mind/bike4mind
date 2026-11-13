@@ -568,15 +568,26 @@ describe('role routing and task runtime compatibility', () => {
     ).rejects.toThrow(/settled/);
     expect((await store.get(child.id))?.workerTask?.state).toMatchObject({ status: 'canceled' });
   });
-  async function drain(ids: string[]) {
+  async function drain(ids: string[], initialReport?: { parentId: string; childId: string }) {
     const ended = new Set<number>();
     await vi.waitUntil(
-      () => {
+      async () => {
         streams.forEach((stream, index) => {
           if (ended.has(index)) return;
           ended.add(index);
           finish(index);
         });
+        if (initialReport) {
+          const parent = await store.get(initialReport.parentId);
+          if (
+            !parent?.messages.some(
+              message =>
+                message.automatic?.kind === 'agents-settled' &&
+                message.automatic.sessionIds.includes(initialReport.childId)
+            )
+          )
+            return false;
+        }
         return ids.every(id => !service.isSessionBusy(id));
       },
       { timeout: 5000, interval: 20 }
@@ -589,7 +600,7 @@ describe('role routing and task runtime compatibility', () => {
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
     await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
-    await drain([parent.id, child.id]);
+    await drain([parent.id, child.id], { parentId: parent.id, childId: child.id });
     await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
     const canceled = await store.get(child.id);
