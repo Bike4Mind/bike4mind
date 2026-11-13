@@ -170,7 +170,7 @@ App Store Connect questionnaire (all data is **linked to the user**, **not used 
 |-----------|-----------|-----|
 | Contact Info: Email Address, Name | Yes | Account sign-in (completed in the web sign-in sheet) |
 | Identifiers: User ID, Device ID | Yes | Session identity; APNs token for push |
-| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends |
+| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends. Voice conversation audio is recognized on the device (Apple Speech, on-device where the language supports it) and only the resulting text is sent |
 | Diagnostics (crash, performance), Usage Data, Location, Health, Financial, Browsing, Search | No | Not collected |
 
 Does the app track users across other companies' apps or sites: **No**. Account deletion is available in the app. Keep this table

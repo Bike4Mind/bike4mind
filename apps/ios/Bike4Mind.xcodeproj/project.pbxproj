@@ -390,7 +390,8 @@
 				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to capture photos you choose to save to a lake.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind listens to your voice to turn it into text for a message or a note, and to talk with you hands-free.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -428,7 +429,8 @@
 				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bike4Mind uses Face ID to unlock the app when App Lock is on.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to capture photos you choose to save to a lake.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind listens to your voice to turn it into text for a message or a note, and to talk with you hands-free.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
