@@ -180,7 +180,7 @@ async function parkConnectionIfFolderGone(
  *
  * Creates (or refreshes) the OrgGoogleDriveConnection binding and enqueues by connectionId (202).
  * On an org lake, binding an org-wide credential and globally claiming a Drive folder is an
- * org-administrative act, so this gates on org owner/manager (verifyOrgPermission (manageContent)), NOT merely the lake's
+ * org-administrative act, so this gates on `manageContent` (verifyOrgPermission), NOT merely the lake's
  * creator. On a personal lake the creator is the only one who may connect, and the connection keeps
  * no credential copy (see authorizeLakeConnectorAccess and readUserDriveCredential).
  */
