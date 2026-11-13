@@ -20,6 +20,7 @@ import {
   Permission,
   hasAdminPermission,
   hasDeveloperUserTag,
+  readableGroupIds,
 } from '@bike4mind/common';
 
 export type Ability = MongoAbility;
@@ -65,12 +66,15 @@ export function applySharedShareableRules(
       const userWithPermissions: MongoQuery = {
         users: { $elemMatch: { userId: user.id, permissions: permission } },
       };
+      // Read also honours an org-owned key's granted groups (readableGroupIds); every other
+      // permission keeps the account's own memberships, so a key grant never confers write.
+      const groupIds = permission === Permission.read ? readableGroupIds(user) : (user.groups ?? []);
       const groupWithPermissions: MongoQuery = {
-        groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
+        groups: { $elemMatch: { groupId: { $in: groupIds }, permissions: permission } },
       };
       allow(permission, resource, userWithPermissions);
 
-      if (user.groups?.length) {
+      if (groupIds.length) {
         allow(permission, resource, groupWithPermissions);
       }
     });

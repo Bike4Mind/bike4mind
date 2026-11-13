@@ -50,11 +50,8 @@ const ADMIN_ROUTES_ELSEWHERE = [
   'settings/update.ts',
 ];
 
-const RAW_GATE_ALLOWLIST = new Set<string>([
-  'moderation-incidents/[id]/verdict.ts',
-  'moderation-incidents/index.ts',
-  // Receipts stay full-admin only for now; the credit ledger and summary routes they sit beside are CREDITS_PAGE_READ.
-  'users/[userId]/usage-receipt.ts',
+const RAW_GATE_ALLOWLIST = new Map<string, string>([
+  ['emergency-login.ts', 'unauthenticated recovery requires the target full-admin account password and second factor'],
 ]);
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
@@ -165,13 +162,31 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
     ).toBe(false);
   });
 
-  it.each([...RAW_GATE_ALLOWLIST])('allowlist entry %s exists and still gates raw', name => {
+  it.each([...RAW_GATE_ALLOWLIST])('allowlist entry %s exists and still gates raw', (name, reason) => {
+    expect(reason.trim()).not.toBe('');
     const file = path.join(ROUTES_DIR, name);
     expect(existsSync(file), `${name} no longer exists; remove it from RAW_GATE_ALLOWLIST`).toBe(true);
     expect(
       usesRawIsAdminGate(readFileSync(file, 'utf8')),
       `${name} no longer gates on raw isAdmin; remove it from RAW_GATE_ALLOWLIST`
     ).toBe(true);
+  });
+
+  it.each(['moderation-incidents/index.ts', 'moderation-incidents/[id]/verdict.ts', 'users/[userId]/usage-receipt.ts'])(
+    '%s uses adminApi without a redundant raw gate',
+    name => {
+      const { code } = blankStringLiterals(readFileSync(path.join(ROUTES_DIR, name), 'utf8'));
+      expect(ADMIN_API_CALL.test(code)).toBe(true);
+      expect(RAW_GATE.test(code)).toBe(false);
+    }
+  );
+
+  it('keeps the organization ledger permission-aware for its mixed audience', () => {
+    const source = readFileSync(path.join(ROUTES_DIR, 'transactions.ts'), 'utf8');
+    expect(source).toMatch(
+      /verifyOrg(?:Owner|Access)\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId\s*\)/
+    );
+    expect(usesRawIsAdminGate(source)).toBe(false);
   });
 });
 

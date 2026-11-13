@@ -34,7 +34,6 @@ const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
 
 const PACKAGE_LINKS: ReadonlyArray<SectionLink> = [
-  { label: 'Open Invites', tab: AdminTab.RegistrationInvites, testId: 'invite-center-open-invites-btn' },
   { label: 'Open Partner signups', tab: AdminTab.PartnerSignupRules, testId: 'invite-center-open-partner-signups-btn' },
 ];
 
@@ -44,7 +43,7 @@ const PackagesSection = () => {
     <Stack gap={1}>
       <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
         <Typography level="body-sm" sx={{ color: 'text.secondary', mr: 1 }}>
-          Issue codes from Invites; attach domains from Partner signups.
+          Add codes inside each package; attach domains from Partner signups.
         </Typography>
         {PACKAGE_LINKS.map(({ label, tab, testId }) => (
           <Button

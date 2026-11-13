@@ -11,6 +11,8 @@ import {
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
   LiveActivityPushEventSchema,
   PushNotificationEventSchema,
+  STUDIO_JOB_COMPLETED_EVENT,
+  StudioJobCompletedEventSchema,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -141,6 +143,14 @@ export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
   /** Live activity progress for a quest; publish via apps/client/server/utils/liveActivityPush.ts. */
   LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
+};
+
+/**
+ * One per finished Studio group, published by emitStudioJobCompletion (b4m-core/services generationJobs). Consumed by
+ * apps/workers/src/events/studioJobCompleted.ts; a native notifier subscribes to the same detail-type.
+ */
+export const StudioEvents = {
+  JobCompleted: event(STUDIO_JOB_COMPLETED_EVENT, StudioJobCompletedEventSchema),
 };
 
 export const StripeEvents = {

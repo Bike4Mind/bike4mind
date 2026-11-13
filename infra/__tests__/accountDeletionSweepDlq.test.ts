@@ -40,13 +40,32 @@ describe('account deletion sweep dead letter', () => {
     expect(cron).toContain('retries: 0,');
   });
 
-  it('links the resources and scoped permission reached by the deletion completion path', () => {
-    const source = readInfra('cron.ts');
-    const start = source.indexOf("new sst.aws.Cron('accountDeletionSweep'");
-    const cron = source.slice(
-      start,
-      source.indexOf('if (accountDeletionSweep && accountDeletionSweepDeadLetter)', start)
-    );
+  // Both run completeAccountDeletion, so each needs everything the purge reaches.
+  const purgeRunners: Array<[string, () => string]> = [
+    [
+      'the deletion sweep cron',
+      () => {
+        const source = readInfra('cron.ts');
+        const start = source.indexOf("new sst.aws.Cron('accountDeletionSweep'");
+        return source.slice(
+          start,
+          source.indexOf('if (accountDeletionSweep && accountDeletionSweepDeadLetter)', start)
+        );
+      },
+    ],
+    [
+      'the admin erasure queue consumer',
+      () => {
+        const source = readInfra('queues.ts');
+        const start = source.indexOf('const accountErasureQueueSubscription');
+        return source.slice(start, source.indexOf('SINGLE_RECORD_BATCH', start));
+      },
+    ],
+  ];
+
+  it.each(purgeRunners)('links the resources and scoped permission reached by %s', (_name, readBlock) => {
+    const cron = readBlock();
+    expect(cron).not.toBe('');
     const required = [
       'eventBus',
       'fabFileBucket',

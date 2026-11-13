@@ -29,9 +29,10 @@ import {
   type TextField,
 } from './capabilityFields';
 import { insertSnippet } from './insertSnippet';
-import StudioModelCards, { type StudioModelCard } from './StudioModelCards';
+import StudioModelPicker from './StudioModelPicker';
+import type { StudioModelCard } from './studioModelCard';
 
-// The model picker: a dropdown of names, or a card per model with its strength, price and fit (Create v2).
+// The model picker: a dropdown of names, or (Create v2) a compact row with a panel of ranked model cards.
 type ModelPickerProps =
   | { models: readonly CapabilityOption[]; modelCards?: never }
   | { modelCards: readonly StudioModelCard[]; models?: never };
@@ -432,7 +433,7 @@ const CapabilityForm = ({
       {modelCards ? (
         <FormControl>
           <FormLabel>Model</FormLabel>
-          <StudioModelCards
+          <StudioModelPicker
             testIdPrefix={testIdPrefix}
             cards={modelCards}
             selectedId={modelId}

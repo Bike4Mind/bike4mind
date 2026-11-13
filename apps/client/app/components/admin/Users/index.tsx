@@ -213,7 +213,7 @@ const UsersTab: React.FC = () => {
     : undefined;
 
   return (
-    <Stack gap={2} sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }} data-testid="admin-users-tab">
+    <Stack gap={2} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-users-tab">
       <AdminPageHeader
         title="Users"
         description={description}

@@ -14,7 +14,6 @@ import {
   QuestNodeStatusExtra,
   REVIEW_VERDICT_VALUES,
   RUNNABLE_NODE_STATUS_VALUES,
-  GraphState,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -181,10 +180,6 @@ class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implement
 
   async findByUserId(userId: string): Promise<IQuestGraphDocument[]> {
     return this.questGraphModel.find({ userId }).sort({ updatedAt: -1 });
-  }
-
-  async updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null> {
-    return this.questGraphModel.findByIdAndUpdate(id, { $set: { state } }, { new: true });
   }
 
   async addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null> {

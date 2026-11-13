@@ -84,7 +84,7 @@ This is exactly what the gallery **Share** button does under the hood. Host any 
 ```bash
 KEY=$YOUR_API_KEY
 BASE=https://app.bike4mind.com
-UID=<your-user-id>            # GET /api/identify
+UID=<your-user-id>            # GET /api/v1/me (the key needs the me:read scope)
 SLUG=my-dashboard
 
 # Step 1 — request a presigned upload for each file

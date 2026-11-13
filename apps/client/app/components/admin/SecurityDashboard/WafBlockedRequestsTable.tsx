@@ -111,6 +111,7 @@ export const WafBlockedRequestsTable = ({
               ...FILTERS.filter(([key]) => key !== 'action').map(([key, label]) => ({
                 id: key,
                 label,
+                wrap: true,
                 render: (row: (typeof rows)[number]) => (
                   <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
                     {row[key]}
@@ -120,11 +121,13 @@ export const WafBlockedRequestsTable = ({
               {
                 id: 'args',
                 label: 'Args',
+                wrap: true,
                 render: row => <Typography sx={{ overflowWrap: 'anywhere' }}>{row.args}</Typography>,
               },
               {
                 id: 'requestId',
                 label: 'Request ID',
+                wrap: true,
                 render: row => (
                   <Typography sx={{ overflowWrap: 'anywhere', fontFamily: 'monospace' }}>{row.requestId}</Typography>
                 ),

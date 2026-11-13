@@ -18,8 +18,10 @@ src/
     index.ts           designTokens: the assembled, schema-validated token set
   emitters/
     types.ts           TokenEmitter<TOutput>: the named-target interface
-    joy.ts             MUI Joy theme fragment (consumed by apps/client)
+    joy.ts             MUI Joy theme fragment: colors, type ramps, spacing,
+                       radii, shadows, motion (apps/client, apps/desktop)
     cssVariables.ts    --b4m-* CSS custom properties (optional target)
+    native/            native (non-web) emitters
 ```
 
 ## Rules
@@ -34,8 +36,13 @@ src/
 - **Values are seeded from the web theme.** The typography ramps, spacing,
   radii and shadows pin what the web app renders with today, including
   framework defaults the theme never overrode; `motion` pins the de-facto
-  transition durations. These are reference values for non-web targets until
-  a platform consumes them.
+  transition durations.
+- **Who consumes what.** The web Joy theme takes colors, metrics and motion
+  from the Joy fragment. Desktop takes its shared colors and the metrics from
+  the same fragment and keeps its own slot mapping plus a few desktop-only
+  colors. Native targets use `emitters/native`. Two parity tests guard drift:
+  `apps/client/app/utils/themes/designTokenParity.test.ts` and
+  `apps/desktop/src/renderer/src/themeTokenParity.test.ts`.
 
 ## Adding an emit target
 
