@@ -100,6 +100,7 @@ import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
 import { findArtifactSaveTarget } from '@client/app/utils/artifactPersistence';
+import { useRefreshArtifactOnNewVersion } from '@client/app/hooks/useRefreshArtifactOnNewVersion';
 import { useQueryClient } from '@tanstack/react-query';
 import { useArtifact } from '@client/app/hooks/data/artifacts';
 import { useArtifactPersistence } from '@client/app/hooks/useArtifactPersistence';
@@ -511,6 +512,8 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       includeVersions: false,
     }
   );
+
+  useRefreshArtifactOnNewVersion();
 
   // Ref tracks the last updated version to prevent infinite loops.
   const lastUpdatedVersionRef = React.useRef<number | undefined>(undefined);
