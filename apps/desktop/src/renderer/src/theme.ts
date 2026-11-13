@@ -1,3 +1,4 @@
+import { brand, designTokens, emitJoyThemeFragment } from '@bike4mind/design-tokens';
 import { extendTheme } from '@mui/joy/styles';
 import { avoidPageModifier } from './chat/agentBrowser';
 
@@ -14,31 +15,37 @@ export const TOOLTIP_MAX_WIDTH = 340;
  */
 const avoidPage = [avoidPageModifier];
 
+// Everything desktop shares with the web comes from the design tokens. Desktop keeps its own
+// mapping of those values into Joy slots, so it is not the web scheme spread wholesale. The font
+// is not taken: the renderer does not bundle Libre Franklin.
+const tokens = emitJoyThemeFragment(designTokens);
+const web = tokens.colorSchemes.dark.palette;
+
 /**
  * Dark mode borrows the web app's cool, blue-tinted ramp instead of Joy's default, whose page is
- * pure black. Values are lifted from apps/client/app/utils/themes/colors.ts (`gray` / `brand`),
- * apart from the prompt-bubble fills; keep the lifted ones in step when the web ramp moves. Light
- * mode stays on Joy's defaults, which already share the web's light grays.
+ * pure black. Light mode stays on Joy's defaults, which already share the web's light grays.
  */
 export const DARK_PALETTE = {
-  /** web gray[900]: the page behind the thread. */
-  page: '#0E1214',
-  /** web gray[850]: inputs, cards, the terminal. */
-  panel: '#13181C',
+  /** The page behind the thread. */
+  page: web.background.body,
+  /** Inputs, cards, the terminal. */
+  panel: web.background.panel as string,
+  /** Every border and divider, and the level2 fill (selected rows, inline code). */
+  stroke: web.divider,
+  /** The pale-blue ink the web sets its text in. */
+  ink: web.text.primary,
+  /** Main button hover. */
+  buttonHover: brand[900],
+  // Desktop-only: the web scheme has no equivalent, and no second platform needs them yet, so
+  // they stay here instead of becoming package tokens.
   /** One step above panel: the sidebar and anything that floats (menus, popovers). */
   raised: '#181E23',
-  /** web gray[800]: every border and divider, and the level2 fill (selected rows, inline code). */
-  stroke: '#2C3135',
-  /** web brand[100]: the pale-blue ink the web sets its text in. */
-  ink: '#D1E4F4',
   /**
    * Pressed/selected (mode switcher, terminal selection). Deeper and bluer than the web's
    * brand[700] "selected" (#2A4159), which matched the level2 track it sits on in luminance
    * and vanished there.
    */
   selected: '#1B4B7A',
-  /** web brand[900]: main button hover. */
-  buttonHover: '#0959AA',
   /** The user's prompt bubble: a slate navy that reads as brand without glowing against the page. */
   bubble: '#172535',
   /** The same bubble under the pointer; pressed uses `selected`. */
@@ -47,16 +54,22 @@ export const DARK_PALETTE = {
 
 const INK_RGB = [1, 3, 5].map(offset => Number.parseInt(DARK_PALETTE.ink.slice(offset, offset + 2), 16)).join(' ');
 
-// The web's secondary/tertiary ink steps (text.secondary / text.tertiary there); both clear 4.5:1
-// on page, panel and raised.
+// Only the hover fills below are derived from the ink; text.secondary/tertiary are web tokens.
 const inkAt = (opacity: number) => `rgba(${INK_RGB} / ${opacity})`;
 
 export const desktopTheme = extendTheme({
+  fontSize: tokens.fontSize,
+  fontWeight: tokens.fontWeight,
+  lineHeight: tokens.lineHeight,
+  spacing: tokens.spacing,
+  radius: tokens.radius,
+  shadow: tokens.shadow,
+  motion: tokens.motion,
   colorSchemes: {
     light: {
       palette: {
         // Electron's window background cannot resolve Joy's default CSS variable.
-        background: { surface: '#FBFCFE' },
+        background: { surface: tokens.colorSchemes.light.palette.background.body },
       },
     },
     dark: {
@@ -83,8 +96,8 @@ export const desktopTheme = extendTheme({
         divider: DARK_PALETTE.stroke,
         text: {
           primary: DARK_PALETTE.ink,
-          secondary: inkAt(0.8),
-          tertiary: inkAt(0.7),
+          secondary: web.text.secondary,
+          tertiary: web.text.tertiary,
         },
         primary: {
           // solidBg is already the web's main-button blue (#0B6BCB); only its hover differs.

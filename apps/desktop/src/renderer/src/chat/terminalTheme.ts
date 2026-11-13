@@ -1,3 +1,4 @@
+import { designTokens } from '@bike4mind/design-tokens';
 import type { ITheme } from '@xterm/xterm';
 import { DARK_PALETTE } from '../theme';
 
@@ -42,7 +43,7 @@ const ANSI: Record<'light' | 'dark', ITheme> = {
 };
 
 const FALLBACK = {
-  light: { background: '#fbfcfe', foreground: '#171a1c', selection: '#c7dff7' },
+  light: { background: designTokens.color.schemes.light.background.body, foreground: '#171a1c', selection: '#c7dff7' },
   dark: { background: DARK_PALETTE.panel, foreground: DARK_PALETTE.ink, selection: DARK_PALETTE.selected },
 };
 
