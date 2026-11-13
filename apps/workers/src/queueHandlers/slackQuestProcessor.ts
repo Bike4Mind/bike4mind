@@ -47,6 +47,8 @@ import { Logger } from '@bike4mind/observability';
 
 // Register global error handlers for enhanced observability of network errors
 registerLambdaErrorHandlers();
+// Slack quests settle org credits; this entry does not load queueHandlers/utils.
+registerOrgAlertObserver();
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
@@ -90,6 +92,7 @@ import {
   type PendingSlackNotification,
 } from '@workers/videoGenerations/slackVideoToolConfig';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];

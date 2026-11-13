@@ -49,6 +49,7 @@ export async function evaluateMemberCap(
 
   recentChecks.set(memoKey, nowMs + RECHECK_TTL_MS);
   const who = row?.name || row?.email || 'A member';
+  const detail = `used ${fmt(used)} of their ${fmt(cap)} credit monthly limit, so further requests are blocked until the limit resets next month. You can raise their limit from the Members tab.`;
   await dispatchOrgAlert({
     organizationId: event.organizationId,
     kind: 'member_cap',
@@ -56,6 +57,8 @@ export async function evaluateMemberCap(
     subjectUserId: event.userId,
     periodKey,
     title: 'Member reached their credit limit',
-    message: `${who} has used ${fmt(used)} of their ${fmt(cap)} credit monthly limit, so further requests are blocked until the limit resets next month. You can raise their limit from the Members tab.`,
+    message: `${who} has ${detail}`,
+    // The Inbox row belongs to the admin, so erasing the member would not reach their name in it.
+    inboxMessage: `A member has ${detail}`,
   });
 }

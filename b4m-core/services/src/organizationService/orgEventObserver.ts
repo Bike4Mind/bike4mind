@@ -2,13 +2,13 @@
  * Org event observer (host seam) for admin alerts.
  *
  * A leaf with no imports, like llm/toolFinishObserver.ts: callers reach it via
- * '@bike4mind/services/organizationService/orgEventObserver', never the barrel, and the host
- * registers its dispatcher from apps/client's baseApi and the queue handler wrapper
- * (packages/server-utils/src/organizations/orgAlertDispatcher.ts).
+ * '@bike4mind/services/organizationService/orgEventObserver', never the barrel. The host registers
+ * via packages/server-utils/src/organizations/registerOrgAlertObserver.ts at every entry that can
+ * raise an event (baseApi, queueHandlers/utils, and the entries guarded by orgAlertObserverEntries tests).
  */
 
 export type OrgEvent =
-  | { type: 'credit_debit'; organizationId: string; balanceAfter: number; actingUserId?: string }
+  | { type: 'credit_debit'; organizationId: string; balanceAfter: number }
   | { type: 'seat_limit'; organizationId: string; seats: number }
   /** `actorUserId` is the admin who added them, if any; neither is notified. */
   | { type: 'member_joined'; organizationId: string; userId: string; actorUserId?: string }

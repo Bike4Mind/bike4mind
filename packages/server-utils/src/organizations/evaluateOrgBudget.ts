@@ -67,7 +67,7 @@ export async function evaluateOrgBudget(
         kind: 'low_balance',
         scope: `low:${low}`,
         title: 'Credits running low',
-        message: `Your organization's credit pool is down to ${fmt(event.balanceAfter)} credits, at or below the ${fmt(low)} credit alert you set. Add credits from the Billing tab to avoid interruptions.`,
+        message: `Your organization's credit pool is down to ${fmt(event.balanceAfter)} credits, at or below the ${fmt(low)} credit alert you set. The owner can add credits from the Billing tab to avoid interruptions.`,
       },
       nowMs
     );

@@ -35,8 +35,8 @@ export interface DispatchOrgAlertInput {
   title: string;
   /** Plain-text body shared by the email and the Inbox entry. */
   message: string;
-  /** Recipients who still get the Inbox entry but no email (they were already emailed elsewhere). */
-  excludeEmailUserIds?: readonly string[];
+  /** Stored Inbox text when it must differ from `message`, e.g. to keep a member's identity out of it. */
+  inboxMessage?: string;
   /** The owner still gets the Inbox entry but no email, e.g. paymentFailureNotice already emailed them. */
   excludeOwnerEmail?: boolean;
   /** Never notified, e.g. the member who just joined and the admin who added them. */
@@ -101,8 +101,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
       message: input.message,
       settingsUrl: `${appUrl}/organizations/${input.organizationId}?tab=members`,
     });
-    const skipEmail = new Set(input.excludeEmailUserIds ?? []);
-    if (input.excludeOwnerEmail) skipEmail.add(org.userId);
+    const skipEmail = new Set<string>(input.excludeOwnerEmail ? [org.userId] : []);
 
     let delivered = 0;
     let attempted = 0;
@@ -114,7 +113,7 @@ export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<Di
           receiverId: userId,
           type: InboxType.COMMON,
           title,
-          message: input.message,
+          message: input.inboxMessage ?? input.message,
         });
         delivered++;
       } catch (error) {
@@ -150,17 +149,62 @@ async function releaseQuietly(id: string | undefined): Promise<void> {
   }
 }
 
-type TransactionStorage = { exit<R>(callback: () => R): R };
+type AmbientSession = {
+  inTransaction(): boolean;
+  transaction: { state: string };
+  once(event: 'ended', listener: () => void): unknown;
+};
+type TransactionStorage = {
+  exit<R>(callback: () => R): R;
+  getStore(): { session?: AmbientSession } | undefined;
+};
+
+/** Refusals report a write the transaction is about to abort, so they must not wait for its commit. */
+const firesOnAbort = (event: OrgEvent): boolean =>
+  event.type === 'seat_limit' || (event.type === 'member_cap_check' && event.refused === true);
+
+const COMMITTED_STATES = new Set(['TRANSACTION_COMMITTED', 'TRANSACTION_COMMITTED_EMPTY']);
+const deferredBySession = new WeakMap<AmbientSession, Map<string, OrgEvent>>();
 
 /**
- * Maps an org event to its alert, outside any ambient transaction: events fire from inside
- * withTransaction (credit holds, roster writes), and joining it would roll back the claim and Inbox
- * write on abort while the email still went out, so the next attempt would send again.
+ * Maps an org event to its alert, always outside any ambient transaction (joining it would roll back
+ * the claim and Inbox write on abort while the email still went out). A refusal is routed at once;
+ * any other event raised inside a transaction waits for its commit, so the evaluators read the
+ * committed write and nothing is sent for a rolled-back one.
  */
 export function handleOrgEvent(event: OrgEvent): Promise<void> {
   const storage = (mongoose as unknown as { transactionAsyncLocalStorage?: TransactionStorage })
     .transactionAsyncLocalStorage;
-  return storage ? storage.exit(() => routeOrgEvent(event)) : routeOrgEvent(event);
+  if (!storage) return routeOrgEvent(event);
+  const session = storage.getStore()?.session;
+  if (session?.inTransaction() && !firesOnAbort(event)) {
+    deferUntilCommit(storage, session, event);
+    return Promise.resolve();
+  }
+  return storage.exit(() => routeOrgEvent(event));
+}
+
+function deferUntilCommit(storage: TransactionStorage, session: AmbientSession, event: OrgEvent): void {
+  let pending = deferredBySession.get(session);
+  if (!pending) {
+    pending = new Map();
+    deferredBySession.set(session, pending);
+    const events = pending;
+    // Mongoose's connection.transaction ends the session once the commit or abort settles.
+    session.once('ended', () => {
+      if (!COMMITTED_STATES.has(session.transaction.state)) return;
+      for (const deferred of events.values()) {
+        void storage
+          .exit(() => routeOrgEvent(deferred))
+          .catch(error => {
+            log().warn('Deferred org alert failed', { organizationId: deferred.organizationId, error });
+          });
+      }
+    });
+  }
+  // Latest wins per subject: a driver-retried callback re-raises the same event in one session.
+  const subject = 'userId' in event ? event.userId : '';
+  pending.set(`${event.type}|${event.organizationId}|${subject}`, event);
 }
 
 /** Threshold kinds are evaluated by their own modules, which dispatch. */
@@ -172,7 +216,7 @@ async function routeOrgEvent(event: OrgEvent): Promise<void> {
         kind: 'seat_limit',
         scope: `seats:${event.seats}`,
         title: 'Seat limit reached',
-        message: `Someone could not join because all ${event.seats} seats are in use. Add seats from the Billing tab to let more people in.`,
+        message: `Someone could not join because all ${event.seats} seats are in use. The owner can add seats from the Billing tab to let more people in.`,
       });
       return;
     case 'member_joined':

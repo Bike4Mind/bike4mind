@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Organization, OrgAlertNotificationModel, User, mongoose } from '@bike4mind/database';
+import { Organization, OrgAlertNotificationModel, User, inboxRepository, mongoose } from '@bike4mind/database';
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import { clearMemberCapAlertCache, evaluateMemberCap } from './evaluateMemberCap';
 
@@ -65,6 +65,10 @@ describe('evaluateMemberCap', () => {
     expect((await claims()).map(c => [c.scope, c.periodKey, c.subjectUserId])).toEqual([['user:m1', '2026-11', 'm1']]);
     expect(publish).toHaveBeenCalledOnce();
     expect(publish.mock.calls[0][0].body).toContain('Sam has used 100 of their 100 credit monthly limit');
+
+    const [entry] = await inboxRepository.findByReceiverId(ownerId.toHexString());
+    expect(entry.message).toContain('A member has used 100 of their 100 credit monthly limit');
+    expect(entry.message).not.toContain('Sam');
   });
 
   it('stays quiet below the cap', async () => {

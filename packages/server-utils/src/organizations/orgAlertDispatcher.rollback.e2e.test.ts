@@ -20,11 +20,12 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 const { publish } = vi.hoisted(() => ({ publish: vi.fn() }));
 vi.mock('../utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
 
-// Seat and cap refusals raise their event inside a transaction that then aborts; only a replica set
-// can tell a claim that escaped the rollback from one that was undone with it.
+// Events raised inside a transaction: refusals escape its rollback, everything else waits for its
+// commit. Only a replica set can tell the two apart.
 
 const orgId = new mongoose.Types.ObjectId();
 const ownerId = new mongoose.Types.ObjectId();
+const cappedOrgId = new mongoose.Types.ObjectId();
 let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
@@ -40,6 +41,16 @@ beforeAll(async () => {
     userId: ownerId.toHexString(),
     adminUserIds: [],
     users: [],
+  });
+  await Organization.collection.insertOne({
+    _id: cappedOrgId,
+    name: 'Capped',
+    personal: false,
+    userId: ownerId.toHexString(),
+    adminUserIds: [],
+    users: [{ userId: 'm1' }],
+    maxCreditsPerMember: 100,
+    userDetails: [{ id: 'm1', name: 'Sam', usedCredits: 0, periodStart: new Date() }],
   });
 });
 
@@ -63,5 +74,32 @@ describe('handleOrgEvent inside an aborted transaction', () => {
     expect(await OrgAlertNotificationModel.countDocuments({ kind: 'seat_limit' })).toBe(1);
     expect(await inboxRepository.findByReceiverId(ownerId.toHexString())).toHaveLength(1);
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing for a member_joined whose transaction rolled back', async () => {
+    const event = { type: 'member_joined' as const, organizationId: orgId.toHexString(), userId: 'joiner' };
+
+    await expect(
+      withTransaction(async () => {
+        await handleOrgEvent(event);
+        throw new Error('rolled back');
+      })
+    ).rejects.toThrow('rolled back');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(await OrgAlertNotificationModel.countDocuments({ kind: 'member_joined' })).toBe(0);
+  });
+
+  it('evaluates a usage event after commit, so it counts the write that raised it', async () => {
+    const organizationId = cappedOrgId.toHexString();
+
+    await withTransaction(async () => {
+      await Organization.updateOne({ _id: cappedOrgId }, { $set: { 'userDetails.0.usedCredits': 100 } });
+      await handleOrgEvent({ type: 'member_cap_check', organizationId, userId: 'm1' });
+    });
+
+    await vi.waitFor(async () => {
+      expect(await OrgAlertNotificationModel.countDocuments({ organizationId, kind: 'member_cap' })).toBe(1);
+    });
   });
 });

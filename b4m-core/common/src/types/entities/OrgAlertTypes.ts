@@ -18,7 +18,10 @@ export type OrgAlertKind = (typeof ORG_ALERT_KINDS)[number];
 
 export const ORG_ALERT_MAX_PERCENT_THRESHOLDS = 5;
 
-/** Claim rows outlive the monthly period they dedupe, so a row is never swept while its period is open. */
+/**
+ * Claim rows outlive the monthly period they dedupe, so a row is never swept while its period is open.
+ * A `once` row (member_joined) expires too, so a re-add after this long alerts again.
+ */
 export const ORG_ALERT_NOTIFICATION_RETENTION_DAYS = 90;
 
 /** Owner-configured budget alerting, stored on the organization. */
@@ -73,7 +76,7 @@ export function orgAlertPeriodKey(now: Date = new Date()): string {
 
 /**
  * The dedup row for one alert. `scope` carries the threshold or subject (`pct:80`, `low:5000`,
- * `seats:10`, `user:<id>`) so editing a threshold mid-period can fire again.
+ * `seats:10`, `user:<id>`, `invoice:<id>`) so editing a threshold mid-period can fire again.
  */
 export interface IOrgAlertNotification {
   organizationId: string;
