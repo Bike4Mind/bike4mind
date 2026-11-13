@@ -5,6 +5,7 @@ import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useState } from 'react';
 import type { MiniTavernApi } from '@shared/ipc';
+import { CloseIcon, FollowIcon, PagerIcon } from '../chat/icons';
 import { prefersReducedMotion } from '../chat/orchestrator/motion';
 import { MiniRoom } from './MiniRoom';
 import { MiniStrip } from './MiniStrip';
@@ -104,7 +105,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
                   onClick={() => room.step(-1)}
                   data-testid="mini-tavern-prev-btn"
                 >
-                  {'<'}
+                  <PagerIcon direction="previous" />
                 </IconButton>
                 <Typography level="body-xs" data-testid="mini-tavern-position">
                   {room.position} of {room.count}
@@ -116,7 +117,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
                   onClick={() => room.step(1)}
                   data-testid="mini-tavern-next-btn"
                 >
-                  {'>'}
+                  <PagerIcon direction="next" />
                 </IconButton>
               </Box>
             )}
@@ -130,7 +131,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
                 sx={noDrag}
                 data-testid="mini-tavern-unpin-btn"
               >
-                {'*'}
+                <FollowIcon />
               </IconButton>
             )}
           </>
@@ -143,7 +144,7 @@ export function MiniTavern({ api = miniApi() }: { api?: MiniTavernApi }) {
           sx={noDrag}
           data-testid="mini-tavern-close-btn"
         >
-          {'x'}
+          <CloseIcon />
         </IconButton>
       </Box>
 

@@ -220,10 +220,13 @@ export type NameLabel = { lane: 0 | 1; maxWidth: number; shown: boolean };
 
 type LaidOut = { point: SlotPoint; lane: 0 | 1 };
 
-/** Widest a label at `point` on `lane` can be without meeting any of `others`, all centred under their points. */
+/**
+ * Widest a label at `point` on `lane` can be without meeting any of `others` or running past the
+ * scene's side walls (the scene clips it), all centred under their points.
+ */
 function labelCap(point: SlotPoint, lane: 0 | 1, others: Iterable<LaidOut>): number {
   const top = point.y + lane * LABEL_SPAN;
-  let cap = NAME_LABEL_MAX_WIDTH;
+  let cap = Math.min(NAME_LABEL_MAX_WIDTH, 2 * (Math.min(point.x, 100 - point.x) - LABEL_GUTTER));
   for (const other of others) {
     if (Math.abs(other.point.y + other.lane * LABEL_SPAN - top) >= LABEL_SPAN) continue;
     cap = Math.min(cap, Math.abs(other.point.x - point.x) - LABEL_GUTTER);
