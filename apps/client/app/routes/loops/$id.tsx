@@ -1,0 +1,349 @@
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { isAxiosError } from 'axios';
+import { toast } from 'sonner';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionGroup,
+  AccordionSummary,
+  Box,
+  Chip,
+  CircularProgress,
+  DialogTitle,
+  Drawer,
+  IconButton,
+  Link,
+  Sheet,
+  Stack,
+  Typography,
+} from '@mui/joy';
+import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
+import LoopActions from '@client/app/components/Loops/LoopActions';
+import LoopEventLog from '@client/app/components/Loops/LoopEventLog';
+import LoopTicketBoard from '@client/app/components/Loops/LoopTicketBoard';
+import LoopStatsPanel from '@client/app/components/Loops/LoopStatsPanel';
+import LoopCoach from '@client/app/components/Loops/LoopCoach';
+import LoopTicketRating from '@client/app/components/Loops/LoopTicketRating';
+import {
+  formatCredits,
+  formatInterval,
+  formatSpendToday,
+  lastRunLabel,
+  LoopMarkdown,
+  LoopStatusChip,
+  holdLabel,
+  nextRunLabel,
+  unavailableTools,
+  unavailableToolsMessage,
+} from '@client/app/components/Loops/loopUi';
+import {
+  countNeedsYou,
+  useLoop,
+  useLoopCoach,
+  useLoopEvents,
+  useLoopRunInfo,
+  useLoops,
+  useLoopTickets,
+  useOverrideDirective,
+  useResolveUnsure,
+} from '@client/app/hooks/data/loops';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
+import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
+import CloseIcon from '@mui/icons-material/Close';
+import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
+import { activeLaneCount, loopMaxConcurrent } from '@bike4mind/common';
+import { useState } from 'react';
+
+export default function LoopDetailPage() {
+  const { id = '' } = useParams({ strict: false });
+  const navigate = useNavigate();
+  // `?run=<executionId>` drives the live run drawer, so it is deep-linkable and Back closes it.
+  const { run } = useSearch({ strict: false }) as { run?: string };
+  const setRun = (executionId?: string) =>
+    navigate({ to: '/loops/$id', params: { id }, search: executionId ? { run: executionId } : {} });
+  // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
+  const { data: loop, isLoading, error } = useLoop(id);
+  const { data: tickets } = useLoopTickets(id);
+  const { data: events } = useLoopEvents(id);
+  const { data: runInfo } = useLoopRunInfo(run);
+  const { data: loops = [] } = useLoops();
+  const overrideDirective = useOverrideDirective();
+  const resolveUnsure = useResolveUnsure();
+  const toolAvailability = useConfig().data?.toolAvailability;
+  const needsYou = countNeedsYou(events);
+  // The stats are read only while their panel is open.
+  const [statsOpen, setStatsOpen] = useState(false);
+  // Likewise the coach; its count shows in the header once it has been opened.
+  const [coachOpen, setCoachOpen] = useState(false);
+  const [coachSeen, setCoachSeen] = useState(false);
+  const { data: coach } = useLoopCoach(id, coachSeen);
+  useDocumentTitle(loop?.name ?? 'Loop');
+
+  if (isLoading) return <CircularProgress size="sm" sx={{ m: 2 }} />;
+  if (!loop) {
+    const notFound = !error || (isAxiosError(error) && error.response?.status === 404);
+    return (
+      <Box sx={{ p: 2 }} data-testid="loop-detail-not-found">
+        <Typography>{notFound ? 'Loop not found.' : "Couldn't load this loop. Try again shortly."}</Typography>
+        <Link component="button" onClick={() => navigate({ to: '/loops' })} data-testid="loop-detail-back-btn">
+          Back to loops
+        </Link>
+      </Box>
+    );
+  }
+
+  const missingTools = unavailableTools(loop.tools, toolAvailability).map(tool => getToolDisplayName(tool));
+  const lanes = activeLaneCount(loop);
+  const ticketOfRun = (executionId: string) =>
+    tickets?.stages.flatMap(column => column.tickets).find(ticket => ticket.executionId === executionId);
+  const ticketTitle = (executionId: string) => ticketOfRun(executionId)?.title;
+  const runTicket = run ? ticketOfRun(run) : undefined;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+      <AgentPageHeader
+        title={loop.name}
+        backTo="/loops"
+        rightActions={<LoopActions loop={loop} onDeleted={() => navigate({ to: '/loops' })} />}
+      />
+      <Stack gap={2} sx={{ p: 2 }}>
+        <Stack direction="row" gap={2} alignItems="flex-start" flexWrap="wrap" data-testid="loop-detail-summary">
+          <LoopStatusChip loop={loop} />
+          {loop.status === 'error' && loop.lastExecutionId && (
+            <Link
+              component="button"
+              level="body-sm"
+              color="danger"
+              onClick={() => setRun(loop.lastExecutionId)}
+              data-testid="loop-last-error-run-link"
+            >
+              View failed run
+            </Link>
+          )}
+          {needsYou > 0 && (
+            <Chip size="sm" variant="soft" color="warning" data-testid="loop-detail-needs-you">
+              {needsYou} need you
+            </Chip>
+          )}
+          <Typography level="body-sm">
+            {formatInterval(loop.intervalMinutes)} - last run {lastRunLabel(loop)} - next {nextRunLabel(loop)} -{' '}
+            {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) -{' '}
+            <span data-testid="loop-detail-spend-today">{formatSpendToday(loop)} today</span> - {loop.model}
+            {loopMaxConcurrent(loop) > 1 && (
+              <span data-testid="loop-detail-lanes">
+                {' '}
+                - {lanes}/{loopMaxConcurrent(loop)} running
+              </span>
+            )}
+          </Typography>
+          {loop.lastExecutionId && (
+            <Link
+              component="button"
+              level="body-sm"
+              onClick={() => setRun(loop.lastExecutionId)}
+              data-testid="loop-detail-latest-run-link"
+            >
+              Latest run
+            </Link>
+          )}
+        </Stack>
+        {lanes > 0 && (
+          <Stack gap={0.5} data-testid="loop-detail-active-runs">
+            <Typography level="title-sm">Active runs</Typography>
+            {loop.activeExecutionIds!.map(executionId => (
+              <Stack
+                key={executionId}
+                direction="row"
+                gap={1}
+                alignItems="center"
+                data-testid={`loop-detail-active-run-${executionId}`}
+              >
+                <Typography level="body-sm">{ticketTitle(executionId) ?? (tickets ? 'Goal run' : 'Run')}</Typography>
+                <Link
+                  component="button"
+                  level="body-sm"
+                  onClick={() => setRun(executionId)}
+                  data-testid={`loop-detail-active-run-view-${executionId}`}
+                >
+                  View run
+                </Link>
+              </Stack>
+            ))}
+          </Stack>
+        )}
+        {holdLabel(loop) && (
+          <Typography level="body-sm" color="neutral" data-testid="loop-detail-backoff">
+            <span data-testid="loop-hold-reason">{holdLabel(loop)}</span>
+          </Typography>
+        )}
+        {missingTools.length > 0 && (
+          <Typography level="body-sm" color="warning" data-testid="loop-detail-unavailable-tools">
+            {unavailableToolsMessage(missingTools)}
+          </Typography>
+        )}
+        <LoopOversightLine loopId={loop.id} oversees={loop.oversees ?? []} loops={loops} />
+        <AccordionGroup variant="outlined" sx={{ borderRadius: 'sm' }}>
+          <Accordion>
+            <AccordionSummary data-testid="loop-detail-memory-toggle">Memory</AccordionSummary>
+            <AccordionDetails>
+              <Typography level="title-sm">Next action</Typography>
+              <Box sx={{ mb: 1 }}>
+                <LoopMarkdown testId="loop-detail-memory-next-action">{loop.memory.nextAction || '-'}</LoopMarkdown>
+              </Box>
+              <Typography level="title-sm">Notes</Typography>
+              <LoopMarkdown testId="loop-detail-memory-notes">{loop.memory.notes || '-'}</LoopMarkdown>
+            </AccordionDetails>
+          </Accordion>
+          <Accordion>
+            <AccordionSummary data-testid="loop-detail-log-toggle">Log</AccordionSummary>
+            <AccordionDetails>
+              <LoopEventLog
+                data={events}
+                onViewRun={setRun}
+                loopId={loop.id}
+                loops={loops}
+                onOverride={(eventId, action, note) =>
+                  overrideDirective.mutate({ loopId: loop.id, eventId, action, note })
+                }
+                onResolveUnsure={(eventId, outcome, note) =>
+                  resolveUnsure.mutate(
+                    { loopId: loop.id, eventId, outcome, note },
+                    {
+                      onSuccess: row => {
+                        if (row.ticketSkipped) {
+                          toast.info('Answer saved. The ticket changed since the question, so it was left as it is.');
+                        }
+                      },
+                    }
+                  )
+                }
+                resolvingUnsureId={resolveUnsure.isPending ? resolveUnsure.variables?.eventId : undefined}
+              />
+            </AccordionDetails>
+          </Accordion>
+          <Accordion expanded={statsOpen} onChange={(_, expanded) => setStatsOpen(expanded)}>
+            <AccordionSummary data-testid="loop-detail-stats-toggle">Stats</AccordionSummary>
+            <AccordionDetails>
+              {statsOpen && <LoopStatsPanel loop={loop} tickets={tickets} loops={loops} onViewRun={setRun} />}
+            </AccordionDetails>
+          </Accordion>
+          <Accordion
+            expanded={coachOpen}
+            onChange={(_, expanded) => {
+              setCoachOpen(expanded);
+              if (expanded) setCoachSeen(true);
+            }}
+          >
+            <AccordionSummary data-testid="loop-detail-coach-toggle">
+              Coach{coach ? ` (${coach.suggestions.length})` : ''}
+            </AccordionSummary>
+            <AccordionDetails>{coachOpen && <LoopCoach loopId={loop.id} />}</AccordionDetails>
+          </Accordion>
+        </AccordionGroup>
+        <LoopTicketBoard loop={loop} data={tickets} onViewRun={setRun} />
+      </Stack>
+      <Drawer
+        anchor="right"
+        open={!!run}
+        onClose={() => setRun(undefined)}
+        slotProps={{ content: { sx: { width: 'min(720px, 100vw)', p: 2, gap: 1 } } }}
+        data-testid="loop-run-drawer"
+      >
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+            <DialogTitle>Run</DialogTitle>
+            {runInfo?.model && (
+              <Typography level="body-sm" data-testid="loop-run-model">
+                {runInfo.model}
+              </Typography>
+            )}
+            {runInfo?.escalated && (
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                title="The ticket's last run before its run limit, on the escalation model"
+                data-testid="loop-run-escalated"
+              >
+                Escalated
+              </Chip>
+            )}
+            {runInfo?.loopRunKind === 'triage' && (
+              <Chip size="sm" variant="soft" color="neutral" data-testid="loop-run-triage">
+                Triage
+              </Chip>
+            )}
+          </Stack>
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Close run"
+            onClick={() => setRun(undefined)}
+            data-testid="loop-run-drawer-close-btn"
+          >
+            <CloseIcon />
+          </IconButton>
+        </Stack>
+        {runTicket?.status === 'closed' && (
+          <Stack direction="row" gap={1} alignItems="center" data-testid="loop-run-ticket-rating">
+            <Typography level="body-sm">Rate &quot;{runTicket.title}&quot;</Typography>
+            <LoopTicketRating loopId={loop.id} ticket={runTicket} />
+          </Stack>
+        )}
+        {runInfo?.loopReflection && (
+          <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }} data-testid="loop-run-reflection">
+            <Stack direction="row" justifyContent="space-between" gap={1}>
+              <Typography level="title-sm">Reflection</Typography>
+              <Typography level="body-xs" data-testid="loop-run-reflection-credits">
+                {formatCredits(runInfo.loopReflection.credits)} credits
+              </Typography>
+            </Stack>
+            <Typography level="body-sm" data-testid="loop-run-reflection-text">
+              {runInfo.loopReflection.reflection}
+            </Typography>
+            <Typography level="body-sm" data-testid="loop-run-reflection-next">
+              Next time: {runInfo.loopReflection.nextIntendedAction}
+            </Typography>
+          </Sheet>
+        )}
+        <Box sx={{ overflowY: 'auto' }}>{run && <AgentRunViewer executionId={run} />}</Box>
+      </Drawer>
+    </Box>
+  );
+}
+
+/** "Oversees: A, B - Overseen by: C", each a link to that loop; nothing when the loop is in no oversight. */
+function LoopOversightLine({
+  loopId,
+  oversees,
+  loops,
+}: {
+  loopId: string;
+  oversees: string[];
+  loops: { id: string; name: string; oversees?: string[] }[];
+}) {
+  const navigate = useNavigate();
+  const watched = loops.filter(other => oversees.includes(other.id));
+  const watchers = loops.filter(other => other.oversees?.includes(loopId));
+  if (watched.length === 0 && watchers.length === 0) return null;
+  const links = (group: { id: string; name: string }[]) =>
+    group.map((other, index) => (
+      <span key={other.id}>
+        {index > 0 && ', '}
+        <Link
+          component="button"
+          level="body-sm"
+          onClick={() => navigate({ to: '/loops/$id', params: { id: other.id } })}
+        >
+          {other.name}
+        </Link>
+      </span>
+    ));
+  return (
+    <Stack direction="row" gap={2} flexWrap="wrap" data-testid="loop-detail-oversight">
+      {watched.length > 0 && <Typography level="body-sm">Oversees: {links(watched)}</Typography>}
+      {watchers.length > 0 && <Typography level="body-sm">Overseen by: {links(watchers)}</Typography>}
+    </Stack>
+  );
+}

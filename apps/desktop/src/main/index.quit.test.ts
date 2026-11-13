@@ -60,6 +60,18 @@ vi.mock('./usage', () => ({ registerUsage: vi.fn() }));
 vi.mock('./fleet', () => ({
   registerFleet: () => ({ setDirectoryResolver: vi.fn(), setModelResolver: vi.fn() }),
 }));
+vi.mock('./loops', () => ({
+  registerLoopRunner: () => ({
+    runner: {
+      observe: vi.fn(),
+      unattended: vi.fn(),
+      merge: vi.fn(),
+      releaseAll: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    },
+    sync: vi.fn(async () => undefined),
+  }),
+}));
 vi.mock('./models', () => ({ registerModels: () => harness.models }));
 vi.mock('./terminal', () => ({ registerTerminals: () => harness.terminals }));
 vi.mock('./update', () => ({ registerUpdates: harness.registerUpdates }));

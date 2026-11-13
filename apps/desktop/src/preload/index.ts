@@ -25,6 +25,14 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { LoopApproveRequest, LoopRunnerSettings, LoopRunnerState } from '@shared/loopRunner';
+import type {
+  AnswerLocalEventRequest,
+  CreateLocalLoopRequest,
+  CreateLocalTicketRequest,
+  UpdateLocalLoopRequest,
+  UpdateLocalTicketRequest,
+} from '@shared/localLoops';
 import type { WatchPreferences, WatchPreferencesPatch } from '@shared/watch';
 import type { GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -73,6 +81,40 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: UpdateState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
+  loopRunner: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerGetState),
+    setSettings: (patch: Partial<LoopRunnerSettings>) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerSetSettings, patch),
+    setOpenAtLogin: (on: boolean) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerSetOpenAtLogin, on),
+    approve: (request: LoopApproveRequest) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerApprove, request),
+    revoke: (loopId: string) => ipcRenderer.invoke(IPC_CHANNELS.loopRunnerRevoke, loopId),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, state: LoopRunnerState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.loopRunnerStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.loopRunnerStateChanged, handler);
+    },
+  },
+  localLoops: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsList),
+    get: (loopId: string) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsGet, loopId),
+    createLoop: (request: CreateLocalLoopRequest) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsCreateLoop, request),
+    updateLoop: (request: UpdateLocalLoopRequest) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsUpdateLoop, request),
+    deleteLoop: (loopId: string) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsDeleteLoop, loopId),
+    setStatus: (request: { id: string; status: 'live' | 'paused' }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.localLoopsSetStatus, request),
+    runNow: (loopId: string) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsRunNow, loopId),
+    createTicket: (request: CreateLocalTicketRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.localLoopsCreateTicket, request),
+    updateTicket: (request: UpdateLocalTicketRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.localLoopsUpdateTicket, request),
+    answerEvent: (request: AnswerLocalEventRequest) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsAnswerEvent, request),
+    getBudget: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsGetBudget),
+    setBudget: (dailyCredits: number | null) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsSetBudget, { dailyCredits }),
+    onChanged: listener => {
+      const handler = (_event: unknown, change: { loopIds: string[] }) => listener(change);
+      ipcRenderer.on(IPC_CHANNELS.localLoopsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.localLoopsChanged, handler);
     },
   },
   models: {

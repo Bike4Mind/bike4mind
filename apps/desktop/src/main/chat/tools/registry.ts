@@ -32,6 +32,8 @@ import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { loopTool } from './loopTool';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { setSessionPullRequest } from './pullRequestTool';
+import { LOCAL_LOOP_TICKET_TOOLS } from './localLoopTicketTools';
+import { loopMergePr } from './loopMergeTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
@@ -164,6 +166,8 @@ const BY_NAME = new Map(
     requestDirectory,
     loopTool,
     setSessionPullRequest,
+    loopMergePr,
+    ...LOCAL_LOOP_TICKET_TOOLS,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -279,6 +283,10 @@ export function toolsForRequest(options: {
    * follows. Offers set_session_pull_request.
    */
   pullRequest?: boolean;
+  /** A loop runner session, which merges only through loop_merge_pr. */
+  loopMerge?: boolean;
+  /** A Desktop loop run: its loop's loop_ticket_* tools, backed by the local store. */
+  localLoopTickets?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -301,6 +309,8 @@ export function toolsForRequest(options: {
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory, loopTool] : []),
     ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
+    ...(options.loopMerge ? [loopMergePr] : []),
+    ...(options.localLoopTickets ? LOCAL_LOOP_TICKET_TOOLS : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [

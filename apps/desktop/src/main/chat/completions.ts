@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { LOOP_RUN_HEADER } from '@bike4mind/common';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
@@ -141,9 +142,17 @@ export interface CompletionRequest {
   run?: CompletionRunAttribution;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /**
+   * The loop run this request works for, sent as LOOP_RUN_HEADER so the server counts its credits
+   * against the loop's daily budget. Set only in a loop runner session.
+   */
+  loopRunId?: string;
   /** Set when the tools were left out because the listed model reports no tool support. */
   toolsUnsupported?: true;
 }
+
+/** The contract's header; the server adds the call's credits to that loop run. */
+export { LOOP_RUN_HEADER };
 
 /**
  * Stream one completion, calling `onEvent` for each decoded SSE event.
@@ -249,7 +258,10 @@ async function streamOnce(
         timeout: COMPLETION_HEADER_TIMEOUT_MS,
         // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
         // so a resend under the same id would read as the same charge.
-        headers: { 'X-Request-ID': randomUUID() },
+        headers: {
+          'X-Request-ID': randomUUID(),
+          ...(request.loopRunId ? { [LOOP_RUN_HEADER]: request.loopRunId } : {}),
+        },
       }
     );
   } catch (err) {

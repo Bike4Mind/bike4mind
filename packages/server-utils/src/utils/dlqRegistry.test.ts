@@ -47,10 +47,12 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
   'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  'loop-dispatch': 'https://sqs.us-east-2.amazonaws.com/123456789/loopDispatchQueueDLQ',
   ...Object.fromEntries(
     [
       'young-account-spend-alert',
       'api-probe-detector',
+      'loop-scheduler',
       'image-moderation-review-sweep',
       'spend-monitor',
       'signup-grant-held-release',
@@ -102,6 +104,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   secopsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/secopsTriageQueue',
   overwatchAnalyticsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/overwatchAnalyticsQueue',
   agentContinuationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueue',
+  loopDispatchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/loopDispatchQueue',
   optihashiRunCompletionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueue',
   bobRunQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueue',
   libreoncologyAudioRenderQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/libreoncologyAudioRenderQueue',
@@ -144,7 +147,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(62);
+      expect(registry).toHaveLength(64);
     });
 
     it('each entry has required fields', () => {

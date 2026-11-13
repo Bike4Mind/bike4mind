@@ -48,6 +48,7 @@ import {
 } from './eventBus';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
+import { loopSchedulerDeadLetter } from './loopSchedulerDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
@@ -87,6 +88,8 @@ import {
   lakeMemoryQueueDLQ,
   riskEvidenceQueue,
   riskEvidenceQueueDLQ,
+  loopDispatchQueue,
+  loopDispatchQueueDLQ,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -280,6 +283,8 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'young-account-spend-alert': youngAccountSpendAlertDeadLetter.queue.url,
       }),
       ...(apiProbeDetectorDeadLetter && { 'api-probe-detector': apiProbeDetectorDeadLetter.queue.url }),
+      ...(loopDispatchQueueDLQ && { 'loop-dispatch': loopDispatchQueueDLQ.url }),
+      ...(loopSchedulerDeadLetter && { 'loop-scheduler': loopSchedulerDeadLetter.queue.url }),
       ...(imageModerationReviewSweepDeadLetter && {
         'image-moderation-review-sweep': imageModerationReviewSweepDeadLetter.queue.url,
       }),
@@ -347,6 +352,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     secopsTriageQueue: secopsTriageQueue.url,
     overwatchAnalyticsQueue: overwatchAnalyticsQueue.url,
     agentContinuationQueue: agentContinuationQueue.url,
+    ...(loopDispatchQueue && { loopDispatchQueue: loopDispatchQueue.url }),
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
     libreoncologyAudioRenderQueue: libreoncologyAudioRenderQueue.url,
@@ -440,6 +446,8 @@ export const web = new sst.aws.Nextjs(
       // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
       // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
       riskEvidenceQueue,
+      // Loop routes ask for an immediate dispatch (requestLoopDispatch); absent off the loop scheduler's stages.
+      ...(loopDispatchQueue ? [loopDispatchQueue] : []),
     ],
     permissions: [
       {

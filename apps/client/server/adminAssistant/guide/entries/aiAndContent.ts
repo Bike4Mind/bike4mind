@@ -33,6 +33,30 @@ export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['configuration', 'system settings', 'feature flags', 'api keys', 'save bar', 'setting value', 'toggle'],
   },
   {
+    id: 'loops',
+    title: 'Loops',
+    summary:
+      'Recurring, unattended agent runs that users set up on the Loops page, each billed to its owner. Loops stay off until an admin turns them on, and admin settings cap how much they run and spend.',
+    views: ['admin.settings'],
+    settings: ['EnableLoops', 'LoopsDailyCreditsPerUser', 'LoopsMaxActiveRuns', 'LoopsCloudLanesPerUser'],
+    howTo: [
+      'Turn on Enable Loops on the Experimental tab of Admin Settings. It needs Enable Agents on. While it is off, the Loops page and API are hidden and no loop runs.',
+      "Loops: Daily Credits per User caps what all of one user's loops may spend per UTC day, paced across the day; 0 means no cap. A user may set a lower cap of their own.",
+      'Loops: Cloud Runs at Once (Server-wide) and Loops: Cloud Runs at Once per User limit cloud loop runs in flight. Keep the server-wide value well below the agent executor slots so chat keeps room.',
+      'Each loop can also have its own daily budget. A loop whose budget is below the cost of one run pauses and says how many credits one run needs; the owner raises it and sets the loop live.',
+      'Runs on a user Desktop app count against the daily budgets but not against the cloud run limits. Users can start a loop from a template on the Loops page; templates set no budget.',
+    ],
+    keywords: [
+      'loops',
+      'recurring agent',
+      'scheduled agent',
+      'unattended runs',
+      'loop budget',
+      'loop templates',
+      'desktop runner',
+    ],
+  },
+  {
     id: 'llm-model-dashboard',
     title: 'LLM Dashboard',
     summary:

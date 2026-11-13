@@ -164,6 +164,17 @@ describe('IterationStream — render', () => {
     expect(screen.getByText('Awaiting permission')).toBeInTheDocument();
   });
 
+  it('labels a completed run that handed its ticket to the user as Blocked', () => {
+    mocks.execution = makeExecution({ status: 'completed', failureReason: 'blocked', iterations: [step(0, 1)] });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument();
+  });
+
   it('does not mount the PermissionCard when pendingPermission is undefined', () => {
     mocks.execution = makeExecution({ status: 'running' });
     render(
@@ -233,6 +244,24 @@ describe('IterationStream — render', () => {
     it('falls back to a generic denial line when tool_denied has no message', () => {
       const line = renderFailed({ failureReason: 'tool_denied' });
       expect(line).toHaveTextContent('Execution stopped: a tool call was denied.');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
+    it.each([
+      ['insufficient_credits', 'Stopped: out of credits'],
+      ['credit_cap', "Stopped: reached this run's credit cap"],
+    ])('shows friendly text for %s instead of the raw reason', (failureReason, text) => {
+      const line = renderFailed({ failureReason, errorMessage: 'raw message' });
+      expect(line).toHaveTextContent(text);
+      expect(line).not.toHaveTextContent(/Failed:|raw message/);
+    });
+
+    it("shows a new account's spend cap message as it is", () => {
+      const line = renderFailed({
+        failureReason: 'spend_cap',
+        errorMessage: 'New accounts can spend up to 10 credits',
+      });
+      expect(line).toHaveTextContent('New accounts can spend up to 10 credits');
       expect(line).not.toHaveTextContent(/Failed:/);
     });
 

@@ -1,0 +1,902 @@
+import { IBaseRepository } from './BaseTypes';
+import type { IWorkItem } from './WorkItemTypes';
+
+/**
+ * A Loop is a recurring, unattended agent run owned by a user. Every
+ * `intervalMinutes` the loop scheduler (`apps/workers/src/cron/loopScheduler.ts`)
+ * dispatches its `goal` as an ordinary headless agent execution under the loop's
+ * notebook, then folds the run's `loop-memory` block back into `memory` so the
+ * next run picks up where this one stopped.
+ */
+export const LOOP_STATUSES = ['draft', 'live', 'paused', 'needs_you', 'error'] as const;
+
+export type LoopStatus = (typeof LOOP_STATUSES)[number];
+
+/**
+ * True when the loop's own status needs its owner: stopped by the scheduler (`needs_you`, `error`) or
+ * paused with a reason. An owner pause clears `statusReason`, so it never counts. Shared by the notice
+ * sweep (`apps/workers/src/cron/loopNotices.ts`) and the loop list marker (`loopNeedsOwner`).
+ */
+export const loopStatusNeedsOwner = (loop: Pick<ILoop, 'status' | 'statusReason'>): boolean =>
+  loop.status === 'needs_you' || loop.status === 'error' || (loop.status === 'paused' && !!loop.statusReason);
+
+/**
+ * Server agent tools offered only on loop runs (`apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts`).
+ * Pre-approved on headless loop runs in `startAgentExecution`.
+ */
+export const LOOP_TICKET_TOOL_NAMES = [
+  'loop_ticket_list',
+  'loop_ticket_create',
+  'loop_ticket_update',
+  'loop_ticket_unsure',
+  'loop_ticket_split',
+  'loop_ticket_handoff',
+] as const;
+
+/** `interval`, the default: runs on its interval and when tickets arrive. `tickets`: only when tickets arrive. */
+export const LOOP_WAKE_MODES = ['interval', 'tickets'] as const;
+export type LoopWakeMode = (typeof LOOP_WAKE_MODES)[number];
+
+/** Upper bound of a loop's `triggers`; the API, the form and LoopModel share it. */
+export const LOOP_TRIGGERS_MAX = 10;
+
+/**
+ * Stored on the woken loop: when a ticket of `fromLoopId` reaches `stage`, a linked copy is filed into this loop
+ * in `toStage` (default its first stage). See `fireStageTriggers` (apps/client/server/utils/loopHandoff.ts).
+ */
+export interface ILoopTrigger {
+  fromLoopId: string;
+  stage: string;
+  toStage?: string;
+}
+
+/**
+ * Directive tools (`apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts`): every loop run can
+ * answer the directives sent to it; only runs of a loop with `oversees` get the overseer tools. Both lists are
+ * pre-approved on headless loop runs in `startAgentExecution`.
+ */
+export const LOOP_DIRECTIVE_TOOL_NAMES = ['loop_directive_respond'] as const;
+export const LOOP_OVERSEER_TOOL_NAMES = [
+  'loop_oversee_status',
+  'loop_directive_issue',
+  'loop_run_now',
+  'loop_resume',
+] as const;
+
+export const LOOP_AUTO_RESUME_KINDS = ['budget', 'credits'] as const;
+
+export type LoopAutoResume = (typeof LOOP_AUTO_RESUME_KINDS)[number];
+
+/**
+ * Why a live, otherwise due loop is not running: paced to its daily budget, the server-wide run cap, or its p2
+ * runs per day used up with only p2/p3 tickets ready (`priority_budget`, until 00:00 UTC).
+ */
+export const LOOP_HOLD_KINDS = ['pacing', 'capacity', 'priority_budget'] as const;
+export type LoopHoldKind = (typeof LOOP_HOLD_KINDS)[number];
+
+/**
+ * Which cap a capacity hold is waiting on: the loop's own lanes, the owner's cloud lanes, the server-wide
+ * cap, or a lane's share of the budget below one iteration.
+ */
+export const LOOP_CAPACITY_LIMITS = ['loop', 'user', 'server', 'budget'] as const;
+export type LoopCapacityLimit = (typeof LOOP_CAPACITY_LIMITS)[number];
+
+/** Most cloud runs one loop may have in flight at once (`maxConcurrent`). */
+export const LOOP_MAX_CONCURRENT = 5;
+/** Cap (chars) on a loop's memory notes: the fallback tail of an answer, and the tail kept when parallel runs merge. */
+export const LOOP_MEMORY_TAIL_CHARS = 4000;
+/** Caps (chars) on a run's stored reflection (`AgentExecution.loopReflection`). */
+export const LOOP_REFLECTION_CHARS = 1000;
+export const LOOP_NEXT_ACTION_CHARS = 300;
+/** Output token ceiling of the reflection call made after a cloud run. */
+export const LOOP_REFLECT_MAX_TOKENS = 600;
+
+export const activeLaneCount = (loop: Pick<ILoop, 'activeExecutionIds'>): number =>
+  loop.activeExecutionIds?.length ?? 0;
+export const loopMaxConcurrent = (loop: Pick<ILoop, 'maxConcurrent'>): number => loop.maxConcurrent ?? 1;
+
+/** Liveness problems the scheduler flags to the owner: a live loop idle with ready tickets, or a run far longer than usual. */
+export const LOOP_ALARM_KINDS = ['idle_with_work', 'long_run'] as const;
+export type LoopAlarmKind = (typeof LOOP_ALARM_KINDS)[number];
+
+export interface ILoopHold {
+  kind: LoopHoldKind;
+  /** Pacing and priority_budget: when the deferred run is due. */
+  until?: Date;
+  /** Capacity only; absent on older holds, which read as `server`. */
+  limit?: LoopCapacityLimit;
+  at: Date;
+}
+
+export interface ILoopAlarm {
+  kind: LoopAlarmKind;
+  reason: string;
+  since: Date;
+  /** long_run only: the run that is going long. */
+  executionId?: string;
+}
+
+/** Midnight UTC of `now`'s day; a loop's daily budget counts runs started since then. */
+export const startOfUtcDay = (now: Date): Date =>
+  new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+/** The UTC midnight after `now`: when a loop's daily budgets reset. */
+export const nextUtcMidnight = (now: Date): Date => new Date(startOfUtcDay(now).getTime() + 24 * 60 * 60 * 1000);
+
+/** Hours a p0/p1 ticket may wait (open, running or parked on deps) before it is flagged stale; `ILoop.serviceLevelHours` overrides. */
+export const LOOP_SERVICE_LEVEL_HOURS = { p0: 4, p1: 24 } as const;
+/** Upper bounds of a loop's `serviceLevelHours` and `p2RunsPerDay`: the API, the form and LoopModel share them. */
+export const LOOP_SERVICE_LEVEL_HOURS_MAX = 720;
+export const LOOP_P2_RUNS_PER_DAY_MAX = 1000;
+
+/**
+ * Hours a p0/p1 ticket has waited past its loop's service level, counted from when its priority was last set
+ * (`prioritySetAt`, else `createdAt`); null when it is within it or not covered. A ticket its owner blocked
+ * already has a blocked notice, and an epic waits on its children, so neither counts. Shared by the notice sweep
+ * (apps/workers/src/cron/loopNotices.ts) and the tickets route's `stale`.
+ */
+export function serviceLevelBreach(
+  ticket: Pick<IWorkItem, 'priority' | 'status' | 'blockedOn' | 'epic' | 'prioritySetAt' | 'createdAt'>,
+  loop: Pick<ILoop, 'serviceLevelHours'>,
+  now: Date
+): { hours: number; threshold: number } | null {
+  const { priority } = ticket;
+  if (priority !== 'p0' && priority !== 'p1') return null;
+  if (ticket.epic || ticket.status === 'closed' || (ticket.status === 'blocked' && !ticket.blockedOn)) return null;
+  const threshold = loop.serviceLevelHours?.[priority] ?? LOOP_SERVICE_LEVEL_HOURS[priority];
+  const hours = (now.getTime() - new Date(ticket.prioritySetAt ?? ticket.createdAt).getTime()) / (60 * 60 * 1000);
+  return hours > threshold ? { hours, threshold } : null;
+}
+
+/**
+ * The model a ticket run uses. `runsAfterClaim` is the ticket's runCount including this run: the run that reaches
+ * `limit` (the last before the ticket is blocked) uses the escalation model when one is set, the stage's first.
+ * Shared by the cloud dispatch (apps/workers/src/cron/loopScheduler.ts) and the desktop claim (loopRunner.ts).
+ */
+export function loopRunModel(
+  loop: Pick<ILoop, 'model' | 'escalationModel'>,
+  stage: Pick<ILoopStageConfig, 'model' | 'escalationModel'>,
+  runsAfterClaim: number,
+  limit: number
+): { model: string; escalated: boolean } {
+  const escalation = stage.escalationModel ?? loop.escalationModel;
+  if (escalation && runsAfterClaim === limit) return { model: escalation, escalated: true };
+  return { model: stage.model ?? loop.model, escalated: false };
+}
+
+export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
+
+export const LOOP_STAGE_RUNNERS = ['cloud', 'desktop'] as const;
+
+export type LoopStageRunner = (typeof LOOP_STAGE_RUNNERS)[number];
+
+/** Per-stage overrides for runs that work a ticket in `stage`. Unset fields fall back to the loop's own. */
+export interface ILoopStageConfig {
+  /** One of the loop's `stages`, never the last. */
+  stage: string;
+  /** Owner-written; added to the prompt of runs working a ticket in this stage. */
+  instructions?: string;
+  /** Replaces the loop's `model`. */
+  model?: string;
+  /** Replaces the loop's `escalationModel` (`loopRunModel`). */
+  escalationModel?: string;
+  /** Replaces the loop's `tools`; empty or absent inherits them. */
+  tools?: string[];
+  /** Cloud stages only: replaces the loop's `agentId`. */
+  agentId?: string;
+  /** Skill ids, rendered into the prompt of runs working a ticket in this stage. */
+  skills?: string[];
+  /**
+   * Absent means `cloud`. The cloud scheduler never claims a ticket in a `desktop` stage; a desktop runner
+   * does.
+   */
+  runner?: LoopStageRunner;
+  /** Desktop stages only, from here down: the guards a desktop runner applies to the ticket's work. `owner/name`. */
+  repoHint?: string;
+  /** Absent means `review`; served as `effectiveMergePolicy`. */
+  mergePolicy?: LoopMergePolicy;
+  deployWorkflow?: string;
+  smoke?: LoopSmokeCheck;
+  holdLabels?: string[];
+}
+
+export const LOOP_MERGE_POLICIES = ['review', 'green-ci', 'never'] as const;
+export type LoopMergePolicy = (typeof LOOP_MERGE_POLICIES)[number];
+export type LoopSmokeCheck = { url: string } | { command: string };
+
+/** The merge policy a desktop runner applies: `review` when unset, and when the org turned `green-ci` merges off. */
+export const effectiveMergePolicy = (
+  policy: LoopMergePolicy | undefined,
+  orgGreenCiDisabled?: boolean
+): LoopMergePolicy => (!policy || (policy === 'green-ci' && orgGreenCiDisabled) ? 'review' : policy);
+
+/** Header a desktop runner sends on its completion calls so their credits count toward the run's loop budgets. */
+export const LOOP_RUN_HEADER = 'X-B4M-Loop-Run';
+/** A desktop run's lease (ms); heartbeat and progress renew it, and the scheduler reopens the ticket once it lapses. */
+export const RUNNER_LEASE_MS = 2 * 60_000;
+/** A runner's presence counts as online this long (ms) after its last post. */
+export const RUNNER_PRESENCE_FRESH_MS = 2 * 60_000;
+/** Desktop runs a user may have active at once: the desktop app's lane cap. */
+export const MAX_DESKTOP_RUNS_PER_USER = 4;
+
+/** Desktop runner API shapes (apps/client/pages/api/loops/runner); the desktop app mirrors them. */
+export interface RunnerTicket {
+  ticketId: string;
+  title: string;
+  loopId: string;
+  loopName: string;
+  stage: string;
+  repoHint?: string;
+}
+
+/** A loop with ready desktop tickets that its budgets hold back now, with the reason to show. */
+export interface RunnerHeldLoop {
+  loopId: string;
+  loopName: string;
+  repoHint?: string;
+  reason: string;
+}
+
+export interface RunnerClaim {
+  ticket: RunnerTicket;
+  runId: string;
+  leaseExpiresAt: string;
+  /** The same prompt a cloud run of this ticket gets. */
+  prompt: string;
+  model?: string;
+  tools?: string[];
+  stage: {
+    mergePolicy: LoopMergePolicy;
+    guards?: { deployWorkflow?: string; smoke?: LoopSmokeCheck; holdLabels?: string[] };
+  };
+}
+
+export type LoopProgressFrame =
+  | { type: 'text'; text: string }
+  | { type: 'tool-start'; callId: string; name: string; input: string }
+  | { type: 'tool-end'; callId: string; name: string; status: string; error?: string; preview?: string }
+  | { type: 'usage'; usage: unknown };
+
+/** Optional on every outcome: names of tools the run called but did not have, and of tools that threw. */
+type RunnerToolFailures = { toolsUnavailable?: string[]; toolsErrored?: string[] };
+
+export type RunnerOutcome = RunnerToolFailures &
+  (
+    | { outcome: 'advanced'; answer: string; durationMs: number }
+    | { outcome: 'blocked'; reason: string; answer?: string; durationMs: number }
+    | { outcome: 'failed'; reason: string; durationMs: number }
+    | { outcome: 'released'; reason?: string; durationMs: number }
+  );
+
+/** A user's desktop runner, as last reported. One row per user: with two machines the last post wins. */
+export interface ILoopRunnerPresence {
+  id: string;
+  userId: string;
+  seenAt: Date;
+  lanesBusy: number;
+  lanesFree: number;
+  waitingReason?: string;
+}
+
+export interface ILoopRunnerPresenceRepository {
+  upsertForUser(userId: string, fields: Omit<ILoopRunnerPresence, 'id' | 'userId'>): Promise<void>;
+  findByUserId(userId: string): Promise<ILoopRunnerPresence | null>;
+}
+
+/** The config for a stage; {} when it has none. */
+export const stageConfigOf = (loop: Pick<ILoop, 'stageConfig'>, stage?: string): Omit<ILoopStageConfig, 'stage'> =>
+  (loop.stageConfig ?? []).find(entry => entry.stage === stage) ?? {};
+
+/** Stages whose tickets wait for a desktop runner. */
+export const desktopStagesOf = (loop: Pick<ILoop, 'stageConfig'>): string[] =>
+  (loop.stageConfig ?? []).filter(entry => entry.runner === 'desktop').map(entry => entry.stage);
+
+/** What a cloud run's reflection call wrote about it; `credits` is what the call cost, already in the run's total. */
+export interface ILoopRunReflection {
+  reflection: string;
+  nextIntendedAction: string;
+  credits: number;
+  createdAt: Date;
+}
+
+/** An earlier run's reflection as shown in the next run's prompt; `stage` is unset for a goal run. */
+export type LoopReflectionEntry = Pick<ILoopRunReflection, 'reflection' | 'nextIntendedAction' | 'createdAt'> & {
+  stage?: string;
+};
+
+/** State carried from one run to the next. */
+export interface ILoopMemory {
+  notes: string;
+  nextAction: string;
+  updatedAt?: Date;
+}
+
+export interface ILoop {
+  id: string;
+  userId: string;
+  /** Billing target, checked against the owner's membership at write time. */
+  organizationId?: string;
+  name: string;
+  /** The prompt each run is given. */
+  goal: string;
+  /**
+   * Persisted agent whose orchestration profile the run uses. If that profile is
+   * exclusive, the executor ignores `tools` and uses the profile's own toolset.
+   */
+  agentId?: string;
+  model: string;
+  /** Notebook every run is grouped under; created with the loop. */
+  sessionId: string;
+  intervalMinutes: number;
+  /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `<lowercased server>__<tool>` for MCP tools. */
+  tools: string[];
+  stages: string[];
+  /** Sparse list keyed by `stage` (one of `stages`, never the last); see `stageConfigOf`. */
+  stageConfig?: ILoopStageConfig[] | null;
+  /** Enforced at dispatch per UTC day (`startOfUtcDay`); one run can overshoot it. */
+  budgetCreditsPerDay?: number;
+  status: LoopStatus;
+  statusReason?: string;
+  /** Set only by the scheduler on a pause it lifts itself; an owner pause never has it. */
+  autoResume?: LoopAutoResume;
+  memory: ILoopMemory;
+  lastRunAt?: Date;
+  nextRunAt?: Date;
+  lastExecutionId?: string;
+  /** Cloud runs from dispatch until each is folded in; a loop is dispatched again only while a lane is free. */
+  activeExecutionIds?: string[];
+  /** Cloud lanes, 1 to `LOOP_MAX_CONCURRENT`; absent means 1 (`loopMaxConcurrent`). Desktop runs are not counted. */
+  maxConcurrent?: number;
+  /** Claim lease held by a scheduler tick while it dispatches. */
+  leaseUntil?: Date;
+  runCount: number;
+  /** Non-credit failures in a row; the loop moves to `error` at the scheduler's limit. */
+  consecutiveFailures: number;
+  /** Idle runs in a row (no ticket, memory unchanged, no ticket touched); each doubles the wait before the next. */
+  idleStreak?: number;
+  /** Last Run now, owner edit, directive or ticket change; a run in flight across it is not idle. */
+  idleResetAt?: Date;
+  /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
+  oversees?: string[];
+  /** Why a live loop is held back on purpose right now; written only by the scheduler. */
+  hold?: ILoopHold;
+  /** A liveness problem for the owner; written only by the scheduler. */
+  alarm?: ILoopAlarm;
+  /** Per-priority overrides of LOOP_SERVICE_LEVEL_HOURS. */
+  serviceLevelHours?: { p0?: number; p1?: number };
+  /** Ticket runs (cloud and desktop) of p2 tickets per UTC day; absent means no cap. Over it, p2 and p3 wait. */
+  p2RunsPerDay?: number;
+  /** The model triage runs use; absent means `model`. */
+  triageModel?: string;
+  /** The model of a ticket's last run before its run limit (`loopRunModel`); absent means no escalation. */
+  escalationModel?: string;
+  /** Ids of the same owner's loops this loop's runs may hand tickets to (`loop_ticket_handoff`). */
+  handoffTargets?: string[];
+  triggers?: ILoopTrigger[];
+  /** Absent means `interval`. In `tickets` mode `nextRunAt` is set only when a ticket makes the loop due. */
+  wakeMode?: LoopWakeMode;
+  /** The coach's model trial on one stage (apps/client/server/utils/loopCoach.ts). The scheduler never reads it. */
+  coachTrial?: ILoopCoachTrial;
+  /** Coach suggestions the owner dismissed; a key fires again 30 days after `at`. Newest last. */
+  coachDismissed?: ILoopCoachDismissal[];
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * A stage running on `model` for `tickets` tickets so the owner can compare it with `baselineModel` (the stage's
+ * effective model when it started). `previousModel` is the stage's own model then; absent means it inherited the
+ * loop's. Never reverts by itself: the owner keeps or reverts it.
+ */
+export interface ILoopCoachTrial {
+  stage: string;
+  model: string;
+  previousModel?: string;
+  baselineModel: string;
+  tickets: number;
+  startedAt: Date;
+}
+
+export interface ILoopCoachDismissal {
+  key: string;
+  reason: string;
+  at: Date;
+}
+
+/**
+ * The loop fields a `config_changed` event versions (before/after) and an undo restores. Owner-only writes: the
+ * scheduler never writes them.
+ */
+export const LOOP_VERSIONED_FIELDS = [
+  'stages',
+  'stageConfig',
+  'model',
+  'budgetCreditsPerDay',
+  'maxConcurrent',
+  'tools',
+  'triageModel',
+  'escalationModel',
+  'intervalMinutes',
+] as const;
+export type LoopVersionedField = (typeof LOOP_VERSIONED_FIELDS)[number];
+
+/** Who made a settings change: the owner's edit, a coach suggestion applied, a model trial, or an undo. */
+export const LOOP_CONFIG_CHANGE_BY = ['owner', 'coach', 'trial', 'undo'] as const;
+export type LoopConfigChangeBy = (typeof LOOP_CONFIG_CHANGE_BY)[number];
+
+/** Only the changed fields, each whole (the full `stageConfig` array); `null` means unset. */
+export interface ILoopConfigChange {
+  by: LoopConfigChangeBy;
+  before: Partial<Record<LoopVersionedField, unknown>>;
+  after: Partial<Record<LoopVersionedField, unknown>>;
+  suggestionKey?: string;
+  /** The id of the `undo` event that reverted this one. */
+  undoneBy?: string;
+}
+
+export const LOOP_COACH_KINDS = ['budget', 'schedule', 'model', 'tool', 'stage'] as const;
+export type LoopCoachKind = (typeof LOOP_COACH_KINDS)[number];
+
+/** One coach suggestion. No `patch`: advice only. `patch` is a PATCH /api/loops/:id body the server recomputes. */
+export interface LoopCoachSuggestion {
+  key: string;
+  kind: LoopCoachKind;
+  stage?: string;
+  title: string;
+  evidence: string;
+  patch?: Record<string, unknown>;
+  trialable: boolean;
+  /** Set when the patch cannot be applied yet (e.g. the stage still holds tickets). */
+  disabledReason?: string;
+}
+
+/** One side of a trial comparison. Rates are 0..1, `null` with nothing to measure. */
+export interface LoopCoachTrialSide {
+  model: string;
+  runs: number;
+  tickets: number;
+  up: number;
+  down: number;
+  creditsPerRun: number | null;
+  medianRunMs: number | null;
+  doneRate: number | null;
+}
+
+/** `GET /api/loops/:id/coach`. Dates are ISO strings. */
+export interface LoopCoachResponse {
+  suggestions: LoopCoachSuggestion[];
+  dismissed: { key: string; reason: string; at: string }[];
+  trial?: Omit<ILoopCoachTrial, 'startedAt'> & {
+    startedAt: string;
+    done: number;
+    complete: boolean;
+    trial: LoopCoachTrialSide;
+    baseline: LoopCoachTrialSide;
+  };
+  /** Newest first. `undoable` marks the one change Undo is offered on. */
+  versions: {
+    id: string;
+    at: string;
+    reason: string;
+    by: LoopConfigChangeBy;
+    suggestionKey?: string;
+    undone: boolean;
+    undoable: boolean;
+  }[];
+}
+
+/**
+ * GET /api/loops/budget: what all of the caller's loops spent today (since `startOfUtcDay`) against the
+ * all-loops cap. `effectiveCap` is the lower of the admin and user caps; each is absent when unset.
+ */
+export interface ILoopsBudget {
+  creditsToday: number;
+  userDailyCredits?: number;
+  adminDailyCredits?: number;
+  effectiveCap?: number;
+  /** The admin lane settings as `loopLaneLimits` clamps them: cloud loop runs per user, and server-wide. */
+  laneLimits?: { lanesPerUser: number; maxActiveRuns: number };
+}
+
+/** A finished run's memory and what the fold needs to merge it with a parallel run's (see `foldRun`). */
+export interface LoopRunMemory {
+  notes: string;
+  nextAction: string;
+  /** When the run started; memory written after it came from a parallel run, so the notes are appended. */
+  startedAt: Date;
+  updatedAt: Date;
+  ticketTitle?: string;
+}
+
+/**
+ * A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL,
+ * `creditsToday` those started since `startOfUtcDay`; `blockedTickets` counts its live blocked tickets.
+ */
+export type ILoopWithUsage = ILoop & { creditsUsed: number; creditsToday: number; blockedTickets: number };
+
+export interface ILoopRepository extends IBaseRepository<ILoop> {
+  listForUser(userId: string): Promise<ILoop[]>;
+  findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
+  /**
+   * Scoped update - a `null` in `patch` unsets the field. With `expectedStatus` it only applies while
+   * the loop still has that status, with `guard.stages` only while its stages are exactly those, and with
+   * `guard.noTrial` only while no coach trial is running.
+   * Returns null when nothing matched.
+   */
+  updateForUser(
+    id: string,
+    userId: string,
+    patch: Record<string, unknown>,
+    expectedStatus?: LoopStatus,
+    guard?: { stages?: string[]; noTrial?: boolean }
+  ): Promise<ILoop | null>;
+  deleteForUser(id: string, userId: string): Promise<boolean>;
+  /** Atomically leases one due `live` loop with a free lane and not in `skipIds`, or returns null. */
+  claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
+  releaseLease(id: string): Promise<void>;
+  /**
+   * Adds the run to `activeExecutionIds` and releases the claim. `laneHoldAt` marks the loop held on its own
+   * lane limit from then (all lanes now busy with ready tickets waiting); without it any hold is cleared. A null
+   * `nextRunAt` unsets it (a `tickets` wake-mode loop).
+   */
+  markDispatched(id: string, executionId: string, nextRunAt: Date | null, laneHoldAt?: Date): Promise<void>;
+  listInFlight(): Promise<ILoop[]>;
+  /** Cloud lanes in flight across all loops, and for one user. */
+  countInFlight(): Promise<number>;
+  countLanesForUser(userId: string): Promise<number>;
+  /**
+   * Folds a finished run into the loop and drops it from `activeExecutionIds`. Conditional on the run still
+   * being in it, so a second fold of the same run is a no-op. With `memory`, writes it the way
+   * `foldRunnerRun` does. Also clears this run's long_run alarm and a loop-lane hold. False when nothing matched.
+   */
+  foldRun(
+    id: string,
+    executionId: string,
+    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> },
+    memory?: LoopRunMemory
+  ): Promise<boolean>;
+  /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
+  makeDueNow(id: string, now: Date): Promise<boolean>;
+  /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
+  markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
+  /** Drops a deleted loop from every other loop's `oversees` and `handoffTargets`, and the triggers it feeds. */
+  removeLoopReferences(userId: string, loopId: string): Promise<void>;
+  /** Drops the triggers on `fromLoopId` whose `stage` is no longer one of its `stages`. */
+  pruneTriggersForStages(userId: string, fromLoopId: string, stages: string[]): Promise<void>;
+  /** The owner's loops with a trigger on (`fromLoopId`, `stage`). */
+  listTriggeredBy(userId: string, fromLoopId: string, stage: string): Promise<ILoop[]>;
+  /** Paused loops with `autoResume` set. */
+  listAutoPaused(): Promise<ILoop[]>;
+  /**
+   * Sets a loop paused with this `autoResume` back to `live`, due at `now`, clearing `autoResume` and
+   * `statusReason`. Conditional on both, so an owner's edit landing first wins. False when nothing matched.
+   */
+  resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean>;
+  /**
+   * Folds a finished desktop run into its loop: its memory, `lastRunAt`, and one more `runCount`. Never touches
+   * `activeExecutionIds`, which only cloud runs hold. The memory replaces the loop's when nothing wrote it since
+   * the run started; otherwise the run's notes are appended under a `[parallel run]` marker and the tail kept.
+   * An undefined `run` (a run with no answer) leaves the memory as is.
+   */
+  foldRunnerRun(id: string, userId: string, run: LoopRunMemory | undefined, lastRunAt: Date): Promise<void>;
+  /**
+   * Defers a claimed live loop to `nextRunAt` under a hold of `kind` (default pacing) and releases the claim. The one
+   * write of the deferring holds; a loop carries one hold, and `markDispatched` clears it.
+   */
+  deferUntil(id: string, nextRunAt: Date, now: Date, kind?: Exclude<LoopHoldKind, 'capacity'>): Promise<void>;
+  /** Marks a claimed live loop held on `limit` and releases the claim. */
+  holdForCapacity(id: string, limit: LoopCapacityLimit, now: Date): Promise<void>;
+  /** Clears capacity holds the tick recomputes; a loop-lane hold is cleared by the fold instead. */
+  clearCapacityHolds(): Promise<void>;
+  /** Marks every live loop `claimDue` would take now, except `skipIds`, as held by the server-wide cap. */
+  setCapacityHolds(now: Date, skipIds: string[]): Promise<void>;
+  /** Live loops with no lane active due at or before `before`, oldest first. */
+  listPastDueLive(before: Date, limit: number): Promise<ILoop[]>;
+  /** Loops carrying an alarm, of `kinds` when given. */
+  listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]>;
+  /**
+   * Sets the alarm while it still applies (a long run while it is an active run; an idle alarm while the loop is
+   * live with no lane active), keeping `since` when the same alarm (kind, and run for long_run) is already set.
+   */
+  setAlarm(id: string, alarm: ILoopAlarm): Promise<void>;
+  clearAlarm(id: string, kind: LoopAlarmKind): Promise<void>;
+}
+
+/**
+ * A per-loop event, kept past the execution TTL. `unsure` is a run the confidence gate paused: the
+ * scheduler parks its ticket as blocked and records it here, with the owner's answer as its `resolution`.
+ * Directives live in their own collection (`ILoopDirective`); the events API merges both into one log.
+ * `auto_resumed` is the scheduler lifting its own budget or credit pause; its `executionId` is the
+ * loop's last run and `requestedAt` the resume time. `handoff` is a ticket leaving (`out`) or arriving (`in`),
+ * one row per loop; its `executionId` is synthetic (`handoff:...`) and the run, if any, is `handoff.executionId`.
+ * `config_changed` is an owner edit to the loop's stages, models, budget, lanes or tools (`reason` summarizes it);
+ * its `executionId` is synthetic (`config:...`). The stats charts mark each as an era.
+ */
+export const LOOP_EVENT_KINDS = ['unsure', 'auto_resumed', 'handoff', 'config_changed'] as const;
+
+export type LoopEventKind = (typeof LOOP_EVENT_KINDS)[number];
+
+export type LoopGateOutcome = 'resumed' | 'rejected';
+
+/** `handed_off`: the ticket an `asked` event waited on left the loop, so nobody here can answer it. */
+export type LoopEventOutcome = LoopGateOutcome | 'handed_off';
+
+export interface ILoopEvent {
+  id: string;
+  loopId: string;
+  userId: string;
+  kind: LoopEventKind;
+  /**
+   * `unsure` only: `gate` (absent on older rows) is a run paused at the confidence gate, resolved through its
+   * gate card; `asked` is a run asking the owner with `loop_ticket_unsure`, resolved from the Log.
+   */
+  source?: 'gate' | 'asked';
+  executionId: string;
+  workItemId?: string;
+  ticketTitle?: string;
+  /** Set on gate `unsure` only. */
+  iteration?: number;
+  /** Set on gate `unsure` only. */
+  confidence?: number;
+  reason: string;
+  /** The gate's `requestedAt`; with `executionId` it identifies the event. */
+  requestedAt: Date;
+  /** `note` is the owner's answer to an `asked` event. */
+  resolution?: { outcome: LoopEventOutcome; by?: string; at: Date; note?: string };
+  /** Set once the scheduler has folded a resumed run back into its ticket. */
+  foldedAt?: Date;
+  handoff?: ILoopEventHandoff;
+  /** `config_changed` written from this feature on: what changed and who changed it. */
+  config?: ILoopConfigChange;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type LoopUnsureBase = Omit<
+  ILoopEvent,
+  'id' | 'kind' | 'source' | 'iteration' | 'confidence' | 'resolution' | 'foldedAt' | 'createdAt' | 'updatedAt'
+>;
+
+export type LoopUnsureFields = LoopUnsureBase & { source?: 'gate'; iteration: number; confidence: number };
+
+export type LoopAskedFields = LoopUnsureBase & { source: 'asked' };
+
+export interface ILoopEventHandoff {
+  direction: 'out' | 'in';
+  otherLoopId: string;
+  otherLoopName: string;
+  stage: string;
+  by: 'run' | 'owner';
+  via?: 'trigger';
+  executionId?: string;
+  note?: string;
+}
+
+/** One hand-off: `recordHandoff` writes the `out` row on `fromLoopId` and the `in` row on `toLoopId`. */
+export interface LoopHandoffFields {
+  userId: string;
+  fromLoop: { id: string; name: string };
+  toLoop: { id: string; name: string };
+  workItemId: string;
+  ticketTitle: string;
+  stage: string;
+  by: 'run' | 'owner';
+  via?: 'trigger';
+  executionId?: string;
+  note?: string;
+  at: Date;
+}
+
+export type LoopAutoResumedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'executionId' | 'reason' | 'requestedAt'>;
+
+export type LoopConfigChangedFields = Pick<ILoopEvent, 'loopId' | 'userId' | 'reason' | 'config'> & { at: Date };
+
+export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
+  /** Records an unsure event once per gate (`executionId` + `requestedAt`); a repeat is a no-op. */
+  recordUnsure(fields: LoopUnsureFields | LoopAskedFields): Promise<void>;
+  recordAutoResumed(fields: LoopAutoResumedFields): Promise<void>;
+  recordHandoff(fields: LoopHandoffFields): Promise<void>;
+  /** Returns the new event's id. */
+  recordConfigChanged(fields: LoopConfigChangedFields): Promise<string>;
+  /** The loop's `config_changed` events, newest first. */
+  listConfigChanges(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]>;
+  findConfigChange(id: string, userId: string, loopId: string): Promise<ILoopEvent | null>;
+  /** Sets `config.undoneBy` unless already set. False when nothing matched. */
+  markConfigUndone(id: string, undoneBy: string): Promise<boolean>;
+  /** Events created since `since` (of `kinds` when given), oldest first, capped at `limit`. */
+  listForLoopSince(
+    userId: string,
+    loopId: string,
+    since: Date,
+    kinds: LoopEventKind[] | undefined,
+    limit: number
+  ): Promise<ILoopEvent[]>;
+  /** The loop's unresolved `unsure` events (gate and asked), oldest first. */
+  listUnresolvedUnsure(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]>;
+  /** Records the event if missing, then its resolution. The first resolution wins. */
+  resolveUnsure(
+    fields: LoopUnsureFields,
+    resolution: { outcome: LoopGateOutcome; by?: string; at: Date }
+  ): Promise<void>;
+  /** Newest first. */
+  listForLoop(userId: string, loopId: string, limit: number): Promise<ILoopEvent[]>;
+  /** Resumed events whose run the scheduler has not folded yet. */
+  listResumedUnfolded(limit: number): Promise<ILoopEvent[]>;
+  markFolded(id: string, now: Date): Promise<void>;
+  /**
+   * Resolves an unresolved `asked` event and marks it folded in the same write, so the scheduler's resumed-run
+   * fold never picks it up (the asking run already ended). Null when no such event matched.
+   */
+  resolveAsked(
+    id: string,
+    userId: string,
+    loopId: string,
+    resolution: NonNullable<ILoopEvent['resolution']>
+  ): Promise<ILoopEvent | null>;
+  /** Undoes a `resolveAsked` written at `at` (when its ticket write failed), so the owner can answer again. */
+  reopenAsked(id: string, at: Date): Promise<void>;
+  /** Resolves the ticket's open `asked` events in `loopId` as `handed_off` once it moved to another loop. */
+  closeAskedForHandoff(userId: string, loopId: string, workItemId: string, at: Date): Promise<number>;
+  /** A ticket's resumed `asked` events that carry the owner's answer, newest first. */
+  listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]>;
+  /** Whether a resumed event for this run is still waiting for the scheduler's fold. */
+  hasUnfolded(executionId: string): Promise<boolean>;
+  deleteManyForLoop(userId: string, loopId: string): Promise<number>;
+}
+
+/**
+ * A directive one loop's run (the overseer) sends to another loop of the same owner (the worker). The worker
+ * answers it on its next scheduled run with `loop_directive_respond`; the owner may withdraw or overrule it.
+ *
+ * | Who    | From                         | To                            |
+ * |--------|------------------------------|-------------------------------|
+ * | worker | open                         | accepted, pushed_back, done   |
+ * | worker | accepted                     | pushed_back, done             |
+ * | owner  | open, accepted, pushed_back  | withdrawn                     |
+ * | owner  | pushed_back (overrule)       | open                          |
+ */
+export const LOOP_DIRECTIVE_STATES = ['open', 'accepted', 'pushed_back', 'done', 'withdrawn'] as const;
+
+export type LoopDirectiveState = (typeof LOOP_DIRECTIVE_STATES)[number];
+
+export type LoopDirectiveWorkerOutcome = 'accepted' | 'pushed_back' | 'done';
+export type LoopDirectiveOwnerAction = 'withdraw' | 'overrule';
+
+/** Directive text caps (characters); shared by the schema, the loop tools, the override route and the UI. */
+export const LOOP_DIRECTIVE_INSTRUCTION_MAX = 2000;
+export const LOOP_DIRECTIVE_REASON_MAX = 1000;
+export const LOOP_DIRECTIVE_NOTE_MAX = 1000;
+
+/** States each move is allowed from; shared by the worker tool and the owner override route. */
+export const LOOP_DIRECTIVE_TRANSITIONS: Record<
+  LoopDirectiveWorkerOutcome | LoopDirectiveOwnerAction,
+  readonly LoopDirectiveState[]
+> = {
+  accepted: ['open'],
+  pushed_back: ['open', 'accepted'],
+  done: ['open', 'accepted'],
+  withdraw: ['open', 'accepted', 'pushed_back'],
+  overrule: ['pushed_back'],
+};
+
+/** An action an overseer took on a worker itself (`loop_run_now`, `loop_resume`), logged as a `done` directive. */
+export const LOOP_DIRECTIVE_ACTIONS = ['run_now', 'resume'] as const;
+export type LoopDirectiveAction = (typeof LOOP_DIRECTIVE_ACTIONS)[number];
+
+export type ILoopDirectiveReply =
+  | { by: 'worker'; outcome: LoopDirectiveWorkerOutcome; note?: string; executionId: string; at: Date }
+  | { by: 'owner'; outcome: 'withdrawn' | 'overruled'; note?: string; userId: string; at: Date };
+
+export interface ILoopDirective {
+  id: string;
+  /** The worker (target) loop. */
+  loopId: string;
+  userId: string;
+  /** The overseer loop; its name is copied so the thread still reads after the overseer is deleted. */
+  fromLoopId: string;
+  fromLoopName: string;
+  /** The overseer run that issued it. */
+  executionId: string;
+  instruction: string;
+  reason: string;
+  state: LoopDirectiveState;
+  replies: ILoopDirectiveReply[];
+  /** Set on an overseer action; such a row is always `done`, so it never reaches the worker or the owner's buttons. */
+  action?: LoopDirectiveAction;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ILoopDirectiveRepository extends IBaseRepository<ILoopDirective> {
+  countByExecution(executionId: string): Promise<number>;
+  /** Overseer actions of this kind on a loop since `since`. */
+  countActionsSince(loopId: string, action: LoopDirectiveAction, since: Date): Promise<number>;
+  /** Open and accepted directives to a loop, oldest first: what its next run is shown. */
+  listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  /** Directives to a loop in any state, newest first. */
+  listToLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  /** Directives to or from a loop, newest first: its Log. */
+  listForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
+  findByIdForUser(id: string, userId: string): Promise<ILoopDirective | null>;
+  /** Moves the directive to `to` and appends `reply`, only while it is still in one of `from`. Null when it was not. */
+  transition(
+    id: string,
+    userId: string,
+    from: readonly LoopDirectiveState[],
+    to: LoopDirectiveState,
+    reply: ILoopDirectiveReply
+  ): Promise<ILoopDirective | null>;
+  deleteManyForLoop(userId: string, loopId: string): Promise<number>;
+}
+
+/** How a loop run ended, stamped on its execution at fold (`loopOutcome`). Side data: no scheduling reads it. */
+export const LOOP_RUN_OUTCOMES = ['done', 'blocked', 'unsure', 'failed', 'budget_stopped', 'idle'] as const;
+export type LoopRunOutcome = (typeof LOOP_RUN_OUTCOMES)[number];
+
+/** Windows (days) the stats API serves. Runs expire after 90 days, so that is the longest. */
+export const LOOP_STATS_WINDOWS = [7, 30, 90] as const;
+export type LoopStatsWindow = (typeof LOOP_STATS_WINDOWS)[number];
+
+/** A headline figure over the window and over the equal window before it; `null` when there is nothing to measure. */
+export interface ILoopStatsFigure {
+  value: number | null;
+  baseline: number | null;
+}
+
+/**
+ * Per stage of `loop.stages`. Durations in ms. Runs from before stage stamping, and triage runs, are not counted here.
+ * Time in stage is per stay that ended in the window (or is still open); a closed ticket's last stage is not a stay.
+ */
+export interface ILoopStageStats {
+  stage: string;
+  runs: number;
+  outcomes: Record<LoopRunOutcome, number>;
+  /** Runs past a ticket's first (`loopAttempt > 1`). */
+  retried: number;
+  medianRunMs: number | null;
+  credits: number;
+  medianTimeInStageMs: number | null;
+  /** Tickets that entered this stage in the window. */
+  entered: number;
+  /** Moves out of this stage to an earlier one (a reopen included). */
+  backMoves: number;
+  /** Back-moves made by a run or the scheduler, not the owner. */
+  bounces: number;
+  toolsUnavailable: { tool: string; count: number }[];
+  toolsErrored: { tool: string; count: number }[];
+}
+
+/** `GET /api/loops/:id/stats`: computed on read (apps/client/server/utils/loopStats.ts). Days are UTC `YYYY-MM-DD`. */
+export interface ILoopStats {
+  days: LoopStatsWindow;
+  from: string;
+  to: string;
+  headline: {
+    throughputPerDay: ILoopStatsFigure;
+    medianCycleMs: ILoopStatsFigure;
+    creditsPerClosed: ILoopStatsFigure;
+    /** A live count, so its baseline is always null. */
+    needsYou: ILoopStatsFigure;
+  };
+  byStage: ILoopStageStats[];
+  daily: { day: string; closed: number; credits: number; budget: number | null; stages: Record<string, number> }[];
+  eras: { at: string; reason: string }[];
+  costByModel: { model: string; runs: number; credits: number }[];
+  /** Oldest first. A gate on a run that worked no ticket has no `workItemId`. */
+  humanQueue: {
+    workItemId?: string;
+    title: string;
+    stage?: string;
+    reason: 'blocked' | 'unsure';
+    /** When an open question was asked; for a blocked ticket, its last update (no blocked-at time is kept). */
+    since: string;
+    executionId?: string;
+  }[];
+  ratings: { up: number; down: number; unrated: number };
+  directives: { pushedBack: number; overruled: number };
+  /** Earliest stage-history entry among the loop's tickets; older tickets count from `createdAt` in their stage. */
+  historyBegins?: string;
+  /** A run or ticket read hit its cap, so the figures are from a prefix. */
+  truncated: boolean;
+}

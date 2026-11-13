@@ -1,0 +1,202 @@
+import { useState } from 'react';
+import { Link as RouterLink, useNavigate } from '@tanstack/react-router';
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  DialogTitle,
+  List,
+  ListItem,
+  ListItemButton,
+  Link,
+  ListItemContent,
+  Modal,
+  ModalDialog,
+  Sheet,
+  Stack,
+  Table,
+  Typography,
+} from '@mui/joy';
+import { LOOP_TEMPLATES, type ILoopTemplate } from '@bike4mind/common';
+import AutorenewOutlinedIcon from '@mui/icons-material/AutorenewOutlined';
+import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
+import LoopActions from '@client/app/components/Loops/LoopActions';
+import LoopFormModal from '@client/app/components/Loops/LoopFormModal';
+import LoopsBudgetBar from '@client/app/components/Loops/LoopsBudgetBar';
+import {
+  holdLabel,
+  formatCredits,
+  formatSpendToday,
+  formatInterval,
+  lastRunLabel,
+  loopNeedsOwner,
+  LoopStatusChip,
+  nextRunLabel,
+} from '@client/app/components/Loops/loopUi';
+import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useLoops } from '@client/app/hooks/data/loops';
+import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
+
+export default function LoopsPage() {
+  const navigate = useNavigate();
+  const { currentUser } = useUser();
+  const [creating, setCreating] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [template, setTemplate] = useState<ILoopTemplate>();
+  // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
+  const { data: loops, isLoading } = useLoops();
+  useDocumentTitle('Loops');
+  const needsYou = loops?.filter(loopNeedsOwner).length ?? 0;
+
+  const newLoopButton = (
+    <Stack direction="row" gap={1}>
+      <Button size="sm" variant="outlined" onClick={() => setPicking(true)} data-testid="loops-template-btn">
+        From template
+      </Button>
+      <Button size="sm" onClick={() => setCreating(true)} data-testid="loops-new-btn">
+        New loop
+      </Button>
+    </Stack>
+  );
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+      <AgentPageHeader
+        title="Loops"
+        backButton={false}
+        titleIcon={<AutorenewOutlinedIcon sx={{ color: 'text.primary50' }} />}
+        rightActions={newLoopButton}
+      />
+      <Box sx={{ p: 2 }}>
+        {currentUser && canCreateMissions(currentUser) && (
+          <Typography level="body-sm" sx={{ mb: 1 }} data-testid="loops-deep-agent-hint">
+            Need a single long-running goal?{' '}
+            <Link component={RouterLink} to="/deep-agents">
+              Use a Deep agent.
+            </Link>
+          </Typography>
+        )}
+        <LoopsBudgetBar />
+        {needsYou > 0 && (
+          <Typography level="title-sm" color="warning" sx={{ mb: 1 }} data-testid="loops-needs-you-count">
+            {needsYou} {needsYou === 1 ? 'loop needs' : 'loops need'} you
+          </Typography>
+        )}
+        {isLoading ? (
+          <CircularProgress size="sm" />
+        ) : !loops?.length ? (
+          <Sheet
+            variant="soft"
+            sx={{ p: 4, borderRadius: 'md', textAlign: 'center', display: 'grid', gap: 2, justifyItems: 'center' }}
+            data-testid="loops-empty-state"
+          >
+            <Typography>A loop runs an agent on a schedule and works through its tickets, stage by stage.</Typography>
+            {newLoopButton}
+          </Sheet>
+        ) : (
+          <Table hoverRow sx={{ '& tbody tr': { cursor: 'pointer' } }}>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Schedule</th>
+                <th>Last run</th>
+                <th>Next run</th>
+                <th>Runs</th>
+                <th title="Credits since 00:00 UTC, against the daily budget">Today</th>
+                <th title="Top-level runs kept for 90 days">Credits (90 days)</th>
+                <th style={{ width: 320 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {loops.map(loop => (
+                <tr
+                  key={loop.id}
+                  tabIndex={0}
+                  onClick={() => navigate({ to: '/loops/$id', params: { id: loop.id } })}
+                  onKeyDown={e => {
+                    // Only the row itself: Enter on an action button inside it must not also open the loop.
+                    if (e.key === 'Enter' && e.target === e.currentTarget) {
+                      navigate({ to: '/loops/$id', params: { id: loop.id } });
+                    }
+                  }}
+                  data-testid={`loops-row-${loop.id}`}
+                >
+                  <td>
+                    <Typography level="title-sm">{loop.name}</Typography>
+                  </td>
+                  <td>
+                    <LoopStatusChip loop={loop} />
+                    {/* The status chip already reads "Needs you" for that status; only add what it doesn't say. */}
+                    {loopNeedsOwner(loop) && (loop.blockedTickets > 0 || loop.status !== 'needs_you') && (
+                      <Chip
+                        size="sm"
+                        variant="outlined"
+                        color="warning"
+                        sx={{ mt: 0.5 }}
+                        data-testid="loops-row-needs-you"
+                      >
+                        {loop.blockedTickets > 0 ? `${loop.blockedTickets} blocked` : 'Needs you'}
+                      </Chip>
+                    )}
+                  </td>
+                  <td>{formatInterval(loop.intervalMinutes)}</td>
+                  <td>{lastRunLabel(loop)}</td>
+                  <td data-testid="loops-row-next-run">
+                    {nextRunLabel(loop)}
+                    {holdLabel(loop) && (
+                      <Typography level="body-xs" color="neutral" data-testid="loops-row-backoff">
+                        <span data-testid="loop-hold-reason">{holdLabel(loop)}</span>
+                      </Typography>
+                    )}
+                  </td>
+                  <td>{loop.runCount}</td>
+                  <td data-testid="loops-row-spend-today">{formatSpendToday(loop)}</td>
+                  <td>{formatCredits(loop.creditsUsed)}</td>
+                  <td>
+                    <LoopActions loop={loop} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Box>
+      <Modal open={picking} onClose={() => setPicking(false)}>
+        <ModalDialog sx={{ width: 480, maxWidth: '95vw', overflowY: 'auto' }} data-testid="loop-template-picker">
+          <DialogTitle>New loop from template</DialogTitle>
+          <List>
+            {LOOP_TEMPLATES.map(t => (
+              <ListItem key={t.id}>
+                <ListItemButton
+                  onClick={() => {
+                    setPicking(false);
+                    setTemplate(t);
+                  }}
+                  data-testid={`loop-template-option-${t.id}`}
+                >
+                  <ListItemContent>
+                    <Typography level="title-sm">{t.name}</Typography>
+                    <Typography level="body-sm">{t.summary}</Typography>
+                  </ListItemContent>
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
+        </ModalDialog>
+      </Modal>
+      {(creating || template) && (
+        <LoopFormModal
+          open
+          template={template}
+          onClose={() => {
+            setCreating(false);
+            setTemplate(undefined);
+          }}
+        />
+      )}
+    </Box>
+  );
+}

@@ -51,6 +51,14 @@ describe('sst-env core secret guard', () => {
     expect(result.stderr).toContain('sst-env.d.ts: OVERLAY_PRIVATE_TOKEN');
   });
 
+  it('checks a nested sst-env.d.ts', () => {
+    write('packages/app/sst-env.d.ts', declaration('OVERLAY_PRIVATE_TOKEN'));
+    git('add', '.');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('packages/app/sst-env.d.ts: OVERLAY_PRIVATE_TOKEN');
+  });
+
   it('does not let an unstaged core constructor authorize a staged private name', () => {
     write('sst-env.d.ts', declaration('OVERLAY_PRIVATE_TOKEN'));
     git('add', 'sst-env.d.ts');

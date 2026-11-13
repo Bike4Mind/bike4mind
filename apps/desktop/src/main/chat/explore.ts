@@ -57,6 +57,8 @@ export function buildExploreContext(options: {
   models: readonly ChatModelOption[];
   sessionModel: string;
   onUsage(usage: ChatUsage): void;
+  /** See CompletionRequest.loopRunId. */
+  loopRunId?: string;
   /** The turn's run attribution, read per request so a run the server refused mid-turn is not resent. */
   run?: () => CompletionRunAttribution | undefined;
   /** Called when the server refuses `run`, before the request is resent without it. */
@@ -72,7 +74,14 @@ export function buildExploreContext(options: {
     complete: (request, onEvent, signal) =>
       withRunFallback(
         options.run?.(),
-        run => streamCompletion(options.axios, options.endpoint, run ? { ...request, run } : request, onEvent, signal),
+        run =>
+          streamCompletion(
+            options.axios,
+            options.endpoint,
+            { ...request, ...(run ? { run } : {}), ...(options.loopRunId ? { loopRunId: options.loopRunId } : {}) },
+            onEvent,
+            signal
+          ),
         async () => options.onRunRejected?.()
       ),
     addUsage: options.onUsage,

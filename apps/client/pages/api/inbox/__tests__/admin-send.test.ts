@@ -84,4 +84,16 @@ describe('POST /api/inbox/admin-send', () => {
     expect(h.sendToClient).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
+
+  it('rejects the server-only loop notice type', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { receiverId: 'user-7', title: 'Heads up', message: 'text', reason: 'Billing follow-up', type: 'loop' },
+    });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow();
+
+    expect(h.createInbox).not.toHaveBeenCalled();
+  });
 });

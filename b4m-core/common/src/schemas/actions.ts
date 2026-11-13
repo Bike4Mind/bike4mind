@@ -1292,6 +1292,8 @@ export const AgentCompletedAction = z.object({
   totalIterations: z.number(),
   totalCreditsUsed: z.number(),
   mementoIds: z.array(z.string()).optional(),
+  /** 'blocked' when a desktop loop run finished but parked its ticket. */
+  failureReason: z.literal('blocked').optional(),
 });
 
 export const AgentFailedAction = z.object({
@@ -1551,6 +1553,12 @@ export const ReconnectResultAction = z.object({
   // client falls back to fetching them via GET /api/agent-executions/[id].
   children: z.array(ChildExecutionSnapshotSchema).optional(),
   childrenTruncated: z.boolean().optional(),
+  // Outcome of a finished run, sent to `subscribe` viewers only (a chat reconnect
+  // already shows it in the reply bubble). `answer` shares the steps budget, so it
+  // is omitted with `stepsTruncated: true` and comes from the REST trace instead.
+  answer: z.string().optional(),
+  failureReason: z.string().optional(),
+  errorMessage: z.string().optional(),
 });
 
 // Union

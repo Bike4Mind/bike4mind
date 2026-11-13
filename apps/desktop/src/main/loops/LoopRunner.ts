@@ -1,0 +1,651 @@
+import type {
+  ChatAutomaticOrigin,
+  ChatApprovalMode,
+  ChatSession,
+  ChatStreamEvent,
+  CreateCodeSessionRequest,
+  CreateCodeSessionResult,
+} from '@shared/chat';
+import type { LoopPolicy, LoopRunnerState } from '@shared/loopRunner';
+import { parsePullRequestUrl, type PrRef } from '@shared/pullRequest';
+import type { AutomaticTurnResult } from '../chat/ChatService';
+import type { GhRunner } from '../pr/gh';
+import { admit, hardFloorBreached, laneCapFor, nextIdleDelay, type MachineSample } from './budget';
+import type { SmokeDeps } from './guards';
+import {
+  LeaseLost,
+  USER_WIDE_REFUSALS,
+  type LoopRunnerApi,
+  type RunnerClaim,
+  type RunnerOutcome,
+} from './LoopRunnerClient';
+import type { LoopPolicyStore } from './LoopPolicyStore';
+import { ProgressBatcher } from './progress';
+import {
+  afterMergeChecks,
+  CREDIT_STOP,
+  mergeLoopPr,
+  openLoopSession,
+  opensPr,
+  pendingReason,
+  PR_URL,
+  startLoopTurn,
+  type LoopMergeGithub,
+} from './session';
+
+/** The parts of ChatService the runner drives; every call is one a user's own click could make. */
+export interface RunnerChat {
+  createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
+  setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<unknown>;
+  setLoopRunModel(sessionId: string, model: string): Promise<unknown>;
+  startAutomaticTurn(sessionId: string, text: string, automatic: ChatAutomaticOrigin): Promise<AutomaticTurnResult>;
+  stop(sessionId: string): void;
+  isSessionBusy(sessionId: string): boolean;
+  getSession(sessionId: string): Promise<ChatSession | null>;
+  deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+  removeWorktrees(directory: string, paths?: readonly string[]): Promise<unknown>;
+  loopRunOf(sessionId: string): string | undefined;
+  loopRunSessions(runId: string): string[];
+  endLoopRun(runId: string): void;
+}
+
+export interface RunnerGithub extends LoopMergeGithub {
+  findOpenForBranch(cwd: string, branch: string): Promise<string | null>;
+}
+
+export interface LoopRunnerDeps {
+  client: LoopRunnerApi;
+  chat: RunnerChat;
+  /** Kills a session's background process groups, and only that session's. */
+  killSessionProcesses(sessionId: string): Promise<void> | void;
+  store: LoopPolicyStore;
+  /** The signed-in environment's key and server URL, or null when signed out. */
+  environment(): { key: string; url: string } | null;
+  sample(): Promise<MachineSample>;
+  gh: GhRunner;
+  github: RunnerGithub;
+  powerSaveBlocker: { start(type: 'prevent-app-suspension'): number; stop(id: number): void };
+  smoke?: SmokeDeps;
+  /** Lanes Desktop-owned loops hold now: they share this machine's lane cap. */
+  otherLanes?: () => number;
+  /** Whether a window has focus; polling stays fast while the user is looking. */
+  focused(): boolean;
+  onChange(): void;
+  logger: { warn(message: string): void };
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export const RUNNER_MS = {
+  /**
+   * While a lane is free, and the idle and error pace too (budget.ts nextIdleDelay caps it here). The knobs to retire once Desktop has a socket client for the
+   * server's loop-changed push (only the web page receives it today).
+   */
+  claimPoll: 10_000,
+  /** Every lane busy: presence only; a lane freeing runs a claim pass at once. */
+  busyPoll: 15_000,
+  /** Signed out: nothing can be listed until sign-in, which calls start() again. */
+  signedOutPoll: 5 * 60_000,
+  heartbeat: 45_000,
+  /** Worktrees older than this are removed even with a PR still open. */
+  worktreeMaxAge: 7 * 24 * 60 * 60_000,
+  gcEvery: 24 * 60 * 60_000,
+  stopWait: 10_000,
+} as const;
+
+/** An outcome as the runner decides it; `durationMs` is added when it is reported. */
+type Outcome = WithoutDuration<RunnerOutcome>;
+type WithoutDuration<T> = T extends unknown ? Omit<T, 'durationMs'> : never;
+
+/** What the Settings panel says for a refusal that holds every claim this poll. */
+const USER_WIDE_REASON: Record<string, string> = {
+  lanes_full: 'your desktop runs are at their limit',
+  user_budget: 'your loops have spent their daily budget',
+};
+
+interface Lane {
+  claim: RunnerClaim;
+  policy: LoopPolicy;
+  sessionId: string;
+  startedAt: number;
+  batcher: ProgressBatcher;
+  heartbeat: ReturnType<typeof setInterval>;
+  /** What the last approval card in this run asked for: the block reason if it goes unanswered. */
+  pending?: string;
+  merged?: { pr: PrRef; mergeSha?: string };
+  /** The PR in the loop's repository the run opened (or merged): a quit must not let a rerun open another. */
+  prUrl?: string;
+  /** Tool calls of the run's own session that were declined (by the user or the approval mode). */
+  denied: number;
+  /** Why the last declined call was refused. */
+  lastDenied?: string;
+  /** Tool calls of the run's own session that ran, whether they succeeded or errored. */
+  ran: number;
+  /** Set once the run has an outcome; later events for it are ignored. */
+  finished: boolean;
+}
+
+/**
+ * Claims tickets of desktop-run loop stages and works each one in its own worktree session,
+ * unattended, within the machine budget. See shared/loopRunner.ts for what the user sees.
+ *
+ * Only ever stops, kills or deletes sessions it started (and their spawned children, which
+ * ChatService marks with the same run id), and only removes worktrees it recorded.
+ */
+export class LoopRunner {
+  private readonly lanes = new Map<string, Lane>();
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private gcTimer: ReturnType<typeof setInterval> | undefined;
+  private idleDelay: number = RUNNER_MS.claimPoll;
+  private previous: MachineSample | undefined;
+  private blocker: number | null = null;
+  private running = false;
+  /** Set by releaseAll: the app is going, so finishing runs skip the worktree GC and its gh calls. */
+  private quitting = false;
+  private ticking = false;
+  /** A claim pass was asked for while one was running; run another as soon as it ends. */
+  private again = false;
+  private waitingReason: string | undefined;
+  /** loopId -> until when its tickets are not claimed, after a run stopped at its credit cap. */
+  private readonly creditStops = new Map<string, number>();
+  private error: string | undefined;
+  private pendingApprovals: LoopRunnerState['pendingApprovals'] = [];
+  private lastBlocked: LoopRunnerState['lastBlocked'];
+  private cap = 1;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(private readonly deps: LoopRunnerDeps) {
+    this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  }
+
+  /** Start polling. Safe to call again; a second call only polls sooner. */
+  start(): void {
+    // Turning the runner on is the user's retry after a credit stop; an auth refresh re-calling start is not.
+    if (!this.running) this.creditStops.clear();
+    this.running = true;
+    this.quitting = false;
+    this.gcTimer ??= setInterval(() => void this.collectWorktrees(), RUNNER_MS.gcEvery);
+    void this.collectWorktrees();
+    this.schedule(0);
+  }
+
+  /** Stop claiming. Work in flight carries on until it finishes or releaseAll is called. */
+  stop(): void {
+    this.running = false;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.gcTimer) clearInterval(this.gcTimer);
+    this.gcTimer = undefined;
+    this.waitingReason = undefined;
+    this.deps.onChange();
+  }
+
+  get busy(): number {
+    return this.lanes.size;
+  }
+
+  private schedule(ms: number): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = this.running ? setTimeout(() => void this.tick(), ms) : undefined;
+  }
+
+  /** One poll: presence, budget, then claim what the budget admits. Exposed for tests. */
+  async tick(): Promise<void> {
+    if (this.ticking) {
+      this.again = true;
+      return;
+    }
+    this.ticking = true;
+    this.again = false;
+    let next: number = RUNNER_MS.claimPoll;
+    try {
+      next = await this.poll();
+      this.error = undefined;
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+      this.idleDelay = nextIdleDelay(this.idleDelay);
+      next = this.idleDelay;
+    } finally {
+      this.ticking = false;
+      this.deps.onChange();
+      if (this.running) this.schedule(this.again ? 0 : next);
+    }
+  }
+
+  private async poll(): Promise<number> {
+    const env = this.deps.environment();
+    if (!env) return RUNNER_MS.signedOutPoll;
+    const settings = await this.deps.store.settings(env.key);
+    const sample = await this.deps.sample();
+    const previous = this.previous;
+    this.previous = sample;
+    this.cap = laneCapFor(sample.cores, settings.laneCap);
+
+    const breached = hardFloorBreached(sample);
+    if (breached) {
+      this.waitingReason = breached;
+      await this.stopAll(breached);
+    }
+
+    const { tickets, held } = await this.deps.client.listTickets();
+    const policies = new Map((await this.deps.store.policies(env.key)).map(policy => [policy.loopId, policy]));
+    const running = new Set([...this.lanes.values()].map(lane => lane.claim.ticket.ticketId));
+    const unapproved = new Map<string, LoopRunnerState['pendingApprovals'][number]>();
+    for (const ticket of tickets) {
+      if (!policies.has(ticket.loopId)) {
+        unapproved.set(ticket.loopId, {
+          loopId: ticket.loopId,
+          loopName: ticket.loopName,
+          ...(ticket.repoHint ? { repoHint: ticket.repoHint } : {}),
+        });
+      }
+    }
+    for (const loop of held) if (!policies.has(loop.loopId)) unapproved.set(loop.loopId, loop);
+    this.pendingApprovals = [...unapproved.values()];
+
+    if (!breached) {
+      this.waitingReason = undefined;
+      const heldApproved = held.find(loop => policies.has(loop.loopId));
+      const busyBefore = this.lanes.size;
+      for (const ticket of tickets) {
+        const policy = policies.get(ticket.loopId);
+        if (!policy || running.has(ticket.ticketId)) continue;
+        const admission = admit(sample, previous, this.lanes.size + (this.deps.otherLanes?.() ?? 0), settings);
+        if (!admission.ok) {
+          this.waitingReason = admission.reason;
+          break;
+        }
+        if ((this.creditStops.get(ticket.loopId) ?? 0) > this.now()) continue;
+        const claim = await this.deps.client.claim(ticket.ticketId);
+        if ('refused' in claim) {
+          // Any other refusal is about this ticket only (taken, not open, its loop's budget).
+          if (!USER_WIDE_REFUSALS.has(claim.refused)) continue;
+          this.waitingReason = USER_WIDE_REASON[claim.refused] ?? claim.refused;
+          break;
+        }
+        await this.run(claim, policy);
+      }
+      if (!this.waitingReason && heldApproved && this.lanes.size === busyBefore)
+        this.waitingReason = `${heldApproved.loopName}: ${heldApproved.reason}`;
+    }
+
+    // A poll still in flight at quit must not post after releaseAll's offline presence.
+    if (this.quitting) return RUNNER_MS.claimPoll;
+    await this.deps.client
+      .presence({
+        lanesBusy: this.lanes.size,
+        lanesFree: Math.max(this.cap - this.lanes.size, 0),
+        ...(this.waitingReason ? { waitingReason: this.waitingReason } : {}),
+      })
+      .catch(() => undefined);
+
+    if (this.lanes.size >= this.cap) return RUNNER_MS.busyPoll;
+    if (this.lanes.size > 0 || tickets.length > 0 || this.deps.focused()) {
+      this.idleDelay = RUNNER_MS.claimPoll;
+      return RUNNER_MS.claimPoll;
+    }
+    this.idleDelay = nextIdleDelay(this.idleDelay);
+    return this.idleDelay;
+  }
+
+  /**
+   * Work one claimed ticket. Whatever happens, the claim ends in a complete or a release: the
+   * server never moves a desktop-stage ticket for us, and a lapsed lease is only the backstop.
+   */
+  private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
+    const { runId } = claim;
+    this.lastBlocked = undefined;
+    const opened = await openLoopSession(this.deps.chat, {
+      directory: policy.directory,
+      approvalMode: policy.approvalMode,
+      ...(claim.model ? { model: claim.model } : {}),
+    });
+    if (!opened.ok) {
+      await this.report(runId, this.now(), { outcome: opened.outcome, reason: opened.reason });
+      return;
+    }
+    const { sessionId } = opened;
+    const lane: Lane = {
+      claim,
+      policy,
+      sessionId,
+      startedAt: this.now(),
+      finished: false,
+      denied: 0,
+      ran: 0,
+      batcher: new ProgressBatcher(
+        frames => this.deps.client.progress(runId, frames),
+        err => {
+          if (err instanceof LeaseLost) void this.abandon(lane, err.reason);
+        }
+      ),
+      heartbeat: setInterval(() => {
+        this.deps.client.heartbeat(runId).catch(err => {
+          if (err instanceof LeaseLost) void this.abandon(lane, err.reason);
+        });
+      }, RUNNER_MS.heartbeat),
+    };
+    this.lanes.set(runId, lane);
+    this.updateBlocker();
+
+    const started = await startLoopTurn(this.deps.chat, sessionId, claim.prompt, {
+      kind: 'loop-runner',
+      loopId: claim.ticket.loopId,
+      ticketId: claim.ticket.ticketId,
+      runId,
+      summary: claim.ticket.title,
+    });
+    if (!started.ok) await this.finish(lane, { outcome: 'failed', reason: started.error });
+  }
+
+  private laneOf(sessionId: string): Lane | undefined {
+    const runId = this.deps.chat.loopRunOf(sessionId);
+    if (runId) return this.lanes.get(runId);
+    // Deleting a session drops its marking before its turn stops, so the turn's last event arrives unmarked.
+    return [...this.lanes.values()].find(lane => lane.sessionId === sessionId);
+  }
+
+  /** Every chat stream event, from the main-process observer. */
+  observe(event: ChatStreamEvent): void {
+    if (!('sessionId' in event)) return;
+    const lane = this.laneOf(event.sessionId);
+    if (!lane || lane.finished) return;
+    const pending = pendingReason(event);
+    if (pending) lane.pending = pending;
+    if (event.type === 'tool-end' && event.call.preview && opensPr(event.call)) this.notePr(lane, event.call.preview);
+    if (event.sessionId !== lane.sessionId) return;
+    if (event.type === 'tool-end' && event.call.status === 'denied') {
+      lane.denied++;
+      // A refusal without a card (path or loop-tool rules) carries its reason as the error.
+      lane.lastDenied = event.call.approvalDetail ? lane.pending : (event.call.error ?? lane.pending);
+    }
+    if (event.type === 'tool-end' && (event.call.status === 'done' || event.call.status === 'error')) lane.ran++;
+    lane.batcher.push(event);
+    if (event.type === 'error' && CREDIT_STOP.test(event.message)) {
+      this.creditStop(lane.claim.ticket.loopId);
+      void this.finish(lane, { outcome: 'released', reason: 'out of credits' });
+    } else if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
+    if (event.type !== 'done') return;
+    // The user pressed Stop (or deleted the conversation): the work is unfinished, and theirs now.
+    if (event.stopReason === 'aborted')
+      void this.finish(lane, { outcome: 'blocked', reason: 'Stopped on the desktop' });
+    else void this.turnDone(lane, event.content);
+  }
+
+  private notePr(lane: Lane, text: string): void {
+    const repo = lane.policy.repo ?? lane.policy.repoHint?.toLowerCase();
+    for (const [url] of text.matchAll(PR_URL)) {
+      const ref = parsePullRequestUrl(url);
+      if (ref && (!repo || `${ref.owner}/${ref.repo}`.toLowerCase() === repo)) lane.prUrl = ref.url;
+    }
+  }
+
+  /** ApprovalGate closed a card in a runner session: nobody can answer it, so the user gets the ticket. */
+  unattended(sessionId: string): void {
+    const lane = this.laneOf(sessionId);
+    if (lane && !lane.finished)
+      void this.finish(lane, { outcome: 'blocked', reason: lane.pending ?? 'Needs approval' });
+  }
+
+  private async turnDone(lane: Lane, answer: string): Promise<void> {
+    // A spawned child still working reports back to this session, which then takes another turn.
+    const children = this.deps.chat.loopRunSessions(lane.claim.runId).filter(id => id !== lane.sessionId);
+    if (children.some(id => this.deps.chat.isSessionBusy(id))) return;
+    if (lane.finished) return;
+    lane.finished = true;
+    if (lane.denied > 0 && lane.ran === 0) {
+      const reason = `Every action was declined: ${lane.lastDenied ?? 'no detail'}`;
+      await this.finish(lane, { outcome: 'blocked', reason, answer }, true);
+      return;
+    }
+    // The heartbeat keeps running through the checks, so a long deploy wait holds the lease.
+    const outcome = await this.postTurnChecks(lane, answer).catch((err: unknown): Outcome => ({
+      outcome: 'blocked',
+      reason: `post-merge check failed: ${String(err)}`,
+      answer,
+    }));
+    await this.finish(lane, outcome, true);
+  }
+
+  /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
+  private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
+    const checked = await afterMergeChecks(
+      { gh: this.deps.gh, smoke: this.deps.smoke, now: this.now, sleep: this.sleep },
+      lane.merged,
+      lane.claim.stage.guards ?? lane.policy.guards,
+      lane.policy.directory,
+      async () => (await this.deps.chat.getSession(lane.sessionId))?.project?.workingDirectory ?? lane.policy.directory
+    );
+    return checked.ok ? { outcome: 'advanced', answer } : { outcome: 'blocked', reason: checked.reason, answer };
+  }
+
+  private creditStopped(): boolean {
+    return [...this.creditStops.values()].some(until => until > this.now());
+  }
+
+  /** Hold the loop's tickets until the next UTC day, when its budgets reset; a restart clears it. */
+  private creditStop(loopId: string): void {
+    const now = new Date(this.now());
+    this.creditStops.set(loopId, Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    this.deps.onChange();
+  }
+
+  /** loop_merge_pr: merge under the stage's policy, or block the ticket with why not. */
+  async merge(sessionId: string, prUrl: string): Promise<string> {
+    const lane = this.laneOf(sessionId);
+    if (!lane || lane.finished) throw new Error('This session is not working on a loop ticket.');
+    const ref = parsePullRequestUrl(prUrl);
+    if (!ref) throw new Error(`Not a GitHub pull request URL: ${prUrl}`);
+    const blocked = (reason: string): never => {
+      void this.finish(lane, { outcome: 'blocked', reason });
+      throw new Error(`${reason} The ticket is handed to the user; stop here.`);
+    };
+
+    const guards = lane.claim.stage.guards ?? lane.policy.guards;
+    const result = await mergeLoopPr({ github: this.deps.github, gh: this.deps.gh }, ref, {
+      repo: lane.policy.repo ?? lane.policy.repoHint?.toLowerCase(),
+      mergePolicy: lane.claim.stage.mergePolicy,
+      ...(guards?.holdLabels ? { holdLabels: guards.holdLabels } : {}),
+    });
+    if (!result.ok) return blocked(result.reason);
+    lane.merged = result.merged;
+    lane.prUrl = ref.url;
+    return result.message;
+  }
+
+  /**
+   * Report the outcome once, stop whatever of the run is still going, then clean up. `force`
+   * lets the post-turn checks, which already claimed the outcome, report it.
+   */
+  private async finish(lane: Lane, outcome: Outcome, force = false): Promise<void> {
+    if (lane.finished && !force) return;
+    lane.finished = true;
+    clearInterval(lane.heartbeat);
+    // Released, the ticket would be re-run from scratch and open a second PR: hand it to the user instead.
+    if (outcome.outcome === 'released' && lane.prUrl) {
+      const branch = await this.deps.chat
+        .getSession(lane.sessionId)
+        .then(session => session?.project?.workspaceBranch)
+        .catch(() => undefined);
+      const why = outcome.reason ? outcome.reason[0].toUpperCase() + outcome.reason.slice(1) : 'Stopped';
+      outcome = {
+        outcome: 'blocked',
+        reason: `${why} after opening ${lane.prUrl}${branch ? ` (branch ${branch})` : ''}; continue that PR`,
+      };
+    }
+    if (outcome.outcome === 'blocked' || outcome.outcome === 'failed') {
+      const { ticket } = lane.claim;
+      this.lastBlocked = {
+        ticketId: ticket.ticketId,
+        title: ticket.title,
+        loopName: ticket.loopName,
+        reason: outcome.reason,
+        at: new Date(this.now()).toISOString(),
+      };
+    }
+    await this.stopSessions(lane.claim.runId);
+    await lane.batcher.flush();
+    lane.batcher.dispose();
+    await this.report(lane.claim.runId, lane.startedAt, outcome);
+    this.laneFreed(lane);
+    await this.retire(lane).catch(err => this.deps.logger.warn(`LOOPS: cleanup failed: ${String(err)}`));
+  }
+
+  private async report(runId: string, startedAt: number, outcome: Outcome): Promise<void> {
+    await this.deps.client
+      .complete(runId, { ...outcome, durationMs: this.now() - startedAt })
+      .catch(err => this.deps.logger.warn(`LOOPS: could not report run ${runId}: ${String(err)}`));
+  }
+
+  /**
+   * The run ended on the server (the web run view's Stop, the credit cap, a lapsed lease): stop
+   * without reporting, since a complete would only get another 410.
+   */
+  private async abandon(lane: Lane, reason: string): Promise<void> {
+    if (lane.finished) return;
+    if (reason === 'credit_cap') this.creditStop(lane.claim.ticket.loopId);
+    lane.finished = true;
+    clearInterval(lane.heartbeat);
+    lane.batcher.dispose();
+    await this.stopSessions(lane.claim.runId);
+    this.laneFreed(lane);
+    await this.retire(lane).catch(() => undefined);
+  }
+
+  /** Stop this run's sessions and kill their process groups. Never touches any other session. */
+  private async stopSessions(runId: string): Promise<void> {
+    const sessions = this.deps.chat.loopRunSessions(runId);
+    for (const sessionId of sessions) this.deps.chat.stop(sessionId);
+    await Promise.all(
+      sessions.map(sessionId => Promise.resolve(this.deps.killSessionProcesses(sessionId)).catch(() => undefined))
+    );
+  }
+
+  /** Hard floor: hand every ticket back and stop only the runner's own sessions. */
+  private async stopAll(reason: string): Promise<void> {
+    await Promise.all([...this.lanes.values()].map(lane => this.finish(lane, { outcome: 'released', reason })));
+  }
+
+  /** Quit: hand everything back now, so the server re-offers it without waiting out the lease. */
+  async releaseAll(): Promise<void> {
+    this.quitting = true;
+    this.stop();
+    await this.stopAll('the desktop app quit');
+    // Best effort and short: the board shows the runner offline now rather than after the freshness window.
+    await Promise.race([
+      this.deps.client.presence({ lanesBusy: 0, lanesFree: 0, offline: true }).catch(() => undefined),
+      this.sleep(2_000),
+    ]);
+  }
+
+  dispose(): void {
+    this.stop();
+    for (const lane of this.lanes.values()) {
+      clearInterval(lane.heartbeat);
+      lane.batcher.dispose();
+    }
+    this.lanes.clear();
+    this.updateBlocker();
+  }
+
+  /** Drop the lane and take the next ticket now rather than at the next poll. */
+  private laneFreed(lane: Lane): void {
+    this.lanes.delete(lane.claim.runId);
+    this.updateBlocker();
+    this.deps.onChange();
+    if (this.running) void this.tick();
+  }
+
+  private updateBlocker(): void {
+    if (this.lanes.size > 0 && this.blocker === null) {
+      this.blocker = this.deps.powerSaveBlocker.start('prevent-app-suspension');
+    } else if (this.lanes.size === 0 && this.blocker !== null) {
+      this.deps.powerSaveBlocker.stop(this.blocker);
+      this.blocker = null;
+    }
+  }
+
+  /**
+   * Record each of the run's worktrees and end the run's marking in ChatService, then remove the
+   * worktrees without an open PR. One whose PR is still open is kept for the user, and collected
+   * later by collectWorktrees. Not on quit: the GC's gh calls would hold the quit up.
+   */
+  private async retire(lane: Lane): Promise<void> {
+    try {
+      for (const sessionId of this.deps.chat.loopRunSessions(lane.claim.runId)) {
+        const project = (await this.deps.chat.getSession(sessionId))?.project;
+        if (!project?.workspace || !project.workspaceBranch) continue;
+        await this.deps.store.recordWorktree({
+          sessionId,
+          directory: project.directory,
+          path: project.workingDirectory,
+          branch: project.workspaceBranch,
+          ticketId: lane.claim.ticket.ticketId,
+          createdAt: new Date(lane.startedAt).toISOString(),
+          finishedAt: new Date(this.now()).toISOString(),
+        });
+      }
+    } finally {
+      this.deps.chat.endLoopRun(lane.claim.runId);
+    }
+    if (!this.quitting) await this.collectWorktrees();
+  }
+
+  /** Remove recorded runner worktrees that are finished with no open PR, or past the age limit. */
+  async collectWorktrees(): Promise<void> {
+    const active = new Set([...this.lanes.keys()].flatMap(runId => this.deps.chat.loopRunSessions(runId)));
+    for (const worktree of await this.deps.store.worktrees()) {
+      if (active.has(worktree.sessionId)) continue;
+      const old = this.now() - Date.parse(worktree.createdAt) > RUNNER_MS.worktreeMaxAge;
+      if (!old) {
+        if (!worktree.finishedAt) continue;
+        const open = await this.deps.github
+          .findOpenForBranch(worktree.directory, worktree.branch)
+          .catch(() => 'unknown');
+        if (open) continue;
+      }
+      try {
+        await this.waitIdle(worktree.sessionId);
+        if (await this.deps.chat.getSession(worktree.sessionId))
+          await this.deps.chat.deleteSession(worktree.sessionId, true);
+        else await this.deps.chat.removeWorktrees(worktree.directory, [worktree.path]);
+        await this.deps.store.forgetWorktree(worktree.sessionId);
+      } catch (err) {
+        this.deps.logger.warn(`LOOPS: could not remove worktree ${worktree.path}: ${String(err)}`);
+      }
+    }
+  }
+
+  private async waitIdle(sessionId: string): Promise<void> {
+    const deadline = this.now() + RUNNER_MS.stopWait;
+    while (this.deps.chat.isSessionBusy(sessionId) && this.now() < deadline) await this.sleep(100);
+  }
+
+  state(): Pick<LoopRunnerState, 'lanes' | 'tickets' | 'waitingReason' | 'pendingApprovals' | 'lastBlocked' | 'error'> {
+    return {
+      lanes: { cap: this.cap, busy: this.lanes.size },
+      tickets: [...this.lanes.values()].map(lane => ({
+        ticketId: lane.claim.ticket.ticketId,
+        title: lane.claim.ticket.title,
+        loopId: lane.claim.ticket.loopId,
+        loopName: lane.claim.ticket.loopName,
+        stage: lane.claim.ticket.stage,
+        runId: lane.claim.runId,
+        sessionId: lane.sessionId,
+        startedAt: new Date(lane.startedAt).toISOString(),
+      })),
+      ...(this.waitingReason ? { waitingReason: this.waitingReason } : {}),
+      pendingApprovals: this.pendingApprovals,
+      ...(this.lastBlocked ? { lastBlocked: this.lastBlocked } : {}),
+      ...(this.error || this.creditStopped()
+        ? {
+            error:
+              this.error ??
+              'Out of credits: a loop run stopped at its credit cap. Its tickets wait until tomorrow (UTC).',
+          }
+        : {}),
+    };
+  }
+}

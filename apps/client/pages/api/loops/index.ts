@@ -1,0 +1,137 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  loopRepository,
+  workItemRepository,
+} from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { DEFAULT_LOOP_STAGES, ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionCrud';
+import {
+  assertLoopsEnabled,
+  LOOP_RATE_LIMIT,
+  LOOP_RATE_WINDOW_MS,
+  validateLoopAgentId,
+  validateLoopAgentsAndSkills,
+  validateLoopBudget,
+  validateLoopMaxConcurrent,
+  validateLoopGoal,
+  validateLoopHandoffTargets,
+  validateLoopInterval,
+  validateLoopModel,
+  validateLoopName,
+  validateLoopOrganizationId,
+  validateLoopOversees,
+  validateLoopPriorityPolicy,
+  validateLoopStageConfig,
+  validateLoopStages,
+  validateLoopTools,
+  validateLoopTriggers,
+  validateLoopWakeMode,
+} from '@server/utils/loopValidation';
+
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-collection' }))
+  .get(async (req, res) => {
+    await assertLoopsEnabled();
+    const loops = await loopRepository.listForUser(req.user!.id);
+    const ids = loops.map(loop => loop.id);
+    const sessionIds = loops.map(loop => loop.sessionId);
+    const [credits, creditsToday, blocked] = await Promise.all([
+      agentExecutionRepository.sumCreditsByLoop(ids, sessionIds),
+      agentExecutionRepository.sumCreditsByLoop(ids, sessionIds, startOfUtcDay(new Date())),
+      workItemRepository.countBlockedByLoop(req.user!.id, ids),
+    ]);
+    res.json(
+      loops.map((loop): ILoopWithUsage => ({
+        ...loop,
+        creditsUsed: credits[loop.id] ?? 0,
+        creditsToday: creditsToday[loop.id] ?? 0,
+        blockedTickets: blocked[loop.id] ?? 0,
+      }))
+    );
+  })
+  .post(async (req, res) => {
+    await assertLoopsEnabled();
+    const body = req.body as Partial<ILoop>;
+
+    const name = validateLoopName(body.name);
+    const goal = validateLoopGoal(body.goal);
+    const intervalMinutes = validateLoopInterval(body.intervalMinutes);
+    const tools = body.tools === undefined ? [] : validateLoopTools(body.tools);
+    const stages = body.stages === undefined ? undefined : validateLoopStages(body.stages);
+    const stageConfig =
+      body.stageConfig === undefined || body.stageConfig === null
+        ? undefined
+        : validateLoopStageConfig(body.stageConfig, stages ?? DEFAULT_LOOP_STAGES);
+    const agentId = body.agentId === undefined ? undefined : validateLoopAgentId(body.agentId);
+    const budgetCreditsPerDay =
+      body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
+    const maxConcurrent = body.maxConcurrent === undefined ? undefined : validateLoopMaxConcurrent(body.maxConcurrent);
+    const oversees =
+      body.oversees === undefined ? null : await validateLoopOversees(body.oversees, undefined, req.user!.id);
+    const handoffTargets =
+      body.handoffTargets === undefined
+        ? null
+        : await validateLoopHandoffTargets(body.handoffTargets, undefined, req.user!.id);
+    const triggers =
+      body.triggers === undefined
+        ? null
+        : await validateLoopTriggers(body.triggers, undefined, req.user!.id, stages ?? DEFAULT_LOOP_STAGES);
+    const wakeMode = body.wakeMode === undefined ? null : validateLoopWakeMode(body.wakeMode);
+    const policy = Object.fromEntries(
+      Object.entries(validateLoopPriorityPolicy(body as Record<string, unknown>)).filter(([, value]) => value !== null)
+    );
+
+    const organizationId =
+      body.organizationId === undefined ? undefined : validateLoopOrganizationId(body.organizationId);
+    if (organizationId) {
+      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, organizationId);
+    }
+
+    await validateLoopAgentsAndSkills({ userId: req.user!.id, organizationId }, agentId, stageConfig ?? []);
+
+    // Same default as POST /api/v1/agent-executions, resolved once so every run uses the same model.
+    let model = body.model === undefined ? undefined : validateLoopModel(body.model);
+    if (!model) {
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const resolved = await resolveDefaultChatModel({
+        configuredModel: getSettingsValue('DefaultAPIModel', settings),
+        userId: req.user!.id,
+        logger: req.logger,
+      });
+      model = resolved.model;
+    }
+
+    const { sessionId } = await getOrCreateSession({ sessionName: name, user: req.user!, logger: req.logger });
+
+    const created = await loopRepository.create({
+      userId: req.user!.id,
+      ...(organizationId && { organizationId }),
+      name,
+      goal,
+      model,
+      sessionId,
+      intervalMinutes,
+      tools,
+      ...(stages && { stages }),
+      ...(stageConfig?.length && { stageConfig }),
+      ...(agentId && { agentId }),
+      ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
+      ...(maxConcurrent !== undefined && { maxConcurrent }),
+      ...(oversees && { oversees }),
+      ...(handoffTargets && { handoffTargets }),
+      ...(triggers && { triggers }),
+      ...(wakeMode && { wakeMode }),
+      ...policy,
+      status: 'draft',
+    } as Omit<ILoop, 'id' | 'createdAt' | 'updatedAt'>);
+
+    res.status(201).json(created);
+  });
+
+export default handler;

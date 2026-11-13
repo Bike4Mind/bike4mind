@@ -22,6 +22,8 @@ import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './Cl
 import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
 import { LocalHistorySettings } from './LocalHistorySettings';
+import type { LoopRunnerState } from '@shared/loopRunner';
+import { LoopRunnerSettings, loopRunnerSummary, useLoopRunnerState } from './LoopRunnerSettings';
 import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
 import { WorktreesSettings } from './WorktreesSettings';
@@ -324,6 +326,16 @@ function localHistoryEntry(): ConfigEntry {
   };
 }
 
+function loopRunnerEntry(state: LoopRunnerState | null, setState: (state: LoopRunnerState) => void): ConfigEntry {
+  return {
+    id: 'loop-runner',
+    icon: <ServerIcon />,
+    label: 'Loop runner',
+    summary: loopRunnerSummary(state),
+    control: <LoopRunnerSettings state={state} onState={setState} />,
+  };
+}
+
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   // Electron prefixes a rejected invoke with where it came from; the user needs the reason only.
@@ -553,6 +565,7 @@ function useSettingsEntries(
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
+  const [loopRunner, setLoopRunner] = useLoopRunnerState();
 
   return {
     general: [
@@ -594,6 +607,7 @@ function useSettingsEntries(
         curatedList.saving
       ),
       localHistoryEntry(),
+      ...(loopRunner ? [loopRunnerEntry(loopRunner, setLoopRunner)] : []),
       localDataExportEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),

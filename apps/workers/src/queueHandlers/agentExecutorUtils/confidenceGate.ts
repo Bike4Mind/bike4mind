@@ -4,6 +4,7 @@ import {
   type LowConfidenceCompletionMode,
   type ScoredToolCall,
 } from '@bike4mind/agents';
+import { OrchestrationDefaultsSchema } from '@bike4mind/common';
 
 /**
  * Consecutive low-confidence iterations before the gate pauses. One weak tool result
@@ -11,6 +12,21 @@ import {
  * low is the stuck loop the gate exists to catch.
  */
 export const LOW_CONFIDENCE_STREAK_TO_PAUSE = 2;
+
+// The schema default in common is the single source (agentExecutor reads the same value).
+const CONFIDENCE_GATE_THRESHOLD = OrchestrationDefaultsSchema.parse({}).confidenceGateThreshold;
+
+/**
+ * The run's gate threshold: the profile's override, else the default. A profile threshold of 0 disables
+ * the gate, except on loop runs - an unsure loop run parks its ticket for the owner instead of guessing on.
+ */
+export function gateThresholdFor(
+  profile: { confidenceGateThreshold?: number } | undefined,
+  execution: { loopId?: string }
+): number {
+  const threshold = profile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+  return threshold === 0 && execution.loopId ? CONFIDENCE_GATE_THRESHOLD : threshold;
+}
 
 export interface ConfidenceGateInput {
   /** Iteration-average confidence the agent reported, or null when no tools ran. */

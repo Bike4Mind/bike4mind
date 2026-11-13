@@ -3,12 +3,24 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
+import {
+  assertBlockedOnSatisfiable,
+  assertLoopTicketAccess,
+  makeDueIfReady,
+  priorityPatch,
+  ticketMovePatch,
+  initialStageHistory,
+} from '@server/utils/loopTickets';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
+import { fireStageTriggers } from '@server/utils/loopHandoff';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
   validateWorkItemDescription,
+  validateWorkItemPriority,
   validateWorkItemStatus,
   validateWorkItemTitle,
   WORK_ITEM_RATE_LIMIT,
@@ -26,6 +38,7 @@ const handler = baseApi()
     const {
       status,
       organizationId,
+      loopId,
       query = '',
       page = '1',
       limit = String(DEFAULT_LIMIT),
@@ -46,12 +59,14 @@ const handler = baseApi()
     // set that is already hard-scoped to the caller's own userId, so gating it
     // would 404 a plain org member without protecting anything.
     const statusFilter = parseStatusFilter(status);
+    if (loopId !== undefined) await assertLoopTicketAccess(req, loopId);
 
     const result = await workItemRepository.listForUser(
       req.user!.id,
       {
         ...(statusFilter && { status: statusFilter }),
         ...(organizationId && { organizationId }),
+        ...(loopId && { loopId }),
         ...(query && { search: query }),
       },
       { page: safePage, limit: safeLimit },
@@ -61,18 +76,39 @@ const handler = baseApi()
     res.json(result);
   })
   .post(async (req, res) => {
-    const body = req.body as Partial<IWorkItem>;
+    const body = req.body as Partial<Omit<IWorkItem, 'priority' | 'blockedOn'>> & {
+      reason?: unknown;
+      priority?: unknown;
+      blockedOn?: unknown;
+    };
 
     const title = validateWorkItemTitle(body.title);
     const description = validateWorkItemDescription(body.description);
-    const status = validateWorkItemStatus(body.status) ?? 'open';
+    const requestedStatus = validateWorkItemStatus(body.status);
     const dependencies = validateWorkItemDependencies(body.dependencies) ?? [];
+    // Same rule as PATCH: `loopId: null` means not linked, and a stage needs a loop.
+    const loop = body.loopId != null ? await assertLoopTicketAccess(req, body.loopId) : undefined;
+    for (const field of ['stage', 'priority', 'blockedOn'] as const) {
+      if (!loop && body[field] != null) throw new BadRequestError(`${field} is only valid on a loop ticket`);
+    }
+    // No priority leaves the ticket untriaged: the loop's next triage run sets one.
+    const priority = validateWorkItemPriority(body.priority);
+    const ticket =
+      loop &&
+      ticketMovePatch(
+        loop,
+        undefined,
+        { stage: body.stage, status: requestedStatus, reason: body.reason, blockedOn: body.blockedOn },
+        'owner'
+      );
+    const status = ticket?.status ?? requestedStatus ?? 'open';
 
     if (body.organizationId) {
       await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, body.organizationId);
     }
 
     await assertDependenciesUsable(req.user!.id, dependencies);
+    await assertBlockedOnSatisfiable(req.user!.id, dependencies, ticket?.blockedOn);
 
     const created = await workItemRepository.create({
       userId: req.user!.id,
@@ -83,8 +119,18 @@ const handler = baseApi()
       status,
       dependencies,
       ...(status === 'closed' && { closedAt: new Date() }),
+      ...(loop && { loopId: loop.id, stage: ticket!.stage, ...(priority && priorityPatch(priority, 'owner')) }),
+      ...(ticket?.statusReason && { statusReason: ticket.statusReason }),
+      ...(ticket?.blockedOn && { blockedOn: ticket.blockedOn }),
+      ...(ticket && initialStageHistory(ticket)),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
+    if (loop) {
+      if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, req.logger);
+      // The owner's other tabs and browsers; the tab that made the write already updated its own cache.
+      await pushLoopChanged(req.user!.id, loop.id, req.logger);
+      await fireStageTriggers({ userId: req.user!.id, ticket: created, loop, logger: req.logger });
+    }
     res.status(201).json(created);
   });
 
