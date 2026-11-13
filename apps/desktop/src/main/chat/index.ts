@@ -12,7 +12,6 @@ import {
   ipcMain,
   nativeImage,
   net,
-  safeStorage,
   shell,
   type WebContents,
 } from 'electron';
@@ -96,6 +95,7 @@ import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
 import { privateFile } from '../privateFile';
+import { appSecretCipher } from '../secrets';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -531,10 +531,18 @@ export function registerChat(
     logger.warn(message)
   );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
-  // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
+  // Encrypted like the MCP secrets: a server's token or header value never goes to plain JSON.
+  const modelServerStore = new ModelServerStore(
+    appSecretCipher(),
+    privateFile(join(userData, 'model-servers.json')),
+    logger
+  );
+  void modelServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MODEL SERVERS: could not re-save stored credentials: ${String(error)}`));
   const modelServers = new ModelServerRegistry({
     loadSettings,
-    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
+    store: modelServerStore,
     logger,
     changed: servers => {
       models.expireLocal();
@@ -549,7 +557,7 @@ export function registerChat(
       gpuVendor: async () => (await localHardware.probed())?.gpuVendor ?? null,
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
-    ownedCipher: safeStorage,
+    ownedCipher: appSecretCipher(),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -680,12 +688,14 @@ export function registerChat(
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
-  // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
+  // Encrypted for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
-  const mcp = new McpManager(
-    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
-    logger,
-    (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
+  const mcpServerStore = new McpServerStore(appSecretCipher(), privateFile(join(userData, 'mcp-servers.json')), logger);
+  void mcpServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MCP: could not re-save stored secrets: ${String(error)}`));
+  const mcp = new McpManager(mcpServerStore, logger, (state: McpServersState) =>
+    send(IPC_CHANNELS.mcpServersChanged, state)
   );
 
   const foreground = new ForegroundCommandRegistry();
