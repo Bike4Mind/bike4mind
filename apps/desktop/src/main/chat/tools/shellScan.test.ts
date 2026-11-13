@@ -524,8 +524,8 @@ describe('scanShell', () => {
       }
     );
 
-    it.each(['git log --format={,} -1', 'git show --format={x}a,b} HEAD'])(
-      'still leaves braces it cannot expand unread: %s',
+    it.each(['git log --format={,} -1', 'git show --format={x}a,b} HEAD', 'grep foo /etc/x=', 'sed -n 1p /etc/x='])(
+      'still leaves braces it cannot expand, or an operand ending in =, unread: %s',
       async command => {
         expect((await scan(command)).unread).toBe(true);
       }
