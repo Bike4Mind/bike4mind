@@ -91,6 +91,19 @@ describe('DataTable', () => {
     expect(row).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('marks the active row independently of bulk selection', () => {
+    renderTable({
+      rows: rows.slice(0, 2),
+      activeRowId: '1',
+      selection: { mode: 'explicit', ids: ['2'] },
+      onSelectionChange: vi.fn(),
+    });
+    expect(screen.getByTestId('admin-table-row-1')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('admin-table-row-1')).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByTestId('admin-table-row-2')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('admin-table-row-2')).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('runs a row shortcut on the focused row only for a plain, fresh key press', () => {
     const accept = vi.fn();
     const override = vi.fn();

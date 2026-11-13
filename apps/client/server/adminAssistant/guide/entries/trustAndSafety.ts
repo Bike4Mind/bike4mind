@@ -276,6 +276,21 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['api key scopes', 'scopes', 'api keys', 'preflight', 'scope migration', 'requiredScopes', '403'],
   },
   {
+    id: 'legacy-api-keys',
+    title: 'Legacy API keys',
+    summary:
+      'A read-only list of recently used API keys created before the scope cutoff, with their owners. These keys still reach routes they hold no scope for until legacy access ends; their owners need a new scoped key before then.',
+    views: ['admin.legacy_api_keys'],
+    settings: [],
+    howTo: [
+      'The header tiles show Legacy keys in use, Owners, the Cutoff and when Legacy access ends ("Not set" until those dates are chosen).',
+      'Pick a usage window (7, 30 or 90 days) to list keys used within it, most recently used first. Each row shows the owner email, key name, prefix, creation date and last use.',
+      'Rotating a legacy key keeps it legacy; owners must create a new key with the scopes they need.',
+      'Delegated admins with support:read can open this tab.',
+    ],
+    keywords: ['legacy api keys', 'legacy keys', 'grandfathered', 'api keys', 'scoped key', 'key owners', 'cutoff'],
+  },
+  {
     id: 'oauth-clients',
     title: 'OAuth clients',
     summary:

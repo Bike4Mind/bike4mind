@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeMembershipChangeEventRepository: { __repo: 'lakeMembershipChangeEvents' },
   adminSettingsRepository: { __repo: 'adminSettings' },
 }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   assertDataLakeWriteScope: h.assertDataLakeWriteScope,
 }));
 

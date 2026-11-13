@@ -26,7 +26,7 @@ import type { CompletionRequest, StreamTransport } from './streamTransport';
  * This class is purely the SSE *transport*: `open()` makes the streaming request
  * and yields decoded {@link StreamEvent}s. The retry / accumulate /
  * finalize-exactly-once / empty / abort policy lives in {@link runCompletion},
- * which `complete()` delegates to - shared verbatim with `WebSocketLlmBackend`.
+ * which `complete()` delegates to.
  */
 export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private apiClient: ApiClient;

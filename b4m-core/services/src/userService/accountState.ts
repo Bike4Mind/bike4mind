@@ -24,7 +24,7 @@ export interface AccountStateFields {
  * `suspend_pending` and `throttled` are deliberately NOT reasons: the former awaits a human's
  * confirmation and the latter is a rate limit, so neither is refused at key-use time. Both the
  * admin update and the Stripe dispute webhook derive their deactivation decision from this list,
- * and the use-time gate in `apps/client/server/cli/auth.ts` must switch on it in the same order.
+ * and the use-time gate in `packages/server-utils/src/cli/auth.ts` must switch on it in the same order.
  */
 export function accountBlockReasons(user: AccountStateFields): AccountBlockReason[] {
   const reasons: AccountBlockReason[] = [];

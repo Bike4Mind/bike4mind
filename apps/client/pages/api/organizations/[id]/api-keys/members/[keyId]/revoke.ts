@@ -14,7 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgMemberKey } from '@server/organizations/orgMemberApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { notifyApiKeyOrgRevoke } from '@server/utils/apiKeyRotationNotifier';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const RevokeOrgMemberApiKeyBodySchema = z.object({ reason: z.string().trim().max(500).optional() }).optional();

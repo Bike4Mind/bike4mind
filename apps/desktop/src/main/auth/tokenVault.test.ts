@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthTokens } from '@bike4mind/client-auth';
+import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
 import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
 
 const TOKENS: AuthTokens = {
@@ -201,5 +202,61 @@ describe('TokenVault', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringMatching(/clearing stored credentials .* vault decrypt failed/)
     );
+  });
+});
+
+describe('TokenVault.reencrypt', () => {
+  const A = 'https://a.example.com';
+  const B = 'https://b.example.com';
+  const OTHER: AuthTokens = { ...TOKENS, userId: 'user-2' };
+
+  function storedVault(blobs: Record<string, string>) {
+    const file = memoryFile(JSON.stringify({ version: 1, environment: { preset: 'hosted' }, tokens: blobs }));
+    const write = vi.spyOn(file, 'write');
+    return { file, write, tokens: () => JSON.parse(file.contents ?? '{}').tokens as Record<string, string> };
+  }
+
+  it('re-seals each legacy blob once and leaves current ones as they are', async () => {
+    const stored = storedVault({
+      [A]: sealedAs('old', JSON.stringify(TOKENS)),
+      [B]: sealedAs('new', JSON.stringify(OTHER)),
+    });
+    const vault = new TokenVault(versionedCipher('new'), stored.file, silentLogger);
+
+    await vault.reencrypt();
+
+    expect(openedAs(stored.tokens()[A])).toBe(`new:${JSON.stringify(TOKENS)}`);
+    expect(stored.tokens()[B]).toBe(sealedAs('new', JSON.stringify(OTHER)));
+    expect(JSON.parse(stored.file.contents ?? '{}').environment).toEqual({ preset: 'hosted' });
+    expect(stored.write).toHaveBeenCalledTimes(1);
+
+    await vault.reencrypt();
+    expect(stored.write).toHaveBeenCalledTimes(1);
+    expect(await vault.getTokens(A)).toEqual(TOKENS);
+    expect(await vault.getTokens(B)).toEqual(OTHER);
+  });
+
+  it('keeps a legacy blob it cannot open, and the read path then treats it as before', async () => {
+    const blob = sealedAs('old', JSON.stringify(TOKENS));
+    const stored = storedVault({ [A]: blob });
+    const vault = new TokenVault(versionedCipher('new', { opensOld: false }), stored.file, silentLogger);
+
+    await vault.reencrypt();
+
+    expect(stored.write).not.toHaveBeenCalled();
+    expect(stored.tokens()[A]).toBe(blob);
+  });
+
+  it('leaves the file alone when encryption is unavailable or the cipher asks for no migration', async () => {
+    const blob = sealedAs('old', JSON.stringify(TOKENS));
+    for (const cipher of [versionedCipher('new', { available: false }), fakeCipher()]) {
+      const stored = storedVault({ [A]: blob });
+      const read = vi.spyOn(stored.file, 'read');
+
+      await new TokenVault(cipher, stored.file, silentLogger).reencrypt();
+
+      expect(read).not.toHaveBeenCalled();
+      expect(stored.write).not.toHaveBeenCalled();
+    }
   });
 });

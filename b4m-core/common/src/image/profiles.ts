@@ -1,4 +1,6 @@
 import { ImageModels } from '../models';
+import type { ModelProfile } from '../generation/types';
+import { IMAGE_MODEL_CATALOG } from './catalog';
 import type { ImageProviderId } from './types';
 
 /**
@@ -42,3 +44,14 @@ export const IMAGE_PROVIDER_LABELS: Record<ImageProviderId, string> = {
   xai: 'xAI',
   gemini: 'Google',
 };
+
+const hasImageProfile = (modelId: string): modelId is ImageModels => Object.hasOwn(IMAGE_MODEL_STRENGTHS, modelId);
+
+/** The card copy for a catalog image model, or null for any other id (text models, retired ids). */
+export const imageModelProfile = (modelId: string): ModelProfile | null =>
+  hasImageProfile(modelId)
+    ? {
+        blurb: IMAGE_MODEL_STRENGTHS[modelId],
+        providerLabel: IMAGE_PROVIDER_LABELS[IMAGE_MODEL_CATALOG[modelId].provider],
+      }
+    : null;

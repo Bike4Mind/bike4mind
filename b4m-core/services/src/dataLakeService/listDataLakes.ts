@@ -496,7 +496,7 @@ const toFallbackConfig = (
  * does NOT own - so the UI can flag someone else's lake and not let it be managed by mistake.
  *
  * Wider blast radius than its name suggests: `resolveAccessibleLakes`
- * (`apps/client/server/dataLakes/index.ts`) builds the content-scope lake set from this same
+ * (`packages/server-utils/src/dataLakes/index.ts`) builds the content-scope lake set from this same
  * function, and that set is the lake arm of the single-file read gate behind `/api/files/[id]`,
  * `/api/files/byIds` and `/api/files/presigned-url`, plus the scope for `/api/data-lakes/articles`,
  * `/api/data-lakes/tag-counts` and the `rlm-answer` has-any-lake precondition. A row this function

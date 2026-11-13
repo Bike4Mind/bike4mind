@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import { isQuickApproval } from '@shared/watch';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -141,6 +142,19 @@ describe('ChatService running a script written in the same session', () => {
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
     expect(calls('file_write', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  // The menu bar and the mini window show only the command line, so the reason the gate gave must
+  // keep the call off their approve-once path.
+  it('carries the reason apart from the detail, so the call is not answerable from the menu bar', async () => {
+    const id = await session('auto');
+    await reply(id, [write('deploy.sh'), shell('./deploy.sh')]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalParts).toBeUndefined();
+    expect(asked.approvalReasons).toEqual([expect.stringContaining('deploy.sh, which was written in this session')]);
+    for (const reason of asked.approvalReasons ?? []) expect(asked.approvalDetail).toContain(reason);
+    expect(isQuickApproval(asked)).toBe(false);
   });
 
   it.each(['./setup.sh', 'sh ./setup.sh', 'source setup.sh', 'timeout 5 python3 -u setup.sh', 'cat setup.sh | sh'])(
@@ -408,6 +422,10 @@ describe('ChatService running a script written in the same session', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).not.toContain('written in this session');
+    // A working directory below the command is not a reason, but the one-line menu summary
+    // would hide it, so the call goes to the app card.
+    expect(asked.approvalReasons).toBeUndefined();
+    expect(isQuickApproval(asked)).toBe(false);
   });
 
   it('asks again after an "always" on a run whose script check failed', async () => {
@@ -418,6 +436,8 @@ describe('ChatService running a script written in the same session', () => {
     expect(first.approvalDetail).toContain('Could not check');
     expect(first.approvalRules).toBeUndefined();
     expect(first.approvalOnceOnly).toBe(true);
+    expect(first.approvalReasons).toEqual([expect.stringContaining('Could not check')]);
+    expect(isQuickApproval(first)).toBe(false);
     approvals.resolve(first.approvalId!, { decision: 'always' });
     await settled('bash_execute');
     expect(rememberAllows).not.toHaveBeenCalled();

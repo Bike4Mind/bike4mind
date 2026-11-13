@@ -1,5 +1,6 @@
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import { parsePage, toNumber } from './adminSearchValues';
+import { ADMIN_PAGE_SIZES } from './shared/adminPagination';
 import { DEFAULT_PRESET_DAYS, getPresetRange } from './EventMetrics/UserActivity/dateRange';
 
 /**
@@ -24,7 +25,8 @@ export const MODEL_LOGS_TAB_PARAMS = [
   MODEL_LOGS_MODEL_PARAM,
 ] as const;
 
-export const MODEL_LOGS_PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+// The DataTable footer's sizes, so every size it offers round-trips through the URL.
+export const MODEL_LOGS_PAGE_SIZE_OPTIONS = ADMIN_PAGE_SIZES;
 type ModelLogsPageSize = (typeof MODEL_LOGS_PAGE_SIZE_OPTIONS)[number];
 
 /** The model filter's options, in menu order; no param is every model. */
@@ -80,7 +82,7 @@ const parseDate = (value: unknown): string | undefined => {
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value) ? value : undefined;
 };
 
-// Trimmed and bounded; empty, or the select's own "all", means every model.
+// Trimmed and bounded; empty or the legacy "all" sentinel means every model.
 const parseModelId = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const id = value.trim();

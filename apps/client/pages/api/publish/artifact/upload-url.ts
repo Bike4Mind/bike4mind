@@ -1,4 +1,5 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -103,6 +104,7 @@ const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public') await assertPublicationPublicLink(body);
 
   const existing = await PublishedArtifact.findOne({
     tier: body.tier,

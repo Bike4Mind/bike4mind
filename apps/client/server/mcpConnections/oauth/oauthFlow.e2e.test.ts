@@ -54,8 +54,8 @@ vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
 
 const { startUserConnectionOAuth } = await import('./startOAuth');
 const { completeUserConnectionOAuth } = await import('./completeOAuth');
-const { getOAuthAccessToken } = await import('./tokenManager');
-const { invokeRemoteMcp } = await import('../invokeRemoteMcp');
+const { getOAuthAccessToken } = await import('@bike4mind/server-utils/mcpConnections/oauth/tokenManager');
+const { invokeRemoteMcp } = await import('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp');
 const { disconnectUserConnectionOAuth, deleteUserConnection } = await import('../connectionService');
 
 const context: CustomMcpContext = {
