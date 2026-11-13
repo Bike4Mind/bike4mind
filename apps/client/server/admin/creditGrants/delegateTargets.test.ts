@@ -53,6 +53,7 @@ describe('assertDelegateCanCreditOrganization', () => {
   it.each([
     ['owns', { userId: 'delegate-1' }],
     ['administers', { userId: 'user-1', adminUserIds: ['delegate-1'] }],
+    ['manages billing for', { userId: 'user-1', billingManagerUserIds: ['delegate-1'] }],
     ['is a member of', { userId: 'user-1', users: [{ userId: 'delegate-1' }] }],
   ])('refuses a delegate that %s the organization', async (_label, organization) => {
     await expect(assertDelegateCanCreditOrganization(delegate, organization, 'top up')).rejects.toThrow(
@@ -67,12 +68,30 @@ describe('assertDelegateCanCreditOrganization', () => {
     );
   });
 
+  it('checks billing-manager ties for the impersonator too', async () => {
+    await expect(
+      assertDelegateCanCreditOrganization(
+        { ...delegate, impersonatedBy: 'billing-manager' },
+        { userId: 'user-1', billingManagerUserIds: ['billing-manager'] },
+        'top up'
+      )
+    ).rejects.toThrow('an organization you belong to');
+  });
+
   it('lets a delegate top up an unrelated organization, and a full admin any', async () => {
     await expect(
-      assertDelegateCanCreditOrganization(delegate, { userId: 'user-1', users: [] }, 'top up')
+      assertDelegateCanCreditOrganization(
+        delegate,
+        { userId: 'user-1', users: [], billingManagerUserIds: ['unrelated'] },
+        'top up'
+      )
     ).resolves.toBeUndefined();
     await expect(
-      assertDelegateCanCreditOrganization(fullAdmin, { userId: 'admin-1' }, 'top up')
+      assertDelegateCanCreditOrganization(
+        fullAdmin,
+        { userId: 'admin-1', billingManagerUserIds: ['admin-1'] },
+        'top up'
+      )
     ).resolves.toBeUndefined();
   });
 });

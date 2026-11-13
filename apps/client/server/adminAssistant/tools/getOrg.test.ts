@@ -122,6 +122,20 @@ describe('getOrgTool', () => {
     ]);
   });
 
+  it('reports a billing manager in the tool response without changing the manager label', async () => {
+    resolveAdminOrgRef.mockResolvedValue({
+      ok: true,
+      org: orgDoc({ billingManagerUserIds: ['member-1'] }),
+    });
+
+    const result = await runTool({ orgId: ORG_ID });
+
+    expect(result.data.members).toEqual([
+      { userId: 'manager-1', name: 'Max', role: 'admin' },
+      { userId: 'member-1', name: null, role: 'billingManager' },
+    ]);
+  });
+
   it('does not count the owner twice when users[] also lists them', async () => {
     resolveAdminOrgRef.mockResolvedValue({
       ok: true,

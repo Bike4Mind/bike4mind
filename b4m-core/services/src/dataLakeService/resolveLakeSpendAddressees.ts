@@ -1,3 +1,4 @@
+import { orgMemberHasPermission } from '@bike4mind/common';
 import type {
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
@@ -44,9 +45,9 @@ export const MAX_ORG_IDS_TO_RESOLVE = 20;
  * suppress a lake's notifications, since the caller treats `[]` as a stable, keep-the-claim
  * outcome.
  *
- * Org-owned lake: the org's billing owner (`userId`) + `adminUserIds` - the
- * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights)
- * - covers `canManageLake`'s org-admin rung. Also folds in any org-principal owner/curator GRANT
+ * Org-owned lake: the org's billing owner (`userId`), current billing managers and `adminUserIds`.
+ * The owner/admin fields match OrganizationModel.findIdsWithAdminRights and cover `canManageLake`'s
+ * org-admin rung. Also folds in any org-principal owner/curator GRANT
  * on this specific lake (canManageLake's org-grant rung) - each such grant's `principalId` is
  * itself an ORG id, resolved through the same org-admin-fields lookup, never pushed directly
  * into the user-id lookup (an org id can never match a user, which would otherwise silently
@@ -56,8 +57,8 @@ export const MAX_ORG_IDS_TO_RESOLVE = 20;
  * The individual effective owner (`resolveEffectiveOwnerIds`: owner-role grant, else the
  * immutable creator) is always UNIONED in, not gated on the org set being empty - `canManageLake`'s
  * owner and org-admin rungs grant independently, so the notified set is a superset of the
- * org-admin rung (no false negatives), never a subset (a notified id unable to view the lake
- * was never possible either way).
+ * org-admin rung (no false negatives). Billing managers receive spend notices independently
+ * of lake-content access.
  */
 export async function resolveLakeSpendAddressees(
   dataLakeId: string,
@@ -97,7 +98,11 @@ export async function resolveLakeSpendAddressees(
       }
       const orgs = await Promise.all(boundedOrgIds.map(id => db.organizations.findById(id)));
       orgAdminIds = orgs.flatMap(org =>
-        [org?.userId, ...(org?.adminUserIds ?? [])].filter((id): id is string => !!id && id.trim().length > 0)
+        [
+          org?.userId,
+          ...(org?.adminUserIds ?? []),
+          ...(org?.billingManagerUserIds ?? []).filter(id => org && orgMemberHasPermission(org, id, 'manageBilling')),
+        ].filter((id): id is string => !!id && id.trim().length > 0)
       );
     }
 
