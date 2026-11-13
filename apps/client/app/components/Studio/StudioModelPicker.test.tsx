@@ -117,4 +117,21 @@ describe('StudioModelPicker', () => {
     expect(optionIds()).toEqual(['a', 'b', 'c']);
     expect(screen.queryByTestId('pick-model-show-all-btn')).not.toBeInTheDocument();
   });
+  it('carries its own token scope and names the row as the model control', () => {
+    renderPicker();
+    expect(screen.getByTestId('pick-model-scope')).toHaveAttribute('data-inline', 'true');
+    const change = screen.getByTestId('pick-model-change-btn');
+    expect(change).toHaveAccessibleName('Change model');
+    expect(change).toHaveAccessibleDescription(/Model A/);
+  });
+
+  it('shows each cost in mono credits and dims a model that cannot run', () => {
+    renderPicker();
+    fireEvent.click(screen.getByTestId('pick-model-change-btn'));
+    expect(screen.getByTestId('pick-model-option-a-cost')).toHaveTextContent('10 cr');
+    expect(screen.getByRole('radiogroup', { name: 'Models for this request' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pick-model-show-all-btn'));
+    expect(screen.getByTestId('pick-model-option-h')).toHaveAttribute('data-unavailable', 'true');
+    expect(screen.getByTestId('pick-model-option-a')).toHaveAttribute('data-unavailable', 'false');
+  });
 });

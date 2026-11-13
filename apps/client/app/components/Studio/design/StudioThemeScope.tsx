@@ -9,12 +9,16 @@ const ScopeRoot = styled('div')({
   backgroundColor: studioColor('canvas'),
   color: studioColor('text'),
   fontFamily: studioFont('ui'),
+  // Inline: only declares the tokens, adding no box, so a primitive can sit on a page outside Studio's stage.
+  '&[data-inline="true"]': { display: 'contents', backgroundColor: 'transparent' },
 });
 
 type StudioThemeScopeProps = {
   children: ReactNode;
   testId?: string;
   className?: string;
+  /** Declare the tokens without drawing the canvas or adding a layout box (see the style above). */
+  inline?: boolean;
 };
 
 /**
@@ -22,10 +26,15 @@ type StudioThemeScopeProps = {
  * Studio primitives read only these variables, so they render correctly only under this scope,
  * and the tokens never reach the rest of the app.
  */
-const StudioThemeScope = ({ children, testId = 'studio-theme-scope', className }: StudioThemeScopeProps) => {
+const StudioThemeScope = ({
+  children,
+  testId = 'studio-theme-scope',
+  className,
+  inline = false,
+}: StudioThemeScopeProps) => {
   const mode = useTheme().palette.mode;
   return (
-    <ScopeRoot data-studio-mode={mode} data-testid={testId} className={className}>
+    <ScopeRoot data-studio-mode={mode} data-inline={inline} data-testid={testId} className={className}>
       {children}
     </ScopeRoot>
   );
