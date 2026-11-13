@@ -80,6 +80,7 @@ export interface IProject {
   name: string;
   description: string;
   userId: string;
+  organizationId?: string;
 
   sessionIds: string[];
   fileIds: string[];

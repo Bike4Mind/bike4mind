@@ -4,6 +4,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   agentRepository,
   fabFileRepository,
+  organizationRepository,
   projectRepository,
   questRepository,
   Session,
@@ -43,6 +44,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
           users: userRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          organizations: organizationRepository,
           agents: agentRepository,
         },
         // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of

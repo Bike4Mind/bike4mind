@@ -6,6 +6,7 @@ import { AxiosError, isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { generateMockProjects } from '@client/app/mocks/mockProjects';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { useUser } from '@client/app/contexts/UserContext';
 
 // Set true to use mock projects for UI testing
 const USE_MOCK_PROJECTS = false;
@@ -45,11 +46,15 @@ export const useCreateProject = (callback?: {
   silentSuccess?: boolean;
 }) => {
   const queryClient = useQueryClient();
+  const { currentUser } = useUser();
   return useMutation({
     mutationFn: async (
       project: Pick<IProject, 'name' | 'description'> & { sessionIds?: string[]; fileIds?: string[] }
     ) => {
-      const response = await api.post<IProjectDocument>('/api/projects', project);
+      const response = await api.post<IProjectDocument>('/api/projects', {
+        ...project,
+        organizationId: currentUser?.organizationId ?? undefined,
+      });
       return response.data;
     },
     onSuccess: (project: IProjectDocument, variables) => {
