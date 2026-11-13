@@ -36,7 +36,7 @@ const farmAccount = (overrides: Partial<UserAccountRiskProfile> = {}): UserAccou
   signupAsn: 64500,
   signupDatacenter: false,
   signupWafAnonIp: true,
-  totpEnabled: true,
+  mfaEnabled: true,
   mfaSetupAt: new Date(SIGNUP.getTime() + 4 * MINUTE_MS),
   ...overrides,
 });
@@ -131,7 +131,7 @@ describe('buildAccountProfile', () => {
       buildAccountProfile({
         spendSince: SPEND_SINCE,
         account: farmAccount({
-          totpEnabled: false,
+          mfaEnabled: false,
           signupMethod: 'google',
           signupDatacenter: null,
           signupWafAnonIp: null,

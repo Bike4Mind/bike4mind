@@ -727,7 +727,7 @@ describe('account dialogs', () => {
 
       expect(screen.queryByTestId('login-as-dialog-mfa-input')).not.toBeInTheDocument();
       expect(confirmButton('login-as-dialog')).toBeDisabled();
-      expect(hint('login-as-dialog')).toHaveTextContent('Set up two-factor on your own account first.');
+      expect(hint('login-as-dialog')).toHaveTextContent('Set up an authenticator app on your own account first.');
 
       fireEvent.click(screen.getByTestId('login-as-dialog-setup-mfa-btn'));
 

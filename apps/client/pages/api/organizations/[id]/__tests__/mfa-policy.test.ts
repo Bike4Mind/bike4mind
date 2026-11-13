@@ -122,7 +122,20 @@ describe('organization MFA policy', () => {
     expect(res._getJSONData()).toEqual({ members: [{ id: 'owner', name: 'Owner', mfaEnabled: true }] });
     expect(mocks.findUsers).toHaveBeenCalledWith(
       { _id: { $in: ['owner', 'manager'] }, serviceAccountOrganizationId: null },
-      { _id: 1, name: 1, 'mfa.totpEnabled': 1 }
+      { _id: 1, name: 1, 'mfa.totpEnabled': 1, 'mfa.passkeyEnabled': 1 }
     );
+  });
+  it('counts a passkey-only member as enrolled', async () => {
+    mocks.lean.mockResolvedValue([
+      { _id: 'owner', name: 'Owner', mfa: { totpEnabled: false, passkeyEnabled: true } },
+      { _id: 'manager', name: 'Manager', mfa: { totpEnabled: false } },
+    ]);
+    const res = await run('get');
+    expect(res._getJSONData()).toEqual({
+      members: [
+        { id: 'owner', name: 'Owner', mfaEnabled: true },
+        { id: 'manager', name: 'Manager', mfaEnabled: false },
+      ],
+    });
   });
 });

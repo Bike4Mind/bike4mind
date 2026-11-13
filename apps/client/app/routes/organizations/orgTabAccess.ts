@@ -10,6 +10,7 @@ import {
 
 export enum OrganizationTabs {
   Overview = 'overview',
+  Library = 'library',
   Members = 'members',
   Groups = 'groups',
   Usage = 'usage',

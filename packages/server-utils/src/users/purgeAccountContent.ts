@@ -65,7 +65,7 @@ const ownerFilter = (userId: string) => {
 };
 /**
  * A person's own content, not their organization's: owned with no organization, or in one of their
- * personal workspaces. Shared with the data subject export (`server/dataSubject/subjectRecordExport.ts`),
+ * personal workspaces. Shared with the data subject walks (`server/dataSubject/subjectMatcher.ts`),
  * which passes the owner path of its registry reference.
  */
 export const personalFilter = (userId: string, personalOrganizationIds: readonly string[], ownerPath = 'userId') => ({
