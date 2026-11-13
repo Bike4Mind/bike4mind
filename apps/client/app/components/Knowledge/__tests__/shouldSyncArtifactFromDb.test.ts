@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldStampPersistedVersion, shouldSyncArtifactFromDb } from '../KnowledgeViewer';
+import { shouldRestoreOpenArtifact, shouldStampPersistedVersion, shouldSyncArtifactFromDb } from '../KnowledgeViewer';
 
 describe('shouldSyncArtifactFromDb', () => {
   it('does not downgrade the just-opened version during the persist race (#457)', () => {
@@ -117,5 +117,25 @@ describe('shouldStampPersistedVersion', () => {
         latestVersion: undefined,
       })
     ).toBe(false);
+  });
+});
+
+describe('shouldRestoreOpenArtifact', () => {
+  it('restores the open artifact when the shown tab got a new version after a send cleared it', () => {
+    expect(shouldRestoreOpenArtifact({ shownItemId: 'a1', openArtifactId: undefined, artifactId: 'a1' })).toBe(true);
+  });
+
+  it('leaves another tab alone', () => {
+    expect(shouldRestoreOpenArtifact({ shownItemId: 'a2', openArtifactId: undefined, artifactId: 'a1' })).toBe(false);
+  });
+
+  it('does nothing when the open artifact already is the one that got the version', () => {
+    expect(shouldRestoreOpenArtifact({ shownItemId: 'a1', openArtifactId: 'a1', artifactId: 'a1' })).toBe(false);
+  });
+
+  it('does nothing when nothing is shown', () => {
+    expect(shouldRestoreOpenArtifact({ shownItemId: undefined, openArtifactId: undefined, artifactId: 'a1' })).toBe(
+      false
+    );
   });
 });
