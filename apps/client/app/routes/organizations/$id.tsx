@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
+import OrganizationLibrarySection from '@client/app/components/organizations/OrganizationLibrarySection';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
@@ -115,11 +116,14 @@ const OrganizationPage: FC = () => {
   }, [currentUser, organization]);
 
   const canManageOrg = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
+    return (
+      userPermissions.includes(Permission.share) ||
+      userPermissions.includes(Permission.update) ||
+      (!!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization))
+    );
+  }, [userPermissions, currentUser, organization]);
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
-  // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
+  // Usage and Analysis admit current managers; integrations stay owner-only (orgTabAccess.ts).
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
   const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
@@ -180,6 +184,12 @@ const OrganizationPage: FC = () => {
       value: OrganizationTabs.Members,
       label: t('organization.tabs.members'),
       icon: <GroupOutlinedIcon sx={{ fontSize: 16 }} />,
+    },
+    {
+      value: OrganizationTabs.Library,
+      label: 'Library',
+      icon: null,
+      testId: 'organization-library-tab',
     },
     ...(canManageGroups
       ? [
@@ -448,6 +458,15 @@ const OrganizationPage: FC = () => {
               )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
+            {selectedTab === OrganizationTabs.Library && (
+              <TabPanel value={OrganizationTabs.Library} {...panelAccessibility(OrganizationTabs.Library)}>
+                <OrganizationLibrarySection
+                  key={organization.id}
+                  organizationId={organization.id}
+                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Members} {...panelAccessibility(OrganizationTabs.Members)}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
@@ -558,7 +577,7 @@ const OrganizationHeader: FC<{
     // Grant admin permissions if user is a system admin
     if (currentUser.isAdmin) return true;
     // Grant full permissions if user is the owner
-    if (currentUser.id === organization.userId) return true;
+    if (isOrgOwnerOrCurrentAdmin(currentUser, organization)) return true;
     const memberDetails = organization.users.find(u => u.userId === currentUser.id);
     return memberDetails?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
   }, [currentUser, organization]);

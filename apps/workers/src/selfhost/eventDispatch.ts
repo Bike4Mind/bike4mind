@@ -8,6 +8,7 @@ import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { handler as sendPushHandler } from '@workers/events/sendPush';
+import { handler as studioJobCompletedHandler } from '@workers/events/studioJobCompleted';
 import { handler as invoicePaymentSucceededHandler } from '@workers/events/stripe/invoicePaymentSucceeded';
 import { handler as customerSubscriptionUpdatedHandler } from '@workers/events/stripe/customerSubscriptionUpdated';
 
@@ -49,6 +50,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
   'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,
   'notification.liveActivity': sendPushHandler,
+  'studio.job.completed': studioJobCompletedHandler,
 };
 
 export async function dispatchSelfHostEvent(

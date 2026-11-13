@@ -1624,7 +1624,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 /**
- * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Operator limits for advisory abuse assessments (packages/server-utils/src/security/abuseAssessment/abuseAssessment.ts).
  * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
  * gates all provider egress on top of this.
  */

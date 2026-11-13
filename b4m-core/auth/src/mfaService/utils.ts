@@ -123,12 +123,17 @@ export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean)
 }
 
 /**
- * Check if a user has MFA configured
+ * True when the user has at least one second factor: an authenticator app or a passkey. Both
+ * flags are NOT select:false, so this works even when the user was loaded without the secrets
+ * (e.g. OTC login). Every "is MFA on" check must go through here so the factors stay in step.
  */
 export function userHasMFAConfigured(user: IUserDocument): user is IUserDocument & { mfa: IMFAConfig } {
-  // totpEnabled is the source of truth and is NOT select:false - so this works even
-  // when the user was loaded without the (select:false) totpSecret (e.g. OTC login).
-  return !!(user.mfa && user.mfa.totpEnabled);
+  return !!(user.mfa && (user.mfa.totpEnabled || user.mfa.passkeyEnabled));
+}
+
+/** True when the user can answer with an authenticator-app code (not just a passkey or backup code). */
+export function userHasTotpConfigured(user: IUserDocument): boolean {
+  return !!user.mfa?.totpEnabled;
 }
 
 export const MAX_FAILED_ATTEMPTS = MFA_MAX_FAILED_ATTEMPTS;

@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
     }
   },
 }));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/observability', () => {
   const MockLogger = vi.fn(function () {
     return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };

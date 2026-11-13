@@ -25,6 +25,7 @@ import type {
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
+import type { WatchPreferences, WatchPreferencesPatch } from '@shared/watch';
 import type { GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
@@ -515,6 +516,8 @@ const api: DesktopApi = {
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
     setOption: (sessionId: string, option: PrOption, enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.prSetOption, sessionId, option, enabled),
+    getAutoFixAttempts: () => ipcRenderer.invoke(IPC_CHANNELS.prGetAutoFixAttempts),
+    setAutoFixAttempts: (attempts: number) => ipcRenderer.invoke(IPC_CHANNELS.prSetAutoFixAttempts, attempts),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: PrBarState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.prStateChanged, handler);
@@ -561,6 +564,15 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
     takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
+  },
+  watch: {
+    getPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.watchGetPreferences),
+    setPreferences: (patch: WatchPreferencesPatch) => ipcRenderer.invoke(IPC_CHANNELS.watchSetPreferences, patch),
+    onPreferences: listener => {
+      const handler = (_event: unknown, preferences: WatchPreferences) => listener(preferences);
+      ipcRenderer.on(IPC_CHANNELS.watchPreferences, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.watchPreferences, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

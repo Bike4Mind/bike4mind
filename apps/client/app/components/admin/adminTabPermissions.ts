@@ -19,10 +19,20 @@ type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
  * permission's own pages list it beside `support:read`, matching their routes' GET requirement.
  */
 export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, AdminPermissionRequirement>>> = {
-  // The modal endpoints' CASL rules grant read and write on settings:manage. What's new shares
-  // them but stays out: its highlights panel and LiveOps lookup are full-admin only.
+  // The modal endpoints' CASL rules grant read and write on settings:manage; What's new adds its
+  // variants, highlights and LiveOps routes, all declared settings:manage.
   [AdminTab.Modals]: 'settings:manage',
+  [AdminTab.WhatsNewModals]: 'settings:manage',
   [AdminTab.AiOperations]: 'settings:manage',
+
+  // settings:manage only, not support:read: a support reader would 403 on the scoped overrides,
+  // secrets, release-note and prompt history reads these pages load. General settings locks the
+  // FULL_ADMIN_SETTING_KEYS fields for delegates. Models, Secrets rotation and Tutorials stay
+  // full-admin: their writes check for a full admin on purpose.
+  [AdminTab.AdminSettings]: 'settings:manage',
+  [AdminTab.SystemPrompts]: 'settings:manage',
+  [AdminTab.SystemSecrets]: 'settings:manage',
+  [AdminTab.ReleaseNotes]: 'settings:manage',
 
   // Read-only for support:read. Their write controls name the permission they need
   // (AdminPermissionAction), or are already decided per row by the server (Approvals, Audit log).
@@ -30,6 +40,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.WebhookAuditLogs]: 'support:read',
   [AdminTab.HelpAnalytics]: 'support:read',
   [AdminTab.ApiKeyScopePreflight]: 'support:read',
+  [AdminTab.LegacyApiKeys]: 'support:read',
   [AdminTab.IntegrationDemand]: 'support:read',
   [AdminTab.AuditLog]: 'support:read',
   [AdminTab.Approvals]: 'support:read',

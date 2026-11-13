@@ -57,15 +57,9 @@ can silently turn it into `none`.
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/client/server/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |
 | Agent | `memoryJournal.content` | maxlength | `ai/AgentModel.ts#AgentRepository.appendMemory` | none |  | tavern-conversation.ts appends LLM-extracted content via String(item.content) with no length cap |
-| Agent | `memoryJournal.content` | maxlength | `ai/AgentModel.ts#AgentRepository.replaceMemoryJournal` | none |  | no callers; content would be uncapped LLM text |
 | Agent | `memoryJournal.importance` | min,max | `ai/AgentModel.ts#AgentRepository.appendMemory` | route-schema | `b4m-core/services/src/agentMemoryService/index.ts#clampImportance` | Sole caller's entries come from extractMemoriesFromConversation, clamped to 1-5 |
-| Agent | `memoryJournal.importance` | min,max | `ai/AgentModel.ts#AgentRepository.replaceMemoryJournal` | none |  | no callers |
 | Agent | `memoryJournal.source` | enum | `ai/AgentModel.ts#AgentRepository.appendMemory` | route-schema | `b4m-core/services/src/agentMemoryService/index.ts#extractMemoriesFromConversation` | Source hardcoded to literal 'conversation' by the extraction service |
-| Agent | `memoryJournal.source` | enum | `ai/AgentModel.ts#AgentRepository.replaceMemoryJournal` | none |  | no callers |
 | Agent | `pendingMessages.text` | maxlength | `ai/AgentModel.ts#AgentRepository.consumePendingMessages` | repository-check | `packages/database/src/models/ai/AgentModel.ts#AgentRepository.consumePendingMessages` | Writes literal empty array; no text value is ever written |
-| Agent | `pendingMessages.text` | maxlength | `ai/AgentModel.ts#AgentRepository.pushPendingMessage` | none |  | no callers |
-| Agent | `worldMemory.action` | enum | `ai/AgentModel.ts#AgentRepository.appendWorldMemory` | none |  | no callers |
-| Agent | `worldMemory.description` | maxlength | `ai/AgentModel.ts#AgentRepository.appendWorldMemory` | none |  | no callers |
 | AgentExecution | `confidenceGate.mode` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.persistConfidenceGate` | route-schema | `apps/client/server/utils/agentValidation.ts#validateConfidenceGateMode` | Agent or admin profile value, checked by OrchestrationDefaultsSchema; otherwise fallback constant |
 | AgentExecution | `confidenceGate.threshold` | min,max | `billing/AgentExecutionModel.ts#AgentExecutionRepository.persistConfidenceGate` | route-schema | `apps/client/server/utils/agentValidation.ts#validateConfidenceGateThreshold` | Agent or admin profile value, checked 0..1 by OrchestrationDefaultsSchema; otherwise fallback constant |
 | AgentExecution | `dagSpec.tasks.agentType` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setDagSpec` | route-schema | `b4m-core/agents/src/dag/schemas.ts#DecomposedTaskSchema` | LLM decomposition goes through DecomposeTaskInputSchema.safeParse in coordinateTask before handoff |
@@ -78,8 +72,7 @@ can silently turn it into `none`.
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.markFailed` | repository-check | `literal` | writes "failed" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setPendingGate` | repository-check | `literal` | writes "paused" |
 | AgentExecution | `status` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setWaitingOnChild` | repository-check | `literal` | writes "awaiting_subagent" |
-| AgentExecution | `subagentConfig.thoroughness` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setSubagentConfig` | none |  | delegateToAgent casts LLM tool args (args as DelegateToAgentParams); thoroughness never enum-checked |
-| AgentOpsSettings | `totalGenerationsCount` | min | `ai/AgentOpsSettingsModel.ts#AgentOpsSettingsRepository.incrementGenerationCount` | none |  | no callers; writer only does $inc by literal 1 |
+| AgentExecution | `subagentConfig.thoroughness` | enum | `billing/AgentExecutionModel.ts#AgentExecutionRepository.setSubagentConfig` | route-schema | `b4m-core/services/src/llm/tools/implementation/delegateToAgent.ts#createDelegateToAgentTool` | Tool rejects out-of-enum thoroughness before foreground or background delegation; omitted values use the agent default |
 | AnalyticsDaily | `day` | match | `analytics/AnalyticsDailyModel.ts#AnalyticsDailyRepository.upsertDay` | route-schema | `apps/client/server/analytics/analyticsRollup.ts#dayBounds` | Sole caller rollupDay checks YYYY-MM-DD regex via dayBounds and throws first |
 | ArenaVote | `status` | enum | `social/ArenaVoteModel.ts#ArenaVoteRepository.recordVote` | repository-check | `literal` | writes "voted" |
 | AutoContainmentDecision | `mode` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.reclaim` | route-schema | `b4m-core/common/src/schemas/settings.ts#AutoContainmentConfigSchema` | mode comes from admin setting safeParsed by zod enum, else default |
@@ -121,9 +114,7 @@ can silently turn it into `none`.
 | DungeonInstance | `status` | enum | `content/DungeonInstanceModel.ts#markExpired` | repository-check | `literal` | writes "expired" |
 | DungeonInstance | `status` | enum | `content/DungeonInstanceModel.ts#markExpiring` | repository-check | `literal` | writes "expiring" |
 | EmailJob | `overallStatus` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.claimForSending` | route-schema | `apps/client/pages/api/admin/email/jobs/[id]/send.ts#claimForSending` | Writer sets SENDING constant; sole caller's updates spread has no status |
-| EmailJob | `overallStatus` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.updateOverallStatus` | none |  | no callers; writer passes typed param through unchecked |
 | EmailJob | `status` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.claimForStart` | route-schema | `apps/client/pages/api/admin/email/jobs/[id]/start.ts#claimForStart` | Writer sets QUEUED constant; sole caller spreads only startedBy |
-| EmailPreferences | `unsubscribedCategories` | enum | `infra/email/EmailPreferencesModel.ts#EmailPreferencesRepository.resubscribe` | none |  | no callers; it only does $pull or sets an empty array |
 | EmailPreferences | `unsubscribedCategories` | enum | `infra/email/EmailPreferencesModel.ts#EmailPreferencesRepository.unsubscribeFromCategory` | route-schema | `apps/client/pages/api/email/unsubscribe.ts#unsubscribeBodySchema` | Body category parsed with z.nativeEnum(EmailCategory) |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.cancelPendingAttempts` | repository-check | `packages/database/src/models/infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.cancelPendingAttempts` | Writer sets constant EmailSendStatus.CANCELLED |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markOpened` | repository-check | `packages/database/src/models/infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markOpened` | Writer sets constant EmailSendStatus.OPENED |
@@ -184,13 +175,13 @@ can silently turn it into `none`.
 | OrgGoogleDriveConnection | `status` | enum | `infra/integrations/OrgGoogleDriveConnectionModel.ts#OrgGoogleDriveConnectionRepository.claimForSync` | repository-check | `literal` | writes "syncing" |
 | OrgGoogleDriveConnection | `status` | enum | `infra/integrations/OrgGoogleDriveConnectionModel.ts#OrgGoogleDriveConnectionRepository.releaseSyncClaim` | route-schema | `apps/workers/src/queueHandlers/driveLakeIngest.ts#releaseSyncClaim` | Callers use default connected or literal needs_reconnect |
 | OrgGoogleDriveConnection | `status` | enum | `infra/integrations/OrgGoogleDriveConnectionModel.ts#OrgGoogleDriveConnectionRepository.updateCredential` | repository-check | `packages/database/src/models/infra/integrations/OrgGoogleDriveConnectionModel.ts#updateCredential` | $cond keeps existing syncing or sets literal connected |
-| OverwatchSocialConnection | `platform` | enum | `social/OverwatchSocialConnectionModel.ts#OverwatchSocialConnectionRepository.upsertConnection` | none |  | no callers; platform typed as plain string in writer |
 | OverwatchSocialConnection | `status` | enum | `social/OverwatchSocialConnectionModel.ts#OverwatchSocialConnectionRepository.revokeConnection` | repository-check | `literal` | writes "revoked" |
 | PaymentAttempt | `kind` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordCheckoutStart` | repository-check | `literal` | writes "subscription" |
 | PaymentAttempt | `kind` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordOutcome` | route-schema | `apps/client/pages/api/stripe/webhook.ts#screenPaymentOutcome` | Webhook passes literal subscription/credits or ternary between them |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordCheckoutStart` | repository-check | `literal` | writes "started" |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordOutcome` | route-schema | `apps/client/pages/api/stripe/webhook.ts#screenPaymentOutcome` | Webhook passes literals succeeded or failed only |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordStart` | repository-check | `literal` | writes "started" |
+| Project | `groups.permissions` | enum | `content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | repository-check | `packages/database/src/models/content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | Snapshot-checked ordinary updates preserve or remove stored grants; new grants contain only the literal permission 'read' |
 | PublishedArtifactReport | `status` | enum | `content/purgeOwnerPublishedArtifacts.ts#purgeMatchingPublishedArtifacts` | repository-check | `literal` | writes "actioned" |
 | Quest | `callback.state` | enum | `content/QuestModel.ts#QuestRepository.armCallback` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.armCallback` | Writer hardcodes state 'pending' |
 | Quest | `callback.state` | enum | `content/QuestModel.ts#QuestRepository.claimCallbackDispatch` | repository-check | `literal` | writes "dispatched" |
@@ -203,16 +194,15 @@ can silently turn it into `none`.
 | Quest | `promptMeta.tokenUsage.promptCacheTtl` | enum | `content/QuestModel.ts#QuestRepository.settleIfUnfinished` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.settleIfUnfinished` | mergeObjects keeps stored promptMeta; only finishReason is written |
 | Quest | `promptMeta.tokenUsage.settledBasis` | enum | `content/QuestModel.ts#QuestRepository.settleIfUnfinished` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.settleIfUnfinished` | mergeObjects keeps stored promptMeta; only finishReason is written |
 | Quest | `promptMeta.toolMode` | enum | `content/QuestModel.ts#QuestRepository.settleIfUnfinished` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.settleIfUnfinished` | mergeObjects keeps stored promptMeta; only finishReason is written |
-| QuestGraph | `state` | enum | `content/QuestNodeModel.ts#QuestGraphRepository.updateState` | none |  | no callers |
-| QuestMasterPlan | `blockers.description` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addBlocker` | none |  | no callers (only the interface declaration in QuestTypes.ts) |
-| QuestMasterPlan | `blockers.resolution` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addBlocker` | none |  | no callers (only the interface declaration in QuestTypes.ts) |
-| QuestMasterPlan | `blockers.resolution` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.resolveBlocker` | none |  | no callers (only the interface declaration in QuestTypes.ts) |
-| QuestMasterPlan | `decisions.description` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addDecision` | none |  | no callers (only the interface declaration in QuestTypes.ts) |
-| QuestMasterPlan | `decisions.rationale` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addDecision` | none |  | no callers (only the interface declaration in QuestTypes.ts) |
-| QuestMasterPlan | `handoff.blockers` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | none |  | no callers; CLI posts to a /handoff route that does not exist |
-| QuestMasterPlan | `handoff.nextSteps` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | none |  | no callers; CLI posts to a /handoff route that does not exist |
-| QuestMasterPlan | `handoff.pendingDecisions` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | none |  | no callers; CLI posts to a /handoff route that does not exist |
-| QuestMasterPlan | `handoff.summary` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | none |  | no callers; CLI posts to a /handoff route that does not exist |
+| QuestMasterPlan | `blockers.description` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addBlocker` | schema | `runValidators` | Validates pushed elements; $slice retains the array cap |
+| QuestMasterPlan | `blockers.resolution` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addBlocker` | schema | `runValidators` | Validates pushed elements; $slice retains the array cap |
+| QuestMasterPlan | `blockers.resolution` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.resolveBlocker` | schema | `runValidators` | Validates positional $set |
+| QuestMasterPlan | `decisions.description` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addDecision` | schema | `runValidators` | Validates pushed elements; $slice retains the array cap |
+| QuestMasterPlan | `decisions.rationale` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.addDecision` | schema | `runValidators` | Validates pushed elements; $slice retains the array cap |
+| QuestMasterPlan | `handoff.blockers` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | schema | `runValidators` | Validates handoff array elements |
+| QuestMasterPlan | `handoff.nextSteps` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | schema | `runValidators` | Validates handoff array elements |
+| QuestMasterPlan | `handoff.pendingDecisions` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | schema | `runValidators` | Validates handoff array elements |
+| QuestMasterPlan | `handoff.summary` | maxlength | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateHandoff` | schema | `runValidators` | Validates handoff subdocument |
 | QuestMasterPlan | `quests.subQuests.status` | enum | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateTaskStatus` | schema | `runValidators` | update call passes runValidators |
 | QuestMasterPlan | `state` | enum | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.resumeIfPaused` | repository-check | `literal` | writes "active" |
 | QuestMasterPlan | `state` | enum | `content/QuestMasterPlanModel.ts#QuestMasterPlanRepository.updateQuestProgress` | schema | `runValidators` | update call passes runValidators |
@@ -223,10 +213,7 @@ can silently turn it into `none`.
 | ReleaseNote | `status` | enum | `content/ReleaseNoteModel.ts#ReleaseNoteRepository.publishNow` | schema | `runValidators` | update call passes runValidators |
 | ReleaseNote | `status` | enum | `content/ReleaseNoteModel.ts#ReleaseNoteRepository.unhide` | schema | `runValidators` | update call passes runValidators |
 | ScopedSetting | `ownerType` | enum | `infra/ops/ScopedSettingModel.ts#ScopedSettingsRepository.upsertOverride` | route-schema | `apps/client/pages/api/admin/scoped-settings/index.ts#PutBodySchema` | Admin route zod enum User/Organization; orgPolicy caller omits ownerType |
-| SecurityFinding | `category` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRepository.upsertByFingerprint` | none |  | no callers anywhere in repo; data.category unchecked by writer |
-| SecurityFinding | `severity` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRepository.upsertByFingerprint` | none |  | no callers anywhere in repo; data.severity unchecked by writer |
 | SecurityFinding | `status` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRepository.markMissingAsResolved` | repository-check | `literal` | writes "resolved" |
-| SecurityFinding | `status` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRepository.upsertByFingerprint` | none |  | no callers; writer itself only produces literals via $switch |
 | SecurityFindingRun | `status` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRunRepository.completeRun` | repository-check | `literal` | writes "completed" |
 | SecurityFindingRun | `status` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRunRepository.failRun` | repository-check | `literal` | writes "failed" |
 | SecurityFindingRun | `status` | enum | `infra/security/SecurityFindingModel.ts#SecurityFindingRunRepository.reapStaleRuns` | repository-check | `literal` | writes "failed" |
@@ -280,7 +267,7 @@ can silently turn it into `none`.
 | StripeDispute | `state` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.resolveBySystem` | repository-check | `literal` | writes "resolved" |
 | StripeDispute | `subject` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.markUserGone` | repository-check | `literal` | writes "unmatched" |
 | StripeDispute | `subject` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.recordClosed` | repository-check | `packages/database/src/models/billing/StripeDisputeModel.ts#StripeDisputeRepository.recordClosed` | Subject written only when facts.subject === 'user' |
-| SystemPrompt | `content` | maxlength | `content/SystemPromptModel.ts#SystemPromptRepository.saveToVersion` | none |  | save-version.ts route passes req.body content; only checks non-empty string, no 50000 cap |
+| SystemPrompt | `content` | maxlength | `content/SystemPromptModel.ts#SystemPromptRepository.saveToVersion` | schema | `runValidators` | update call passes runValidators |
 | SystemSecret | `category` | enum | `infra/security/SystemSecretsModel.ts#SystemSecretRepository.upsertSecret` | schema | `runValidators` | update call passes runValidators |
 | SystemSecret | `source` | enum | `infra/security/SystemSecretsModel.ts#SystemSecretRepository.upsertSecret` | schema | `runValidators` | update call passes runValidators |
 | TaskSchedule | `status` | enum | `infra/ops/TaskScheduleModel.ts#TaskScheduleRepository.claimDueTaskSchedule` | repository-check | `packages/database/src/models/infra/ops/TaskScheduleModel.ts#TaskScheduleRepository.claimDueTaskSchedule` | Writer sets constant TaskScheduleStatus.PROCESSING |
@@ -290,8 +277,8 @@ can silently turn it into `none`.
 | TavernQuest | `status` | enum | `content/TavernQuestModel.ts#expireOverdue` | repository-check | `literal` | writes "expired" |
 | TavernQuest | `status` | enum | `content/TavernQuestModel.ts#releaseStaleClaimsByAgent` | repository-check | `literal` | writes "open" |
 | TavernQuest | `status` | enum | `content/TavernQuestModel.ts#unclaimQuest` | repository-check | `literal` | writes "open" |
-| TavernWorld | `editHistory.source` | enum | `content/TavernWorldModel.ts#applyEdits` | none |  | no callers (tests only); source is only type-checked |
-| TavernWorld | `editHistory.source` | enum | `content/TavernWorldModel.ts#getOrCreateWorld` | none |  | no callers (tests only); writer inserts only the literal editHistory [] |
+| TavernWorld | `editHistory.source` | enum | `content/TavernWorldModel.ts#applyEdits` | schema | `runValidators` | Validates replacement history entries |
+| TavernWorld | `editHistory.source` | enum | `content/TavernWorldModel.ts#getOrCreateWorld` | schema | `runValidators` | Validates $setOnInsert; history starts empty |
 | ToolDefinitionOverride | `description` | maxlength | `ai/ToolDefinitionOverrideModel.ts#ToolDefinitionOverrideRepository.updateDescription` | route-schema | `apps/client/pages/api/admin/tool-definitions/[toolId].ts#updateSchema` | Sole caller zod max(10000) matches schema maxlength |
 | ToolDefinitionOverride | `shortDescription` | maxlength | `ai/ToolDefinitionOverrideModel.ts#ToolDefinitionOverrideRepository.updateDescription` | route-schema | `apps/client/pages/api/admin/tool-definitions/[toolId].ts#updateSchema` | Sole caller zod max(500) matches schema maxlength |
 | TransformBatch | `status` | enum | `ai/TransformBatchModel.ts#TransformBatchRepository.claimCompletion` | repository-check | `literal` | writes "completed" |
@@ -316,4 +303,3 @@ can silently turn it into `none`.
 | UserUsagePatternSignals | `signals.id` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.markSkipped` | repository-check | `packages/database/src/models/auth/UserUsagePatternSignalsModel.ts#markSkipped` | Writer always sets signals to empty array literal |
 | UserUsagePatternSignals | `signals.id` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.upsertLatest` | route-schema | `b4m-core/services/src/userService/usagePatternSignals.ts#computeUsagePatternSignals` | Signals built by fixed signal functions with literal ids |
 | UserUsagePatternSignals | `skipped` | enum | `auth/UserUsagePatternSignalsModel.ts#UserUsagePatternSignalsRepository.markSkipped` | route-schema | `apps/workers/src/cron/usagePatternSignals.ts#markSkipped` | Sole caller passes literal paid |
-| WebhookAuditLog | `actions.status` | enum | `infra/webhooks/WebhookAuditLogModel.ts#WebhookAuditLogRepository.addAction` | none |  | no callers; WebhookAuditLogger.addAction is a separate in-memory method |

@@ -124,7 +124,7 @@ vi.mock('@server/embed/identifiedEmbedUser', () => ({
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
 const mockVerifyEmbedKeyById = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: mockVerifyEmbedApiKey,
   verifyEmbedKeyById: mockVerifyEmbedKeyById,
 }));

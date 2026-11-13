@@ -19,6 +19,8 @@ import { setOrganizationManager } from './setOrganizationManager';
 import type { OrganizationManagerChange } from './setOrganizationManager';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { createStandardGroup } from './createStandardGroup';
+import { shareGroupProject } from './shareGroupProject';
 import {
   assignUserToGroup,
   removeUserFromGroup,
@@ -65,6 +67,8 @@ export {
   setOrganizationManager,
   clearActiveOrganization,
   setOrganizationGroupTypes,
+  createStandardGroup,
+  shareGroupProject,
   assignUserToGroup,
   assertCanManageOrgGroups,
   removeUserFromGroup,

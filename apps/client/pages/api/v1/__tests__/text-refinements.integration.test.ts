@@ -59,8 +59,8 @@ vi.mock('@bike4mind/database', async orig => ({
   },
 }));
 // The meter the route bills through; the reserve/settle internals are covered by meterPlatformCompletion.test.ts.
-vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
-  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
   createRequestCompletionMeter: () => mockMeter,
 }));
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));

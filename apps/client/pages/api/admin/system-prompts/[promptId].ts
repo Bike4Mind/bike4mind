@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -16,7 +16,7 @@ const UpdateSystemPromptSchema = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage', DELETE: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(

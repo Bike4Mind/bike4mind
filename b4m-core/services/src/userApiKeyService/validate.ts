@@ -8,6 +8,7 @@ import {
   IUserApiKeyDocument,
   IUserApiKeyRepository,
   isExchangeKeyMetadata,
+  OrgApiKeyGrant,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
@@ -63,6 +64,8 @@ export interface ValidationResult {
   createdAt?: Date;
   /** OAuth client that minted the key, present only for a federated exchange key. */
   oauthExchangeClientId?: string;
+  /** An org-owned key's reach grants (IUserApiKey.orgOwned.grants); present iff the key is org-owned. */
+  orgOwnedGrants?: OrgApiKeyGrant[];
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -135,6 +138,7 @@ function finalizeApiKeyValidation(
     createdByUserId: apiKey.metadata?.createdByUserId,
     createdAt: apiKey.createdAt,
     oauthExchangeClientId: isExchangeKeyMetadata(apiKey.metadata) ? apiKey.metadata.oauthClientId : undefined,
+    orgOwnedGrants: apiKey.orgOwned ? (apiKey.orgOwned.grants ?? []) : undefined,
   };
 }
 

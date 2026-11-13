@@ -5,7 +5,7 @@ import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { isTerminalCreditRefusal, UnprocessableEntityError } from '@bike4mind/common';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { z } from 'zod';
 
 // 16,000 chars (~4k tokens), matching PROMPT_TEXT_MAX in common. The chat box has no character cap of its

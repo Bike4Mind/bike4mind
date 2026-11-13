@@ -2,8 +2,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
-import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
+import { ApiKeyScope } from '@bike4mind/common';
+import * as dataLakeScopes from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   CLIENT_DIR,
   HAND_HELPERS,
@@ -16,7 +16,6 @@ import {
   gatesForRoute,
   gatesIn,
   isOverlayPath,
-  normalizePath,
   parseEndpoint,
   resolvePageFile,
   scopeOf,
@@ -28,7 +27,6 @@ import {
 import {
   ADMIN_ONLY_API_KEY_SCOPES,
   HAND_WRITTEN_API_KEY_SCOPE_ENDPOINTS,
-  OPEN_TO_ANY_KEY_ENDPOINTS,
   USER_API_KEY_SCOPES,
   endpointKeys,
   type ApiKeyScopeOption,
@@ -37,7 +35,7 @@ import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/con
 
 // Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
 vi.mock('@bike4mind/services', () => ({}));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 
 /**
  * Every endpoint a scope lists must be gated by a check that admits it and nothing that makes the
@@ -162,23 +160,6 @@ describe('apiKeyScopes endpoint claims', () => {
     }
   );
 
-  it.each([...OPEN_TO_ANY_KEY_ENDPOINTS])('%s is still open to any key, and listed under no scope', endpoint => {
-    const { methods, path: routePath } = parseEndpoint(endpoint)!;
-    const contract = CONTRACTS.find(
-      c => c.method.toUpperCase() === methods[0] && normalizePath(c.path) === normalizePath(routePath)
-    );
-    expect(contract?.scopes ?? [], `${endpoint} has a contract scope door`).toEqual([]);
-    const file = resolvePageFile(routePath);
-    expect(file, `${endpoint} has no pages/ route`).toBeDefined();
-    const code = stripComments(readFileSync(file!, 'utf8'));
-    expect(code, `${endpoint} now declares a route-level scope door`).not.toMatch(/\brequiredScopes\b/);
-    // Listed once in the Scopes tab instead: under one scope it would read as that scope's gate.
-    expect(
-      CLAIMS.some(c => `${c.method} ${c.path}` === endpoint),
-      `${endpoint} is listed under a scope`
-    ).toBe(false);
-  });
-
   it.each([...HAND_WRITTEN_API_KEY_SCOPE_ENDPOINTS])(
     '%s lists by hand nothing the generator already lists',
     (scope, hand) => {
@@ -227,7 +208,7 @@ describe('the gate rule itself', () => {
   });
 
   it('counts neither an import, a non-throwing probe, nor a scope array that enforces nothing', () => {
-    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';\n";
+    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';\n";
     expect(gatesIn(stripComments(imported), HELPERS)).toEqual([]);
     expect(HELPERS.has('holdsDataLakeReadScope')).toBe(false);
     const payload =

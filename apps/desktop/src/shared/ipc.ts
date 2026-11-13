@@ -144,6 +144,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -521,6 +522,9 @@ export const IPC_CHANNELS = {
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
   prSetOption: 'pr:set-option',
+  /** The Settings auto-fix attempt budget; main validates it, see @shared/autoFixSetting. */
+  prGetAutoFixAttempts: 'pr:get-auto-fix-attempts',
+  prSetAutoFixAttempts: 'pr:set-auto-fix-attempts',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
   /** The sidebar's PR icons. The read is of stored state only and never reaches GitHub. */
@@ -557,6 +561,18 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** The menu-bar toggle, for Settings; see @shared/watch. */
+  watchGetPreferences: 'watch:get-preferences',
+  watchSetPreferences: 'watch:set-preferences',
+  /** main -> app windows push: a preference changed (e.g. hidden from the menu-bar item itself). */
+  watchPreferences: 'watch:preferences',
+  /** The mini Tavern window's own surface (preload/mini.ts); refused from any other window. */
+  watchGetSnapshot: 'watch:get-snapshot',
+  /** main -> mini Tavern push of the latest WatchSnapshot. */
+  watchSnapshot: 'watch:snapshot',
+  watchRespond: 'watch:respond',
+  watchFocusAgent: 'watch:focus-agent',
+  watchCloseMini: 'watch:close-mini',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -693,6 +709,21 @@ export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessi
 export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
+/**
+ * Everything the mini Tavern window can reach, exposed as `window.b4mMini` by preload/mini.ts. Kept
+ * this narrow on purpose: the window floats over other apps all day, so it gets the watch snapshot
+ * and three actions, not the chat, auth or filesystem surface of `window.b4m`.
+ */
+export interface MiniTavernApi {
+  getSnapshot(): Promise<WatchSnapshot>;
+  onSnapshot(listener: (snapshot: WatchSnapshot) => void): () => void;
+  /** Approve once or deny a quick request; false when it was not answerable from here. */
+  respond(approvalId: string, decision: WatchDecision): Promise<boolean>;
+  /** Raise the main window on this agent, the way clicking its notification does. */
+  focusAgent(sessionId: string, rootId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
@@ -1321,6 +1352,9 @@ export interface DesktopApi {
      * only; see PrBinding.
      */
     setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
+    getAutoFixAttempts(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setAutoFixAttempts(attempts: number): Promise<number>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
@@ -1375,6 +1409,12 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+  };
+  /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
+  watch: {
+    getPreferences(): Promise<WatchPreferences>;
+    setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
+    onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

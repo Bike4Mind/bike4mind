@@ -697,6 +697,12 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
+   * surface that shows less than the full card (the menu bar, the mini window) can tell the call
+   * carries a reason it would otherwise drop.
+   */
+  reasons?: readonly string[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**
@@ -742,6 +748,8 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
+  unchecked?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
@@ -766,10 +774,7 @@ export interface ApprovalPart {
   words?: string;
   expanded?: string;
   opaque?: string;
-  /**
-   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
-   * every mode. Only set on a prompt with `byPart`.
-   */
+  /** Why this part asks: 'full' requires an explicit decision in every mode. Only set with `byPart`. */
   ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
 }
 
