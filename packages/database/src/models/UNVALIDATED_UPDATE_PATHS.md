@@ -267,7 +267,7 @@ can silently turn it into `none`.
 | StripeDispute | `state` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.resolveBySystem` | repository-check | `literal` | writes "resolved" |
 | StripeDispute | `subject` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.markUserGone` | repository-check | `literal` | writes "unmatched" |
 | StripeDispute | `subject` | enum | `billing/StripeDisputeModel.ts#StripeDisputeRepository.recordClosed` | repository-check | `packages/database/src/models/billing/StripeDisputeModel.ts#StripeDisputeRepository.recordClosed` | Subject written only when facts.subject === 'user' |
-| SystemPrompt | `content` | maxlength | `content/SystemPromptModel.ts#SystemPromptRepository.saveToVersion` | none |  | save-version.ts route passes req.body content; only checks non-empty string, no 50000 cap |
+| SystemPrompt | `content` | maxlength | `content/SystemPromptModel.ts#SystemPromptRepository.saveToVersion` | schema | `runValidators` | update call passes runValidators |
 | SystemSecret | `category` | enum | `infra/security/SystemSecretsModel.ts#SystemSecretRepository.upsertSecret` | schema | `runValidators` | update call passes runValidators |
 | SystemSecret | `source` | enum | `infra/security/SystemSecretsModel.ts#SystemSecretRepository.upsertSecret` | schema | `runValidators` | update call passes runValidators |
 | TaskSchedule | `status` | enum | `infra/ops/TaskScheduleModel.ts#TaskScheduleRepository.claimDueTaskSchedule` | repository-check | `packages/database/src/models/infra/ops/TaskScheduleModel.ts#TaskScheduleRepository.claimDueTaskSchedule` | Writer sets constant TaskScheduleStatus.PROCESSING |
