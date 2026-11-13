@@ -78,6 +78,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
   },
   adminSettingsRepository: { findBySettingName: vi.fn() },
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},

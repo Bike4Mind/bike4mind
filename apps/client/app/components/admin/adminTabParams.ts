@@ -93,6 +93,7 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
  * exactly that reason.
  */
 export const ADMIN_TAB_PARAMS = {
+  'credit-analytics': ['creditView', 'economyFrom', 'economyTo', 'economyOwner', 'economyFlow'],
   [ADMIN_USERS_TAB_SLUG]: USERS_TAB_PARAMS,
   [ADMIN_FEEDBACK_TAB_SLUG]: FEEDBACK_TAB_PARAMS,
   [ADMIN_AUDIT_LOG_TAB_SLUG]: [...AUDIT_LOG_FILTER_PARAMS, AUDIT_ENTRY_ID_PARAM],

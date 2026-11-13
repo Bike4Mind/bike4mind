@@ -10,6 +10,7 @@ import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFla
 import { CORE_TUTORIAL_SETTING } from './settingName';
 import { setCoreSessionMarker } from './sessionMarker';
 import { resolveCoreTutorial } from './registry';
+import type { TutorialModule } from './types';
 import { coreTutorialVisibleTo } from './visibility';
 
 // Loaded on first use: core.ts pulls in the session and sheet deps the chat path has no need for.
@@ -17,16 +18,24 @@ async function turnsFor(ctx: Omit<CoreTutorialTurnContext, 'quest'>) {
   const moduleId = ctx.session.tutorial?.moduleId;
   if (ctx.session.tutorial?.owner !== 'core' || !moduleId) return undefined;
   if (!(await isFeatureEnabled(CORE_TUTORIAL_SETTING))) return undefined;
+  const user = ctx.user as IUserDocument;
   const tutorial = resolveCoreTutorial(moduleId);
-  if (!tutorial?.enabled || !(await coreTutorialVisibleTo(ctx.user as IUserDocument, tutorial.visibility))) {
-    return undefined;
+  let served: TutorialModule[];
+  if (tutorial) {
+    if (!tutorial.enabled || !(await coreTutorialVisibleTo(user, tutorial.visibility))) return undefined;
+    const { coreContent } = await import('./core');
+    // The one module the marker names: a stale marker never reaches another walk.
+    served = (await coreContent.resolve()).modules.filter(m => m.id === moduleId);
+  } else {
+    const { coreDraftStore } = await import('./coreDrafts');
+    const draft = await coreDraftStore.servableById(moduleId);
+    if (!draft?.row.visibility || !(await coreTutorialVisibleTo(user, draft.row.visibility))) return undefined;
+    served = [draft.module];
   }
-  const { coreContent, coreModels } = await import('./core');
-  const { modules } = await coreContent.resolve();
+  const { coreModels } = await import('./core');
   const { tutorialTurnService } = await import('./service');
-  // The one module the marker names: a stale marker never reaches another walk.
   return tutorialTurnService({
-    modules: modules.filter(m => m.id === moduleId),
+    modules: served,
     models: coreModels,
     // Clears the marker when the script ends the walk, so later turns skip this check.
     setSessionMarker: setCoreSessionMarker,

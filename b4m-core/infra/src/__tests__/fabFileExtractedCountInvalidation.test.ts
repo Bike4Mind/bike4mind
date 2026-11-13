@@ -61,7 +61,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/s3/notebookImportComplete.ts',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
-  'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  'packages/server-utils/src/dataLakes/proposalAdmissionDeps.ts',
   // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
   'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',

@@ -164,6 +164,7 @@ vi.mock('@bike4mind/database', () => ({
     claimOnce: (...args: unknown[]) => mockClaimOnce(...args),
     releaseClaim: (...args: unknown[]) => mockReleaseClaim(...args),
   },
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},

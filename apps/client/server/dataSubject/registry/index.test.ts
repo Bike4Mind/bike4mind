@@ -5,6 +5,37 @@ import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
 
+describe('organization audit personal-data policy', () => {
+  it('classifies membership target IDs in analytics as attribution on another account record', () => {
+    const holder = DATA_HOLDER_REGISTRY.CounterLog;
+    if (holder.kind !== 'holder') throw new Error('CounterLog must be a holder');
+    const references = holder.references.filter(reference => reference.path === 'metadata.userId');
+    expect(references).toHaveLength(1);
+    expect(references[0].action).toBe('anonymize');
+    expect(holderExportScope(references.map(reference => ({ reference, throughArray: false })))).toEqual({
+      scope: 'matchedPaths',
+      paths: ['metadata.userId'],
+    });
+  });
+
+  it('retains actor records and qualifies user targets by their member actions', () => {
+    const holder = DATA_HOLDER_REGISTRY.OrganizationAuditEvent;
+    if (holder.kind !== 'holder') throw new Error('OrganizationAuditEvent must be a holder');
+    const actors = holder.references.filter(reference => reference.path === 'actorUserId');
+    expect(actors).toHaveLength(1);
+    expect(actors[0].where).toBeUndefined();
+    const targets = holder.references.filter(reference => reference.path === 'targetId');
+    expect(targets.map(reference => reference.where)).toEqual([
+      { action: 'member.added' },
+      { action: 'member.removed' },
+    ]);
+    expect(targets.every(reference => reference.action === 'retain')).toBe(true);
+    expect(holderExportScope(targets.map(reference => ({ reference, throughArray: false })))).toEqual({
+      scope: 'wholeDocument',
+    });
+  });
+});
+
 describe('findUnclassifiedModels', () => {
   it('returns the names the registry does not classify', () => {
     expect(findUnclassifiedModels(['User', 'NotARealModel'])).toEqual(['NotARealModel']);
@@ -25,6 +56,15 @@ describe('mergeRegistries', () => {
   it('throws when a model is classified in two registries', () => {
     const a: DataHolderRegistry = { A: noData };
     expect(() => mergeRegistries([a, a])).toThrow(/classified twice/);
+  });
+});
+
+describe('persona credential classification', () => {
+  it('excludes the persisted one-use login verifier from user exports', () => {
+    const user = DATA_HOLDER_REGISTRY.User;
+    expect(user.kind).toBe('subject');
+    if (user.kind !== 'subject') throw new Error('User must be a data subject');
+    expect(user.secretPaths).toContain('personaLoginCodeHash');
   });
 });
 

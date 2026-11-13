@@ -106,6 +106,8 @@ export const AdminAiSuggestionSchema: Schema<IAdminAiSuggestionDocument> = new S
 
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, inputHash: 1, policyVersion: 1 }, { unique: true });
 AdminAiSuggestionSchema.index({ feature: 1, status: 1, createdAt: -1 });
+AdminAiSuggestionSchema.index({ feature: 1, actionClass: 1, policyVersion: 1, status: 1, decidedAt: -1 });
+AdminAiSuggestionSchema.index({ status: 1, decidedAt: -1 });
 AdminAiSuggestionSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, createdAt: -1, _id: -1 });
 
