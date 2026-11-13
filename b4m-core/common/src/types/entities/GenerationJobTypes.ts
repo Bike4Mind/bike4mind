@@ -119,15 +119,15 @@ export type MusicJobPayload = {
 /** Same storage fields as VideoJobOutput minus the duration a still image does not have. */
 export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
 
+/** Image job work beyond a plain render. `cutout`: remove the background of its edit_source (a product shot). */
+export const IMAGE_JOB_PURPOSES = ['cutout'] as const;
+export type ImageJobPurpose = (typeof IMAGE_JOB_PURPOSES)[number];
+
 /**
  * One image per job. Most providers return the finished image from one blocking call, so the output is moderated
  * and stored in the submit step. An async provider (BFL) queues a task instead: the handle is kept while the job
  * polls, and the provider's delivery URL (never its bytes) until the store step downloads it.
  */
-/** Image job work beyond a plain render. `cutout`: remove the background of its edit_source (a product shot). */
-export const IMAGE_JOB_PURPOSES = ['cutout'] as const;
-export type ImageJobPurpose = (typeof IMAGE_JOB_PURPOSES)[number];
-
 export type ImageJobPayload = {
   request: StoredImageRequest;
   /** Absent for a plain render. Server-set: a client cannot ask for it on the image-jobs route. */

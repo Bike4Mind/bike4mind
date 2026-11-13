@@ -116,6 +116,8 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     const inputs = await loadInputs(job);
     if ('next' in inputs) return inputs;
     if (job.payload.purpose !== 'cutout') return { provider, inputs, ctx };
+    // storeOutput composites the matte only on the sync path; an async store would keep the raw render.
+    if (provider.mode !== 'sync') return fail('provider_error', 'a cutout job needs a sync provider');
     const cutout = await prepareCutoutInputs(request, inputs);
     if ('error' in cutout) return fail('provider_error', `cutout source could not be prepared: ${cutout.error}`);
     return { provider, inputs: cutout.inputs, ctx, cutout };
