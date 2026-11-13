@@ -98,9 +98,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
                 session.complete(result.code, request, Build.MODEL)
                 SignInOutcome.SignedIn
             }
-            else -> {
+            AuthorizationResult.Denied -> {
                 pendingSignIn.clear()
-                SignInOutcome.Failed(result.toString())
+                SignInOutcome.Failed("Sign-in was cancelled.")
+            }
+            is AuthorizationResult.Failed -> {
+                pendingSignIn.clear()
+                SignInOutcome.Failed("Sign-in failed (${result.reason}).")
             }
         }
     }

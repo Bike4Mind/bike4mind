@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -41,6 +42,8 @@ class MainActivity : ComponentActivity() {
                     is SignInOutcome.Failed -> outcome.reason
                     else -> null
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (failure: Exception) {
                 failure.message ?: "Sign-in failed"
             }

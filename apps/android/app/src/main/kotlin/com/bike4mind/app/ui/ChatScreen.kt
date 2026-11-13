@@ -47,9 +47,8 @@ class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
-    val model = viewModel(key = "chat@" + graph.environment.baseUrl + "/" + (sessionId ?: "new")) {
-        ChatViewModel(graph, sessionId)
-    }
+    // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
+    val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     val list = rememberLazyListState()

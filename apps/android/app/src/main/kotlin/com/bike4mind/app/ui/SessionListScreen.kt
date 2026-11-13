@@ -31,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.kit.networking.UpgradeRequiredException
 import com.bike4mind.kit.sessions.SessionSummary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +58,8 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
                 graph.clientConfig().models.defaultId
             } catch (upgrade: UpgradeRequiredException) {
                 null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (failure: Exception) {
                 null
             }
@@ -86,6 +89,8 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
                 }
             } catch (upgrade: UpgradeRequiredException) {
                 mutableState.update { it.copy(loading = false) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (failure: Exception) {
                 mutableState.update { it.copy(loading = false, error = failure.message ?: "Could not load chats") }
             }
@@ -96,7 +101,8 @@ class SessionListViewModel(private val graph: AppGraph) : ViewModel() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -> Unit) {
-    val model = viewModel(key = "sessions@" + graph.environment.baseUrl) { SessionListViewModel(graph) }
+    // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
+    val model = viewModel { SessionListViewModel(graph) }
     val state by model.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
@@ -110,6 +116,8 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                         scope.launch {
                             try {
                                 graph.session.signOut()
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
                             } catch (offline: Exception) {
                                 // The server-side logout is best effort; the local sign-out below still happens.
                                 graph.signOutLocally()
