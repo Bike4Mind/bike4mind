@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   findUsers: vi.fn(),
   lean: vi.fn(),
+  audit: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -32,6 +33,8 @@ vi.mock('@bike4mind/database/infra', () => ({
   Organization: { findByIdAndUpdate: mocks.update },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ User: { find: mocks.findUsers } }));
+vi.mock('@bike4mind/db-core', () => ({ withTransaction: async <T>(write: () => Promise<T>) => write() }));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: mocks.audit }));
 import '../mfa-policy';
 
 const id = '123456789012345678901234';
@@ -45,9 +48,14 @@ const org = {
     { userId: 'invite', permissions: [] },
   ],
 };
-async function run(method: 'get' | 'put', userId = 'owner', body: unknown = { required: true, graceDays: 7 }) {
+async function run(
+  method: 'get' | 'put',
+  userId = 'owner',
+  body: unknown = { required: true, graceDays: 7 },
+  impersonatedBy?: string
+) {
   const { req, res } = createMocks({ query: { id }, body });
-  Object.assign(req, { user: { id: userId } });
+  Object.assign(req, { user: { id: userId, impersonatedBy } });
   await mocks[method]!(
     req as unknown as Parameters<RequestHandler>[0],
     res as unknown as Parameters<RequestHandler>[1],
@@ -58,6 +66,7 @@ async function run(method: 'get' | 'put', userId = 'owner', body: unknown = { re
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findById.mockResolvedValue(org);
+  mocks.audit.mockResolvedValue(undefined);
   mocks.update.mockImplementation(async (_id, update) => ({ ...org, ...update.$set }));
   mocks.findUsers.mockReturnValue({ lean: mocks.lean });
   mocks.lean.mockResolvedValue([
@@ -74,6 +83,25 @@ describe('organization MFA policy', () => {
     const deadline = mocks.update.mock.calls[0][1].$set.mfaPolicy.graceEndsAt.getTime();
     expect(deadline).toBeGreaterThanOrEqual(start + 7 * 86_400_000);
     expect(deadline).toBeLessThanOrEqual(Date.now() + 7 * 86_400_000);
+    expect(mocks.audit).toHaveBeenCalledWith({
+      organizationId: id,
+      actorUserId: userId,
+      action: 'policy.updated',
+      targetId: 'mfa',
+    });
+  });
+  it('attributes an impersonated policy write to the real admin while authorizing the subject', async () => {
+    await run('put', 'owner', { required: false, graceDays: 0 }, 'real-admin');
+    expect(mocks.audit).toHaveBeenCalledWith({
+      organizationId: id,
+      actorUserId: 'real-admin',
+      action: 'policy.updated',
+      targetId: 'mfa',
+    });
+  });
+  it('fails explicitly when the strict audit cannot persist', async () => {
+    mocks.audit.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(run('put')).rejects.toThrow('audit unavailable');
   });
   it('supports immediate enrollment and disabling', async () => {
     await run('put', 'owner', { required: true, graceDays: 0 });
