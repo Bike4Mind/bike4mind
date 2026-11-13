@@ -10,13 +10,15 @@ const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 const updateOrg = vi.hoisted(() => vi.fn());
+const deleteOrg = vi.hoisted(() => vi.fn());
+const confirmationModal = vi.hoisted(() => ({ setState: vi.fn() }));
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
   loaded: true,
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteOrganization: () => ({ mutateAsync: deleteOrg, isPending: false }),
   useUpdateOrganization: () => ({ mutateAsync: updateOrg, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
@@ -26,7 +28,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 }));
 
 vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmationModal: { setState: vi.fn() },
+  useConfirmationModal: confirmationModal,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -175,7 +177,12 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     fireEvent.click(screen.getByTestId('transfer-ownership-confirm-btn'));
 
     await waitFor(() => expect(transfer).toHaveBeenCalledWith({ organizationId: 'org1', newOwnerId: 'admin1' }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: 'members' } })));
+    // The transfer has committed, so the leave guard for an unsaved prompt must not intercept this.
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ search: { tab: 'members' }, ignoreBlocker: true })
+      )
+    );
   });
 
   it('keeps the dialog open when the transfer fails', async () => {
@@ -216,5 +223,25 @@ describe('OrganizationSettingsSection - system prompt save bar', () => {
     expect(promptInput().value).toBe('');
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();
     expect(updateOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrganizationSettingsSection - delete', () => {
+  it('leaves past the unsaved-prompt guard once the team is deleted', async () => {
+    navigate.mockReset();
+    deleteOrg.mockReset().mockResolvedValue(undefined);
+    confirmationModal.setState.mockReset();
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.change(screen.getByTestId('organization-settings-system-prompt-input'), {
+      target: { value: 'An edit that was never saved.' },
+    });
+    expect(screen.getByTestId('admin-save-bar')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    const { onOk } = confirmationModal.setState.mock.calls[0][0] as { onOk(): Promise<void> };
+    await onOk();
+
+    expect(deleteOrg).toHaveBeenCalledWith('org1');
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', ignoreBlocker: true });
   });
 });

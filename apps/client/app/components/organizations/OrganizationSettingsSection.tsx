@@ -25,7 +25,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   const { currentUser } = useUser();
 
   // Mirrors the server gate in organizationService/delete.ts: billing owner or platform admin only.
-  // The rest of this tab is open to anyone with org update/share, so the Danger Zone needs its own
+  // The rest of this tab is open to org update holders and current managers, so the Danger Zone needs its own
   // narrower predicate - otherwise a member with update sees a Delete button whose call would 403.
   const canDeleteOrg = useMemo(() => {
     if (!currentUser) return false;
@@ -62,7 +62,14 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   const handleTransfer = async (newOwnerId: string) => {
     await transferOwnership.mutateAsync({ organizationId: organization.id, newOwnerId });
     // Settings is not an owner-only tab, but Billing and this zone are; land where the former owner can now leave.
-    navigate({ to: '/organizations/$id', params: { id: organization.id }, search: { tab: 'members' }, replace: true });
+    // The transfer has committed, so an unsaved prompt must not raise a discard dialog that reads as a way back.
+    navigate({
+      to: '/organizations/$id',
+      params: { id: organization.id },
+      search: { tab: 'members' },
+      replace: true,
+      ignoreBlocker: true,
+    });
   };
 
   const savedSystemPrompt = organization.systemPrompt || '';
@@ -95,7 +102,8 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
       okLabel: 'Delete',
       onOk: async () => {
         await deleteOrganization.mutateAsync(organization.id);
-        navigate({ to: '/organizations' });
+        // The team is gone; an unsaved prompt has nowhere to be saved, so skip the leave guard.
+        navigate({ to: '/organizations', ignoreBlocker: true });
       },
     });
   };
