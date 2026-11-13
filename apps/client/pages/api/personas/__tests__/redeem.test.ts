@@ -6,6 +6,7 @@ import { PERSONA_ENDPOINT_OFF_CODE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   routes: {} as Record<string, (req: unknown, res: unknown) => unknown>,
+  baseApiOptions: undefined as unknown,
   settings: { enabled: true },
   redeemPersonaLoginCode: vi.fn(),
   issueBrowserSession: vi.fn(),
@@ -16,7 +17,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const chain: Record<string, unknown> = {};
     chain.use = () => chain;
     chain.get = (fn: (req: unknown, res: unknown) => unknown) => ((h.routes.GET = fn), chain);
@@ -85,7 +87,8 @@ beforeEach(() => {
 describe('POST /api/personas/redeem with session: browser', () => {
   const BROWSER = { code: CODE, session: 'browser' };
 
-  it('has no GET handler, so a code in the query string is never redeemed', () => {
+  it('serves POST only, so a code in the query string is answered 405 and never redeemed', () => {
+    expect(h.baseApiOptions).toMatchObject({ allowedMethods: ['POST'] });
     expect(h.routes.GET).toBeUndefined();
   });
 
