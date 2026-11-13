@@ -53,7 +53,7 @@ export async function resolveCreateScope(
     return { isSystem: true };
   }
 
-  // verifyOrgPermission (manageContent) admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
+  // `manageContent` admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
   await verifyOrgPermission(user, scope.organizationId as string, 'manageContent');
   return { organizationId: scope.organizationId as string };
 }

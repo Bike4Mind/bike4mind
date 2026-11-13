@@ -53,12 +53,12 @@ const QuerySchema = z.object({
  * not carry it, so those rows have no member.
  *
  * Access: admins with `support:read` (cross-org) plus the org's own owner, via
- * verifyOrgPermission (viewUsage) - which pins everyone else to their org and 404s the rest.
+ * `verifyOrgPermission(..., 'viewUsage')` - which pins everyone else to their org and 404s the rest.
  *
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read an
  * org's ledger just because its owner is an admin. JWT/browser callers (admin or
- * org owner) skip that check and still go through verifyOrgPermission (viewUsage) below.
+ * org owner) skip that check and still go through `verifyOrgPermission` below.
  * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
  * rejected server-side), so this closes the API-key path entirely for a
  * non-admin org owner - only a JWT/browser session still works for them.

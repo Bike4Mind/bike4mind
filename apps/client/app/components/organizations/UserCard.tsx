@@ -34,7 +34,7 @@ interface OrganizationUserCardProps {
     permissions: Permission[];
     creditUsage: MemberCreditUsage | null;
   };
-  /** Viewer may cancel a pending invite (`isOrgMember` and `isOrgOwnerOrCurrentAdmin`, the invite routes' gates). */
+  /** Viewer may cancel a pending invite (`isOrgMember` and `manageMembers`, the invite routes' gates). */
   canInviteMembers: boolean;
   /** Viewer may revoke a member (`canRevokeOrgMember`, the DELETE member route's gate). */
   canRevokeMembers: boolean;
