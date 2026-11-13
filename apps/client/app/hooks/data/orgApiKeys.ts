@@ -76,3 +76,18 @@ export function useRevokeOrgMemberApiKey(organizationId: string) {
     onError: error => toast.error(errorMessage(error, 'Failed to revoke the API key')),
   });
 }
+
+export type OrgApiKeyCallbackSecret = {
+  id: string;
+  name: string;
+  callbackSigningSecret: string;
+  callbackSigningSecretCreatedAt: string;
+};
+
+export function useRotateOrgApiKeyCallbackSecret(organizationId: string) {
+  return useMutation<OrgApiKeyCallbackSecret, unknown, string>({
+    mutationFn: async keyId =>
+      (await api.post(`/api/organizations/${organizationId}/api-keys/${keyId}/callback-secret`, {})).data,
+    onError: error => toast.error(errorMessage(error, 'Failed to create the callback signing secret')),
+  });
+}
