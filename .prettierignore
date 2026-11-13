@@ -30,3 +30,7 @@ selfhost/kubernetes/templates/**
 # ESLint bulk-suppression baseline, rewritten by `eslint --suppress-rule` / `--prune-suppressions`.
 # ESLint is the authority for its format; reflowing it would churn every regeneration.
 eslint-suppressions.json
+
+# A ~270-row inventory table: prettier pads every column to its widest cell, so adding one long row
+# would reflow the whole table. The guard test parses cells trimmed, so alignment is cosmetic.
+packages/database/src/models/UNVALIDATED_UPDATE_PATHS.md

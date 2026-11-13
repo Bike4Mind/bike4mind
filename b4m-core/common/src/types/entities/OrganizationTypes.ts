@@ -84,6 +84,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    */
   redactPushContent?: boolean;
   sharingPolicy?: OrganizationSharingPolicy;
+  mfaPolicy?: {
+    required: boolean;
+    graceEndsAt: Date | null;
+  };
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
