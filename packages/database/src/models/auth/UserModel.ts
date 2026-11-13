@@ -6,6 +6,7 @@ import {
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
   canonicalizeEmail,
+  DEFAULT_STORAGE_LIMIT_MB,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -359,6 +360,8 @@ export type UserAccountRiskProfile = {
   signupIp: string | null;
   signupJa4: string | null;
   signupAsnKnown: boolean;
+  /** The signup ASN when known (a positive number); null otherwise. */
+  signupAsn: number | null;
   signupDatacenter: boolean | null;
   signupWafAnonIp: boolean | null;
   totpEnabled: boolean;
@@ -929,6 +932,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       signupIp: doc.signupMeta?.ip ?? null,
       signupJa4: doc.signupMeta?.ja4 ?? null,
       signupAsnKnown: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0,
+      signupAsn: typeof doc.signupMeta?.asn === 'number' && doc.signupMeta.asn > 0 ? doc.signupMeta.asn : null,
       signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
       signupWafAnonIp: doc.signupMeta?.wafAnonIp ?? null,
       totpEnabled: doc.mfa?.totpEnabled === true,
@@ -1112,6 +1116,39 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { _id: userId, currentStorageSize: counterFilter },
       { $set: { currentStorageSize: next } }
     );
+    return res.matchedCount === 1;
+  }
+
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
+    const res = await this.model.updateOne({ _id: userId }, [
+      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
+      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
+      {
+        $set: {
+          storageLimitOverride: {
+            $cond: [
+              fieldMissing('$storageLimitOverride'),
+              {
+                $cond: [
+                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
+                  null,
+                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
+                ],
+              },
+              '$storageLimitOverride',
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
     return res.matchedCount === 1;
   }
 
@@ -1724,6 +1761,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
+    // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
+    serviceAccountOrganizationId: { type: String },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -2013,6 +2052,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSynthetic: { type: Boolean, required: false },
     // See IUser.isInternal. No default, like isSynthetic: absent reads as "not marked".
     isInternal: { type: Boolean, required: false },
+    // See IUser.isPersona. Written only by the persona mint route.
+    isPersona: { type: Boolean, required: false },
+    personaExpiresAt: { type: Date, required: false },
+    personaName: { type: String, required: false },
+    personaOwnerId: { type: String, required: false },
+    personaLoginCodeHash: { type: String, required: false },
+    personaLoginCodeExpiresAt: { type: Date, required: false },
     firstValueAt: { type: Date, required: false },
   },
   {
@@ -2170,6 +2216,16 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// The persona caps and expiry sweep read only persona accounts, a handful among all users.
+UserSchema.index(
+  { isPersona: 1, personaExpiresAt: 1 },
+  { partialFilterExpression: { isPersona: true }, name: 'user_isPersona_expiresAt' }
+);
+// Login-code redemption looks a persona up by the code's hash; only personas with a pending code carry one.
+UserSchema.index(
+  { personaLoginCodeHash: 1 },
+  { partialFilterExpression: { personaLoginCodeHash: { $type: 'string' } }, name: 'user_personaLoginCodeHash' }
+);
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.

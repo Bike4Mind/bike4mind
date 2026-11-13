@@ -18,6 +18,7 @@ import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
 import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from './ModelMetrics/modelMetricsSearch';
+import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -54,6 +55,21 @@ describe('adminSearchForTab', () => {
     expect(search).toMatchObject({ tab: 'admin-settings', section: 'aiConfiguration', q: 'slack' });
     expect(search[FEEDBACK_ID_PARAM]).toBeUndefined();
     expect(search.category).toBeUndefined();
+  });
+});
+
+// The alarm's DLQ replay button links here; without the registration validateSearch drops the queue.
+describe('Dead letters tab params', () => {
+  it('keeps dlqQueue through validateSearch', () => {
+    expect(parseAdminSearch({ tab: 'dlq-replay', dlqQueue: 'fab-file-chunk' })).toMatchObject({
+      tab: 'dlq-replay',
+      dlqQueue: 'fab-file-chunk',
+    });
+  });
+
+  it('keeps dlqQueue on the Dead letters tab and drops it on another tab', () => {
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'dlq-replay').dlqQueue).toBe('fab-file-chunk');
+    expect(adminSearchForTab({ dlqQueue: 'fab-file-chunk' }, 'users').dlqQueue).toBeUndefined();
   });
 });
 
@@ -387,6 +403,12 @@ describe('useAdminListUrlState keys', () => {
     STRIPE_DISPUTE_SEARCH_KEYS,
     MODEL_METRICS_SEARCH_KEYS,
     PAYMENT_REVIEW_SEARCH_KEYS,
+    ECONOMY_SEARCH_KEYS: {
+      query: 'economyQuery',
+      view: 'creditView',
+      filters: { from: 'economyFrom', to: 'economyTo', owner: 'economyOwner', flow: 'economyFlow' },
+    },
+    DLQ_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -408,6 +430,9 @@ describe('useAdminListUrlState keys', () => {
     'metricsQuery',
     'metricsView',
     'paymentUnused',
+    'economyQuery',
+    'dlqQuery',
+    'dlqView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

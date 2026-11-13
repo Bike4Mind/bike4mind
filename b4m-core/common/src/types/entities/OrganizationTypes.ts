@@ -71,6 +71,12 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   maxCreditsPerMember?: number | null;
 
   /**
+   * Id of this org's service account (constants/orgServiceAccount.ts), set when it is created. Not a
+   * member, so the per-member credit cap never applies to it (creditService/memberCreditCap.ts).
+   */
+  serviceAccountUserId?: string | null;
+
+  /**
    * When true, push notifications to members' first-party native clients carry category-generic
    * text instead of session names or message content (applied at delivery, apps/workers/src/events/sendPush.ts).
    * Applies to pushes for users whose active organization is this one.
@@ -175,7 +181,9 @@ export interface IOrganizationRepository
    */
   addMemberIfUnderCeiling(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IOrganizationDocument['users'][number],
+    /** Seats held back for outstanding named invites, so a link join cannot take one. Defaults to 0. */
+    reservedSeats?: number
   ): Promise<IOrganizationDocument | null>;
 
   /**

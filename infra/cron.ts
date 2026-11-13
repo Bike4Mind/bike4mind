@@ -38,6 +38,7 @@ import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliati
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
+import './adminMorningBrief';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -474,6 +475,22 @@ const signupIpRetentionCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/signupIpRetention.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Persona expiry sweep - bans every test persona past personaExpiresAt and revokes its sessions and keys.
+// With PersonaMintEnabled off it bans every live persona, which makes that setting the stage kill switch.
+const personaExpirySweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('personaExpirySweep', {
+      schedule: 'cron(5 * * * ? *)', // Hourly at :05
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/personaExpirySweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
         link: [...allSecrets],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
@@ -1620,6 +1637,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  personaExpirySweepCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
   completionSequenceSweepCron,

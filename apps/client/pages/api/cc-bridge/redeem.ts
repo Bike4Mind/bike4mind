@@ -6,7 +6,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { UserApiKey, userApiKeyRepository } from '@bike4mind/database/auth';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, isOrgServiceAccount } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -82,6 +82,11 @@ const handler = baseApi({ auth: false })
       const owner = await userRepository.findById(record.userId);
       if (!owner) {
         return res.status(401).json({ error: 'Invalid or expired pairing token' });
+      }
+      // A pairing token issued to an org service account (via one of its org keys) must not mint a key
+      // it holds; see assertNotOrgServiceAccount.
+      if (isOrgServiceAccount(owner)) {
+        return res.status(403).json({ error: 'An organization API key cannot pair a bridge' });
       }
       // Enforce paid access before assessing the separate mint trust constraints.
       if (!(await isApiKeyAccessAllowed(owner))) {

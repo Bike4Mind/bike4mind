@@ -36,7 +36,7 @@ private struct GalleryContent: View {
     content
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
-          GenerationTilesView(tracker: tracker)
+          GenerationTilesView(tracker: tracker, settings: create)
           StudioCreateBar(model: create)
         }
       }

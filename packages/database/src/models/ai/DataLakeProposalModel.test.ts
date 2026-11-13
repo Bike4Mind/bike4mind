@@ -193,6 +193,54 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.claimForReview(created.id, review())).not.toBeNull();
   });
 
+  it('claims for a rule with no reviewer and records the matched site', async () => {
+    const created = await create();
+
+    const claimed = await repo.claimForReview(
+      created.id,
+      review({ reviewedByUserId: null, autoAdmission: { configId: 'cfg-1' } })
+    );
+    await repo.recordAdmission(created.id, 'file-9', 'example.com');
+
+    expect(claimed?.reviewedByUserId).toBeNull();
+    const stored = await DataLakeProposalModel.findById(created.id).lean();
+    expect(stored?.autoAdmission).toEqual({ configId: 'cfg-1', trustedDomain: 'example.com' });
+    expect(stored?.admittedFabFileId).toBe('file-9');
+  });
+
+  it('clears autoAdmission when a rule claim is released', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review({ reviewedByUserId: null, autoAdmission: { configId: 'cfg-1' } }));
+
+    await repo.releaseClaim(created.id);
+
+    const stored = await DataLakeProposalModel.findById(created.id).lean();
+    expect(stored?.status).toBe('pending');
+    expect(stored?.autoAdmission).toBeUndefined();
+  });
+
+  it('finds a declined row by text hash within one lake only', async () => {
+    const declined = await create();
+    await repo.claimForReview(declined.id, review({ status: 'declined' }));
+
+    expect(await repo.hasDeclinedWithTextHash('lake-1', 'hash-a')).toBe(true);
+    expect(await repo.hasDeclinedWithTextHash('lake-2', 'hash-a')).toBe(false);
+    expect(await repo.hasDeclinedWithTextHash('lake-1', 'hash-other')).toBe(false);
+  });
+
+  it('finds an approved row for a source key, excluding the row asked about', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+
+    expect(await repo.hasApprovedForSourceKey('lake-1', 'https://example.com/report', '64b000000000000000000001')).toBe(
+      true
+    );
+    expect(await repo.hasApprovedForSourceKey('lake-1', 'https://example.com/report', approved.id)).toBe(false);
+    expect(await repo.hasApprovedForSourceKey('lake-2', 'https://example.com/report', '64b000000000000000000001')).toBe(
+      false
+    );
+  });
+
   it('leaves a released claim alone when a fresh proposal already holds the pending slot', async () => {
     const approved = await create();
     await repo.claimForReview(approved.id, review());

@@ -24,6 +24,7 @@ import {
   StatStrip,
   StatTile,
   StatusChip,
+  ViewTabs,
   formatMoney,
   type DataColumn,
 } from '../shared';
@@ -52,11 +53,19 @@ import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway 
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
 import { PaymentFulfillmentReview } from './PaymentFulfillmentReview';
+import { PaymentsView } from './payments/PaymentsView';
+import { useRevenueView } from './payments/usePaymentsTabParams';
+import type { RevenueView } from './revenueTabSearch';
 
 const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
   { value: '30d', label: '30 days' },
   { value: '90d', label: '90 days' },
   { value: '12m', label: '12 months' },
+];
+
+const VIEW_TABS: readonly { id: RevenueView; label: string }[] = [
+  { id: 'subscriptions', label: 'Subscriptions' },
+  { id: 'payments', label: 'Payments' },
 ];
 
 const rangeLabel = (range: RevenueRange) => `Last ${RANGE_OPTIONS.find(option => option.value === range)?.label}`;
@@ -540,6 +549,7 @@ function TablesSection({ data, loading, openView }: { data?: AdminRevenueData; l
 
 const AdminRevenue: React.FC = () => {
   const [range, setRange] = useState<RevenueRange>('30d');
+  const [view, setView] = useRevenueView();
   const query = useAdminRevenue(range);
   const navigate = useNavigate();
   const openView: OpenView = (viewId, filters) =>
@@ -548,28 +558,22 @@ const AdminRevenue: React.FC = () => {
   const response = query.data;
   const data = response?.stripeConfigured ? response : undefined;
   const loading = query.isLoading || (query.isPlaceholderData && query.isFetching);
+  const stripeUnconfigured = response !== undefined && !response.stripeConfigured;
 
   const header = (
     <AdminPageHeader
-      title="Revenue"
-      description={`Monthly recurring revenue from Stripe subscriptions, in ${MRR_CURRENCY.toUpperCase()}.`}
-      actions={
-        response?.stripeConfigured !== false && (
-          <SegmentedControl
-            options={RANGE_OPTIONS}
-            value={range}
-            onChange={setRange}
-            aria-label="Revenue range"
-            data-testid="admin-revenue-range"
-          />
-        )
-      }
+      title="Revenue & payments"
+      description="Recurring revenue and the payments behind it, from Stripe and the credit ledger."
     />
   );
 
-  let content: ReactNode;
-  if (response && !response.stripeConfigured) {
-    content = (
+  // The Payments view reads the credit ledger and stored billing events, so only the Stripe-backed
+  // Subscriptions view gives way to the unconfigured notice.
+  let viewContent: ReactNode;
+  if (view === 'payments') {
+    viewContent = <PaymentsView />;
+  } else if (stripeUnconfigured) {
+    viewContent = (
       <Box data-testid="admin-revenue-stripe-unconfigured">
         <EmptyState
           title="Stripe isn't configured on this deployment"
@@ -590,9 +594,9 @@ const AdminRevenue: React.FC = () => {
       </Box>
     );
   } else if (query.isError && !data) {
-    content = <ErrorState message="Could not load revenue." onRetry={() => void query.refetch()} />;
+    viewContent = <ErrorState message="Could not load revenue." onRetry={() => void query.refetch()} />;
   } else {
-    content = (
+    viewContent = (
       <>
         <RevenueStrip data={data} isError={query.isError} />
         <TrendSections data={data} loading={loading} />
@@ -605,7 +609,34 @@ const AdminRevenue: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-revenue-tab">
       {header}
       <PaymentFulfillmentReview />
-      {content}
+      <Stack
+        direction="row"
+        flexWrap="wrap"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={1}
+        sx={{ minWidth: 0 }}
+      >
+        <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
+          <ViewTabs
+            views={VIEW_TABS}
+            activeId={view}
+            onSelect={id => setView(id === 'payments' ? 'payments' : 'subscriptions')}
+            aria-label="Revenue views"
+            data-testid="admin-revenue-view"
+          />
+        </Box>
+        {view === 'subscriptions' && !stripeUnconfigured && (
+          <SegmentedControl
+            options={RANGE_OPTIONS}
+            value={range}
+            onChange={setRange}
+            aria-label="Revenue range"
+            data-testid="admin-revenue-range"
+          />
+        )}
+      </Stack>
+      {viewContent}
     </Stack>
   );
 };

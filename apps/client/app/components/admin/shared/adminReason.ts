@@ -36,6 +36,14 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
+  publishedPageTakedown: [
+    'Harmful or abusive content',
+    'Phishing or impersonation',
+    'Copyright or trademark claim',
+    'Spam or junk content',
+  ],
+  appFileDelete: ['Outdated or replaced file', 'Uploaded in error', 'No longer used on the site'],
+  publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
   rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
@@ -105,6 +113,7 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
   dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
 } as const satisfies Record<string, readonly string[]>;

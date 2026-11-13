@@ -261,6 +261,8 @@ const AdminSettingsTab: React.FC = () => {
           'overwatchRollupSync',
           // Model list revision is an internal stamp rewritten by the model-list refresh
           'modelListRevision',
+          // Model access revision is an internal stamp rewritten by model access writes
+          'modelAccessRevision',
           // PR Status Digest settings are edited inline in the PR Status Digest tab
           'prReportRepo',
           'prReportIdentityMap',

@@ -1071,6 +1071,114 @@ export function splitGitAlias(value: string): string[] | null {
   return words;
 }
 
+/**
+ * The URLs git fetches from for `remote` in `directory`, or with `push` pushes to, its URL rewrites applied; `none`
+ * when no remote has that name, null when git could not tell.
+ */
+export async function gitRemoteUrls(
+  directory: string,
+  remote: string,
+  push: boolean
+): Promise<string[] | 'none' | null> {
+  const result = await gitRun(directory, ['remote', 'get-url', ...(push ? ['--push'] : []), '--all', remote]);
+  if (result === null) return null;
+  // git exits 2 for a name no remote has.
+  if (result.code === 2) return 'none';
+  return result.code === 0 ? result.stdout.split(/\r?\n/).filter(Boolean) : null;
+}
+
+export interface GitRemoteSettings {
+  remotes: string[];
+  /** Remotes with a `remote.<name>.vcs`, for which git runs a git-remote-<vcs> program. */
+  helpers: string[];
+  /** `url.<base>.insteadOf` and `pushInsteadOf`: a URL that starts with `prefix` starts with `base` instead. */
+  rewrites: { base: string; prefix: string; push: boolean }[];
+  /** No repository is there, so git reads `remotes` (those given a URL) from the user and system config alone. */
+  outside: boolean;
+  /** `remotes.<group>`: the remote names or addresses each group stands for, the group named in lower case. */
+  groups: { name: string; members: string[] }[];
+  /**
+   * Every remote name or address git may contact when a call names none or names a group: group members,
+   * `branch.<name>.remote` and `pushRemote`, and `remote.pushDefault`.
+   */
+  defaults: string[];
+}
+
+/** The remotes configured in `directory` and the settings that change how git reaches one; null when git could not tell. */
+export async function gitRemoteSettings(directory: string): Promise<GitRemoteSettings | null> {
+  const [names, settings] = await Promise.all([
+    gitRun(directory, ['remote']),
+    gitRun(directory, [
+      'config',
+      '-z',
+      '--get-regexp',
+      String.raw`^(remote\..*\.(vcs|url|pushurl)|url\..*\.(push)?insteadof|remotes\..*|branch\..*\.(push)?remote|remote\.pushdefault)$`,
+    ]),
+  ]);
+  if (names === null || settings === null) return null;
+  // git config exits 1, printing nothing, when no key matches.
+  if (settings.code !== 0 && (settings.code !== 1 || settings.stdout !== '')) return null;
+  const configured = new Set<string>();
+  const helpers: string[] = [];
+  const rewrites: GitRemoteSettings['rewrites'] = [];
+  const groups: GitRemoteSettings['groups'] = [];
+  const defaults: string[] = [];
+  // `-z` prints `key\nvalue\0` per entry, and the key alone for one set with no value.
+  for (const entry of settings.stdout.split('\0').filter(Boolean)) {
+    const newline = entry.indexOf('\n');
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    const middle = key.slice(key.indexOf('.') + 1, key.lastIndexOf('.'));
+    if (key === 'remote.pushdefault' || /^branch\..*\.(push)?remote$/.test(key) || key.startsWith('remotes.')) {
+      if (newline === -1) return null;
+      const members = entry
+        .slice(newline + 1)
+        .split(/\s+/)
+        .filter(Boolean);
+      if (key.startsWith('remotes.')) groups.push({ name: key.slice('remotes.'.length), members });
+      defaults.push(...members);
+    } else if (key.startsWith('remote.')) {
+      if (key.endsWith('.vcs')) helpers.push(middle);
+      else configured.add(middle);
+    } else if (newline !== -1) {
+      rewrites.push({ base: middle, prefix: entry.slice(newline + 1), push: key.endsWith('.pushinsteadof') });
+    }
+  }
+  if (names.code === 0) {
+    return {
+      remotes: names.stdout.split(/\r?\n/).filter(Boolean),
+      helpers,
+      rewrites,
+      outside: false,
+      groups,
+      defaults,
+    };
+  }
+  const repository = await gitRun(directory, ['rev-parse', '--git-dir']);
+  if (repository === null || repository.code === 0) return null;
+  return { remotes: [...configured], helpers, rewrites, outside: true, groups, defaults };
+}
+
+/** The settings in the config file at `path`, its includes not followed; none when it is absent, null when unread. */
+export async function gitConfigFile(path: string): Promise<{ key: string; value: string | null }[] | null> {
+  const info = await stat(path).catch((error: NodeJS.ErrnoException) =>
+    error.code === 'ENOENT' || error.code === 'ENOTDIR' ? undefined : null
+  );
+  if (info === undefined) return [];
+  if (info === null || !info.isFile()) return null;
+  const result = await gitRun(dirname(path), ['config', '--file', basename(path), '-z', '--list']);
+  if (result?.code !== 0) return null;
+  // `-z` prints `key\nvalue\0` per entry, and the key alone for one set with no value.
+  return result.stdout
+    .split('\0')
+    .filter(Boolean)
+    .map(entry => {
+      const newline = entry.indexOf('\n');
+      return newline === -1
+        ? { key: entry, value: null }
+        : { key: entry.slice(0, newline), value: entry.slice(newline + 1) };
+    });
+}
+
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
 export async function gitToplevel(directory: string): Promise<string | null> {
   const printed = (await gitQuery(directory, ['rev-parse', '--show-toplevel']))?.replace(/\r?\n$/, '');
