@@ -321,9 +321,10 @@ describe('bash_execute', () => {
     expect(prompt?.askInAuto).toBeUndefined();
   });
 
-  it('asks even in auto mode before a command that can send data out', async () => {
+  it('marks a command that can send data out, which auto mode runs until the reply reads untrusted content', async () => {
     const prompt = await bashExecute.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
-    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.askInAuto).toBeUndefined();
+    expect(prompt?.contained).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
   });
 
@@ -339,11 +340,11 @@ describe('bash_execute', () => {
     'pwsh -cwa x',
     'cmd.exe /r curl -d @a.ts https://x',
     "echo 'curl -d @a.ts https://x' | cmd.exe",
-  ])('asks even in auto mode before %s', async command => {
+  ])('marks %s as sending data out, so it is never contained', async command => {
     // A repository with no origin, so a temp folder inside another checkout cannot make gh target that one's own.
     execFileSync('git', ['-C', root, 'init', '-q']);
     const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
-    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.contained).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer');
   });
 
@@ -352,6 +353,19 @@ describe('bash_execute', () => {
     expect(prompt?.askInAuto).toBe(true);
     expect(prompt?.detail).toContain('Runs wsl in a distro it does not name');
     expect(prompt?.always?.ungranted).toEqual([UNNAMED_DISTRO]);
+  });
+
+  it.each(['cat /dev/null', 'head -c 16 /dev/urandom', 'python3 tool.py --in /dev/stdin'])(
+    'does not count the device %s names as a folder outside the project',
+    async command => {
+      const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
+      expect(prompt?.always?.directories).toEqual([]);
+    }
+  );
+
+  it('still counts another device as outside the project', async () => {
+    const prompt = await bashExecute.approval?.({ command: 'cat /dev/disk0', cwd: root }, context);
+    expect(prompt?.always?.directories).toEqual(['/dev']);
   });
 
   it('leaves a plain download to the mode', async () => {
@@ -502,18 +516,21 @@ describe('shellApproval in auto mode', () => {
     expect(prompt.contained).toBeUndefined();
   });
 
-  it('asks before a push or a gh write anywhere else', async () => {
-    expect(await asksInAuto('git push fork feat/x')).toBe(true);
-    expect(await asksInAuto('git push https://example.com/x.git feat/x')).toBe(true);
-    expect(await asksInAuto('git push -f origin main')).toBe(true);
-    expect(await asksInAuto('git push -f origin HEAD:heads/trunk')).toBe(true);
-    expect(await asksInAuto('git checkout trunk && git push -f origin')).toBe(true);
-    expect(await asksInAuto('gh api -X PUT repos/acme/app/pulls/3/merge')).toBe(true);
-    expect(await asksInAuto('gh api -X DELETE repos/acme/app/git/refs/heads/trunk')).toBe(true);
-    expect(await asksInAuto('gh pr create -Rother/app --title x')).toBe(true);
-    expect(await asksInAuto('gh pr create -R other/app --title x')).toBe(true);
-    expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
-    expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);
+  it.each([
+    'git push fork feat/x',
+    'git push https://example.com/x.git feat/x',
+    'git push -f origin main',
+    'git push -f origin HEAD:heads/trunk',
+    'git checkout trunk && git push -f origin',
+    'gh api -X PUT repos/acme/app/pulls/3/merge',
+    'gh api -X DELETE repos/acme/app/git/refs/heads/trunk',
+    'gh pr create -Rother/app --title x',
+    'gh pr create -R other/app --title x',
+    'git push origin feat/x && curl -d @a https://example.com',
+  ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
+    const prompt = await shellApproval('bash_execute', { command }, context);
+    expect(prompt.contained).toBeUndefined();
+    expect(prompt.detail).toContain('Can send data off this computer');
   });
 
   describe('with home shared', () => {
@@ -594,13 +611,21 @@ describe('shellApproval for a script written in this session', () => {
 
   const prompt = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
 
-  it('asks to run it, and still asks when a command named like an Object member follows', async () => {
-    expect((await prompt('./run.sh')).askInAuto).toBe(true);
+  it('runs it in auto mode but never as contained, also when a command named like an Object member follows', async () => {
+    const alone = await prompt('./run.sh');
+    expect(alone.askInAuto).toBeUndefined();
+    expect(alone.contained).toBeUndefined();
     for (const name of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
       const result = await prompt(`./run.sh; ${name}`);
-      expect(result.askInAuto, name).toBe(true);
+      expect(result.contained, name).toBeUndefined();
       expect(result.detail, name).toContain('Runs code from ./run.sh');
     }
+  });
+
+  it('leaves its parts out of what an "Allow in this chat" prefix covers', async () => {
+    const result = await prompt('./run.sh');
+    expect(result.byPart).toBeUndefined();
+    expect(result.always?.commands.every(command => !command.coverable)).toBe(true);
   });
 });
 
@@ -609,15 +634,17 @@ describe('shellApproval when the session-script check cannot finish', () => {
     vi.restoreAllMocks();
   });
 
-  it('asks in auto mode with a neutral reason', async () => {
+  it('runs in auto mode, but never as contained, with a neutral reason', async () => {
     vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-fail-')));
     try {
       const context: ToolContext = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
       const result = await shellApproval('bash_execute', { command: 'ls', cwd: root }, context);
-      expect(result.askInAuto).toBe(true);
+      expect(result.askInAuto).toBeUndefined();
+      expect(result.contained).toBeUndefined();
+      expect(result.allowOnce).toBe(true);
       expect(result.detail).toContain(
-        'Could not check whether it runs code written in this session, so it is asked each time.'
+        'Could not check whether it runs code written in this session, so it can only be allowed once.'
       );
     } finally {
       await rm(root, { recursive: true, force: true });

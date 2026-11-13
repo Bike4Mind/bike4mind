@@ -365,6 +365,14 @@ const REPEATS = new Set(['while_statement', 'for_statement', 'c_style_for_statem
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
 
+/** Devices an operand may name without reaching a folder outside the project (`cat /dev/null`, `head /dev/urandom`). */
+const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
+  ...HARMLESS_REDIRECT_TARGETS,
+  '/dev/zero',
+  '/dev/random',
+  '/dev/urandom',
+]);
+
 /** A path through a process's own links (`/proc/self/cwd`, `/dev/fd/3`), which lead wherever that process is. */
 const PROCESS_LINK =
   /^\/+(proc\/+(self|thread-self|\d+|[^/]*[*?[][^/]*)(\/|$)|dev\/+(fd(\/|$)|(stdin|stdout|stderr)\/))/;
@@ -7206,6 +7214,7 @@ export async function scanShell(
             continue;
           }
           paths.add(await realpathNearest(lexical));
+          if (reader !== 'windows' && HARMLESS_DEVICES.has(lexical)) continue;
           if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
           directories.add(isDirectory ? lexical : dirname(lexical));

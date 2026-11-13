@@ -34,7 +34,7 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
     mode: 'auto',
     label: 'Approve for me',
     description:
-      'Runs everything except commands that reach outside this project, send data out or write protected settings, reads of .env files and repeated calls',
+      'Runs everything except commands that reach outside this project or write protected settings, reads of .env files, repeated calls, and calls that send data out after reading web content',
     tone: 'neutral',
   },
   {
@@ -63,7 +63,7 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   '"Approve for me" runs every other command and edit without asking, including builds, installs and downloads, as you.',
   '"Approve for me" asks before a command names a path outside your folders, before a .env file is read, and when the same call is made three times in a row.',
   '"Approve for me" and "Full access" run commands Desktop cannot fully follow or parse, and git forms it does not list as safe, without asking. They still ask when such a command names permission and hook settings and may write, and "Approve for me" also asks when it names a .env file or runs outside your folders.',
-  '"Approve for me" asks before a command that can send data off this computer (uploads, git push, ssh, inline scripts, GitHub writes such as gh pr comment), and before any command, web fetch, browsing a site, MCP call or message to another session once the reply has read web, browser, MCP or account skill content, or another conversation.',
+  '"Approve for me" runs commands that can send data off this computer (uploads, git push, ssh, inline scripts such as node -e, GitHub writes such as gh pr comment), and scripts or test configs the agent wrote in this conversation, without asking until the reply has read web, browser, MCP or account skill content, or another conversation. From then on it asks before any such command, web fetch, browsing a site, MCP call or message to another session.',
   '"Approve for me" still runs commands that only read files or read from GitHub (ls, grep, git diff, git log, gh pr view, gh api GET requests) after the reply has read such content, because they have nowhere to send it.',
   '"Approve for me" counts a web page, an MCP result, a skill from your account or another conversation as content the reply has read. A skill from your own skills folder or from a project you trusted is not counted, and neither is what a command downloaded and printed, which is covered by the command rules above.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',

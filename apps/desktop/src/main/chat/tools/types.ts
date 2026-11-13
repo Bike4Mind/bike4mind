@@ -727,7 +727,7 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */

@@ -7709,11 +7709,12 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a command that can send data out, a
-   * write the scan sees, or a command's own words name, reach permission settings, an outbound
-   * call after the reply read untrusted content (see DirectoryTurn.untrusted) unless it is a
-   * contained shell command, or a path outside the project the user has not allowed. A command
-   * the scan cannot follow or parse runs like any other.
+   * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
+   * own words name, reach permission settings, an outbound call after the reply read untrusted
+   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path
+   * outside the project the user has not allowed. Over a clean reply, a command the scan cannot
+   * follow or parse, one that can send data out, or one that runs code written in this
+   * conversation runs like any other.
    */
   private autoApproves(
     mode: ChatApprovalMode,

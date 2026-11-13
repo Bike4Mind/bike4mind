@@ -471,9 +471,9 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
-  // What the scan cannot follow runs in 'auto' and 'full'; sending data out or reading secrets still stops 'auto'.
+  // Only reading secrets stops 'auto' here; sending data out stops it once the reply read untrusted content (ChatService).
   return {
-    mode: kinds.some(kind => kind === 'outbound' || kind === 'env') ? 'auto' : 'ask',
+    mode: kinds.includes('env') ? 'auto' : 'ask',
     reason: reasons.join(' '),
     kinds,
   };
@@ -544,8 +544,8 @@ export async function shellApproval(
   // An `.env` read by redirect belongs to no one part.
   const partEnvFiles = new Set(scan.commands.flatMap(entry => entry.envFiles ?? []));
   const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
-  // A push or gh write to the folder's own origin still says so on the card, but does not stop
-  // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
+  // A part that can send data out says so on the card but does not stop auto mode by itself; a reply
+  // that has read untrusted content asks anyway, as such a part is never contained.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const unchecked =
@@ -554,10 +554,11 @@ export async function shellApproval(
     scan.commands.some(entry => entry.unread || entry.gitUnlisted);
   // The scan cannot rule out a protected write in what it cannot follow, but the command's own words can name one.
   const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
+  // Code this session wrote runs in auto mode, but is never contained, so once the reply has read
+  // untrusted content it asks; the scan cannot vouch for what such a script does.
+  const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
     envScript ||
-    !!script ||
-    scriptCheckFailed ||
     !!gitProgram ||
     scan.gitPathUnplaced === true ||
     scan.remoteTree === true ||
@@ -574,10 +575,11 @@ export async function shellApproval(
     unreachable.length > 0;
   // A part that sets the environment changes what every later part runs, so none is decided alone.
   // A script unread as a whole has no part the scan can vouch for, so none is decided alone.
-  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment && scan.unreadScript !== true;
+  const byPart =
+    !scriptAsks && !scriptAsksInFull && !runsSessionCode && !scan.setsEnvironment && scan.unreadScript !== true;
   const reasons = [
     ...(scriptCheckFailed
-      ? ['Could not check whether it runs code written in this session, so it is asked each time.']
+      ? ['Could not check whether it runs code written in this session, so it can only be allowed once.']
       : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
@@ -637,7 +639,7 @@ export async function shellApproval(
     ...(asksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
-    ...(scan.contained ? { contained: true as const } : {}),
+    ...(scan.contained && !runsSessionCode ? { contained: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,
@@ -646,7 +648,8 @@ export async function shellApproval(
         return {
           text,
           pattern: always,
-          coverable,
+          // An exact "always" for code this session wrote lapses when it is written again (see runKey); a prefix would not.
+          coverable: coverable && !runsSessionCode,
           words,
           ...(expanded ? { expanded } : {}),
           ...(opaque ? { opaque } : {}),
