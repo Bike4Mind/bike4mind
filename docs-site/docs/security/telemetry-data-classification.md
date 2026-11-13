@@ -301,6 +301,26 @@ site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
 
+## Team feature-use events
+
+The browser reports in-app actions to the app's own activity log through `POST
+/api/analytics/log-event`. For a signed-in account that is an admin, carries a
+developer tag, or carries the `rounds` user tag, each action that route records
+is also sent to Overwatch as a `quest_feature_used` event, so the team's use of a
+feature can be checked. Requests made with an API key send nothing, and no other
+account's actions are sent.
+
+The event goes to the host product under the user's pseudonym and the visit id
+from `b4m_vid`, as the daily `active` event does. Its metadata is only:
+
+- `feature`: the recorded action's type in snake case, so `Integrations Page
+  Viewed` becomes `integrations_page_viewed`.
+- `internal: true`, whatever the account's flags, and `lane: "synthetic"` as
+  well for a synthetic account. This is the one event that can carry both marks.
+
+The action's own metadata is never sent. At most one event is sent per account
+and feature every 10 minutes on each server instance.
+
 ## Verified hops
 
 A verified hop records that a visitor clicked through from another Overwatch
