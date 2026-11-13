@@ -497,7 +497,7 @@ export interface IUser extends ICreditHolder {
    * org's `users[]` roster, so it takes no seat and is not listed as a member.
    */
   serviceAccountOrganizationId?: string;
-  /** Set on a service account when its organization is deleted; a retired account is never minted into again. */
+  /** Set on a service account when its organization is deleted; getOrCreateOrgServiceAccount refuses a retired account. */
   serviceAccountRetiredAt?: Date;
   subscribedUntil: string | null;
   photoUrl: string | null;
