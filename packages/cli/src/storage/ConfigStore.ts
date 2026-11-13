@@ -427,11 +427,11 @@ function upgradeConfig(raw: { preferences?: unknown; version?: unknown; defaultM
   // a user decision - and leaving it pinned keeps starving adaptive reasoning models
   // on machines that have merely *run* an older CLI. Only the untouched legacy value
   // is cleared, so a budget the user actually chose (any other number) survives.
-  // A 0.2.0 file already had this step, so it must not re-run against a 4096 the user
-  // set after it.
+  // Only a file from before 0.2.0 still needs it; any later file already had it, so it
+  // must not re-run against a 4096 the user set after it.
   const preferences = raw.preferences as { maxTokens?: unknown } | null | undefined;
   if (
-    raw.version !== '0.2.0' &&
+    (raw.version === undefined || raw.version === '0.1.0') &&
     typeof preferences === 'object' &&
     preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS
   ) {
