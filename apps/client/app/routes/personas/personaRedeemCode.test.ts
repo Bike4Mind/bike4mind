@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
 
 const post = vi.hoisted(() => vi.fn());
@@ -19,6 +19,10 @@ function rejection(status: number, data: unknown) {
 }
 
 describe('captureCodeFromFragment', () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
   it('takes the code from the fragment and clears it from the address', () => {
     window.history.replaceState(null, '', '/personas/redeem?x=1#code=abc');
 
@@ -29,11 +33,14 @@ describe('captureCodeFromFragment', () => {
     expect(window.location.search).toBe('?x=1');
   });
 
-  it('leaves the address alone when there is no code', () => {
+  it('leaves the address alone when there is no code', async () => {
     window.history.replaceState(null, '', '/personas/redeem#other=1');
 
-    captureCodeFromFragment();
+    vi.resetModules();
+    const fresh = await import('./personaRedeemCode');
+    fresh.captureCodeFromFragment();
 
+    expect(fresh.getCapturedCode()).toBeUndefined();
     expect(window.location.hash).toBe('#other=1');
   });
 });
@@ -64,6 +71,15 @@ describe('redeemPersonaCode', () => {
 
     const result = await redeemPersonaCode('abc');
 
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/could not be used/) });
+  });
+
+  it('falls back to a generic message when the server error is not a string', async () => {
+    post.mockRejectedValue(rejection(400, { error: { code: 1 } }));
+
+    await expect(redeemPersonaCode('abc')).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/could not be used/),
+    });
   });
 });
