@@ -101,7 +101,13 @@ export async function deleteSoleOwnedOrganizations(
       removed.revokedApiKeyIds.map(apiKeyId =>
         authSessionService.endRealtimeConnections(
           { apiKeyId },
-          { db: { realtimeConnections: realtimeConnectionRepository }, logger }
+          {
+            db: { realtimeConnections: realtimeConnectionRepository },
+            logger: {
+              log: (...args: unknown[]) => logger.info(args.join(' ')),
+              warn: (message: string, error?: unknown) => logger.warn(`${message}: ${String(error)}`),
+            },
+          }
         )
       )
     );
