@@ -378,7 +378,7 @@ describe('no route gates on the raw isAdmin flag', () => {
   it('keeps the organization ledger permission-aware for its mixed audience', () => {
     const source = sourceOf('admin/transactions.ts');
     expect(source).toMatch(
-      /verifyOrg(?:Owner|Access)\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId\s*\)/
+      /verifyOrgPermission\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId,\s*'viewUsage'\s*\)/
     );
     expect(usesRawIsAdminGate(source)).toBe(false);
   });
