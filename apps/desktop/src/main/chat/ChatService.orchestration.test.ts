@@ -589,9 +589,17 @@ describe('role routing and task runtime compatibility', () => {
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
     await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await service.setSessionOrchestrate(parent.id, false);
     await drain([parent.id, child.id]);
-    await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
+    // Turn idleness precedes the async report write; finish the fixture before measuring follow-up effects.
+    await vi.waitUntil(
+      async () =>
+        (await store.get(parent.id))?.messages.some(message => message.content.includes('Task report (untrusted')),
+      { timeout: 5000, interval: 5 }
+    );
+    await service.actOnTask(null, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
+    await service.setSessionOrchestrate(parent.id, true);
     const canceled = await store.get(child.id);
     if (canceled?.workerTask?.state.status !== 'canceled') throw new Error('Task was not canceled');
     return { parent, child: canceled };
