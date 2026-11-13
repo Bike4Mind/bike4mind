@@ -101,6 +101,17 @@ describe('FeedbackDetailDrawer', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
+  it('links a duplicate resolution back to the original report', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(
+      makeRecord({ resolution: 'duplicate', resolutionDuplicateId: 'original-report' })
+    );
+    renderDrawer();
+    expect(await screen.findByTestId('feedback-detail-duplicate-link')).toHaveAttribute(
+      'href',
+      '/admin?tab=feedback&feedbackId=original-report'
+    );
+  });
+
   describe('emailing the reporter', () => {
     it('offers a mail draft to the reporter with the report quoted', async () => {
       mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());

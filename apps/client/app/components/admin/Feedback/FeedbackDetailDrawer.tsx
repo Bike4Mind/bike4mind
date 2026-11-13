@@ -381,7 +381,17 @@ const FeedbackDetailBody = ({
         {record.resolution && (
           <Fact label="Resolution">
             {FEEDBACK_RESOLUTION_LABELS[record.resolution]}
-            {record.resolutionDuplicateId ? ` (${record.resolutionDuplicateId})` : ''}
+            {record.resolutionDuplicateId && (
+              <Button
+                component="a"
+                href={`/admin?tab=feedback&feedbackId=${record.resolutionDuplicateId}`}
+                variant="plain"
+                size="sm"
+                data-testid="feedback-detail-duplicate-link"
+              >
+                Open original report
+              </Button>
+            )}
           </Fact>
         )}
         <Fact label="Status">

@@ -9,6 +9,7 @@ import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCou
 import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_RECORD_QUERY_KEY, FEEDBACK_TRENDS_QUERY_KEY } from './queryKeys';
 import { FEEDBACK_STATUS_LABELS } from './constants';
 import type { SimilarFeedbackResponse } from './feedbackSimilar';
+import type { FeedbackBulkChange, FeedbackBulkRequest, FeedbackBulkResponse } from './feedbackBulk';
 
 const QUERY_KEY = [...FEEDBACK_RECORD_QUERY_KEY, 'similar'] as const;
 
@@ -19,34 +20,36 @@ export default function FeedbackSimilarReports({ feedbackId }: { feedbackId: str
     queryKey: [...QUERY_KEY, feedbackId],
     queryFn: async () => (await api.get<SimilarFeedbackResponse>(`/api/feedback/${feedbackId}/similar`)).data,
   });
-  const change = {
+  const change: FeedbackBulkChange = {
     action: 'status',
     status: FeedbackStatus.Closed,
     resolution: 'duplicate',
     resolutionDuplicateId: feedbackId,
-  } as const;
+  };
   const dryRun = useMutation({
     mutationFn: async () => {
       const ids = (query.data?.items ?? []).filter(item => item.status !== FeedbackStatus.Closed).map(item => item.id);
-      const { data } = await api.post<{ count: number; fingerprint: string }>('/api/feedback/bulk', {
+      const body: FeedbackBulkRequest = {
         selection: { mode: 'explicit', ids },
         change,
         preview: true,
-      });
+      };
+      const { data } = await api.post<FeedbackBulkResponse>('/api/feedback/bulk', body);
       setPreview({ ids, ...data });
     },
   });
   const apply = useMutation({
     mutationFn: async (reason: string) => {
       if (!preview) return;
-      await api.post('/api/feedback/bulk', {
+      const body: FeedbackBulkRequest = {
         selection: { mode: 'explicit', ids: preview.ids },
         change,
         preview: false,
         reason,
         expectedCount: preview.count,
         fingerprint: preview.fingerprint,
-      });
+      };
+      await api.post<FeedbackBulkResponse>('/api/feedback/bulk', body);
       setPreview(null);
       await Promise.all(
         [
