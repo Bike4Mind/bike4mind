@@ -141,7 +141,7 @@ async function releaseQuietly(id: string | undefined): Promise<void> {
   }
 }
 
-/** Maps an org event to its alert. Threshold kinds are evaluated by their own modules before dispatch. */
+/** Maps an org event to its alert. Threshold kinds are evaluated by their own modules, which dispatch. */
 export async function handleOrgEvent(event: OrgEvent): Promise<void> {
   switch (event.type) {
     case 'seat_limit':
@@ -172,7 +172,10 @@ export async function handleOrgEvent(event: OrgEvent): Promise<void> {
         message: 'A renewal payment for your organization failed. The owner can update the card from the Billing tab.',
       });
       return;
-    case 'credit_debit':
+    case 'credit_debit': {
+      const { evaluateOrgBudget } = await import('./evaluateOrgBudget');
+      await evaluateOrgBudget(event);
       return;
+    }
   }
 }
