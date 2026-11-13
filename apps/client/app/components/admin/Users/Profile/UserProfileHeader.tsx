@@ -47,6 +47,7 @@ const menuEntries = (
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
+  { action: 'dataExport', label: 'Export user data' },
   gateEntry(
     { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
     moderationBlocked

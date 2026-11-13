@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { Request } from 'express';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
-import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
@@ -114,6 +115,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       let lakesPromise: ReturnType<typeof resolveAccessibleLakes> | undefined;
       const accessibleLakes = () => (lakesPromise ??= resolveAccessibleLakes(req));
 
+      // Files (and their granting lakes) reached only through the lake fallback - what the access audit records.
+      const lakeFileIds: string[] = [];
+      const lakeIds = new Set<string>();
+
       const serveableFileKeys = await filterServeableFilePaths(
         decodedFileKeys,
         filePath => FabFile.findOne({ filePath }).lean(),
@@ -125,9 +130,21 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
           // mirrors the identical gate in loadAccessibleFabFile's single-file fallback (files/[id]).
           if (!holdsDataLakeReadScope(req)) return false;
           const lakes = await accessibleLakes();
-          return isFileInAccessibleLake(lakes, fabFile);
+          const granting = grantingLakes(
+            lakes,
+            (fabFile.tags ?? []).map(t => t.name)
+          );
+          if (granting.length === 0) return false;
+          lakeFileIds.push(id);
+          for (const lake of granting) lakeIds.add(lake.id);
+          return true;
         }
       );
+
+      // Before signing, so a strict (admin-bypass) audit failure hands out no URL.
+      if (lakeFileIds.length > 0) {
+        await recordLakeRead(req, { lakeIds: [...lakeIds], fileIds: lakeFileIds, surface: 'data-lake-file-fallback' });
+      }
 
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
