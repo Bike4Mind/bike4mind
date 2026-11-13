@@ -171,7 +171,15 @@ describe('isSignupNetworkOverLimit', () => {
     settings({ maxSignupsPerIpPerDay: '1' });
     mockRecentDistinctSignups.mockRejectedValue(new Error('timeout'));
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
-    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('signup-limit-failed-open', { error: 'timeout' });
+  });
+
+  it('fails open and logs the bare event when the settings read fails', async () => {
+    mockFindBySettingName.mockRejectedValue(new Error('db down'));
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('signup-limit-failed-open', { error: 'db down' });
   });
 
   it('counts live signups only when the trace count fails, and warns', async () => {
