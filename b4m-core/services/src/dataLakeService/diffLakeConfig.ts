@@ -211,6 +211,25 @@ export function proposalReviewChange(
 }
 
 /**
+ * A proposal admitted by a research config's trusted-site rule rather than a person. Names the
+ * config and the matched site in the value, since no actor field can: the recorded principal is the
+ * system. Same derived-field encoding as `proposalReviewChange`.
+ */
+export function autoApprovalChange(
+  proposal: { title?: string; sourceUrl: string },
+  rule: { configId: string; configName: string; trustedDomain?: string }
+): ILakeConfigLiteralChange {
+  const title = proposal.title?.trim();
+  const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
+  const site = rule.trustedDomain ? `, trusted site ${rule.trustedDomain}` : '';
+  return literalChange(
+    'proposalReview',
+    undefined,
+    `auto-approved: ${label} [config ${rule.configName} (${rule.configId})${site}]`
+  );
+}
+
+/**
  * A saved research configuration's create/update/delete, as a change entry - the same
  * derived-field, value-encoded pattern as `proposalReviewChange` above, since a config lives in its
  * own collection and never on the lake document. The NAME is what a curator recognizes a config by
@@ -221,6 +240,24 @@ export function researchConfigChange(
   decision: 'created' | 'updated' | 'deleted'
 ): ILakeConfigLiteralChange {
   return literalChange('researchConfig', undefined, `${decision}: ${configName}`);
+}
+
+/** Auto-admit being switched on or off on a research config, as an event entry on the same field. */
+export function researchAutoAdmitChange(configName: string, enabled: boolean): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
+}
+
+/** The trusted-site list of a research config changing, naming the entries added and removed. */
+export function researchTrustedSitesChange(
+  configName: string,
+  added: readonly string[],
+  removed: readonly string[]
+): ILakeConfigLiteralChange {
+  const parts = [
+    ...(added.length > 0 ? [`added ${added.join(', ')}`] : []),
+    ...(removed.length > 0 ? [`removed ${removed.join(', ')}`] : []),
+  ];
+  return literalChange('researchConfig', undefined, `trusted sites ${parts.join('; ')}: ${configName}`);
 }
 
 /**

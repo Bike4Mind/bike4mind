@@ -3,6 +3,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -150,6 +151,7 @@ const handler = baseApi({ auth: true })
       const userId = req.user?.id;
       if (!userId) throw new BadRequestError('Missing authenticated user');
       ensureTavernAccess(req.user);
+      assertNotOrgServiceAccount(req.user);
 
       const parsed = DownloadRequestSchema.safeParse(req.body ?? {});
       if (!parsed.success) {

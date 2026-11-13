@@ -1,6 +1,7 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import {
   FeedbackStatus,
+  FEEDBACK_RESOLUTIONS,
   FEEDBACK_CLIENT_PLATFORMS,
   FEEDBACK_SUBJECTS,
   HELP_FEEDBACK_REPORT_TYPES,
@@ -15,6 +16,8 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
     // below is what tells a reader "expired" apart from "never had text".
     content: { type: String, required: false },
     status: { type: String, required: true },
+    resolution: { type: String, enum: FEEDBACK_RESOLUTIONS, required: false },
+    resolutionDuplicateId: { type: String, required: false },
     tags: { type: Array<string>, required: false },
     username: { type: String, required: true },
     userEmail: { type: String, required: false },

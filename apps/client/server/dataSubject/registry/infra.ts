@@ -56,6 +56,14 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrganizationAuditEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'actorUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.added' } },
+      { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
+    ],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {
@@ -145,6 +153,7 @@ export const infraHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] },
       // Free-form context on admin and membership counters.
+      { path: 'metadata.userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.targetUserId', matchBy: 'userId', action: 'anonymize' },
       { path: 'metadata.memberEmail', matchBy: 'email', action: 'anonymize' },
       { path: 'metadata.email', matchBy: 'email', action: 'anonymize' },
@@ -327,6 +336,7 @@ export const infraHolders = {
   // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
   // `purgeAccountContent` filters on) is deferred to the erasure flow.
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
+  // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
     kind: 'holder',
     references: [
@@ -335,7 +345,13 @@ export const infraHolders = {
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
+    unrelatedPaths: [
+      'userDetails.email',
+      'maxCreditsPerMember',
+      'signupGrantUnlockCount',
+      'signupInviteBonusCount',
+      'serviceAccountUserId',
+    ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.

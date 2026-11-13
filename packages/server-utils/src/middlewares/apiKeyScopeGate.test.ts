@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import { decideScopeGate, parseStagedScopes } from './apiKeyScopeGate';
+import {
+  assertApiKeyScope,
+  decideScopeGate,
+  holdsApiKeyScope,
+  isLegacyApiKey,
+  LEGACY_API_KEY_WINDOW,
+  LEGACY_SCOPE_PASS_LOG,
+  parseStagedScopes,
+  shouldLogLegacyPass,
+} from './apiKeyScopeGate';
 
 vi.mock('../premium-generated/premiumApiKeyScopes.generated', () => ({
   premiumApiKeyScopes: [
@@ -243,5 +252,119 @@ describe('contributed scopes', () => {
     const { staged } = parseStagedScopes('acme:read');
     expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
     expect(decideScopeGate(['acme:read'], [ApiKeyScope.EMBED_CHAT, 'acme:read'], NONE)).toEqual({ outcome: 'allow' });
+  });
+});
+
+describe('isLegacyApiKey', () => {
+  const cutoff = new Date('2027-01-01T00:00:00Z');
+  const endsAt = new Date('2027-04-01T00:00:00Z');
+  const before = new Date('2026-12-31T00:00:00Z');
+  const after = new Date('2027-01-02T00:00:00Z');
+  const midWindow = new Date('2027-02-01T00:00:00Z');
+
+  it('ships with no cutoff and no end date, so every key is legacy until the dates are set', () => {
+    expect(LEGACY_API_KEY_WINDOW).toEqual({ cutoff: null, endsAt: null });
+    expect(isLegacyApiKey(after)).toBe(true);
+    expect(isLegacyApiKey(undefined)).toBe(true);
+  });
+
+  it('counts only keys created before the cutoff once it is set', () => {
+    const window = { cutoff, endsAt };
+    expect(isLegacyApiKey(before, midWindow, window)).toBe(true);
+    expect(isLegacyApiKey(cutoff, midWindow, window)).toBe(false);
+    expect(isLegacyApiKey(after, midWindow, window)).toBe(false);
+  });
+
+  it('fails closed for a key with no creation date once a cutoff is set', () => {
+    expect(isLegacyApiKey(undefined, midWindow, { cutoff, endsAt })).toBe(false);
+  });
+
+  it('ends for every key at the end date, with no deploy', () => {
+    const window = { cutoff, endsAt };
+    expect(isLegacyApiKey(before, endsAt, window)).toBe(false);
+    expect(isLegacyApiKey(before, new Date('2027-05-01T00:00:00Z'), window)).toBe(false);
+    expect(isLegacyApiKey(before, endsAt, { cutoff: null, endsAt })).toBe(false);
+  });
+});
+
+describe('decideScopeGate grandfathering', () => {
+  const required = [ApiKeyScope.ME_READ];
+
+  it('legacy-allows a grandfathered key that misses the required scope', () => {
+    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, true)).toEqual({
+      outcome: 'legacyAllow',
+    });
+    expect(decideScopeGate(required, [], NONE, undefined, true).outcome).toBe('legacyAllow');
+  });
+
+  it('denies the same key when the route or the key is not grandfathered', () => {
+    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE, undefined, false).outcome).toBe('deny');
+    expect(decideScopeGate(required, [ApiKeyScope.AI_GENERATE], NONE).outcome).toBe('deny');
+  });
+
+  it('prefers a real hold, so the log lists only keys that still need a new key', () => {
+    expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, undefined, true).outcome).toBe('allow');
+  });
+
+  it('reports a staged pass over a legacy one, so the key stays on the staging backlog', () => {
+    expect(
+      decideScopeGate(required, [ApiKeyScope.AI_GENERATE], new Set([ApiKeyScope.ME_READ]), undefined, true)
+    ).toEqual({
+      outcome: 'stagedAllow',
+      stagedScopes: required,
+    });
+  });
+
+  it('never admits a confined key', () => {
+    expect(decideScopeGate(required, [ApiKeyScope.EMBED_CHAT], NONE, undefined, true).outcome).toBe('deny');
+  });
+
+  it('never covers a missing AND scope', () => {
+    expect(decideScopeGate(required, [ApiKeyScope.ME_READ], NONE, [ApiKeyScope.AI_GENERATE], true).outcome).toBe(
+      'deny'
+    );
+  });
+
+  it('still denies an empty required list', () => {
+    expect(decideScopeGate([], [ApiKeyScope.AI_GENERATE], NONE, undefined, true).outcome).toBe('deny');
+  });
+});
+
+describe('holdsApiKeyScope grandfathering', () => {
+  const keyReq = (scopes: ApiKeyScope[]) => {
+    const info = vi.fn();
+    return { req: { apiKeyInfo: { keyId: 'k1', scopes, createdAt: new Date('2026-01-01') }, logger: { info } }, info };
+  };
+
+  it('admits a legacy key that opts in and logs the pass', () => {
+    const { req, info } = keyReq([ApiKeyScope.READ_NOTEBOOKS]);
+    expect(holdsApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], { grandfatherLegacyKeys: true })).toBe(true);
+    expect(info).toHaveBeenCalledWith(LEGACY_SCOPE_PASS_LOG, {
+      keyId: 'k1',
+      heldScopes: [ApiKeyScope.READ_NOTEBOOKS],
+      requiredScopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+    });
+  });
+
+  it('refuses the same key without the option, and logs nothing', () => {
+    const { req, info } = keyReq([ApiKeyScope.READ_NOTEBOOKS]);
+    expect(() => assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'write needed')).toThrow('write needed');
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it('does not log a key that holds the scope', () => {
+    const { req, info } = keyReq([ApiKeyScope.WRITE_NOTEBOOKS]);
+    expect(holdsApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], { grandfatherLegacyKeys: true })).toBe(true);
+    expect(info).not.toHaveBeenCalled();
+  });
+});
+
+describe('shouldLogLegacyPass', () => {
+  it('logs a key and route once per hour', () => {
+    const t0 = 1_000_000_000;
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0)).toBe(true);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 59 * 60 * 1000)).toBe(false);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/y', t0)).toBe(true);
+    expect(shouldLogLegacyPass('dedupe-key', '/api/x', t0 + 60 * 60 * 1000)).toBe(true);
   });
 });

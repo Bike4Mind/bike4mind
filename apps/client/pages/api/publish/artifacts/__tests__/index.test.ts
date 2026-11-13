@@ -9,8 +9,17 @@ import { createMocks } from 'node-mocks-http';
  * emits - no real database, so we mock the DB layer and inspect the pipeline handed to it.
  */
 
-const { aggregate, buildListVisibilityFilter, buildListQuery, projectFind, signOwnerThumbnailUrl } = vi.hoisted(() => ({
+const {
+  aggregate,
+  buildListVisibilityFilter,
+  buildListQuery,
+  excludeNonLiveOwners,
+  projectFind,
+  signOwnerThumbnailUrl,
+} = vi.hoisted(() => ({
   aggregate: vi.fn(),
+  // Which owners are live is unit-tested in loadLiveOwner.test.ts; here it is a seam.
+  excludeNonLiveOwners: vi.fn(),
   signOwnerThumbnailUrl: vi.fn(
     async (publicId: string, key: string): Promise<string | undefined> =>
       `https://signed.example.test/${key}?for=${publicId}`
@@ -47,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a),
   buildListQuery: (...a: unknown[]) => buildListQuery(...a),
+  excludeNonLiveOwners: (...a: unknown[]) => excludeNonLiveOwners(...a),
 }));
 
 vi.mock('@server/services/publish/thumbnailUrl', () => ({
@@ -131,6 +141,7 @@ beforeEach(() => {
     },
   ]);
   buildListVisibilityFilter.mockReturnValue(VIS);
+  excludeNonLiveOwners.mockResolvedValue(null);
   buildListQuery.mockReturnValue({ match: {}, sort: { publishedAt: -1, publicId: 1 } });
 });
 
@@ -562,5 +573,52 @@ describe('GET /api/publish/artifacts - owner-only thumbnails', () => {
     expect(own.thumbnailUrl).toBeDefined();
     expect('thumbnailUrl' in theirs).toBe(false);
     expect(signOwnerThumbnailUrl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GET /api/publish/artifacts - owner state on the browse listing', () => {
+  const GATE = { ownerId: { $nin: ['suspended-owner'] } };
+
+  it('lists every row unchanged when all other owners are live', async () => {
+    await run({});
+    expect(excludeNonLiveOwners).toHaveBeenCalledWith({ deletedAt: null, $and: [VIS] }, USER);
+    expect(matchStage()).toEqual({ deletedAt: null, $and: [VIS] });
+  });
+
+  it('drops a non-live owner in the leading $match, so total and paging count the same rows', async () => {
+    excludeNonLiveOwners.mockResolvedValue(GATE);
+    await run({ limit: '10', skip: '20' });
+
+    expect(matchStage()).toEqual({ $and: [{ deletedAt: null, $and: [VIS] }, GATE] });
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(pipeline.findIndex(stage => '$match' in stage)).toBe(0);
+    expect(rowsStage('$skip')).toBe(20);
+    expect(rowsStage('$limit')).toBe(10);
+  });
+
+  it('checks owners within the caller narrowing', async () => {
+    buildListQuery.mockReturnValue({ match: { tags: 'northwind' }, sort: { publishedAt: -1, publicId: 1 } });
+    excludeNonLiveOwners.mockResolvedValue(GATE);
+    await run({ tag: 'northwind' });
+
+    const narrowed = { $and: [{ deletedAt: null, $and: [VIS] }, { tags: 'northwind' }] };
+    expect(excludeNonLiveOwners).toHaveBeenCalledWith(narrowed, USER);
+    expect(matchStage()).toEqual({ $and: [narrowed, GATE] });
+  });
+
+  it.each([
+    ['an admin browse listing', {}, { id: USER, isAdmin: true }],
+    ['?mine', { mine: 'true' }, { id: USER }],
+    ['?sourceArtifactId', { sourceArtifactId: 'artifact_x' }, { id: USER }],
+    ['?sourceMessageId', { sourceMessageId: 'msg_x' }, { id: USER }],
+  ])('leaves %s unchanged', async (_label, query, user) => {
+    await run(query, user);
+    expect(excludeNonLiveOwners).not.toHaveBeenCalled();
+  });
+
+  it('fails the request when the owner lookup fails', async () => {
+    excludeNonLiveOwners.mockRejectedValue(new Error('db down'));
+    await expect(run({})).rejects.toThrow('db down');
+    expect(aggregate).not.toHaveBeenCalled();
   });
 });

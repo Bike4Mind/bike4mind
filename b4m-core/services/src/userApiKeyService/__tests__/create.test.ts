@@ -1073,3 +1073,35 @@ describe('API-key creation metric', () => {
     expect(info).not.toHaveBeenCalled();
   });
 });
+
+describe('createUserApiKey - org-owned keys', () => {
+  const orgOwnedParams = {
+    name: 'org-key',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    metadata: { createdFrom: 'dashboard' as const },
+    orgOwned: { createdByUserId: 'creator-1' },
+  };
+
+  it('persists the creating member on an org-billed key', async () => {
+    const repo = makeRepo();
+    const result = await createUserApiKey(
+      'sa-1',
+      { ...orgOwnedParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' },
+      { trust: TRUSTED, db: { userApiKeys: repo as unknown as IUserApiKeyRepository } }
+    );
+
+    expect(repo.createIfUnderCap.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ userId: 'sa-1', orgOwned: { createdByUserId: 'creator-1' }, organizationId: 'org-1' })
+    );
+    expect(result.orgOwned).toEqual({ createdByUserId: 'creator-1' });
+  });
+
+  it('refuses an org-owned key that does not bill its organization', async () => {
+    await expect(
+      createUserApiKey('sa-1', orgOwnedParams, {
+        trust: TRUSTED,
+        db: { userApiKeys: makeRepo() as unknown as IUserApiKeyRepository },
+      })
+    ).rejects.toThrow(BadRequestError);
+  });
+});
