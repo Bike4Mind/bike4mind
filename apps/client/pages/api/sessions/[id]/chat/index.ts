@@ -1,4 +1,4 @@
-import { addMessageToSession, getMessagesFromSession } from '@server/managers/sessionManager';
+import { addMessageToSession, getMessagesFromSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';

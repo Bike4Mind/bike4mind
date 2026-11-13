@@ -7,7 +7,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 
 const CLIENT_CLOSED_REQUEST = 499;

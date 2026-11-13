@@ -466,8 +466,12 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     reasons.push(`Reads ${entry.envFiles.join(', ')}, which usually holds secrets.`);
     kinds.push('env');
   }
+  if (entry.gitUnlisted) {
+    reasons.push(`Runs git in a form Desktop does not list as safe (${entry.gitUnlisted}).`);
+    kinds.push('gitUnlisted');
+  }
   if (kinds.length === 0) return undefined;
-  return { mode: entry.unread ? 'full' : 'auto', reason: reasons.join(' '), kinds };
+  return { mode: entry.unread || entry.gitUnlisted ? 'full' : 'auto', reason: reasons.join(' '), kinds };
 }
 
 /**
@@ -537,6 +541,7 @@ export async function shellApproval(
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
+  const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const scriptAsks =
     envScript ||
     !!script ||
@@ -578,6 +583,9 @@ export async function shellApproval(
     ...(scan.unread
       ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
       : []),
+    ...(gitUnlisted.length > 0
+      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
+      : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
       : []),
@@ -605,6 +613,7 @@ export async function shellApproval(
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
+    ...(reasons.length > 0 ? { reasons } : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
@@ -655,12 +664,20 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true };
-  return {
-    detail: [
+  // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
+  if (!mayReachDistro)
+    return {
       detail,
-      'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.',
-    ].join('\n\n'),
+      key,
+      askInAuto: true,
+      askInFull: true,
+      reasons: ['Could not read this command, so where it acts cannot be checked.'],
+    };
+  const reason =
+    'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.';
+  return {
+    detail: [detail, reason].join('\n\n'),
+    reasons: [reason],
     key,
     askInAuto: true,
     askInFull: true,

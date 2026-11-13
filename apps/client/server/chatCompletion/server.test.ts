@@ -116,7 +116,7 @@ const mockAuth = vi.hoisted(() => ({
   checkApiKeyRateLimitOrThrow: vi.fn(),
   checkRateLimit: vi.fn(),
 }));
-vi.mock('@server/cli/auth', () => mockAuth);
+vi.mock('@bike4mind/server-utils/cli/auth', () => mockAuth);
 // The real quota module reaches the subscription models, which the @bike4mind/database mock lacks.
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: vi.fn().mockResolvedValue({ release: () => Promise.resolve() }),

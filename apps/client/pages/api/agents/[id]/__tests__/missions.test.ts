@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: userFindById },
 }));
 const assertOwnerCanAfford = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/wakeMetering', () => ({
+vi.mock('@bike4mind/server-utils/deepAgent/wakeMetering', () => ({
   assertOwnerCanFundWake: assertOwnerCanAfford,
   isInsufficientCredits: () => false,
 }));
@@ -50,7 +50,7 @@ vi.mock('@bike4mind/server-utils/deepAgent/missions', () => ({
 }));
 vi.mock('@bike4mind/server-utils/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));
+vi.mock('@bike4mind/server-utils/deepAgent/firstWake', () => ({ runMissionFirstWake }));
 
 vi.mock('@server/agents/agentScopes', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/agents/agentScopes')>();

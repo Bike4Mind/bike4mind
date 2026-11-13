@@ -48,6 +48,7 @@ export * from './llm';
 export * from './me';
 export * from './clientConfig';
 export * from './pushToken';
+export * from './personas';
 export * from './pushNotification';
 export * from './liveActivityPush';
 export * from './creditBalance';

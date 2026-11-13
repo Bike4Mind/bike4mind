@@ -43,7 +43,7 @@ import {
   CustomMcpUnavailableError,
   describeRemoteMcpError,
   type InvokeRemoteMcpOptions,
-} from './invokeRemoteMcp';
+} from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 
 /**
  * The custom MCP connection operations behind pages/api/mcp-connections/**. Every operation is

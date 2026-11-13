@@ -39,6 +39,11 @@ export enum ApiKeyScope {
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
+  /**
+   * Create and delete throwaway test-persona accounts (POST/DELETE /api/v1/personas). Offered only to
+   * admins and developer-tagged users, and re-checked against the key owner on every call.
+   */
+  PERSONAS_MINT = 'personas:mint',
   MARKETING_REPORTS_READ = 'marketing-reports:read',
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
@@ -147,9 +152,9 @@ export enum ApiKeyScope {
   /**
    * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
    * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
-   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
-   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
-   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * a listing, and import one into your library. Not confined: `b4m skills push --publish` upserts the
+   * skill through `/api/skills`, which now requires skills:write, and a confined key would be refused
+   * there. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
    * is outward-facing (UserApiKeysTab.tsx).
    */
   SKILLS_WRITE = 'skills:write',
@@ -327,6 +332,11 @@ export interface IUserApiKeyMetadata {
   baseline?: IUserApiKeyBaseline;
 }
 
+/** True for a key minted by the federated AI-token exchange. The one definition of that marker. */
+export const isExchangeKeyMetadata = (
+  metadata: IUserApiKeyMetadata | undefined
+): metadata is IUserApiKeyMetadata & { createdFrom: 'oauth-exchange' } => metadata?.createdFrom === 'oauth-exchange';
+
 /**
  * An org-owned key as the org management surface shows it (pages/api/organizations/[id]/api-keys).
  * A projection, never the stored document: no secret material and no minter location metadata.
@@ -375,6 +385,9 @@ export interface IUserApiKeyRateLimit {
   requestsPerMinute: number;
   requestsPerDay: number;
 }
+
+export const API_KEY_RATE_LIMIT_MAX_PER_MINUTE = 10_000;
+export const API_KEY_RATE_LIMIT_MAX_PER_DAY = 1_000_000;
 
 /**
  * Ceilings a key gets when minted without explicit ones. Lives here rather than
@@ -532,7 +545,44 @@ export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
  */
 export type ApiKeyCapPool = 'standard' | 'personal' | 'oauth-exchange';
 
+/**
+ * A key as the owner list (GET /api/user-api-keys) returns it, with its legacy status
+ * computed server-side by `getApiKeyLegacyStatus`.
+ */
+export type IUserApiKeyListItem = IUserApiKeyDocument & {
+  /** Rides the legacy window: routes that grandfather legacy keys admit it without their scopes. */
+  legacy: boolean;
+  /** When legacy access ends; `null` when the key is not legacy or no end date is set yet. */
+  legacyEndsAt: Date | null;
+};
+
+/** Filter for {@link IUserApiKeyRepository.findLegacyCandidatesPage}. */
+export type LegacyApiKeyCandidateQuery = {
+  /** Keys created before this; `null` matches any creation date (no legacy cutoff set yet). */
+  createdBefore: Date | null;
+  /** Keys last used at or after this. */
+  usedSince: Date;
+  /** Keys holding any of these scopes are left out (confined keys are never legacy). */
+  excludeScopes: readonly string[];
+  skip: number;
+  limit: number;
+};
+
+export type LegacyApiKeyCandidatePage = {
+  keys: IUserApiKeyDocument[];
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+};
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
+  /**
+   * Active, unexpired, non-exchange keys that may still ride the legacy window, most recently
+   * used first. A query primitive only: the legacy rule itself is `getApiKeyLegacyStatus` in
+   * server-utils, which callers apply to every row.
+   */
+  findLegacyCandidatesPage: (query: LegacyApiKeyCandidateQuery) => Promise<LegacyApiKeyCandidatePage>;
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;

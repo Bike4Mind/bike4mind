@@ -7,8 +7,8 @@
  */
 
 import { createDecisionContract } from '@bike4mind/common';
-import { sendDecisionError } from '@server/decisions/decisionErrors';
-import { runDecision } from '@server/decisions/runDecision';
+import { sendDecisionError } from '@bike4mind/server-utils/decisions/decisionErrors';
+import { runDecision } from '@bike4mind/server-utils/decisions/runDecision';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';

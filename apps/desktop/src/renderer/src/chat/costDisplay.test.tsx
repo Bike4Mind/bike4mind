@@ -8,6 +8,7 @@ import { TurnStatus } from './TurnStatus';
 import { MessageThread } from './MessageThread';
 import { Composer } from './Composer';
 import { useCostDisplayPreference } from './costDisplay';
+import { DEFAULT_WATCH_PREFERENCES } from '@shared/watch';
 
 vi.mock('./PermissionsSettings', () => ({
   PermissionsSettings: () => null,
@@ -89,6 +90,14 @@ describe('developer dollar cost preference', () => {
       addListener: () => undefined,
       removeListener: () => undefined,
     }));
+    // SettingsScreen's menu-bar switch reads its preference from main.
+    vi.stubGlobal('b4m', {
+      watch: {
+        getPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        setPreferences: async () => DEFAULT_WATCH_PREFERENCES,
+        onPreferences: () => () => undefined,
+      },
+    });
     window.localStorage.clear();
     useCostDisplayPreference.setState({ showDollarCosts: false });
     Element.prototype.scrollIntoView = () => undefined;

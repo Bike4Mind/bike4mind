@@ -89,6 +89,21 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
     });
   });
 
+  it('mints the registration session only after successful MFA setup, preserving OTC origin', async () => {
+    const origin = { strategy: 'otc', createdVia: 'otc-registration' };
+    expect(mocks.issueBrowserSession).not.toHaveBeenCalled();
+    const response = await verifySetupAs({ id: 'u1', mfaPending: true, mfaSignIn: origin });
+    expect(response._getStatusCode()).toBe(200);
+    expect(mocks.verifyMFASetup.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.issueBrowserSession.mock.invocationCallOrder[0]
+    );
+    expect(mocks.issueBrowserSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'u1', {
+      createdVia: 'otc-registration',
+      tokenVersion: 4,
+    });
+    expect(mocks.logSecondFactorSignIn).toHaveBeenCalledWith(expect.anything(), 'u1', origin);
+  });
+
   it('records no sign-in when an existing session enrolls (no origin)', async () => {
     const res = await verifySetupAs({ id: 'u1' });
 

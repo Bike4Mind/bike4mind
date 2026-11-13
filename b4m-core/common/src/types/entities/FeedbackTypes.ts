@@ -320,6 +320,7 @@ export type UpdateFeedbackStatusResponse = {
  * is structurally impossible rather than merely disallowed.
  */
 export interface IFeedbackText {
+  revision?: number;
   content: string;
   contentTruncated: boolean;
   expiresAt: Date;

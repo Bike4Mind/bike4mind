@@ -521,7 +521,8 @@ export interface ConversationController {
   notice: string | null;
   dismissNotice: () => void;
   /** False when main refused the turn; the text is already back in the composer. */
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** `notes` reach the model with this turn and are never drawn; see SendMessageRequest.notes. */
+  send: (text: string, attachments?: readonly ChatAttachment[], notes?: readonly string[]) => Promise<boolean>;
   /** Device-local: move a conversation whose model is not installed to the one a send would use. */
   settleLocalModel: () => Promise<void>;
   stop: () => void;
@@ -1030,7 +1031,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+    async (
+      text: string,
+      attachments: readonly ChatAttachment[] = [],
+      notes: readonly string[] = []
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
@@ -1059,6 +1064,7 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+            ...(notes.length > 0 ? { notes: [...notes] } : {}),
           }
         : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
@@ -1073,6 +1079,7 @@ export function useConversation(
           sessionId,
           text: prompt,
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          ...(notes.length > 0 ? { notes: [...notes] } : {}),
         })
         .finally(() => {
           if (!goingOut) return;

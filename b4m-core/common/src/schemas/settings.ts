@@ -666,6 +666,14 @@ export const SettingKeySchema = z.enum([
   'AdminAuditCriticalGrantCredits',
   'AdminAuditDailyGrantCredits',
 
+  // Test personas minted with the persona key
+  'PersonaMintEnabled',
+  'PersonaMintDailyLimit',
+  'PersonaMaxLive',
+  'PersonaTtlDays',
+  'PersonaStartingCredits',
+  'PersonaEmailDomain',
+
   // Two-person approval for high-risk admin actions
   'AdminApprovalsEnabled',
   'AdminApprovalBulkUserThreshold',
@@ -766,6 +774,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   // OLDEST CLIENT BUILD SERVED PER X-Client-Name (api-contract/clientVersion.ts)
   'minimumClientVersions',
+  // SERVED AT /.well-known/assetlinks.json (apps/client/pages/api/well-known/assetlinks.ts)
+  'androidAppCertFingerprints',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -1171,6 +1181,12 @@ export interface BaseSetting {
   changesCustomerPrice?: boolean;
 }
 
+/** Defaults for the persona-key caps (PersonaMintDailyLimit, PersonaMaxLive, PersonaTtlDays). */
+export const PERSONA_MINT_DAILY_LIMIT_DEFAULT = 20;
+export const PERSONA_MAX_LIVE_DEFAULT = 40;
+export const PERSONA_TTL_DAYS_DEFAULT = 14;
+export const PERSONA_STARTING_CREDITS_DEFAULT = 0;
+
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
 export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
 
@@ -1432,6 +1448,12 @@ function makeBooleanSetting({
   };
 }
 
+// A SHA-256 certificate fingerprint as Digital Asset Links expects it: 32 colon-separated uppercase hex bytes.
+const ANDROID_CERT_FINGERPRINT_RE = /^[0-9A-F]{2}(?::[0-9A-F]{2}){31}$/;
+const AndroidCertFingerprintsSchema = z
+  .array(z.string().regex(ANDROID_CERT_FINGERPRINT_RE, 'Expected 32 colon-separated uppercase hex bytes'))
+  .max(10);
+
 function makeObjectSetting<T>(
   config: {
     defaultValue?: T;
@@ -1602,7 +1624,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 /**
- * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Operator limits for advisory abuse assessments (packages/server-utils/src/security/abuseAssessment/abuseAssessment.ts).
  * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
  * gates all provider egress on top of this.
  */
@@ -1778,6 +1800,32 @@ export const AdminAiConfigSchema = z.object({
     .meta({ title: 'Features' }),
 });
 export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
+
+// Stored feedback configs predate the decision engine. Obsolete chat models disable that model
+// choice on read; the strict write schema still requires a supported decision model or null.
+const storedFeedbackDecisionModel = z
+  .union([z.enum(DECISION_MODEL_IDS), supportedChatModels.transform(() => null)])
+  .nullable()
+  .prefault(null);
+const storedAdminAiConfig = AdminAiConfigSchema.extend({
+  features: AdminAiConfigSchema.shape.features
+    .unwrap()
+    .extend({
+      feedbackTriage: decisionFeatureConfig('Feedback triage')
+        .unwrap()
+        .extend({ model: storedFeedbackDecisionModel, escalationModel: storedFeedbackDecisionModel })
+        .prefault({}),
+    })
+    .prefault({}),
+});
+export const AdminAiStoredConfigSchema = z.preprocess(value => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}, storedAdminAiConfig);
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
@@ -3103,9 +3151,13 @@ export const API_SERVICE_GROUPS = {
   API_CLIENTS: {
     id: 'apiClientsService',
     name: 'API Clients',
-    description: 'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served',
+    description:
+      'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served, and the native apps they trust',
     icon: 'Widgets',
-    settings: [{ key: 'minimumClientVersions', order: 1 }],
+    settings: [
+      { key: 'minimumClientVersions', order: 1 },
+      { key: 'androidAppCertFingerprints', order: 2 },
+    ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
@@ -4129,6 +4181,18 @@ export const settingsMap = {
     order: 1,
     schema: MinimumClientVersionsSchema,
   }),
+  // Read by apps/client/pages/api/well-known/assetlinks.ts.
+  androidAppCertFingerprints: makeObjectSetting<string[]>({
+    key: 'androidAppCertFingerprints',
+    name: 'Android App Signing Certificates',
+    defaultValue: [],
+    description:
+      'JSON array of SHA-256 signing-certificate fingerprints for the Android app (package com.bike4mind.app), as uppercase colon-separated hex exactly as the Play Console shows them, e.g. ["AB:CD:...:EF"]. Served in /.well-known/assetlinks.json so Android verifies the app\'s https sign-in redirect as an App Link. Empty means no app is verified and release sign-in cannot complete. Public by design, not a secret.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.API_CLIENTS.id,
+    order: 2,
+    schema: AndroidCertFingerprintsSchema,
+  }),
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
@@ -4714,6 +4778,65 @@ export const settingsMap = {
       'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
     category: 'SecOps',
   }),
+  PersonaMintEnabled: makeBooleanSetting({
+    key: 'PersonaMintEnabled',
+    name: 'Test Persona Minting',
+    defaultValue: false,
+    description:
+      'Lets admins and developers create test persona accounts on this stage, with an API key holding the personas:mint scope. Off by default. Turning it off stops minting, and the hourly persona sweep then disables every live test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaMintDailyLimit: makeNumberSetting({
+    key: 'PersonaMintDailyLimit',
+    name: 'Test Persona Mints per Day',
+    defaultValue: PERSONA_MINT_DAILY_LIMIT_DEFAULT,
+    min: 0,
+    max: 1000,
+    int: true,
+    description:
+      'How many test persona accounts may be created in any 24 hours, across all minters. 0 turns minting off.',
+    category: 'SecOps',
+  }),
+  PersonaMaxLive: makeNumberSetting({
+    key: 'PersonaMaxLive',
+    name: 'Live Test Personas',
+    defaultValue: PERSONA_MAX_LIVE_DEFAULT,
+    min: 0,
+    max: 10_000,
+    int: true,
+    description:
+      'How many enabled test persona accounts may exist at once. Minting stops at this number until personas are deleted or expire.',
+    category: 'SecOps',
+  }),
+  PersonaTtlDays: makeNumberSetting({
+    key: 'PersonaTtlDays',
+    name: 'Test Persona Lifetime (days)',
+    defaultValue: PERSONA_TTL_DAYS_DEFAULT,
+    min: 1,
+    max: 90,
+    int: true,
+    description: 'Days after creation when the expiry sweep disables a test persona and signs it out everywhere.',
+    category: 'SecOps',
+  }),
+  PersonaStartingCredits: makeNumberSetting({
+    key: 'PersonaStartingCredits',
+    name: 'Test Persona Starting Credits',
+    defaultValue: PERSONA_STARTING_CREDITS_DEFAULT,
+    min: 0,
+    max: 1_000_000,
+    int: true,
+    description:
+      'Credits each new test persona starts with. The daily and live persona caps bound the total. Re-minting an existing persona does not top it up.',
+    category: 'SecOps',
+  }),
+  PersonaEmailDomain: makeStringSetting({
+    key: 'PersonaEmailDomain',
+    name: 'Test Persona Email Domain',
+    defaultValue: '',
+    description:
+      'Mail domain for test personas minted on production, as <name>@<domain>. Use a dedicated subdomain: a public mail provider, a staff domain or any domain with entitlement or partner signup grants is refused, since every persona address is verified. Leave empty to keep minting off on production. Other stages use the -e2e@test.com addresses.',
+    category: 'SecOps',
+  }),
   AdminApprovalsEnabled: makeBooleanSetting({
     key: 'AdminApprovalsEnabled',
     name: 'Require Second-Admin Approval',
@@ -5121,7 +5244,7 @@ export const settingsMap = {
     name: 'Admin AI Suggestions: Modes and Limits',
     defaultValue: AdminAiConfigSchema.parse({}),
     description:
-      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (DLQ triage, morning brief) a model of None uses the operations model.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ADMIN_AI.id,
     order: 1,

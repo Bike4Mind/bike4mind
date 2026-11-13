@@ -3,6 +3,8 @@ import {
   AI_EDIT_VERSION_RETENTION_DEFAULT,
   IFabFile,
   IFabFileVersion,
+  isPasswordProtectedPdfError,
+  PasswordProtectedFileError,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
 import axios from 'axios';
@@ -61,6 +63,9 @@ export const getFileContent = async (
         const { text } = await extractText(pdf, { mergePages: true });
         content = text as string;
       } catch (error) {
+        if (isPasswordProtectedPdfError(error)) {
+          throw new PasswordProtectedFileError();
+        }
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (
           (error && typeof error === 'object' && 'errorType' in error && error.errorType === 'InvalidPDFException') ||

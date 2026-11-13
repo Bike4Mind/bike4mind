@@ -59,6 +59,15 @@ describe('mergeRegistries', () => {
   });
 });
 
+describe('persona credential classification', () => {
+  it('excludes the persisted one-use login verifier from user exports', () => {
+    const user = DATA_HOLDER_REGISTRY.User;
+    expect(user.kind).toBe('subject');
+    if (user.kind !== 'subject') throw new Error('User must be a data subject');
+    expect(user.secretPaths).toContain('personaLoginCodeHash');
+  });
+});
+
 describe('private feedback note export policy', () => {
   it.each(['userId', 'author.id'])('excludes bodies from whole-record export policy for %s', path => {
     const holder = DATA_HOLDER_REGISTRY.FeedbackNote;

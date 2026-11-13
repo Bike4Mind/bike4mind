@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {},
 }));
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -53,7 +53,12 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyApiKey,
+  verifyJwtToken,
+} from '@bike4mind/server-utils/cli/auth';
 import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';

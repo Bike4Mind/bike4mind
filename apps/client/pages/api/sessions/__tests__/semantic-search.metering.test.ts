@@ -99,7 +99,7 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: { isCurrentOrgMember: () => true },
   creditService: { isMemberAtOrOverCap: () => false, MEMBER_CREDIT_CAP_MESSAGE: 'cap' },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => m.enforce,
   reserveCompletionCredits: m.reserveEmbedding,
   settleCompletion: m.settleEmbedding,
