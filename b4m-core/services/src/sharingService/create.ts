@@ -29,6 +29,7 @@ import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
+import { assertContentInvitePolicy } from './organizationPolicy';
 
 const defaultExpiration = () => new Date(new Date().getFullYear() + 100, new Date().getMonth(), new Date().getDate());
 export const DEFAULT_AVAILABLE = 1;
@@ -276,6 +277,24 @@ export const createInvite = async (
     if (recipientsArray.length > 0 && pending.length === 0) {
       throw new BadRequestError('Could not find a user for any recipient');
     }
+  }
+
+  if (
+    (type === InviteType.Session || type === InviteType.Project || type === InviteType.FabFile) &&
+    (doc as { organizationId?: string }).organizationId
+  ) {
+    const resolvedUsers = await db.users.findAllByEmailsOrUsernames(pending, []);
+    await assertContentInvitePolicy(
+      doc as { organizationId?: string },
+      pending.map(email => ({
+        id: resolvedUsers.find(user => user.email?.toLowerCase() === email.toLowerCase())?.id ?? '',
+        email,
+        // The invite is addressed to this email; accept re-checks the redeeming account's verification.
+        emailVerified: true,
+      })),
+      db.organizations,
+      namesNobody
+    );
   }
 
   let seatsLeft = 0;

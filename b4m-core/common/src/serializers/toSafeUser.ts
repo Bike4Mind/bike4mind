@@ -201,7 +201,12 @@ export function redactUserSecretsForSelf(
 
   // MFA -> keep enrollment status, drop the secret + backup codes.
   if (user.mfa) {
-    u.mfa = { totpEnabled: user.mfa.totpEnabled, setupAt: user.mfa.setupAt, lastUsedAt: user.mfa.lastUsedAt };
+    u.mfa = {
+      totpEnabled: user.mfa.totpEnabled,
+      passkeyEnabled: user.mfa.passkeyEnabled,
+      setupAt: user.mfa.setupAt,
+      lastUsedAt: user.mfa.lastUsedAt,
+    };
   }
   // Google Drive -> keep only the expiry as a "connected" signal.
   if (user.googleDrive) {

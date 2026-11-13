@@ -10,6 +10,11 @@ import {
   UserSharesChange,
 } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
+import {
+  assertOrganizationUserGrants,
+  assertProjectContentGrants,
+  checkedOrganizationSharingQuery,
+} from '../../utils/organizationSharingPolicy';
 
 export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
@@ -274,6 +279,18 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   async updateUserShares(id: string, changes: UserSharesChange): Promise<T | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const { remove, add = [], includeDeleted } = changes;
+    if (add.length > 0) {
+      const content = await this.model
+        .findById(id)
+        .lean<{ organizationId?: string; sessionIds?: string[]; fileIds?: string[] }>();
+      if (content) {
+        await assertOrganizationUserGrants(content, add);
+        await assertProjectContentGrants(
+          content,
+          add.map(grant => grant.userId)
+        );
+      }
+    }
     if (remove && remove.userId === undefined && remove.projectId === undefined) {
       throw new Error('updateUserShares: remove needs a userId or projectId');
     }
@@ -315,10 +332,12 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
       { $unset: USERS_BEFORE }
     );
 
-    const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
-      new: true,
-      ...(includeDeleted ? { includeDeleted: true } : {}),
-    });
+    const doc = await checkedOrganizationSharingQuery(
+      this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
+        new: true,
+        ...(includeDeleted ? { includeDeleted: true } : {}),
+      })
+    );
     return (doc?.toJSON() ?? null) as T | null;
   }
 }

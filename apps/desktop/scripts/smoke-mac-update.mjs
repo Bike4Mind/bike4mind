@@ -22,9 +22,13 @@ assert.equal(process.platform, 'darwin', 'The Squirrel.Mac update check runs on 
 const TEST_ID = 'com.bike4mind.desktop.updatetest';
 const TEST_PRODUCT = 'B4MUpdateTest';
 const TEST_NAME = 'b4m-update-test';
-// Versions follow the release line users run: this build's version, else the latest release tag.
-const OLD = (/\d+\.\d+\.\d+/.exec(process.env.DESKTOP_VERSION || latestReleaseTag()) ?? ['0.0.1'])[0];
-const NEW = OLD.replace(/\d+$/, patch => String(Number(patch) + 1));
+// Versions take the form scripts/package-local.cjs gives a local build, <release>-local.<revision>,
+// on this build's release line (else the latest release tag), with the next patch as the update.
+const RELEASE = (/\d+\.\d+\.\d+/.exec(process.env.DESKTOP_VERSION || git('describe', '--tags', '--abbrev=0', '--match', 'desktop-v*')) ?? ['0.0.1'])[0];
+// An all-digit revision could start with 0, which SemVer rejects in a prerelease identifier.
+const REVISION = git('rev-parse', '--short=12', 'HEAD').replace(/^(?=\d+$)/, 'g');
+const OLD = `${RELEASE}-local.${REVISION}`;
+const NEW = `${RELEASE.replace(/\d+$/, patch => String(Number(patch) + 1))}-local.${REVISION}`;
 const SHIPIT_JOB = `${TEST_ID}.ShipIt`;
 
 const desktop = resolve('apps/desktop');
@@ -104,13 +108,13 @@ async function makeCertificate(label) {
   return { label, sha1 };
 }
 
+function git(...args) {
+  return (spawnSync('git', args, { encoding: 'utf8' }).stdout ?? '').trim();
+}
+
 // Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
 // through the user search list. The list is changed only where the probe says it has to be, and
 // the finally block puts it back.
-function latestReleaseTag() {
-  return spawnSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'desktop-v*'], { encoding: 'utf8' }).stdout ?? '';
-}
-
 async function exposeSigningKeychain(sha1) {
   const probe = join(root, 'probe');
   await copyFile('/usr/bin/true', probe);
