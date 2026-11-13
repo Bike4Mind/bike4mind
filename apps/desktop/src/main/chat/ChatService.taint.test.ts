@@ -191,13 +191,43 @@ describe('ChatService untrusted content in a reply', () => {
     approvals.resolve(tainted.approvalId!, { decision: 'deny' });
 
     const plain = await session('ask');
-    await reply(plain, [build(root)]);
+    await reply(plain, [['bash_execute', { command: 'node --version' }]]);
     const asked = await vi.waitUntil(
       () => calls('bash_execute', 'awaiting-approval').find(call => call.approvalId !== tainted.approvalId),
       { timeout: 5000, interval: 10 }
     );
     expect(asked.approvalReasons).toBeUndefined();
     expect(isQuickApproval(asked)).toBe(true);
+  });
+
+  it("keeps a sending call over untrusted content out of quick answers in 'ask' too", async () => {
+    const id = await session('ask');
+    const pending = reply(id, [fetch, ['bash_execute', { command: 'node --version' }]]);
+    const fetchCard = await awaitCall('web_fetch', 'awaiting-approval');
+    approvals.resolve(fetchCard.approvalId!, { decision: 'once' });
+    await pending;
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalReasons).toContain('Asked because this reply read content from the web (web_fetch).');
+    expect(isQuickApproval(asked)).toBe(false);
+  });
+
+  it('keeps a command with a hidden second line out of quick answers', async () => {
+    const id = await session('ask');
+    await reply(id, [['bash_execute', { command: 'git status\n\nrm -rf src' }]]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('rm -rf src');
+    expect(isQuickApproval(asked)).toBe(false);
+  });
+
+  it('keeps a command run in another folder out of quick answers', async () => {
+    const id = await session('ask');
+    await reply(id, [build(root)]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain(`in ${root}`);
+    expect(isQuickApproval(asked)).toBe(false);
   });
 
   it('counts a fetch that failed, whose error text still reaches the model', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY_WATCH_SNAPSHOT, type WatchOrchestration, type WatchSnapshot } from '@shared/watch';
+import { EMPTY_WATCH_SNAPSHOT, QUICK_SUMMARY_MAX, type WatchOrchestration, type WatchSnapshot } from '@shared/watch';
 import { TRAY_LABEL_MAX, needsYouTitle, trayPresentation, truncateLabel } from './trayPresentation';
 
 function orchestration(overrides: Partial<WatchOrchestration> = {}): WatchOrchestration {
@@ -106,6 +106,28 @@ describe('trayPresentation', () => {
       'toggle-mini',
       'hide-tray',
     ]);
+  });
+});
+
+describe('approval rows', () => {
+  const summary = `bash $ ${'x'.repeat(QUICK_SUMMARY_MAX - 'bash $ '.length)}`;
+  const withPending = (quick: boolean) =>
+    trayPresentation(
+      {
+        ...busy,
+        pending: [{ ...busy.pending[0], agentTitle: 'A very long agent title that goes on', summary, quick }],
+      },
+      false
+    ).items.find(item => item.kind === 'approval');
+
+  it('cuts only the agent name from a quick approval, never its summary', () => {
+    const row = withPending(true);
+    expect(row?.kind === 'approval' && row.label.endsWith(`: ${summary}`)).toBe(true);
+  });
+
+  it('cuts a non-quick row to the menu width, since it only opens the app card', () => {
+    const row = withPending(false);
+    expect(row?.kind === 'approval' && row.label.length).toBe(TRAY_LABEL_MAX);
   });
 });
 

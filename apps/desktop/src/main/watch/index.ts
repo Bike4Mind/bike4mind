@@ -108,7 +108,15 @@ export function registerWatch(deps: WatchDeps): Watch {
     }
     images ??= trayImages(deps.appIcon);
     tray ??= createTrayController(images, {
-      respond: (approvalId, decision) => void service.respond(approvalId, decision),
+      respond: (approvalId, decision) => {
+        service
+          .respond(approvalId, decision)
+          .then(answered => {
+            // The menu was stale: the call was answered elsewhere or stopped being quick.
+            if (!answered) console.warn(`WATCH: approval ${approvalId} is no longer answerable from the menu`);
+          })
+          .catch((error: unknown) => console.warn(`WATCH: could not answer approval ${approvalId}: ${String(error)}`));
+      },
       focus: open => deps.openSession(open),
       action: action => {
         if (action === 'open-tavern') openTavern();

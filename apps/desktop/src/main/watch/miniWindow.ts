@@ -15,23 +15,36 @@ export const BOUNDS_SAVE_DELAY_MS = 400;
 const ROUTE = 'mini-tavern';
 
 /**
- * Saved bounds, if they still land on a screen. A window saved on an unplugged display would
- * otherwise reopen somewhere it cannot be seen or dragged back from; null means "use the default".
+ * Saved bounds, moved fully onto the screen they overlap most. A window saved on an unplugged
+ * display, or under a menu bar or dock that has since grown, would otherwise reopen where its top
+ * strip (the drag handle) cannot be reached; null, when it overlaps no screen, means "use the default".
  */
 export function restoreBounds(saved: WatchBounds | null, workAreas: readonly Rectangle[]): WatchBounds | null {
   if (!saved) return null;
-  const visible = workAreas.some(area => {
+  let best: Rectangle | null = null;
+  let bestOverlap = 0;
+  for (const area of workAreas) {
     const overlapX = Math.min(saved.x + saved.width, area.x + area.width) - Math.max(saved.x, area.x);
     const overlapY = Math.min(saved.y + saved.height, area.y + area.height) - Math.max(saved.y, area.y);
-    // Enough of it on this screen to grab: its top strip is the drag handle.
-    return overlapX >= 40 && overlapY >= 24 && saved.y >= area.y;
-  });
-  if (!visible) return null;
+    const overlap = overlapX > 0 && overlapY > 0 ? overlapX * overlapY : 0;
+    if (overlap > bestOverlap) {
+      best = area;
+      bestOverlap = overlap;
+    }
+  }
+  if (!best) return null;
+  const width = clamp(saved.width, MINI_MIN_SIZE.width, best.width);
+  const height = clamp(saved.height, MINI_MIN_SIZE.height, best.height);
   return {
-    ...saved,
-    width: Math.max(saved.width, MINI_MIN_SIZE.width),
-    height: Math.max(saved.height, MINI_MIN_SIZE.height),
+    x: clamp(saved.x, best.x, best.x + best.width - width),
+    y: clamp(saved.y, best.y, best.y + best.height - height),
+    width,
+    height,
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
 export interface MiniWindowController {

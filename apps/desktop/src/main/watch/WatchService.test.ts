@@ -27,6 +27,7 @@ function waitingMessage(approvalId: string, extra: Partial<ChatToolCall> = {}): 
         input: { command: 'ls' },
         status: 'awaiting-approval',
         approvalId,
+        approvalDetail: '$ ls',
         ...extra,
       },
     ],

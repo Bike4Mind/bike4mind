@@ -90,15 +90,28 @@ export interface WatchSnapshotInput {
 const CARD_TOOLS = new Set([ASK_USER_TOOL_NAME, REQUEST_DIRECTORY_TOOL_NAME]);
 
 /**
+ * The longest summary a quick approval may have. The menu bar and the mini card show a quick
+ * summary whole (see trayPresentation and NeedsYouCard), so a longer one goes to the app card.
+ */
+export const QUICK_SUMMARY_MAX = 60;
+
+const LINE_BREAK = /[\r\n\u2028\u2029]/;
+
+/**
  * Whether a parked call may be answered "approve once" or "deny" from the menu bar or the mini
  * window. An allow-list: anything with a warning, a reason the gate gave for asking, an irreversible
- * effect, a choice, parts, a diff or a card of its own is reviewed in the app, where the full card
- * shows it. The summary line keeps only the command, so a call it would cut a reason from is never quick.
+ * effect, a choice, parts, a diff, a card of its own, or a gate floor that asks in every mode is
+ * reviewed in the app, where the full card shows it. The summary is one short line, so a call whose
+ * detail is missing or runs past it (a second line, or more than QUICK_SUMMARY_MAX characters) is never quick.
  */
 export function isQuickApproval(call: ChatToolCall): boolean {
   if (!call.approvalId || call.status !== 'awaiting-approval') return false;
   if (CARD_TOOLS.has(call.name) || isMcpConfigToolName(call.name)) return false;
+  // Only the gate's own detail, never describeToolInput, which collapses and cuts the input.
+  const detail = call.approvalDetail?.trim();
+  if (!detail || LINE_BREAK.test(detail) || approvalSummary(call).length > QUICK_SUMMARY_MAX) return false;
   return (
+    !call.approvalInAppOnly &&
     !call.approvalIrreversible &&
     !call.approvalWarning &&
     !call.approvalReasons?.length &&
@@ -110,12 +123,11 @@ export function isQuickApproval(call: ChatToolCall): boolean {
 }
 
 /**
- * One line, the command only. Whatever the detail carries below it (the working directory, a gate
- * reason) is left to the app card: a call with a gate reason is not quick (see isQuickApproval), so
- * its line only ever leads to that card.
+ * The detail's first line. For a quick call that is the whole detail (see isQuickApproval); for any
+ * other it only labels a row that leads to the app card, which shows the rest.
  */
 export function approvalSummary(call: ChatToolCall): string {
-  const detail = (call.approvalDetail ?? describeToolInput(call)).split('\n')[0] ?? '';
+  const detail = (call.approvalDetail ?? describeToolInput(call)).trim().split(LINE_BREAK)[0] ?? '';
   return `${call.name} ${detail}`.trim();
 }
 

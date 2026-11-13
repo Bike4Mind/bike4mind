@@ -60,7 +60,13 @@ export function NeedsYouCard({
           </Typography>
           {more > 0 ? ` (+${more} more)` : ''}
         </Typography>
-        <Typography level="body-xs" noWrap sx={{ fontFamily: 'code' }} data-testid="mini-needs-you-summary">
+        {/* A quick summary is answered from this card, so it wraps rather than being cut short. */}
+        <Typography
+          level="body-xs"
+          noWrap={!pending.quick}
+          sx={{ fontFamily: 'code', ...(pending.quick ? { overflowWrap: 'anywhere' } : {}) }}
+          data-testid="mini-needs-you-summary"
+        >
           {pending.summary}
         </Typography>
       </Box>

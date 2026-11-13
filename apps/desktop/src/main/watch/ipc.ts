@@ -28,9 +28,10 @@ export function isWatchedSession(snapshot: WatchSnapshot, sessionId: string, roo
 }
 
 /**
- * The mini Tavern's surface and the Settings toggle. Every mini call is checked against the
+ * The mini Tavern's surface and the Settings toggle. Each mini-surface call is checked against the
  * sender, so no other window (or a page that somehow got a bridge) can answer approvals here, and
- * every argument is validated: "always" never crosses this boundary.
+ * every argument is validated: "always" never crosses this boundary. The preferences handlers are
+ * not sender-gated: the app windows need them, and the mini bridge exposes neither.
  */
 export function registerWatchIpc(deps: WatchIpcDeps): void {
   const fromMini = (event: IpcMainInvokeEvent) => deps.isMiniWindow(event.sender);

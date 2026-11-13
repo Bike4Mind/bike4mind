@@ -20,6 +20,8 @@ export interface TrayPresentation {
 
 /** Long enough to tell two agents apart, short enough that the menu stays narrow. */
 export const TRAY_LABEL_MAX = 60;
+/** The agent's name before a quick approval's summary, which is never cut (see QUICK_SUMMARY_MAX). */
+export const QUICK_AGENT_LABEL_MAX = 24;
 
 // Escapes, not literals: this repo keeps source ASCII. Shapes, not colour, since menus are monochrome.
 const STATE_GLYPH: Record<AgentState, string> = {
@@ -60,7 +62,10 @@ export function trayPresentation(snapshot: WatchSnapshot, miniOpen: boolean): Tr
         approvalId: pending.approvalId,
         sessionId: pending.sessionId,
         rootId: pending.rootId,
-        label: truncateLabel(`${pending.agentTitle}: ${pending.summary}`),
+        // A quick summary is answered from this row, so only the agent's name may be cut from it.
+        label: pending.quick
+          ? `${truncateLabel(pending.agentTitle, QUICK_AGENT_LABEL_MAX)}: ${pending.summary}`
+          : truncateLabel(`${pending.agentTitle}: ${pending.summary}`),
         quick: pending.quick,
       });
     }

@@ -187,7 +187,10 @@ export class WatchService {
       return;
     }
     // An unreadable session still counts as waiting; it just offers nothing to answer from here.
-    const messages = await this.sources.sessionMessages(sessionId).catch(() => []);
+    const messages = await this.sources.sessionMessages(sessionId).catch((error: unknown) => {
+      this.sources.warn(`WATCH: could not read session ${sessionId}: ${String(error)}`);
+      return [];
+    });
     this.pending.set(sessionId, pendingCallsIn(messages));
   }
 

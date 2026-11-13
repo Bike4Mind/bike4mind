@@ -8,6 +8,7 @@ import {
   isQuickApproval,
   parseWatchPreferences,
   pickRoom,
+  QUICK_SUMMARY_MAX,
   type WatchSnapshotInput,
 } from './watch';
 
@@ -32,6 +33,7 @@ function call(extra: Partial<ChatToolCall> = {}): ChatToolCall {
     input: { command: 'pnpm test' },
     status: 'awaiting-approval',
     approvalId: 'approval-1',
+    approvalDetail: '$ pnpm test',
     ...extra,
   } as ChatToolCall;
 }
@@ -107,7 +109,7 @@ describe('buildWatchSnapshot', () => {
       orchestrationTitle: 'Title root',
       quick: false,
     });
-    expect(snapshot.pending[1].summary).toBe('bash pnpm test');
+    expect(snapshot.pending[1].summary).toBe('bash $ pnpm test');
     expect(snapshot.orchestrations[0].needsYouSince).toBe(T0 + 1_000);
   });
 
@@ -152,8 +154,21 @@ describe('isQuickApproval', () => {
     ['a question', { name: 'ask_user' }],
     ['a directory grant', { name: 'request_directory' }],
     ['an MCP server card', { name: 'mcp_add_server' }],
+    ['a gate floor that asks in every mode', { approvalInAppOnly: true }],
+    ['a second line hidden below the command', { approvalDetail: '$ git status\n\nrm -rf src' }],
+    ['a working directory below the command', { approvalDetail: '$ rm -rf build\n\nin /tmp/elsewhere' }],
+    ['a line separator', { approvalDetail: '$ git status\u2028rm -rf src' }],
+    ['no detail of its own, only the cut-down input', { approvalDetail: undefined }],
+    ['a summary too long to show whole', { approvalDetail: `$ echo ${'x'.repeat(QUICK_SUMMARY_MAX)}` }],
   ] as const)('refuses a call with %s', (_label, extra) => {
     expect(isQuickApproval(call(extra as Partial<ChatToolCall>))).toBe(false);
+  });
+
+  it('accepts a one-line detail that fits the summary exactly', () => {
+    const detail = `$ ${'x'.repeat(QUICK_SUMMARY_MAX - 'bash $ '.length)}`;
+    const fits = call({ approvalDetail: detail });
+    expect(approvalSummary(fits)).toHaveLength(QUICK_SUMMARY_MAX);
+    expect(isQuickApproval(fits)).toBe(true);
   });
 });
 
