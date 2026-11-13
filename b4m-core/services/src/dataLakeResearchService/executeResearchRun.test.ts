@@ -1,8 +1,23 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { LegacyResearchRunLevers } from '@bike4mind/common';
-import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import type { LegacyResearchRunLevers, ResearchFeedCursor } from '@bike4mind/common';
+import {
+  researchFeedFingerprint,
+  RESEARCH_FEED_FUTURE_SKEW_MS,
+  RESEARCH_FEED_MAX_RETRIES,
+  RESEARCH_FEED_SEEN_KEYS_MAX,
+  RESEARCH_RUN_PRODUCER,
+  upgradeLegacyResearchLevers,
+} from '@bike4mind/common';
+import { canonicalSourceKey } from '../dataLakeService/canonicalSourceKey';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
-import { executeResearchRun, type ResearchCandidate, type ResearchRunPorts } from './executeResearchRun';
+import {
+  executeResearchRun,
+  FeedUnavailableError,
+  SETTLED_PROPOSE_OUTCOMES,
+  type ResearchCandidate,
+  type ResearchRunPorts,
+  type ResearchRunResult,
+} from './executeResearchRun';
 
 const NOW = new Date('2026-03-01T12:00:00.000Z');
 
@@ -506,6 +521,282 @@ describe('executeResearchRun', () => {
       const result = await executeResearchRun(autoLevers({ maxProposals: 2 }), 'run-1', ports);
       expect(result.stopReason).toBe('proposal_limit');
       expect(result.totals.proposed).toBe(2);
+    });
+  });
+});
+
+describe('executeResearchRun - feed source', () => {
+  const FEED_URL = 'https://feeds.example.org/f.xml';
+  const feedLevers = (overrides: Partial<LegacyResearchRunLevers> = {}) =>
+    levers({ source: 'feed', feedUrl: FEED_URL, maxResults: 20, ...overrides });
+  const daysAgo = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
+  const dated = (n: number, ageDays: number): ResearchCandidate => ({ ...hit(n), publishedAt: daysAgo(ageDays) });
+  const keyOf = (n: number) => canonicalSourceKey(hit(n).url)!;
+
+  const feedPorts = (items: ResearchCandidate[], overrides: Partial<ResearchRunPorts> = {}) => {
+    const made = makePorts(overrides);
+    made.ports.readFeed = vi.fn(async () => items);
+    return made;
+  };
+  const cursorFor = (l: LegacyResearchRunLevers, patch: Partial<ResearchFeedCursor> = {}): ResearchFeedCursor => ({
+    fingerprint: researchFeedFingerprint(upgradeLegacyResearchLevers(l)),
+    newestPublishedAt: null,
+    seenKeys: [],
+    retries: [],
+    ...patch,
+  });
+  const failJudge = (urls: string[]) => (candidate: ResearchCandidate) =>
+    urls.includes(candidate.url)
+      ? Promise.resolve({ outcome: 'failed' as const, error: 'boom', costMicroUsd: 0 })
+      : Promise.resolve({ outcome: 'judged' as const, relevance: 1, costMicroUsd: 1_000 });
+
+  it('reads the feed instead of searching, counts selected items and stamps the feed url in provenance', async () => {
+    const { ports, calls } = feedPorts([dated(1, 2), dated(2, 1)]);
+    const l = feedLevers();
+    const result = await executeResearchRun(l, 'run-1', ports);
+
+    expect(ports.search).not.toHaveBeenCalled();
+    expect(ports.readFeed).toHaveBeenCalledWith(FEED_URL);
+    expect(result.totals.searchHits).toBe(2);
+    expect(calls.proposals).toHaveLength(2);
+    expect(calls.proposals[0].provenance).toMatchObject({ query: 'coastal erosion', feedUrl: FEED_URL });
+    expect(result.feedCursor?.fingerprint).toBe(researchFeedFingerprint(upgradeLegacyResearchLevers(l)));
+  });
+
+  it('applies source tiers and auto-admit to feed items', async () => {
+    const autoAdmit = vi.fn(async () => 'admitted' as const);
+    const { ports } = feedPorts([hit(1, 'trusted.example'), hit(2, 'blocked.example')], { autoAdmit });
+    const result = await executeResearchRun(
+      feedLevers({ trustedDomains: ['trusted.example'], blockedDomains: ['blocked.example'], autoAdmitTrusted: true }),
+      'run-1',
+      ports
+    );
+    expect(result.totals).toMatchObject({ proposed: 1, autoAdmitted: 1, filteredBySource: 1 });
+    expect(autoAdmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns no cursor or backlog for a search run', async () => {
+    const { ports } = makePorts();
+    const result = await executeResearchRun(levers(), 'run-1', ports);
+    expect(result.feedCursor).toBeUndefined();
+    expect(result.feedBacklog).toBeUndefined();
+  });
+
+  it('reports the selection backlog beside the totals', async () => {
+    const l = feedLevers({ maxResults: 1 });
+    const { ports } = feedPorts([dated(1, 3), dated(2, 2), dated(3, 1)]);
+    const result = await executeResearchRun(l, 'run-1', ports, cursorFor(l));
+    expect(result.feedBacklog).toBe(2);
+    expect(result.totals.searchHits).toBe(1);
+  });
+
+  it('throws FeedUnavailableError for a feed run with no readFeed port or no feed url, and never searches', async () => {
+    const { ports } = makePorts();
+    await expect(executeResearchRun(feedLevers(), 'run-1', ports)).rejects.toBeInstanceOf(FeedUnavailableError);
+    const withPort = feedPorts([]);
+    await expect(executeResearchRun(feedLevers({ feedUrl: null }), 'run-1', withPort.ports)).rejects.toBeInstanceOf(
+      FeedUnavailableError
+    );
+    expect(ports.search).not.toHaveBeenCalled();
+  });
+
+  it('lets a FeedUnavailableError from the port reach the caller', async () => {
+    const { ports } = feedPorts([]);
+    ports.readFeed = vi.fn(async () => {
+      throw new FeedUnavailableError('This feed is larger than 10 MB');
+    });
+    await expect(executeResearchRun(feedLevers(), 'run-1', ports)).rejects.toThrow('This feed is larger than 10 MB');
+  });
+
+  describe('cursor', () => {
+    it('keeps skipped keys ahead of settled keys, in processing order', async () => {
+      const l = feedLevers({ maxResults: 2 });
+      const { ports } = feedPorts([dated(1, 1), dated(2, 2), dated(3, 3), dated(4, 4)]);
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.feedCursor?.seenKeys).toEqual([keyOf(4), keyOf(3), keyOf(2), keyOf(1)]);
+      expect(result.feedBacklog).toBe(0);
+    });
+
+    it('puts old keys first and trims from the front at the cap', async () => {
+      const l = feedLevers();
+      const old = Array.from({ length: RESEARCH_FEED_SEEN_KEYS_MAX }, (_, i) => `old${i}`);
+      const { ports } = feedPorts([dated(1, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports, cursorFor(l, { seenKeys: old }));
+      const keys = result.feedCursor!.seenKeys;
+      expect(keys).toHaveLength(RESEARCH_FEED_SEEN_KEYS_MAX);
+      expect(keys[0]).toBe('old1');
+      expect(keys.at(-1)).toBe(keyOf(1));
+    });
+
+    it('ignores a stored cursor written under different levers', async () => {
+      const l = feedLevers();
+      const stale = { ...cursorFor(l, { seenKeys: [keyOf(1)] }), fingerprint: 'different' };
+      const { ports, calls } = feedPorts([dated(1, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports, stale);
+      expect(calls.judged).toEqual([hit(1).url]);
+      expect(result.feedCursor?.seenKeys).toEqual([keyOf(1)]);
+    });
+
+    it('moves the floor to the newest settled item when everything settled', async () => {
+      const l = feedLevers();
+      const { ports } = feedPorts([dated(1, 3), dated(2, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.feedCursor?.newestPublishedAt).toEqual(daysAgo(1));
+    });
+
+    it('never moves the floor past now plus the skew for a future-dated item', async () => {
+      const l = feedLevers();
+      const future: ResearchCandidate = { ...hit(1), publishedAt: new Date('2035-01-01T00:00:00Z') };
+      const { ports } = feedPorts([future]);
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.feedCursor!.newestPublishedAt!.getTime()).toBeLessThanOrEqual(
+        NOW.getTime() + RESEARCH_FEED_FUTURE_SKEW_MS
+      );
+    });
+
+    it('keeps a floor from the old cursor when nothing newer settled', async () => {
+      const l = feedLevers();
+      const { ports } = feedPorts([dated(1, 10)]);
+      const result = await executeResearchRun(l, 'run-1', ports, cursorFor(l, { newestPublishedAt: daysAgo(2) }));
+      expect(result.feedCursor?.newestPublishedAt).toEqual(daysAgo(2));
+    });
+  });
+
+  describe('transient failures', () => {
+    it.each([
+      ['a judge failure before any score', [1], 'judge'],
+      ['a judge failure after the first score', [2], 'judge'],
+      ['a fetch failure', [2], 'fetch'],
+    ])('%s keeps the item out of seenKeys, queues a retry and holds the floor below it', async (_n, failing, kind) => {
+      const l = feedLevers();
+      // Oldest first: item 1 is 5 days old, 2 is 3 days old, 3 is 1 day old.
+      const { ports } = feedPorts([dated(1, 5), dated(2, 3), dated(3, 1)]);
+      if (kind === 'judge') ports.judge = vi.fn(failJudge(failing.map(n => hit(n).url)));
+      else
+        ports.fetchSource = vi.fn(async url => (url === hit(2).url ? null : { title: 't', finalUrl: url, text: 'x' }));
+
+      const result = await executeResearchRun(l, 'run-1', ports);
+      const cursor = result.feedCursor!;
+      const failedKey = keyOf(failing[0]);
+      expect(cursor.seenKeys).not.toContain(failedKey);
+      expect(cursor.retries).toEqual([{ key: failedKey, attempts: 1 }]);
+      // Floor stops strictly below the failed item: only items older than it can move it.
+      const settledOlder = failing[0] === 1 ? null : daysAgo(5);
+      expect(cursor.newestPublishedAt).toEqual(settledOlder);
+    });
+
+    it('gives an item up after the max retries and records it as seen', async () => {
+      const l = feedLevers();
+      const items = [dated(1, 3), dated(2, 5)];
+      let cursor: ResearchFeedCursor | null = null;
+      const seenAfter: boolean[] = [];
+      let lastFloor: Date | null = null;
+      for (let run = 1; run <= RESEARCH_FEED_MAX_RETRIES; run += 1) {
+        const { ports } = feedPorts(items);
+        ports.judge = vi.fn(failJudge([hit(1).url]));
+        const result: ResearchRunResult = await executeResearchRun(l, `run-${run}`, ports, cursor);
+        cursor = result.feedCursor!;
+        seenAfter.push(cursor.seenKeys.includes(keyOf(1)));
+        lastFloor = cursor.newestPublishedAt;
+      }
+      expect(seenAfter).toEqual([false, false, true]);
+      expect(cursor!.retries).toEqual([]);
+      // The failing item never moves the floor, given up or not.
+      expect(lastFloor).toEqual(daysAgo(5));
+    });
+
+    it('prunes a retry whose item left the feed, and clears one that settled', async () => {
+      const l = feedLevers();
+      const stored = cursorFor(l, {
+        retries: [
+          { key: keyOf(8), attempts: 2 },
+          { key: keyOf(1), attempts: 1 },
+        ],
+      });
+      const { ports } = feedPorts([dated(1, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports, stored);
+      expect(result.feedCursor!.retries).toEqual([]);
+    });
+
+    it('carries an untouched retry forward while its item is still in the feed', async () => {
+      const l = feedLevers({ maxResults: 1 });
+      const stored = cursorFor(l, { retries: [{ key: keyOf(3), attempts: 2 }] });
+      // Item 1 is older, so it is taken first; item 3 is left for a later run.
+      const { ports } = feedPorts([dated(1, 5), dated(3, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports, stored);
+      expect(result.feedCursor!.retries).toEqual([{ key: keyOf(3), attempts: 2 }]);
+    });
+  });
+
+  describe('every propose outcome', () => {
+    const outcomes: Record<ProposalOutcome['outcome'], ProposalOutcome> = {
+      proposed: proposed(),
+      duplicate_pending: { outcome: 'duplicate_pending', proposalId: 'x' },
+      already_in_lake: { outcome: 'already_in_lake', reason: 'prior_approval' },
+      suppressed_by_tombstone: { outcome: 'suppressed_by_tombstone', proposalId: 'x' },
+      unusable_source: { outcome: 'unusable_source', reason: 'not_http_url' },
+    };
+
+    it('has a settled entry for exactly the outcomes the propose step can return', () => {
+      expect(Object.keys(SETTLED_PROPOSE_OUTCOMES).sort()).toEqual(Object.keys(outcomes).sort());
+    });
+
+    it.each(Object.entries(outcomes))('%s is settled', async (_name, outcome) => {
+      const l = feedLevers();
+      const { ports } = feedPorts([dated(1, 1)], { propose: vi.fn(async () => outcome) });
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1)]);
+      expect(result.feedCursor!.retries).toEqual([]);
+    });
+
+    it('does not record an unlisted outcome as settled', async () => {
+      const l = feedLevers();
+      const unknown = { outcome: 'brand_new' } as unknown as ProposalOutcome;
+      const { ports } = feedPorts([dated(1, 1)], { propose: vi.fn(async () => unknown) });
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.feedCursor!.seenKeys).toEqual([]);
+      expect(result.feedCursor!.newestPublishedAt).toBeNull();
+    });
+  });
+
+  describe('items not reached', () => {
+    const sevenItems = () => [dated(1, 7), dated(2, 6), dated(3, 5), dated(4, 4)];
+
+    it('hold the floor after proposal_limit', async () => {
+      const l = feedLevers({ maxProposals: 2 });
+      const { ports } = feedPorts(sevenItems());
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.stopReason).toBe('proposal_limit');
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1), keyOf(2)]);
+      expect(result.feedCursor!.newestPublishedAt).toEqual(daysAgo(6));
+    });
+
+    it('hold the floor after time_budget', async () => {
+      const l = feedLevers();
+      let calls = 0;
+      const { ports } = feedPorts(sevenItems(), { remainingTimeMs: () => (calls++ < 2 ? 1_000_000 : 0) });
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.stopReason).toBe('time_budget');
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1), keyOf(2)]);
+      expect(result.feedCursor!.newestPublishedAt).toEqual(daysAgo(6));
+    });
+
+    it('hold the floor after cost_ceiling', async () => {
+      const l = feedLevers({ costCeilingMicroUsd: 2_000 });
+      const { ports } = feedPorts(sevenItems());
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.stopReason).toBe('cost_ceiling');
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1), keyOf(2)]);
+      expect(result.feedCursor!.newestPublishedAt).toEqual(daysAgo(6));
+    });
+
+    it('reports judge_unavailable as a failed judge step so the caller writes no cursor', async () => {
+      const l = feedLevers();
+      const { ports } = feedPorts(sevenItems());
+      ports.judge = vi.fn(async () => ({ outcome: 'failed' as const, error: 'down', costMicroUsd: 0 }));
+      const result = await executeResearchRun(l, 'run-1', ports);
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result.judgeStepFailed).toBe(true);
     });
   });
 });

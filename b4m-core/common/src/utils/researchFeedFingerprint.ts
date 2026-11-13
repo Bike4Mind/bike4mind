@@ -1,0 +1,44 @@
+import type { ResearchRunLevers } from '../types/entities/DataLakeResearchTypes';
+
+export type ResearchFeedFingerprintLevers = Pick<
+  ResearchRunLevers,
+  'feedUrl' | 'query' | 'minRelevance' | 'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'
+> &
+  Partial<Pick<ResearchRunLevers, 'model' | 'recencyDays' | 'blockedDomains'>>;
+
+/** Pure-JS 53-bit hash (cyrb53), so the same value comes out of the node and browser builds. */
+const cyrb53 = (input: string, seed: number): string => {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+};
+
+const sortedUnique = (values: readonly string[] | undefined): string[] => [...new Set(values ?? [])].sort();
+
+/**
+ * A stable hash of the levers that decide which feed items a run judges and how. A cursor written
+ * under a different fingerprint is ignored, so changing any of them re-judges the feed once.
+ * Site lists are order-insensitive.
+ */
+export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): string => {
+  const canonical = JSON.stringify([
+    levers.feedUrl ?? null,
+    levers.query,
+    levers.model ?? null,
+    levers.minRelevance,
+    levers.recencyDays ?? 0,
+    sortedUnique(levers.trustedDomains),
+    sortedUnique(levers.reviewDomains),
+    levers.unlistedSources,
+    sortedUnique(levers.allowedDomains),
+    sortedUnique(levers.blockedDomains),
+  ]);
+  return cyrb53(canonical, 0) + cyrb53(canonical, 1);
+};

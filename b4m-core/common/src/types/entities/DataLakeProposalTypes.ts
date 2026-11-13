@@ -42,6 +42,8 @@ export interface DataLakeProposalProvenance {
   runId?: string;
   /** The question the run was answering, when it had one. Shown to the reviewer as context. */
   query?: string;
+  /** The feed the candidate was read from, when it came from one. Never copied onto an admitted file. */
+  feedUrl?: string;
   /** When the producer actually retrieved the candidate - not when the row was written. */
   retrievedAt: Date;
   /** The source tier the producer routed this candidate under. Absent for other producers and older rows. */

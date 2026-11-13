@@ -1,0 +1,99 @@
+import type { ResearchFeedCursor, ResearchFeedFingerprintLevers, ResearchRunLevers } from '@bike4mind/common';
+import {
+  researchFeedFingerprint,
+  RESEARCH_FEED_DATE_GRACE_DAYS,
+  RESEARCH_FEED_FUTURE_SKEW_MS,
+  RESEARCH_FEED_SEEN_KEYS_MAX,
+} from '@bike4mind/common';
+import { canonicalSourceKey } from '../dataLakeService/canonicalSourceKey';
+import type { ResearchCandidate } from './executeResearchRun';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type FeedSelectionLevers = ResearchFeedFingerprintLevers & Pick<ResearchRunLevers, 'maxResults'>;
+
+export interface FeedSelection {
+  /** In processing order. `publishedAt` is already clamped to `now` plus the skew allowance. */
+  candidates: ResearchCandidate[];
+  /**
+   * First run only: keys of eligible items the run does not take. The caller records them as seen
+   * so the next run does not walk back through the old feed. Oldest first, so trimming drops them first.
+   */
+  skipped: string[];
+  /** Cursor runs only: eligible items not taken, left for the next run. */
+  backlog: number;
+}
+
+interface Keyed {
+  candidate: ResearchCandidate;
+  key: string;
+  at: number | null;
+}
+
+/**
+ * Picks which feed items this run judges. Pure.
+ *
+ * A cursor is honoured only when its fingerprint matches the current levers. Keys decide what is
+ * new; the date check is a backstop that applies only once the key list has hit its cap and may
+ * have lost entries.
+ */
+export function selectFeedCandidates(
+  items: readonly ResearchCandidate[],
+  cursor: ResearchFeedCursor | null | undefined,
+  levers: FeedSelectionLevers,
+  now: Date
+): FeedSelection {
+  const active = cursor && cursor.fingerprint === researchFeedFingerprint(levers) ? cursor : null;
+  const seen = new Set(active?.seenKeys ?? []);
+  const nowMs = now.getTime();
+  const ceilingMs = nowMs + RESEARCH_FEED_FUTURE_SKEW_MS;
+  const keysTrimmed = (active?.seenKeys.length ?? 0) >= RESEARCH_FEED_SEEN_KEYS_MAX;
+  const backstopMs =
+    keysTrimmed && active?.newestPublishedAt
+      ? active.newestPublishedAt.getTime() - RESEARCH_FEED_DATE_GRACE_DAYS * DAY_MS
+      : null;
+  const recencyFloorMs = levers.recencyDays ? nowMs - levers.recencyDays * DAY_MS : null;
+
+  const eligible: Keyed[] = [];
+  const inFeed = new Set<string>();
+  for (const item of items) {
+    const key = canonicalSourceKey(item.url);
+    if (!key || inFeed.has(key)) continue;
+    inFeed.add(key);
+
+    const at = item.publishedAt ? Math.min(item.publishedAt.getTime(), ceilingMs) : null;
+    if (seen.has(key)) continue;
+    if (at !== null && backstopMs !== null && at < backstopMs) continue;
+    if (at !== null && recencyFloorMs !== null && at < recencyFloorMs) continue;
+    eligible.push({ candidate: at === null ? item : { ...item, publishedAt: new Date(at) }, key, at });
+  }
+
+  const feedOrder = new Map(eligible.map((entry, index) => [entry, index]));
+  const byFeedOrder = (a: Keyed, b: Keyed) => feedOrder.get(a)! - feedOrder.get(b)!;
+  const oldestFirst = (list: Keyed[]): Keyed[] => [
+    ...list.filter(entry => entry.at !== null).sort((a, b) => a.at! - b.at! || byFeedOrder(a, b)),
+    ...list.filter(entry => entry.at === null).sort(byFeedOrder),
+  ];
+
+  if (active) {
+    const ordered = oldestFirst(eligible);
+    const taken = ordered.slice(0, levers.maxResults);
+    return {
+      candidates: taken.map(entry => entry.candidate),
+      skipped: [],
+      backlog: ordered.length - taken.length,
+    };
+  }
+
+  const newestFirst = [
+    ...eligible.filter(entry => entry.at !== null).sort((a, b) => b.at! - a.at! || byFeedOrder(a, b)),
+    ...eligible.filter(entry => entry.at === null).sort(byFeedOrder),
+  ];
+  const taken = newestFirst.slice(0, levers.maxResults);
+  const rest = newestFirst.slice(levers.maxResults);
+  return {
+    candidates: oldestFirst(taken).map(entry => entry.candidate),
+    skipped: oldestFirst(rest).map(entry => entry.key),
+    backlog: 0,
+  };
+}

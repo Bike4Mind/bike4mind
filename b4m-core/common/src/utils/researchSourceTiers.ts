@@ -1,6 +1,7 @@
 import type {
   LegacyResearchRunLevers,
   ResearchRunLevers,
+  ResearchSource,
   ResearchUnlistedSources,
 } from '../types/entities/DataLakeResearchTypes';
 import {
@@ -82,9 +83,15 @@ export const deriveLegacyAllowedDomains = (levers: TierFields): string[] =>
 
 type Upgraded<T extends LegacyResearchRunLevers> = Omit<
   T,
-  keyof TierFields | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits'
+  keyof TierFields | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits' | 'source' | 'feedUrl'
 > &
-  TierFields & { allowedDomains: string[]; autoAdmitTrusted: boolean; maxAutoAdmits: number };
+  TierFields & {
+    allowedDomains: string[];
+    autoAdmitTrusted: boolean;
+    maxAutoAdmits: number;
+    source: ResearchSource;
+    feedUrl: string | null;
+  };
 
 /**
  * Brings any stored lever shape to the tiered one. A pure field remap: it never normalizes, and it
@@ -101,6 +108,8 @@ export function upgradeLegacyResearchLevers<T extends LegacyResearchRunLevers>(l
   const autoAdmit = {
     autoAdmitTrusted: levers.autoAdmitTrusted ?? false,
     maxAutoAdmits: levers.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+    source: levers.source === 'feed' ? ('feed' as const) : ('search' as const),
+    feedUrl: levers.feedUrl ?? null,
   };
   const trusted = levers.trustedDomains ?? [];
   const allowed = levers.allowedDomains ?? [];

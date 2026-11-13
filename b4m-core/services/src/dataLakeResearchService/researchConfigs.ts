@@ -203,6 +203,9 @@ const sameStringSet = (a: readonly string[], b: readonly string[]) => {
 const LEVER_EQUALITY: {
   [K in keyof ResearchRunLevers]-?: (a: ResearchRunLevers[K], b: ResearchRunLevers[K]) => boolean;
 } = {
+  // A config document read without the lever (not through the upgrader) is a search config.
+  source: (a, b) => (a ?? 'search') === (b ?? 'search'),
+  feedUrl: sameNullable,
   query: sameValue,
   model: sameNullable,
   maxResults: sameValue,
