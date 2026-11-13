@@ -25,8 +25,10 @@ const REGISTERS = /^registerOrgAlertObserver\(\);$/m;
 const COVERED_BY =
   /queueHandlers\/utils'|@workers\/utils\/eventContext'|server-utils\/s3\/utils'|server-utils\/websocket\/utils'/;
 const REACHES_ORG_ALERT_EMITTER =
-  /creditService|recordOperationalUsage|settleVoiceHold|uploadModerationMeter|moderationScan'|recordSessionOperationalUsage|sessionOperationalCreditGate|releaseHeldSignupCredits|runSignupDomainHoldAssessments|runModerationRescueSweep|addMember|subtractCredits|deductCredits|settleCreditHold|settleJobHold|cliCompletions/;
-const IS_ENTRY = /^export (const|async function|function) (handler|func)\b/m;
+  /creditService|recordOperationalUsage|settleVoiceHold|uploadModerationMeter|moderationScan'|recordSessionOperationalUsage|sessionOperationalCreditGate|releaseHeldSignupCredits|runSignupDomainHoldAssessments|runModerationRescueSweep|addMember|subtractCredits|deductCredits|settleCreditHold|settleJobHold|cliCompletions|ChatCompletionProcess|sharingService/;
+// Infra wires worker Lambdas by export name (`<file>.<export>` in infra/), not only handler/func.
+const IS_ENTRY =
+  /^export (const|async function|function) (handler|func|dispatch|checkAndScheduleProactiveMessages|updateDatabase|ingest)\b/m;
 
 function listSources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
