@@ -165,4 +165,24 @@ describe('POST /api/oauth/device/token paid-only access switch', () => {
     });
     expect(repo.claimApproved).not.toHaveBeenCalled();
   });
+
+  it('refuses an approved code bound to a system account without claiming it', async () => {
+    tryIncrement.mockResolvedValue({ success: true });
+    repo.findByDeviceCode.mockResolvedValue({
+      id: 'auth-1',
+      status: 'approved',
+      userId: 'sys',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    repo.recordPollIfDue.mockResolvedValue({ id: 'auth-1' });
+    repo.claimApproved.mockClear();
+    userFindById.mockResolvedValue({ id: 'sys', isSystem: true });
+
+    const { req, res } = request('dc-1');
+    await mockRefs.handler!(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid_grant' });
+    expect(repo.claimApproved).not.toHaveBeenCalled();
+  });
 });

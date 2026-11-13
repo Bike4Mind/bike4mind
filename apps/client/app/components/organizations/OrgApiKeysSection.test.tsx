@@ -46,7 +46,7 @@ describe('OrgApiKeysSection callback signing secret', () => {
     );
 
     fireEvent.click(screen.getByTestId('org-api-key-callback-secret-btn-key1'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Create secret' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate secret' }));
 
     await waitFor(() => expect(screen.getByTestId('org-api-key-secret-value')).toHaveValue('whsec_test'));
     expect(rotateCallbackSecret.mutateAsync).toHaveBeenCalledWith('key1');

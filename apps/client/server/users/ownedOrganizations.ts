@@ -101,7 +101,7 @@ export async function deleteSoleOwnedOrganizations(
       removed.revokedApiKeyIds.map(apiKeyId =>
         authSessionService.endRealtimeConnections(
           { apiKeyId },
-          { db: { realtimeConnections: realtimeConnectionRepository } }
+          { db: { realtimeConnections: realtimeConnectionRepository }, logger }
         )
       )
     );

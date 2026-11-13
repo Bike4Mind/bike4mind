@@ -57,10 +57,10 @@ const CONFIRM_COPY = {
     confirmText: 'Revoke',
   },
   'callback-secret': {
-    title: 'Create a callback signing secret?',
+    title: 'Generate a new callback signing secret?',
     description: (name: string) =>
       `Generation callbacks for "${name}" will be signed with a new secret. Any previous secret stops verifying on the next delivery.`,
-    confirmText: 'Create secret',
+    confirmText: 'Generate secret',
   },
 } as const;
 

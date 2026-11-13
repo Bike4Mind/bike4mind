@@ -539,6 +539,13 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     expectRejected(await call(refreshBody));
   });
 
+  it('rejects a family owned by a system account without consuming the token', async () => {
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', tokenVersion: 0, isSystem: true });
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
   it('rejects a revoked grant without consuming the token', async () => {
     (h.findGrant as Mock).mockResolvedValue(null);
 

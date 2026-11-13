@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { IOrganization, IUserDocument, isOrgServiceAccountOf, orgServiceAccountEmail } from '@bike4mind/common';
+import { NotFoundError } from '@bike4mind/utils';
 
 interface OrgServiceAccountAdapters {
   db: {
@@ -37,9 +38,10 @@ export const getOrCreateOrgServiceAccount = async (
       `Account at the service-account address of organization ${organization.id} is not its service account`
     );
   }
-  // Set when the org was deleted. A create that passed its org check before the delete committed lands here.
+  // Set when the org was deleted: a caller whose org check ran before the delete committed gets the
+  // same 404 the check would now give.
   if (user.serviceAccountRetiredAt) {
-    throw new Error(`Service account of organization ${organization.id} was retired when the organization was deleted`);
+    throw new NotFoundError('Organization not found');
   }
   // The per-member credit cap reads this to exempt the account (creditService/memberCreditCap.ts).
   if (organization.serviceAccountUserId !== user.id) {

@@ -4,12 +4,12 @@
 // (verifyOrgAccess). POST returns the key's secret once.
 
 import { CreditHolderType, type IOrgApiKeySecretResponse, type IOrgApiKeyView } from '@bike4mind/common';
-import { agentRepository, withTransaction } from '@bike4mind/database';
+import { agentRepository, organizationRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
 import { isKnownApiKeyScope, isOrgApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -76,6 +76,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const serviceAccount = await getOrCreateServiceAccount(org);
       // The key and its strict audit row commit together, so a failed audit leaves no live key behind.
       const created = await withTransaction(async () => {
+        // Conflicts with a concurrent org delete, so a delete that lands after verifyOrgAccess either
+        // aborts this mint or retries and revokes the key it made.
+        if (!(await organizationRepository.touchIfLive(org.id))) throw new NotFoundError('Organization not found');
         const minted = await userApiKeyService.createUserApiKey(
           serviceAccount.id,
           {

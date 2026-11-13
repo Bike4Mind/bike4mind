@@ -101,4 +101,14 @@ describe('POST /api/oauth/ai-token account gates', () => {
     });
     expect(h.isApiKeyAccessAllowed).not.toHaveBeenCalled();
   });
+
+  it('refuses a subject that resolves to a system account as an invalid grant', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', aupAcceptedVersion: 'v1', isSystem: true });
+
+    const res = await run();
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData()).toMatchObject({ error: 'invalid_grant' });
+    expect(h.checkFederatedGrant).not.toHaveBeenCalled();
+  });
 });

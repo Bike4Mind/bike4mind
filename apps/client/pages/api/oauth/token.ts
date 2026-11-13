@@ -352,6 +352,7 @@ const handler = baseApi({ auth: false })
         return res.status(400).json(invalidGrant);
       }
       try {
+        requireNonSystemUser(user);
         assertAccountStateUsable(user);
       } catch {
         logError('invalid_grant', 400);

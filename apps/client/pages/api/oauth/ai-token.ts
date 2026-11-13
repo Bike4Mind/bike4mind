@@ -178,7 +178,8 @@ const handler = baseApi({ auth: false })
 
     // 5. Load the user; a sub that resolves to no B4M user is an invalid grant.
     const user = await userRepository.findById(b4mUserId);
-    if (!user) {
+    // A system account (e.g. an org service account) is never a federated identity.
+    if (!user || user.isSystem) {
       logError('invalid_grant', 401);
       return res
         .status(401)

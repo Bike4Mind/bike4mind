@@ -589,10 +589,6 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
   /**
-   * Disables the user's not-yet-DISABLED keys that are billed to `organizationId`, stamping
-   * revokedAt/revokedBy/revokedReason. Personal keys are untouched. Resolves the revoked ids.
-   */
-  /**
    * Disables every not-yet-DISABLED key of the user, stamping the revoke and `batchId`. Resolves the
    * flipped keys with their prior status.
    */
@@ -600,6 +596,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
     userId: string,
     stamp: { revokedBy: string; revokedReason: string; batchId: string }
   ) => Promise<{ id: string; status: ApiKeyStatus }[]>;
+  /**
+   * Disables the user's not-yet-DISABLED keys that are billed to `organizationId`, stamping
+   * revokedAt/revokedBy/revokedReason. Personal keys are untouched. Resolves the revoked ids.
+   */
   revokeLiveOrgBilledByUserId: (
     userId: string,
     organizationId: string,

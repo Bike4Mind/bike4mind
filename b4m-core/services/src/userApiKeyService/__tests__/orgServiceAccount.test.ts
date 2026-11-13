@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { NotFoundError } from '@bike4mind/utils';
 import { orgServiceAccountEmail, type IUserDocument } from '@bike4mind/common';
 import { findOrgServiceAccount, getOrCreateOrgServiceAccount } from '../orgServiceAccount';
 
@@ -61,6 +62,20 @@ describe('getOrCreateOrgServiceAccount', () => {
         { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update: vi.fn() } } }
       )
     ).rejects.toThrow(/not its service account/);
+  });
+
+  it('answers a retired account (org deleted) with a 404, not a 500, and does not rebind the org', async () => {
+    const findOrCreateByEmail = vi.fn(async () =>
+      asUser({ id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org1', serviceAccountRetiredAt: new Date() })
+    );
+    const update = vi.fn();
+    await expect(
+      getOrCreateOrgServiceAccount(
+        { id: 'org1' },
+        { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
+      )
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(update).not.toHaveBeenCalled();
   });
 });
 

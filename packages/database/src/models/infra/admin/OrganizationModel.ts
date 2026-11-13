@@ -713,6 +713,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Stamps `updatedAt` on a live org and resolves false when it is soft-deleted or missing. Run inside
+   * a transaction, the write conflicts with a concurrent org delete (which writes `deletedAt`), so the
+   * two serialize: whichever commits second retries and sees the other's outcome.
+   */
+  async touchIfLive(organizationId: string): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      { _id: organizationId, deletedAt: null },
+      { $set: { updatedAt: new Date() } },
+      { timestamps: false }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Record spend against a member's monthly budget within an organization.
    *
    * The per-member cap is a UTC calendar-month budget: a row whose `periodStart` is missing or

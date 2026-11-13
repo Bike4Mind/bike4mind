@@ -215,6 +215,21 @@ describe('POST /api/oauth/refresh API access policy', () => {
     expect(h.rotateSession).not.toHaveBeenCalled();
   });
 
+  it('rejects a session owned by a system account before rotating', async () => {
+    h.findById.mockResolvedValue({ ...USABLE_USER, isSystem: true });
+    const res = await call('b4m-cli');
+    expect(res.statusCode).toBe(401);
+    expect(h.rotateSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a legacy token owned by a system account without minting a session', async () => {
+    h.isOpaqueRefreshToken.mockReturnValue(false);
+    h.findById.mockResolvedValue({ ...USABLE_USER, isSystem: true });
+    const res = await call('b4m-cli');
+    expect(res.statusCode).toBe(401);
+    expect(h.issueSession).not.toHaveBeenCalled();
+  });
+
   it('preserves the refresh chain when reading session provenance fails', async () => {
     h.findBySid.mockRejectedValueOnce(Object.assign(new Error('database unavailable'), { name: 'MongoNetworkError' }));
     const res = await call('b4m-cli');

@@ -52,7 +52,7 @@ const handler = baseApi({ auth: false })
           const parsed = authSessionService.parseRefreshToken(refresh_token);
           const session = parsed ? await authSessionRepository.findBySid(parsed.sid) : null;
           const user = session ? await userRepository.findById(session.userId) : null;
-          if (!user) throw new UnauthorizedError('Invalid refresh token');
+          if (!user || user.isSystem) throw new UnauthorizedError('Invalid refresh token');
           await assertApiKeyAccessAllowed(user, undefined, req);
         } catch (error) {
           throw toApiKeyAuthError(error);
@@ -93,7 +93,7 @@ const handler = baseApi({ auth: false })
       // Kill switch: load the user and reject a stale refresh token so a
       // revoked session can't be revived through the refresh endpoint.
       const user = await User.findById(payload.userId);
-      if (!user || !isTokenVersionCurrent(payload.tokenVersion, user.tokenVersion)) {
+      if (!user || user.isSystem || !isTokenVersionCurrent(payload.tokenVersion, user.tokenVersion)) {
         throw new UnauthorizedError('Invalid refresh token');
       }
       // Refused before a session is minted, so nothing is left to revoke.
