@@ -1,4 +1,4 @@
-import { FC, useState } from 'react';
+import { FC, useRef, useState } from 'react';
 import { Button, FormLabel, Input, Option, Select, Stack, useTheme } from '@mui/joy';
 import type { QaFacets, QaStatusSearch } from '@client/app/hooks/data/qaStatus';
 import {
@@ -24,6 +24,59 @@ function withCurrent(options: readonly string[] | undefined, current: string | u
   return list;
 }
 
+interface DateFieldProps {
+  testId: string;
+  inputId: string;
+  value: string;
+  min?: string;
+  max: string;
+  onCommit: (day: string) => void;
+}
+
+/**
+ * A date input that holds typed digits until blur or Enter. Committing per keystroke re-renders the
+ * field, which drops the browser's half-typed segment (so "11" became January then a new month).
+ * A calendar pick, with no keystroke since the last commit, applies at once.
+ */
+const DateField: FC<DateFieldProps> = ({ testId, inputId, value, min, max, onCommit }) => {
+  const theme = useTheme();
+  const [draft, setDraft] = useState(value);
+  const [synced, setSynced] = useState(value);
+  if (value !== synced) {
+    setSynced(value);
+    setDraft(value);
+  }
+  const typing = useRef(false);
+  const commit = () => {
+    typing.current = false;
+    if (draft !== value && parseIsoDay(draft)) onCommit(draft);
+    // A clamped or invalid entry may leave `value` unchanged, so put the field back on it.
+    setDraft(value);
+  };
+  return (
+    <Input
+      size="sm"
+      type="date"
+      sx={{ colorScheme: theme.palette.mode }}
+      data-testid={testId}
+      value={draft}
+      onChange={e => {
+        setDraft(e.target.value);
+        if (!typing.current && parseIsoDay(e.target.value)) onCommit(e.target.value);
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') commit();
+        else if (e.key !== 'Tab' && e.key !== 'Escape') typing.current = true;
+      }}
+      onMouseDown={() => {
+        typing.current = false;
+      }}
+      onBlur={commit}
+      slotProps={{ input: { id: inputId, min, max } }}
+    />
+  );
+};
+
 interface Props {
   search: QaStatusSearch;
   facets?: QaFacets;
@@ -44,7 +97,6 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
     if (next !== (search.branch ?? 'main')) onChange({ branch: next });
   };
 
-  const theme = useTheme();
   const range = resolveRange(search);
   const today = toIsoDay(new Date());
   const preset = activePreset(range);
@@ -128,28 +180,25 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
           <FormLabel htmlFor="qa-filter-from-input" sx={{ m: 0, whiteSpace: 'nowrap' }}>
             Start date
           </FormLabel>
-          <Input
-            size="sm"
-            type="date"
-            sx={{ colorScheme: theme.palette.mode }}
-            data-testid="qa-filter-from"
+          <DateField
+            testId="qa-filter-from"
+            inputId="qa-filter-from-input"
             value={range.from}
-            onChange={e => pickFrom(e.target.value)}
-            slotProps={{ input: { id: 'qa-filter-from-input', max: today } }}
+            max={today}
+            onCommit={pickFrom}
           />
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
           <FormLabel htmlFor="qa-filter-to-input" sx={{ m: 0, whiteSpace: 'nowrap' }}>
             End date
           </FormLabel>
-          <Input
-            size="sm"
-            type="date"
-            sx={{ colorScheme: theme.palette.mode }}
-            data-testid="qa-filter-to"
+          <DateField
+            testId="qa-filter-to"
+            inputId="qa-filter-to-input"
             value={range.to}
-            onChange={e => pickTo(e.target.value)}
-            slotProps={{ input: { id: 'qa-filter-to-input', min: range.from, max: today } }}
+            min={range.from}
+            max={today}
+            onCommit={pickTo}
           />
         </Stack>
         <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>

@@ -88,6 +88,40 @@ describe('StatusFilters', () => {
     expect(onChange).toHaveBeenLastCalledWith({ from: '2026-11-13', to: '2026-11-13', range: undefined });
   });
 
+  it('holds a typed date until blur or Enter, then applies it', () => {
+    const onChange = vi.fn();
+    const search = { product: 'product-a', from: '2026-11-07', to: '2026-11-13' };
+    render(<StatusFilters search={search} facets={facets} onChange={onChange} />, { wrapper: QaTestWrapper });
+    const to = dateInput('qa-filter-to');
+    // The browser reports each half-typed state as a full date: "1" in the month is January.
+    fireEvent.keyDown(to, { key: '1' });
+    fireEvent.change(to, { target: { value: '2026-01-13' } });
+    fireEvent.keyDown(to, { key: '1' });
+    fireEvent.change(to, { target: { value: '2026-11-05' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(to);
+    expect(onChange).toHaveBeenLastCalledWith({ from: '2026-11-05', to: '2026-11-05', range: undefined });
+
+    const from = dateInput('qa-filter-from');
+    fireEvent.keyDown(from, { key: '1' });
+    fireEvent.change(from, { target: { value: '2026-11-01' } });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(from, { key: 'Enter' });
+    expect(onChange).toHaveBeenLastCalledWith({ from: '2026-11-01', to: '2026-11-13', range: undefined });
+  });
+
+  it('puts a typed date that changes nothing back on the current value', () => {
+    const onChange = vi.fn();
+    const search = { product: 'product-a', from: '2026-11-07', to: '2026-11-13' };
+    render(<StatusFilters search={search} facets={facets} onChange={onChange} />, { wrapper: QaTestWrapper });
+    const to = dateInput('qa-filter-to');
+    fireEvent.keyDown(to, { key: '2' });
+    fireEvent.change(to, { target: { value: '' } });
+    fireEvent.blur(to);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(to.value).toBe('2026-11-13');
+  });
+
   it('ignores a cleared date', () => {
     const onChange = vi.fn();
     render(<StatusFilters search={{ product: 'product-a' }} facets={facets} onChange={onChange} />, {
