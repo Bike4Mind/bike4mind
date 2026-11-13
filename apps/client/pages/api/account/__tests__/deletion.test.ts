@@ -36,7 +36,7 @@ vi.mock('@bike4mind/services', () => ({ mfaService: {} }));
 vi.mock('@server/users/accountDeletion', () => ({
   requestAccountDeletion: h.request,
   cancelAccountDeletion: h.cancel,
-  findOwnedOrganizations: h.owned,
+  findAccountDeletionOrganizations: h.owned,
 }));
 
 import handler from '../deletion';
@@ -97,11 +97,18 @@ describe('/api/account/deletion', () => {
     expect(h.findBySid).not.toHaveBeenCalled();
   });
 
-  it('reports the pending deletion and the organizations blocking a request', async () => {
+  it('reports the pending deletion, the organizations blocking a request and the sole-owned ones', async () => {
     h.findById.mockResolvedValue({ deletion: null });
-    h.owned.mockResolvedValue([{ id: 'o1', name: 'Acme' }]);
+    h.owned.mockResolvedValue({
+      ownedOrganizations: [{ id: 'o1', name: 'Acme' }],
+      soleOwnedOrganizations: [{ id: 'o2', name: 'Side Project' }],
+    });
     const { status, body } = await call('GET');
     expect(status).toBe(200);
-    expect(body).toEqual({ deletion: null, ownedOrganizations: [{ id: 'o1', name: 'Acme' }] });
+    expect(body).toEqual({
+      deletion: null,
+      ownedOrganizations: [{ id: 'o1', name: 'Acme' }],
+      soleOwnedOrganizations: [{ id: 'o2', name: 'Side Project' }],
+    });
   });
 });
