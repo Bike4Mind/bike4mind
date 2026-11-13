@@ -108,6 +108,17 @@ describe('shouldStampPersistedVersion', () => {
     ).toBe(false);
   });
 
+  it('does nothing when the persisted content is unknown, even if both contents are undefined', () => {
+    expect(
+      shouldStampPersistedVersion({
+        currentContent: undefined,
+        latestContent: undefined,
+        currentVersion: undefined,
+        latestVersion: 3,
+      })
+    ).toBe(false);
+  });
+
   it('does nothing when the persisted version is unknown', () => {
     expect(
       shouldStampPersistedVersion({
