@@ -742,6 +742,8 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** For a shell command the scan could not fully follow (unparsed, an unread part or script, an unlisted git form): 'auto' asks, 'full' runs it. */
+  unchecked?: true;
   /**
    * `askInAuto` comes only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.

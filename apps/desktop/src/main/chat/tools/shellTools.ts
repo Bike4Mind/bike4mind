@@ -607,6 +607,10 @@ export async function shellApproval(
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
   const asks = scriptAsks || parts.some(ask => ask !== undefined);
+  const unchecked =
+    scan.unread === true ||
+    scan.unreadScript === true ||
+    scan.commands.some(entry => entry.unread || entry.gitUnlisted);
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -616,6 +620,7 @@ export async function shellApproval(
     ...(asks ? { askInAuto: true as const } : {}),
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
     ...(asksInFull ? { askInFull: true as const } : {}),
+    ...(unchecked ? { unchecked: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
@@ -662,7 +667,7 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true };
+  if (!mayReachDistro) return { detail, key, askInAuto: true, unchecked: true };
   return {
     detail: [
       detail,
@@ -670,6 +675,7 @@ function unreadApproval(
     ].join('\n\n'),
     key,
     askInAuto: true,
+    unchecked: true,
     always: {
       namespace: tool,
       commands: [{ text: command, pattern: command, coverable: false, words: command }],

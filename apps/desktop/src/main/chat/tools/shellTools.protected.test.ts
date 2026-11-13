@@ -238,6 +238,19 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
+    it('runs an opaque write to the project settings in full access, marked unchecked', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
+        askInAuto: true,
+        askInFull: undefined,
+        unchecked: true,
+      });
+    });
+
     it('asks before a brace list too long to read', async () => {
       const words = Array.from({ length: 65 }, (_, index) => `w${index}`).join(',');
       expect(await judge(`cp evil.json ~/.config/{${words},Bike4Mind}/vault.json`, 'H')).toEqual(refusedEverywhere);
