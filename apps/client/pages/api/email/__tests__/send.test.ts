@@ -30,7 +30,7 @@ const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlM
 });
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: (...args: unknown[]) => mockFindOrganization(...args) },
-  userRepository: { findByEmail: (...args: unknown[]) => mockFindRecipient(...args) },
+  userRepository: { findOne: (...args: unknown[]) => mockFindRecipient(...args) },
   cacheRepository: { tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a) },
   sessionRepository: { findById: (...a: unknown[]) => mockFindSession(...a) },
   fabFileRepository: { findById: (...a: unknown[]) => mockFindFile(...a) },
@@ -101,9 +101,9 @@ describe('email send', () => {
       filePath: 'p',
       ...(id === 'restricted' ? { organizationId: 'org' } : {}),
     }));
-    mockFindRecipient.mockImplementation(async (email: string) =>
-      email === 'member@example.com' ? { id: 'member', email, emailVerified: true } : null
-    );
+    mockFindRecipient
+      .mockResolvedValueOnce({ id: 'member', email: 'member@example.com', emailVerified: true })
+      .mockResolvedValueOnce(null);
     mockFindOrganization.mockResolvedValue({
       userId: 'member',
       users: [],

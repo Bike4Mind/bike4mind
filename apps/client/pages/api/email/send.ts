@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
 import { reserveEmailSendBudget } from '@server/utils/emailSendLimits';
@@ -101,7 +102,9 @@ async function assertEmailSharingPolicy(
   if (!organizationIds.length) return;
   const recipients = await Promise.all(
     emails.map(async email => {
-      const user = await userRepository.findByEmail(email.trim().toLowerCase());
+      const user = await userRepository.findOne({
+        email: { $regex: `^${escapeRegex(email.trim().toLowerCase())}$`, $options: 'i' },
+      });
       // Delivery goes to this validated address itself; it does not grant access to a claimed account email.
       return { id: user?.id ?? '', email, emailVerified: true };
     })
