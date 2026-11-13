@@ -13,6 +13,8 @@ This read-only Revenue review compares live Stripe payment intents with the cred
 
 Matching uses exact payment intent, refund and dispute IDs, never amount/date proximity. A provider customer must resolve unambiguously to a local user or organization. Internal accounts are not excluded: they follow the same evidence rules. Unknown ownership is not a mismatch.
 
+Stage-owned credit-pack payments remain visible as unknown when neither a customer link nor a ledger row exists. Foreign-stage payments are excluded. The unique sparse payment-intent index prevents duplicate grants under the same key; this review does not detect duplicate issuance under alternate keys (such as an invoice ID), and does not advertise a duplicate category.
+
 A 72-hour operational grace period from the successful charge (or refund creation) accommodates webhook retries and asynchronous delivery. This is a review policy, not a promise that delivery occurs within that period. Recent missing issuance is pending; older missing credit-pack issuance is unmatched. Repeated reads recompute findings, so a delayed ledger row resolves the finding without any review-state mutation.
 
 Succeeded credit-pack refunds expect a deduction per refund ID of `round(purchasedCredits * refundAmount / chargeAmount)`. Fully refunded purchases also require a reversal marker. Partial refunds are not expected to mark the purchase fully reversed. Pending refunds and active/lost disputes remain distinct from settled issuance. Subscription refunds remain unknown rather than assuming pack clawback semantics.

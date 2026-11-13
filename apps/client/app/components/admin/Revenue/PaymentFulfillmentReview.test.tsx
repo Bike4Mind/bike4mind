@@ -6,7 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { PaymentFulfillmentPage } from '@client/app/utils/paymentFulfillment';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('../shared/useAdminListUrlState', () => ({
   useAdminListUrlState: () => [
@@ -95,10 +96,10 @@ describe('payment fulfillment review', () => {
     });
     renderReview();
     expect(await screen.findByTestId('payment-review-row')).toHaveTextContent('Historical entitlement unknown');
-    expect(screen.getByTestId('payment-review-owner-link')).toHaveAttribute(
-      'href',
-      '/admin?tab=organizations&orgId=org1'
-    );
+    fireEvent.click(screen.getByTestId('payment-review-owner-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'organizations', orgId: 'org1' } });
+    fireEvent.click(screen.getByTestId('payment-review-subscriptions-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'subscriptions' } });
     expect(screen.getByTestId('payment-review-provider-link')).toHaveAttribute(
       'href',
       'https://dashboard.stripe.com/test/payments/pi_1'

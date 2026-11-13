@@ -13,7 +13,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: CREDITS_PAG
       const parsed = PaymentFulfillmentQuery.safeParse(req.query);
       if (!parsed.success) throw new BadRequestError('Invalid payment fulfillment filters');
       res.setHeader('Cache-Control', 'private, no-store');
-      return res.json(await readPaymentFulfillment(parsed.data));
+      return res.json(await readPaymentFulfillment(parsed.data, req.logger));
     })
   );
 

@@ -7,7 +7,7 @@ export function classifyPayment(e: FulfillmentEvidence, now: Date): FulfillmentF
   if (!e.complete) return finding('unknown', 'Provider or ledger evidence is incomplete.');
   if (!e.succeeded) return finding('pending', 'Provider payment has not succeeded; no issuance is inferred.');
   const grants = e.rows.filter(row => row.type === 'purchase' || row.type === 'subscription');
-  if (grants.length > 1) return finding('duplicate', 'Multiple issuance rows share this stable payment identifier.');
+  if (grants.length > 1) return finding('unknown', 'Multiple issuance rows require independent review.');
   if (!e.owner) return finding('unknown', 'Payment ownership cannot be established in this environment.');
   if (grants.some(row => row.ownerId !== e.owner?.id || row.ownerType !== e.owner.type)) {
     return finding('unmatched', 'The issuance owner differs from the provider-linked owner.');

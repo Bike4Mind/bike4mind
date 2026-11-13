@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Button, Link, Option, Select, Stack, Typography } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   FULFILLMENT_STATES,
@@ -9,10 +10,10 @@ import {
 } from '@client/app/utils/paymentFulfillment';
 import { EmptyState, ErrorState, SectionCard } from '../shared';
 import { useAdminListUrlState } from '../shared/useAdminListUrlState';
-import { adminOrganizationHref } from '../organizationsTabSearch';
 import { PAYMENT_REVIEW_SEARCH_KEYS } from './paymentReviewSearch';
 
 export function PaymentFulfillmentReview() {
+  const navigate = useNavigate();
   const [url, update] = useAdminListUrlState(PAYMENT_REVIEW_SEARCH_KEYS);
   const opened = url.view === 'open';
   const parsed = PaymentFulfillmentQuery.safeParse(
@@ -45,7 +46,11 @@ export function PaymentFulfillmentReview() {
           Read-only ledger review. Covers payment intents, not invoice-only grants or independent balance delivery.
           Subscription amounts remain unknown without historical entitlement evidence.
         </Typography>
-        <Link href="/admin?tab=subscriptions" data-testid="payment-review-subscriptions-link">
+        <Link
+          component="button"
+          onClick={() => void navigate({ to: '/admin', search: { tab: 'subscriptions' } })}
+          data-testid="payment-review-subscriptions-link"
+        >
           Subscription findings and timelines
         </Link>
         <Stack direction="row" gap={1} flexWrap="wrap">
@@ -142,11 +147,15 @@ export function PaymentFulfillmentReview() {
                   </Typography>
                   {item.owner && (
                     <Link
-                      href={
-                        item.owner.type === 'User'
-                          ? `/admin/users/${item.owner.id}`
-                          : adminOrganizationHref(item.owner.id)
-                      }
+                      component="button"
+                      onClick={() => {
+                        if (!item.owner) return;
+                        if (item.owner.type === 'User') {
+                          void navigate({ to: '/admin/users/$userId', params: { userId: item.owner.id } });
+                        } else {
+                          void navigate({ to: '/admin', search: { tab: 'organizations', orgId: item.owner.id } });
+                        }
+                      }}
                       data-testid="payment-review-owner-link"
                     >
                       {item.owner.type}: {item.owner.id}

@@ -28,9 +28,10 @@ vi.mock('@server/admin/paymentFulfillment/read', () => ({ readPaymentFulfillment
 import handler from '../payment-fulfillment';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const logger = { error: vi.fn() };
 async function call(query: Record<string, string> = {}, user: Record<string, unknown> = ADMIN) {
   const { req, res } = createMocks({ method: 'GET', query });
-  Object.assign(req, { user });
+  Object.assign(req, { user, logger });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -51,7 +52,7 @@ describe('payment fulfillment endpoint', () => {
     const res = await call({}, { id: ADMIN.id, isAdmin: false, adminPermissions: ['support:read'] });
     expect(res._getJSONData()).toMatchObject({ availability: 'unavailable' });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
-    expect(mocks.read).toHaveBeenCalledWith({ days: 7, limit: 10 });
+    expect(mocks.read).toHaveBeenCalledWith({ days: 7, limit: 10 }, logger);
   });
   it('rejects malformed or unbounded input before provider calls', async () => {
     for (const query of [{ days: '999' }, { limit: '100' }, { state: 'nonsense' }, { cursor: 'abc' }]) {

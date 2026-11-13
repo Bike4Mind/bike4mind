@@ -8,6 +8,7 @@ import type {
 } from '@client/app/utils/paymentFulfillment';
 import { classifyPayment } from './classify';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import type { Logger } from '@bike4mind/observability';
 
 type LedgerRow = Omit<FulfillmentLedgerRow, 'id' | 'createdAt' | 'reversedAt'> & {
   _id: { toString(): string };
@@ -16,7 +17,8 @@ type LedgerRow = Omit<FulfillmentLedgerRow, 'id' | 'createdAt' | 'reversedAt'> &
 };
 
 export async function readPaymentFulfillment(
-  query: z.infer<typeof PaymentFulfillmentQuery>
+  query: z.infer<typeof PaymentFulfillmentQuery>,
+  logger: Pick<Logger, 'error'>
 ): Promise<PaymentFulfillmentPage> {
   const now = new Date();
   const from = new Date(now.getTime() - query.days * 86400000);
@@ -39,6 +41,8 @@ export async function readPaymentFulfillment(
     const findings = await Promise.all(
       payments.data.map(async payment => {
         if (payment.metadata.environment && payment.metadata.environment !== Config.STAGE) return null;
+        const credits = Number(payment.metadata.credits);
+        const localPack = payment.metadata.environment === Config.STAGE && Number.isFinite(credits) && credits >= 1;
         const customerId = typeof payment.customer === 'string' ? payment.customer : payment.customer?.id;
         const [user, organization] = customerId
           ? await Promise.all([
@@ -54,7 +58,8 @@ export async function readPaymentFulfillment(
               : null;
         const charge =
           payment.latest_charge && typeof payment.latest_charge !== 'string' ? payment.latest_charge : null;
-        const refunds = charge ? await stripe.refunds.list({ charge: charge.id, limit: 100 }) : null;
+        const refunds =
+          charge && charge.amount_refunded > 0 ? await stripe.refunds.list({ charge: charge.id, limit: 100 }) : null;
         const disputes = charge?.disputed ? await stripe.disputes.list({ charge: charge.id, limit: 2 }) : null;
         const dispute = disputes?.data[0] ?? null;
         const keys = [payment.id];
@@ -69,14 +74,10 @@ export async function readPaymentFulfillment(
           .limit(102)
           .maxTimeMS(3000)
           .lean<LedgerRow[]>();
-        if (!user && !organization && rows.length === 0) return null;
-        const credits = Number(payment.metadata.credits);
+        if (!localPack && !user && !organization && rows.length === 0) return null;
         const pack =
-          payment.metadata.environment === Config.STAGE &&
-          Number.isFinite(credits) &&
-          credits >= 1 &&
-          owner?.type === 'User' &&
-          (!payment.metadata.userId || payment.metadata.userId === owner.id);
+          localPack &&
+          (!owner || (owner.type === 'User' && (!payment.metadata.userId || payment.metadata.userId === owner.id)));
         return classifyPayment(
           {
             id: payment.id,
@@ -128,7 +129,8 @@ export async function readPaymentFulfillment(
             (!query.state || item.state === query.state) && (!query.ownerType || item.owner?.type === query.ownerType)
         ),
     };
-  } catch {
+  } catch (error) {
+    logger.error('Payment fulfillment evidence lookup failed', error);
     return page;
   }
 }

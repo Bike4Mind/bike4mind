@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const FULFILLMENT_STATES = ['consistent', 'unmatched', 'duplicate', 'reversal', 'pending', 'unknown'] as const;
+export const FULFILLMENT_STATES = ['consistent', 'unmatched', 'reversal', 'pending', 'unknown'] as const;
 export const PaymentFulfillmentQuery = z.object({
   days: z.coerce.number().int().min(1).max(90).default(7),
   cursor: z

@@ -41,7 +41,7 @@ describe('payment fulfillment evidence', () => {
     expect(state({ rows: [], settledAt: recent })).toBe('pending');
   });
   it('uses stable IDs rather than event order or number of webhook deliveries', () => {
-    expect(state({ rows: [grant, { ...grant, id: 'tx2' }] })).toBe('duplicate');
+    expect(state({ rows: [grant, { ...grant, id: 'tx2' }] })).toBe('unknown');
     expect(state({ rows: [{ ...grant, ownerId: 'other' }] })).toBe('unmatched');
     expect(state({ rows: [{ ...grant, credits: 99 }] })).toBe('unmatched');
     expect(state({ rows: [{ ...grant, status: 'pending' }] })).toBe('unmatched');
