@@ -192,6 +192,13 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
   /**

@@ -91,8 +91,9 @@ const CARD_TOOLS = new Set([ASK_USER_TOOL_NAME, REQUEST_DIRECTORY_TOOL_NAME]);
 
 /**
  * Whether a parked call may be answered "approve once" or "deny" from the menu bar or the mini
- * window. An allow-list: anything with a warning, an irreversible effect, a choice, parts, a diff
- * or a card of its own is reviewed in the app, where the full card shows it.
+ * window. An allow-list: anything with a warning, a reason the gate gave for asking, an irreversible
+ * effect, a choice, parts, a diff or a card of its own is reviewed in the app, where the full card
+ * shows it. The summary line keeps only the command, so a call it would cut a reason from is never quick.
  */
 export function isQuickApproval(call: ChatToolCall): boolean {
   if (!call.approvalId || call.status !== 'awaiting-approval') return false;
@@ -100,6 +101,7 @@ export function isQuickApproval(call: ChatToolCall): boolean {
   return (
     !call.approvalIrreversible &&
     !call.approvalWarning &&
+    !call.approvalReasons?.length &&
     !call.approvalChoice &&
     !call.approvalParts &&
     !call.approvalDiff &&
@@ -107,7 +109,11 @@ export function isQuickApproval(call: ChatToolCall): boolean {
   );
 }
 
-/** One line: an approval detail can carry its warnings below the command, which the app card shows. */
+/**
+ * One line, the command only. Whatever the detail carries below it (the working directory, a gate
+ * reason) is left to the app card: a call with a gate reason is not quick (see isQuickApproval), so
+ * its line only ever leads to that card.
+ */
 export function approvalSummary(call: ChatToolCall): string {
   const detail = (call.approvalDetail ?? describeToolInput(call)).split('\n')[0] ?? '';
   return `${call.name} ${detail}`.trim();

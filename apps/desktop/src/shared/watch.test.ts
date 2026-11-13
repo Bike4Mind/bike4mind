@@ -144,6 +144,7 @@ describe('isQuickApproval', () => {
     ['no approval id', { approvalId: undefined }],
     ['irreversible', { approvalIrreversible: true }],
     ['a warning', { approvalWarning: 'Whole home folder' }],
+    ['a gate reason', { approvalReasons: ['Runs code from deploy.sh, which was written in this session.'] }],
     ['a choice', { approvalChoice: { options: [] } as unknown as ChatToolCall['approvalChoice'] }],
     ['parts', { approvalParts: [{ text: 'rm -rf build' }] }],
     ['a diff', { approvalDiff: {} as ChatToolCall['approvalDiff'] }],

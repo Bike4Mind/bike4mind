@@ -7203,6 +7203,7 @@ export class ChatService {
             status: 'awaiting-approval',
             approvalId,
             approvalDetail: asked.prompt.detail,
+            ...(asked.prompt.reasons?.length ? { approvalReasons: [...asked.prompt.reasons] } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
