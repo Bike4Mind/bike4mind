@@ -40,7 +40,8 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
   {
     mode: 'full',
     label: 'Full access',
-    description: 'Runs anything without asking. Commands can read any file on this computer and reach the internet',
+    description:
+      'Runs commands and edits without asking, except credit spending, deletes that cannot be undone, signed-in browser pages, commands Desktop cannot follow, and changes to protected settings. Commands can read any file on this computer and reach the internet',
     tone: 'warning',
   },
 ];
@@ -67,6 +68,7 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
+  '"Full access" asks before spending credits, an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks when Desktop cannot follow a command or its operands. It asks about unlisted Git forms and ungranted WSL distros too. Listed Git forms whose only uncertainty is an earlier reference change can run without asking.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',
   'A session the agent starts on its own never runs at full access; it inherits at most "Approve for me".',
   'A new conversation starts in the mode you picked last, except "Full access", which is never carried over.',

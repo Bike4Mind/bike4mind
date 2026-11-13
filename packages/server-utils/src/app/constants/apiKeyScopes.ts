@@ -246,6 +246,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'Post messages and thread replies to Slack channels through the Bike4Mind bot. Reaches only channels an organization owner has enabled for API posting. Confined: a slack:post key carries no other scope and reaches no other API route',
     endpoints: [],
   },
+  {
+    value: ApiKeyScope.API_KEYS_MANAGE,
+    label: 'API keys: Manage',
+    description:
+      'List, create, edit, rotate and revoke your own API keys, and raise a key rate limit. A key created or rotated with it can carry only the scopes this key already holds. Not part of any preset, Full access included',
+    endpoints: [],
+  },
 ];
 
 /**
@@ -404,6 +411,16 @@ export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set(
   )
 );
 
+/**
+ * Scopes no bulk selection grants (the profile modal's Full access preset, the admin modal's Select
+ * All): each is offered, but only ticking it adds it. `personas:mint` creates accounts, and an
+ * `api-keys:manage` key can mint its own successors, so it outlives its own revocation.
+ */
+export const EXPLICIT_ONLY_API_KEY_SCOPES: ReadonlySet<ApiKeyScopeValue> = new Set([
+  ApiKeyScope.PERSONAS_MINT,
+  ApiKeyScope.API_KEYS_MANAGE,
+]);
+
 /** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
   s => !DEDICATED_FLOW_SCOPES.has(s.value)
@@ -470,13 +487,19 @@ export const isApiKeyScopeOffered = (scope: ApiKeyScopeValue, access: ApiKeyScop
  * gates judged against the ORG (resolveApiKeyScopeAccessForOrganization), never a member. The key's
  * principal is the org's service account, whose request-time entitlements are the org plan's
  * (getRequestActiveSubscriptions), so a scope offered here is one its routes later admit.
- * Validated by pages/api/organizations/[id]/api-keys on create and edit; the picker lists
- * `genericApiKeyScopesFor` over the same access.
+ * `api-keys:manage` is never offered: every `/api/user-api-keys/*` route refuses an org service
+ * account (assertNotOrgServiceAccount). Validated by pages/api/organizations/[id]/api-keys on create
+ * and edit; the picker lists `orgApiKeyScopesFor` over the same access.
  */
 export const isOrgApiKeyScopeOffered = (scope: string, access: ApiKeyScopeAccess): boolean => {
+  if (scope === ApiKeyScope.API_KEYS_MANAGE) return false;
   const option = GENERIC_MODAL_API_KEY_SCOPES.find(s => s.value === scope);
   return !!option && isApiKeyScopeOffered(option.value, access);
 };
+
+/** The scopes an org key's picker lists: the same set isOrgApiKeyScopeOffered admits. */
+export const orgApiKeyScopesFor = (access: ApiKeyScopeAccess): ApiKeyScopeOption[] =>
+  genericApiKeyScopesFor(access).filter(option => isOrgApiKeyScopeOffered(option.value, access));
 
 // One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
 // selection when the identity changes).

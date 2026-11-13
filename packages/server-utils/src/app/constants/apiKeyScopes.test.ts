@@ -12,6 +12,7 @@ import {
   type ApiKeyScopeAccess,
   genericApiKeyScopesFor,
   isOrgApiKeyScopeOffered,
+  orgApiKeyScopesFor,
 } from './apiKeyScopes';
 
 describe('apiKeyScopes catalog', () => {
@@ -328,5 +329,12 @@ describe('isOrgApiKeyScopeOffered', () => {
       expect(isOrgApiKeyScopeOffered(scope, everything)).toBe(false);
     }
     expect(isOrgApiKeyScopeOffered('not:a-scope', everything)).toBe(false);
+  });
+
+  it('refuses api-keys:manage, which the key-management routes refuse for a service account', () => {
+    const everything: ApiKeyScopeAccess = { ...NO_ACCESS, bypass: true };
+    expect(isOrgApiKeyScopeOffered(ApiKeyScope.API_KEYS_MANAGE, everything)).toBe(false);
+    expect(orgApiKeyScopesFor(everything).map(s => s.value)).not.toContain(ApiKeyScope.API_KEYS_MANAGE);
+    expect(GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.API_KEYS_MANAGE);
   });
 });

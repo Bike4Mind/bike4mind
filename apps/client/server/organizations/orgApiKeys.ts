@@ -8,7 +8,7 @@ import {
 import { groupRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { genericApiKeyScopesFor, isOrgApiKeyScopeOffered } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { isOrgApiKeyScopeOffered, orgApiKeyScopesFor } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyScopeAccessForOrganization } from '@server/entitlements/apiKeyScopeAccess';
 
@@ -82,7 +82,7 @@ export async function orgApiKeyOptions(
     groupRepository.findByOrganization(organizationId),
   ]);
   return {
-    scopes: genericApiKeyScopesFor(access).map(scope => scope.value),
+    scopes: orgApiKeyScopesFor(access).map(scope => scope.value),
     groups: groups.map(group => ({ id: String(group.id), name: group.name })),
   };
 }
