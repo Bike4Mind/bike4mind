@@ -168,7 +168,7 @@ describe('POST /api/reg-invites/update - editable fields', () => {
   it.each([{ unlimitedUse: true }, { expiresAt: '2030-01-31T00:00:00.000Z' }])(
     'rejects a non-admin editing %j before any write',
     async fields => {
-      await expect(run([ID1], false, fields)).rejects.toThrow(/permission denied/i);
+      await expect(run([ID1], false, fields)).rejects.toThrow('Missing permission: settings:manage');
       expect(h.formatRegInvites).not.toHaveBeenCalled();
       expect(h.audit).not.toHaveBeenCalled();
     }
