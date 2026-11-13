@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,

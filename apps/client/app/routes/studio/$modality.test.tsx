@@ -54,6 +54,8 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
 
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('@client/app/components/Studio/v2/StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
   useVideoModels: () => h.models,
