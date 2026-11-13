@@ -203,7 +203,7 @@ export class AdminPage extends BasePage {
   }
 
   /** Pick an action from the profile header's More menu. */
-  private async clickProfileMenuItem(action: 'editProfile' | 'loginAs' | 'delete') {
+  async clickProfileMenuItem(action: 'editProfile' | 'loginAs' | 'delete') {
     await this.page.getByTestId('user-profile-more-btn').click();
     await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
