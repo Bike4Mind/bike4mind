@@ -21,6 +21,7 @@ const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
 const mobile = vi.hoisted(() => ({ current: false }));
+const libraryRender = vi.hoisted(() => vi.fn());
 
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.current }));
 
@@ -53,6 +54,12 @@ vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () =
 }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
+  default: (props: { organizationId: string; canManage: boolean }) => {
+    libraryRender(props);
+    return <div data-testid="library-content" />;
+  },
+}));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
@@ -117,6 +124,7 @@ describe('organization detail page - responsive rail', () => {
     searchParams.current = {};
     user.current = { id: 'owner1' };
     navigateSpy.mockClear();
+    libraryRender.mockClear();
     mobile.current = false;
   });
 
@@ -179,7 +187,7 @@ describe('organization detail page - responsive rail', () => {
     expectPhoneNames();
     fireEvent.click(screen.getByRole('combobox', { name: 'Team section' }));
     const listbox = screen.getByRole('listbox', { name: 'Team sections' });
-    expect(within(listbox).getAllByRole('option')).toHaveLength(13);
+    expect(within(listbox).getAllByRole('option')).toHaveLength(14);
     fireEvent.click(within(listbox).getByRole('option', { name: 'Members' }));
     applyNavigation(rerender);
     expectPhoneNames();
@@ -188,6 +196,26 @@ describe('organization detail page - responsive rail', () => {
     rerender(wrapper(<OrganizationPage />));
     await waitFor(expectDesktopLinks);
     expect(screen.getByRole('tabpanel', { name: 'Members' })).toBeTruthy();
+  });
+
+  it('keeps the Library panel linked while mounting its contents only when selected', () => {
+    const rerender = renderThroughLoad();
+    const libraryTab = screen.getByRole('tab', { name: 'Library' });
+    const panelId = libraryTab.getAttribute('aria-controls');
+    if (!panelId) throw new Error('Library tab must link to its panel');
+    expect(document.getElementById(panelId)).not.toBeNull();
+    expect(libraryRender).not.toHaveBeenCalled();
+
+    fireEvent.click(libraryTab);
+    applyNavigation(rerender);
+    expect(screen.getByRole('tabpanel', { name: 'Library' })).toHaveAttribute('id', panelId);
+    expect(screen.getByTestId('library-content')).toBeTruthy();
+    expect(libraryRender).toHaveBeenCalledWith({ organizationId: 'org1', canManage: true });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
+    applyNavigation(rerender);
+    expect(screen.queryByTestId('library-content')).toBeNull();
+    expect(document.getElementById(panelId)).not.toBeNull();
   });
 
   it('offers only the tabs the viewer may open and navigates on pick', () => {
@@ -201,7 +229,7 @@ describe('organization detail page - responsive rail', () => {
     const options = within(listbox)
       .getAllByRole('option')
       .map(option => option.textContent);
-    expect(options).toEqual(['Overview', 'Members', 'Settings']);
+    expect(options).toEqual(['Overview', 'Members', 'Library', 'Settings']);
 
     fireEvent.click(within(listbox).getByRole('option', { name: 'Members' }));
     expect(navigateSpy).toHaveBeenLastCalledWith(navigationTo(OrganizationTabs.Members));
