@@ -51,6 +51,20 @@ describe('OrganizationMfaPolicy', () => {
       expect(mocks.put).toHaveBeenCalledWith('/api/organizations/team/mfa-policy', { required: true, graceDays: 3 })
     );
   });
+  it('retains the failed draft and permits retry after a rejected save', async () => {
+    mocks.put.mockRejectedValueOnce(new Error('offline'));
+    renderPolicy();
+    fireEvent.click(screen.getByTestId('organization-mfa-required'));
+    fireEvent.change(screen.getByTestId('organization-mfa-grace-days'), { target: { value: '3' } });
+    fireEvent.click(screen.getByTestId('organization-mfa-save'));
+    await waitFor(() => expect(screen.getByTestId('organization-mfa-required')).not.toBeDisabled());
+    expect(screen.getByTestId('organization-mfa-required')).toBeChecked();
+    expect(screen.getByTestId('organization-mfa-grace-days')).toHaveValue(3);
+    fireEvent.change(screen.getByTestId('organization-mfa-grace-days'), { target: { value: '4' } });
+    fireEvent.click(screen.getByTestId('organization-mfa-save'));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2));
+    expect(mocks.put).toHaveBeenLastCalledWith('/api/organizations/team/mfa-policy', { required: true, graceDays: 4 });
+  });
   it('hides controls and does not fetch status for ordinary members', () => {
     mocks.userId = 'member';
     renderPolicy();

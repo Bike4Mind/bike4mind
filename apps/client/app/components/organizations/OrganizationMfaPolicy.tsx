@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { isOrgOwnerOrCurrentAdmin, type IOrganizationDocument } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
@@ -10,6 +10,7 @@ export default function OrganizationMfaPolicy({ organization }: { organization: 
   const { currentUser } = useUser();
   const canManage = !!currentUser && !organization.personal && isOrgOwnerOrCurrentAdmin(currentUser, organization);
   const queryClient = useQueryClient();
+  const saveInFlight = useRef(false);
   const [required, setRequired] = useState(organization.mfaPolicy?.required ?? false);
   const [graceDays, setGraceDays] = useState('7');
   const url = `/api/organizations/${organization.id}/mfa-policy`;
@@ -40,6 +41,7 @@ export default function OrganizationMfaPolicy({ organization }: { organization: 
         <Checkbox
           label="Require MFA"
           checked={required}
+          disabled={save.isPending}
           onChange={event => setRequired(event.target.checked)}
           slotProps={{ input: { 'data-testid': 'organization-mfa-required' } }}
         />
@@ -49,7 +51,7 @@ export default function OrganizationMfaPolicy({ organization }: { organization: 
             type="number"
             value={graceDays}
             onChange={event => setGraceDays(event.target.value)}
-            disabled={!required}
+            disabled={!required || save.isPending}
             slotProps={{ input: { min: 0, max: 30, 'data-testid': 'organization-mfa-grace-days' } }}
           />
         </FormControl>
@@ -60,7 +62,15 @@ export default function OrganizationMfaPolicy({ organization }: { organization: 
         )}
         <Button
           data-testid="organization-mfa-save"
-          onClick={() => save.mutate()}
+          onClick={() => {
+            if (saveInFlight.current) return;
+            saveInFlight.current = true;
+            save.mutate(undefined, {
+              onSettled: () => {
+                saveInFlight.current = false;
+              },
+            });
+          }}
           loading={save.isPending}
           disabled={required && !validGrace}
         >

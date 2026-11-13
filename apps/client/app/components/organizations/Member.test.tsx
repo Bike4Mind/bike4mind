@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { act, type ReactNode } from 'react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,9 +7,10 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import OrganizationMembers from './Member';
-vi.mock('./OrganizationMfaPolicy', () => ({ default: () => null }));
 
 const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  put: vi.fn(),
   share: vi.fn(),
   search: vi.fn(),
   cancel: vi.fn(),
@@ -21,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   searchUsers: [] as { id: string; name: string; username?: string; pendingInvite?: boolean }[],
   seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
 }));
+
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, put: mocks.put } }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({
@@ -141,6 +145,8 @@ const renderMembers = (organization: IOrganizationDocument) =>
 
 describe('OrganizationMembers credit budget control', () => {
   beforeEach(() => {
+    mocks.get.mockResolvedValue({ data: { members: [] } });
+    mocks.put.mockResolvedValue({ data: {} });
     mocks.viewerId = 'viewer';
     mocks.viewer = undefined;
     mocks.members = [];
@@ -574,5 +580,84 @@ describe('OrganizationMembers bulk invite', () => {
     mocks.seats = { maxSeats: 5, currentSeats: 5, availableSeats: 0 };
     renderMembers(buildOrg({}));
     expect(screen.queryByTestId('organization-members-bulk-invite-btn')).toBeNull();
+  });
+});
+
+describe('OrganizationMembers MFA policy save ownership', () => {
+  it('holds edits through the save and refetch, then the keyed policy is editable again', async () => {
+    mocks.put.mockReset();
+    mocks.get.mockReset();
+    mocks.viewer = undefined;
+    mocks.members = [];
+    mocks.pending = [];
+    mocks.invitations = [];
+    mocks.viewerId = 'owner1';
+    mocks.get.mockResolvedValue({ data: { members: [] } });
+    let finishWrite: () => void = () => {
+      throw new Error('Write not started');
+    };
+    mocks.put.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finishWrite = resolve;
+        })
+    );
+    let finishRefetch: () => void = () => {
+      throw new Error('Refetch not started');
+    };
+    const refetch = new Promise<void>(resolve => {
+      finishRefetch = resolve;
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockReturnValue(refetch);
+    const renderOrganization = (organization: IOrganizationDocument) => (
+      <QueryClientProvider client={client}>
+        <CssVarsProvider theme={appTheme}>
+          <OrganizationMembers organization={organization} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    const organization = buildOrg({ mfaPolicy: { required: false, graceEndsAt: null } });
+    const view = render(renderOrganization(organization));
+    const user = userEvent.setup();
+    const required = screen.getByTestId('organization-mfa-required');
+    const grace = screen.getByTestId('organization-mfa-grace-days');
+    await user.click(required);
+    fireEvent.change(grace, { target: { value: '3' } });
+    const save = screen.getByTestId('organization-mfa-save');
+    act(() => {
+      fireEvent.click(save);
+      fireEvent.click(save);
+    });
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    expect(mocks.put).toHaveBeenLastCalledWith('/api/organizations/org1/mfa-policy', { required: true, graceDays: 3 });
+    expect(required).toBeDisabled();
+    expect(grace).toBeDisabled();
+    act(() => required.click());
+    await user.type(grace, '9', { skipClick: true });
+    expect(required).toBeChecked();
+    expect(grace).toHaveValue(3);
+    await act(async () => {
+      finishWrite();
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+    expect(required).toBeDisabled();
+    expect(grace).toBeDisabled();
+    await act(async () => {
+      finishRefetch();
+    });
+    await waitFor(() => expect(required).not.toBeDisabled());
+    view.rerender(
+      renderOrganization({
+        ...organization,
+        mfaPolicy: { required: true, graceEndsAt: new Date('2030-01-04T00:00:00Z') },
+      })
+    );
+    await user.click(screen.getByTestId('organization-mfa-required'));
+    expect(screen.getByTestId('organization-mfa-required')).not.toBeChecked();
+    mocks.put.mockResolvedValueOnce({ data: {} });
+    await user.click(screen.getByTestId('organization-mfa-save'));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2));
+    expect(mocks.put).toHaveBeenLastCalledWith('/api/organizations/org1/mfa-policy', { required: false, graceDays: 7 });
   });
 });
