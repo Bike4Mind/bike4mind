@@ -7,6 +7,7 @@ import {
   fitAngle,
   buildModelObject,
   exportGlb,
+  shareMetalRoughMaps,
   loadAsset,
   openPose,
   partMaterial,
@@ -79,6 +80,19 @@ describe('exportGlb', () => {
     expect(loaded.size[1]).toBeCloseTo(0.5);
     expect(loaded.size[2]).toBeCloseTo(0.25);
     expect(loaded.units).toBe('m');
+  });
+
+  it('hands the exporter one packed map for a textured part, leaving the viewer material alone', () => {
+    const root = buildModelObject([{ ...box('plank', 100, 20, 10), texture: 'wood' }, box('plain', 1, 1, 1)], 'mm');
+    const viewer = (root.getObjectByName('plank') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    const copy = root.clone(true);
+    shareMetalRoughMaps(copy);
+    const plank = (copy.getObjectByName('plank') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(plank.roughnessMap).toBeInstanceOf(THREE.DataTexture);
+    expect(plank.metalnessMap).toBe(plank.roughnessMap);
+    expect(viewer.metalnessMap).toBeNull();
+    const plain = (copy.getObjectByName('plain') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(plain.metalnessMap).toBeNull();
   });
 });
 
