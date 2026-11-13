@@ -257,9 +257,10 @@ export const useLoopEvents = (id: string) =>
   });
 
 /**
- * The run drawer's header: the model a loop run used and whether it was escalated or a triage run, read from the
- * run trace route (pages/api/agent-executions/[id]). Own query key, so a live run's steps are not cached for the
- * chat's "Show reasoning" disclosure, which shares that route.
+ * The run drawer's header: the model a loop run used, whether it was escalated or a triage run, and its reflection,
+ * read from the run trace route (pages/api/agent-executions/[id]). Own query key, so a live run's steps are not cached
+ * for the chat's "Show reasoning" disclosure, which shares that route. Refetched on open until a reflection arrives,
+ * since it is written as the run ends.
  */
 export const useLoopRunInfo = (executionId?: string) =>
   useQuery({
@@ -276,7 +277,7 @@ export const useLoopRunInfo = (executionId?: string) =>
       };
     },
     enabled: !!executionId,
-    staleTime: Infinity,
+    staleTime: query => (query.state.data?.loopReflection ? Infinity : 0),
   });
 
 export const useLoopsBudget = () =>

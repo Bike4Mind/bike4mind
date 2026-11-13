@@ -14,6 +14,16 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const h = vi.hoisted(() => ({ deductCredits: vi.fn(), turn: 0 }));
 
+// The reflection runs before markComplete, so the fold and the next dispatch see its credits: record the run's
+// status at the moment it is called.
+const reflected = vi.hoisted(() => ({ calls: [] as { outcome: string; status?: string }[] }));
+vi.mock('./agentExecutor.loopReflection', () => ({
+  reflectLoopRun: vi.fn(async ({ executionId, outcome }: { executionId: string; outcome: string }) => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    reflected.calls.push({ outcome, status: (await agentExecutionRepository.findById(executionId))?.status });
+  }),
+}));
+
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
     get: () => new Proxy({}, { get: (_, key) => (key === 'then' ? undefined : `mock-${String(key)}`) }),
@@ -159,6 +169,7 @@ async function runOnce(loopId?: string) {
   });
 
   h.turn = 0;
+  reflected.calls = [];
   const { handler } = await import('./agentExecutor');
   await handler(
     {
@@ -180,6 +191,9 @@ describe('loop run tool failures, end to end', () => {
     expect(run?.status).toBe('completed');
     expect(run?.toolsUnavailable).toEqual(['missing_tool']);
     expect(run?.toolsErrored).toEqual(['flaky_tool']);
+    expect(reflected.calls).toHaveLength(1);
+    expect(reflected.calls[0].outcome).toBe('completed');
+    expect(reflected.calls[0].status).not.toBe('completed');
     // A loop query carries the stage's rendered skills; their `/name` text must not expand a second skill.
     expect(skillsPreamble).not.toHaveBeenCalled();
   });
@@ -189,6 +203,7 @@ describe('loop run tool failures, end to end', () => {
     expect(run?.status).toBe('completed');
     expect(run?.toolsUnavailable).toBeUndefined();
     expect(run?.toolsErrored).toBeUndefined();
+    expect(reflected.calls).toHaveLength(0);
     expect(skillsPreamble).toHaveBeenCalledTimes(1);
   });
 });
