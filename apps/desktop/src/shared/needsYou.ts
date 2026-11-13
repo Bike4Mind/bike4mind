@@ -1,5 +1,6 @@
 import { assignPersonas } from './agentPersona';
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
+import type { LocalLoopDetail, LocalLoopSummary } from './localLoops';
 import { descendantsOf } from './spawnTree';
 import { describeToolInput } from './toolDetail';
 
@@ -92,4 +93,46 @@ export function needsYouBody(messages: readonly ChatMessage[]): string {
   const call = pendingCallsIn(messages).at(-1);
   if (!call) return 'Waiting for your answer';
   return `${call.name} ${describeToolInput(call)}`.trim();
+}
+
+/** A Desktop loop ticket parked on the owner: a question it asked, or a block no other ticket will clear. */
+export interface LoopNeedsYouItem {
+  loopId: string;
+  loopName: string;
+  ticketId: string;
+  title: string;
+  reason: string;
+  /** The ticket's latest unanswered question, when it asked one: answer it with localLoops.answerEvent. */
+  eventId?: string;
+}
+
+/**
+ * The loop's tickets waiting on the owner, newest first. The same tickets the scheduler's summary counts as
+ * `needsYou` (main/loops/local/LocalLoopScheduler.ts summary): blocked, and not on another ticket.
+ */
+export function loopNeedsYouItems(detail: LocalLoopDetail): LoopNeedsYouItem[] {
+  const asked = new Map<string, string>();
+  // events are newest first, so the first unanswered one per ticket is its latest question.
+  for (const event of detail.events)
+    if (event.kind === 'asked' && !event.resolution && event.ticketId && !asked.has(event.ticketId))
+      asked.set(event.ticketId, event.id);
+  return detail.tickets
+    .filter(ticket => ticket.status === 'blocked' && !ticket.blockedOn)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map(ticket => {
+      const eventId = asked.get(ticket.id);
+      return {
+        loopId: detail.loop.id,
+        loopName: detail.loop.name,
+        ticketId: ticket.id,
+        title: ticket.title,
+        reason: ticket.statusReason ?? 'Blocked',
+        ...(eventId ? { eventId } : {}),
+      };
+    });
+}
+
+/** Desktop loop tickets waiting on the owner, across loops: added to the dock badge. */
+export function loopNeedsYouCount(summaries: readonly LocalLoopSummary[]): number {
+  return summaries.reduce((sum, summary) => sum + summary.needsYou, 0);
 }

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { assignPersonas } from './agentPersona';
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from './chat';
+import type { LocalLoopDetail, LocalTicket } from './localLoops';
 import {
   alertableSessions,
+  loopNeedsYouCount,
+  loopNeedsYouItems,
   enteredNeedsYou,
   needsYouBody,
   needsYouCount,
@@ -120,5 +123,69 @@ describe('needsYouBody', () => {
 
   it('says it is waiting when there is no parked call to describe', () => {
     expect(needsYouBody([])).toBe('Waiting for your answer');
+  });
+});
+
+describe('loop needs-you items', () => {
+  const ticket = (id: string, patch: Partial<LocalTicket>): LocalTicket => ({
+    id,
+    loopId: 'l1',
+    title: `Ticket ${id}`,
+    stage: 'todo',
+    status: 'open',
+    dependencies: [],
+    runCount: 0,
+    stageHistory: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...patch,
+  });
+  const detail = {
+    loop: { id: 'l1', name: 'Docs' },
+    lanesBusy: 0,
+    spentToday: 0,
+    needsYou: 2,
+    tickets: [
+      ticket('asked', {
+        status: 'blocked',
+        statusReason: 'Unsure: Which color?',
+        updatedAt: '2026-01-01T01:00:00.000Z',
+      }),
+      ticket('stuck', { status: 'blocked', statusReason: 'CI is red', updatedAt: '2026-01-01T02:00:00.000Z' }),
+      ticket('waits', { status: 'blocked', blockedOn: 'dependencies' }),
+      ticket('open', {}),
+    ],
+    runs: [],
+    events: [
+      { id: 'e2', loopId: 'l1', ticketId: 'asked', kind: 'asked', reason: 'Which color?', createdAt: '2' },
+      { id: 'e1', loopId: 'l1', ticketId: 'asked', kind: 'asked', reason: 'Old', createdAt: '1' },
+      {
+        id: 'e0',
+        loopId: 'l1',
+        ticketId: 'stuck',
+        kind: 'asked',
+        reason: 'Answered',
+        resolution: { outcome: 'answered', at: '1' },
+        createdAt: '0',
+      },
+    ],
+  } as unknown as LocalLoopDetail;
+
+  it('lists blocked tickets not waiting on another ticket, newest first, with the latest open question', () => {
+    expect(loopNeedsYouItems(detail)).toEqual([
+      { loopId: 'l1', loopName: 'Docs', ticketId: 'stuck', title: 'Ticket stuck', reason: 'CI is red' },
+      {
+        loopId: 'l1',
+        loopName: 'Docs',
+        ticketId: 'asked',
+        title: 'Ticket asked',
+        reason: 'Unsure: Which color?',
+        eventId: 'e2',
+      },
+    ]);
+  });
+
+  it('adds up the waiting tickets across loops', () => {
+    expect(loopNeedsYouCount([{ needsYou: 2 }, { needsYou: 0 }, { needsYou: 1 }] as never)).toBe(3);
   });
 });
