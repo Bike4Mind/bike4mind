@@ -51,23 +51,22 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
 
   async setOwnedGroupReadAccess(projectId: string, ownerId: string, groupId: string, enabled: boolean) {
     if (!mongoose.isObjectIdOrHexString(projectId)) return false;
+    const groups = { $ifNull: ['$groups', []] };
+    const withoutGroup = {
+      $filter: { input: groups, as: 'group', cond: { $ne: ['$$group.groupId', { $literal: groupId }] } },
+    };
+    // Enabling keeps an existing entry for the group untouched so broader permissions are not downgraded.
+    const nextGroups = enabled
+      ? {
+          $cond: [
+            { $lt: [{ $size: withoutGroup }, { $size: groups }] },
+            groups,
+            { $concatArrays: [groups, { $literal: [{ groupId, permissions: ['read'] }] }] },
+          ],
+        }
+      : withoutGroup;
     const result = await this.projectModel.updateOne({ _id: convertId(projectId), userId: ownerId, deletedAt: null }, [
-      {
-        $set: {
-          groups: {
-            $concatArrays: [
-              {
-                $filter: {
-                  input: { $ifNull: ['$groups', []] },
-                  as: 'group',
-                  cond: { $ne: ['$$group.groupId', { $literal: groupId }] },
-                },
-              },
-              { $literal: enabled ? [{ groupId, permissions: ['read'] }] : [] },
-            ],
-          },
-        },
-      },
+      { $set: { groups: nextGroups } },
     ]);
     return result.matchedCount === 1;
   }

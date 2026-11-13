@@ -77,6 +77,18 @@ describe('ProjectRepository.listAccessibleAfterId', () => {
     expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(false);
   });
 
+  it('keeps an existing broader group grant when enabling group access', async () => {
+    const project = await makeProject('group-broader', {
+      groups: [{ groupId: GROUP, permissions: ['read', 'update'] }],
+    });
+    const member = { id: OTHER, groups: [GROUP] };
+    expect(await projectRepository.setOwnedGroupReadAccess(project.id, OWNER, GROUP, true)).toBe(true);
+    const shared = await projectRepository.findById(project.id);
+    expect(shared?.groups).toHaveLength(1);
+    expect(shared?.groups[0]).toEqual(expect.objectContaining({ groupId: GROUP, permissions: ['read', 'update'] }));
+    expect(await projectRepository.shareable.findUpdateAccessById(member, project.id)).not.toBeNull();
+  });
+
   it('walks every accessible project once, in ascending _id order, across keyset pages', async () => {
     const created = [];
     for (let index = 0; index < 5; index++) created.push(await makeProject(`p${index}`));
