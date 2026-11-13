@@ -5,6 +5,8 @@ import { dispatchOrgAlert } from './orgAlertDispatcher';
 /** Per-process memo of recent checks (ms); a capped member's refused retries would otherwise re-read and re-claim each time. */
 const RECHECK_TTL_MS = 30_000;
 const recentChecks = new Map<string, number>();
+// Long-lived self-host processes keep this module loaded, so expired keys are swept once the map grows.
+const MEMO_SWEEP_SIZE = 1000;
 
 export function clearMemberCapAlertCache(): void {
   recentChecks.clear();
@@ -32,6 +34,9 @@ export async function evaluateMemberCap(
   const memoKey = `${event.organizationId}|${event.userId}|${periodKey}`;
   const nowMs = now.getTime();
   if ((recentChecks.get(memoKey) ?? 0) > nowMs) return;
+  if (recentChecks.size >= MEMO_SWEEP_SIZE) {
+    for (const [key, expiresAt] of recentChecks) if (expiresAt <= nowMs) recentChecks.delete(key);
+  }
 
   const org = await Organization.findById(event.organizationId, {
     personal: 1,

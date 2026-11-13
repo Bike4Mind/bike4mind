@@ -2,7 +2,7 @@
 // The caller's own org alert opt-ins. Only alert recipients - the owner and current appointed
 // admins - have prefs; the dispatcher (server-utils organizations/orgAlertDispatcher.ts) reads them.
 
-import { ApiKeyScope, ORG_ALERT_KINDS, resolveOrgAlertOptIn, type OrgAlertKind } from '@bike4mind/common';
+import { ORG_ALERT_KINDS, resolveOrgAlertOptIn, type OrgAlertKind } from '@bike4mind/common';
 import { orgAdminNotificationPrefRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -42,7 +42,7 @@ async function effectivePrefs(organizationId: string, userId: string, role: 'own
   >;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const { organizationId, role } = await loadRecipientRole(req);

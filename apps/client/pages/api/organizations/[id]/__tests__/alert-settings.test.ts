@@ -67,8 +67,8 @@ describe('/api/organizations/[id]/alert-settings', () => {
     mocks.findById.mockResolvedValue(org);
   });
 
-  it('requires the admin:* API-key scope', () => {
-    expect(mocks.baseApiOptions).toEqual({ requiredScopes: ['admin:*'] });
+  it('accepts browser sessions only, never API keys', () => {
+    expect(mocks.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it.each(['owner1', 'manager1'])('lets %s save, deduped and sorted, and clears the evaluator cache', async userId => {

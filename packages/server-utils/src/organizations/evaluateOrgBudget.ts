@@ -9,6 +9,8 @@ const settingsCache = new Map<string, { expiresAt: number; alerts: IOrgBudgetAle
 // Every debit after a crossing would otherwise re-run the claim (and the dispatcher's org read)
 // for the rest of the month; the durable claim still dedupes across processes.
 const recentAttempts = new Map<string, number>();
+// Long-lived self-host processes keep this module loaded, so expired entries are swept once a map grows.
+const MEMO_SWEEP_SIZE = 1000;
 
 /** Drops cached alert settings so a saved change applies to the next debit in this process. */
 export function clearOrgBudgetAlertCache(organizationId?: string): void {
@@ -26,6 +28,9 @@ export function clearOrgBudgetAlertCache(organizationId?: string): void {
 async function loadSettings(organizationId: string, now: number): Promise<IOrgBudgetAlerts | null> {
   const cached = settingsCache.get(organizationId);
   if (cached && cached.expiresAt > now) return cached.alerts;
+  if (settingsCache.size >= MEMO_SWEEP_SIZE) {
+    for (const [key, entry] of settingsCache) if (entry.expiresAt <= now) settingsCache.delete(key);
+  }
   const org = await Organization.findById(organizationId, { budgetAlerts: 1, personal: 1 }).lean<{
     budgetAlerts?: IOrgBudgetAlerts | null;
     personal?: boolean;
@@ -41,6 +46,9 @@ const attemptKey = (input: Pick<DispatchOrgAlertInput, 'organizationId' | 'kind'
 async function dispatchOnce(input: DispatchOrgAlertInput & { periodKey: string }, now: number): Promise<void> {
   const key = attemptKey(input);
   if ((recentAttempts.get(key) ?? 0) > now) return;
+  if (recentAttempts.size >= MEMO_SWEEP_SIZE) {
+    for (const [k, expiresAt] of recentAttempts) if (expiresAt <= now) recentAttempts.delete(k);
+  }
   recentAttempts.set(key, now + CACHE_TTL_MS);
   await dispatchOrgAlert(input);
 }

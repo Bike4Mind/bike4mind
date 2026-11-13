@@ -3,7 +3,6 @@
 // or platform admin (canManageMemberCreditBudgets in @bike4mind/common).
 
 import {
-  ApiKeyScope,
   ORG_ALERT_MAX_PERCENT_THRESHOLDS,
   canManageMemberCreditBudgets,
   type IOrgBudgetAlerts,
@@ -40,7 +39,7 @@ async function loadManagedOrg(req: Req): Promise<IOrganizationDocument> {
 }
 
 // `admin:*` only, like member-credit-budget: alert thresholds are org billing policy.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const organization = await loadManagedOrg(req);
