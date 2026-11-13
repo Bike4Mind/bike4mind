@@ -166,7 +166,7 @@ describe('TavernView', () => {
 
   it('gives agents waiting side by side at the bar one bubble with their count', async () => {
     await renderTavern(['a', 'b', 'c'].map(id => agentFixture(id, 'needs-you')));
-    expect(el('orchestrator-tavern-bubble-b').textContent).toBe('3 need you!');
+    expect(el('orchestrator-tavern-bubble-b').textContent).toBe('Needs you! ×3');
     expect(query('orchestrator-tavern-bubble-a')).toBeNull();
     expect(query('orchestrator-tavern-bubble-c')).toBeNull();
   });
