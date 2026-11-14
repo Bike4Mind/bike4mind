@@ -51,7 +51,9 @@ vi.mock('../components/auth/MFAEnforcementWrapper', () => ({
     mfaGate.blocking ? <div data-testid="mfa-enrollment-screen" /> : children,
 }));
 vi.mock('@client/app/components/EmailVerificationBanner', () => ({ default: () => null }));
+vi.mock('@client/app/components/OrgDomainJoinBanner', () => ({ default: () => null }));
 vi.mock('../components/CommandPalette', () => ({ default: () => null }));
+vi.mock('@client/app/components/Studio/completion/StudioJobCompletedListener', () => ({ default: () => null }));
 
 const mountBare = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

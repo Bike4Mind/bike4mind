@@ -1,4 +1,6 @@
 import { ReviewGroupGrantsButton } from './shared/ReviewGroupGrantsButton';
+import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -7,6 +9,7 @@ import {
   Checkbox,
   FormControl,
   FormLabel,
+  IconButton,
   Radio,
   RadioGroup,
   Stack,
@@ -1401,6 +1404,7 @@ export const ShadowDetectionsTab: React.FC = () => {
     {
       id: 'summary',
       label: 'Summary',
+      wrap: true,
       render: row => (
         <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
           {row.summary}
@@ -1421,7 +1425,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       sortable: true,
       width: '11.5rem',
     },
-    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
+    { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem', wrap: true },
     {
       id: 'verdict',
       label: 'Verdict',
@@ -1447,23 +1451,26 @@ export const ShadowDetectionsTab: React.FC = () => {
       },
       sortable: true,
       width: '11rem',
+      wrap: true,
     },
   ];
 
   const rowActions = (row: ShadowDetectionRow) => (
-    <Stack gap={0.5} alignItems="flex-start">
+    <>
       <AdminPermissionAction requirement="users:moderate">
         {disabled => (
-          <Button
+          <IconButton
             size="sm"
             variant="plain"
             color="neutral"
             disabled={disabled}
+            aria-label={row.verdict ? 'View review' : 'Review evidence'}
+            title={row.verdict ? 'View review' : 'Review evidence'}
             data-testid={`shadow-detection-grade-btn-${row.id}`}
             onClick={() => setGrading({ row })}
           >
-            {row.verdict ? 'View review' : 'Review evidence'}
-          </Button>
+            <RateReviewOutlinedIcon />
+          </IconButton>
         )}
       </AdminPermissionAction>
       {(row.detector === 'accountCampaign' ||
@@ -1473,11 +1480,12 @@ export const ShadowDetectionsTab: React.FC = () => {
           userIds={row.userIds}
           sourceDetectionId={row.id}
           label="Watch"
+          icon={<VisibilityOutlinedIcon />}
           incomplete={row.group?.truncated}
           incompleteHint={CAPPED_GROUP_HINT}
         />
       )}
-    </Stack>
+    </>
   );
 
   const filtered = detector !== undefined || verdict !== 'unreviewed';
@@ -1599,11 +1607,13 @@ export const ShadowDetectionsTab: React.FC = () => {
         onRetry={() => void detections.refetch()}
         onRowActivate={row => setGrading({ row })}
         rowActions={rowActions}
+        // Two icon buttons: Review evidence, and Watch on campaign rows.
+        actionsWidth="5.75rem"
         rowShortcuts={decisions}
-        // Fixed-width columns (incl. the 2.75rem selection and 3.5rem row-action columns) total 65.75rem,
+        // Fixed-width columns (incl. the 2.75rem selection and 5.75rem row-action columns) total 68rem,
         // leaving Summary a 12rem floor; keep in sync with the column widths above and in DataTable.
         // Narrower screens scroll sideways.
-        minWidth="77.75rem"
+        minWidth="80rem"
         empty={
           <EmptyState
             title={emptyTitle}

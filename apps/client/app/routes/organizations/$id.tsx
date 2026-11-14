@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
+import OrganizationLibrarySection from '@client/app/components/organizations/OrganizationLibrarySection';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
@@ -17,6 +18,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
@@ -61,9 +63,11 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
   canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -141,6 +145,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
+  const canManageDomains = useMemo(() => canManageOrgDomains(currentUser, organization), [currentUser, organization]);
+
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
@@ -163,6 +169,7 @@ const OrganizationPage: FC = () => {
     canManageGroups,
     canViewBilling,
     canManageConnectors,
+    canManageDomains,
   });
 
   useDocumentTitle(organization?.name, t('organization.document_title_suffix'));
@@ -280,6 +287,9 @@ const OrganizationPage: FC = () => {
               <GroupOutlinedIcon sx={{ fontSize: 16 }} />
               {t('organization.tabs.members')}
             </Tab>
+            <Tab value={OrganizationTabs.Library} data-testid="organization-library-tab">
+              Library
+            </Tab>
             {canManageGroups && (
               <Tab value={OrganizationTabs.Groups} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />
@@ -332,6 +342,16 @@ const OrganizationPage: FC = () => {
                 API Keys
               </Tab>
             )}
+            {canManageDomains && (
+              <Tab
+                value={OrganizationTabs.Domains}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
+                data-testid="org-tab-domains"
+              >
+                <LanguageOutlinedIcon sx={{ fontSize: 16 }} />
+                Domains
+              </Tab>
+            )}
             {canManageOrg && (
               <Tab value={OrganizationTabs.Settings} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
@@ -362,6 +382,15 @@ const OrganizationPage: FC = () => {
               )}
               <OrganizationOverviewSection organization={organization} />
             </TabPanel>
+            {selectedTab === OrganizationTabs.Library && (
+              <TabPanel value={OrganizationTabs.Library}>
+                <OrganizationLibrarySection
+                  key={organization.id}
+                  organizationId={organization.id}
+                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                />
+              </TabPanel>
+            )}
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
@@ -425,6 +454,14 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.connectors')}
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageDomains && (
+              <TabPanel value={OrganizationTabs.Domains}>
+                <Typography level="title-lg" startDecorator={<LanguageOutlinedIcon />} sx={{ mb: 3 }}>
+                  Email Domains
+                </Typography>
+                <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageConnectors && (

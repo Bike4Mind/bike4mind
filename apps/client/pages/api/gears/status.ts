@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
@@ -43,10 +44,14 @@ export interface GearStatus {
   minAccountAgeDays?: number;
 }
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+    if (req.apiKeyInfo?.oauthExchangeClientId) {
+      return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
+    }
 
     const { evaluations, overrides, minAccountAgeDays } = await evaluateGears(String(userId));
     const gears: GearStatus[] = evaluations.map(evaluation => {

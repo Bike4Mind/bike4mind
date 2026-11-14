@@ -44,6 +44,20 @@ export async function buildFeedbackListFilter(
   if (types.length > 0)
     clauses.push({ type: { $in: types.includes(FeedbackType.FEEDBACK) ? [...types, null] : types } });
   if (query.received) clauses.push({ createdAt: { $gt: feedbackReceivedSince(query.received, new Date()) } });
+  if (query.createdFrom || query.createdTo) {
+    clauses.push({
+      createdAt: {
+        ...(query.createdFrom ? { $gte: new Date(query.createdFrom) } : {}),
+        ...(query.createdTo ? { $lte: new Date(query.createdTo) } : {}),
+      },
+    });
+  }
+  // "Has comment" means text was submitted, which `contentStored` records permanently. It is not
+  // hasFeedbackComment(): a report whose only text is the legacy placeholder counts as having one,
+  // since on older rows the text that would tell them apart has expired. `false`, not `$ne: true`:
+  // the field is always present (schema default, and the text-split migration backfilled it), and
+  // an equality keeps feedback_status_contentStored_createdAt usable.
+  if (query.hasComment !== undefined) clauses.push({ contentStored: query.hasComment });
   if (query.search) {
     const pattern = new RegExp(escapeRegex(query.search), 'i');
     const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();

@@ -15,8 +15,9 @@ import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicFileSummary } from '@server/files/toPublicFile';
-import { toPublicProject } from '@server/projects/toPublicProject';
 import { addFilesToProject } from '@server/projects/projectContentMutations';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { projectItemIdsReadableBy, toPublicProjectFor } from '@server/projects/projectItemReach';
 
 const CURSOR_SCOPE = 'v1.projects.files';
 
@@ -29,7 +30,7 @@ const listRoute = nextRouteForContract(listProjectFilesContract, {
   const project = await projectService.get(
     req.user.id,
     { id: req.validatedParams.id },
-    { db: { projects: projectRepository, users: userRepository } }
+    { db: { projects: projectRepository, users: requesterScopedUsers(req, userRepository) } }
   );
 
   // Scoped to the project, so a cursor minted while paging one project is a 422 on another.
@@ -40,7 +41,8 @@ const listRoute = nextRouteForContract(listProjectFilesContract, {
     throw new UnprocessableEntityError('Invalid cursor');
   }
 
-  const page = await fabFileRepository.findPageByIds(project.fileIds, { afterId, limit });
+  const fileIds = await projectItemIdsReadableBy(req.user, project.fileIds, fabFileRepository);
+  const page = await fabFileRepository.findPageByIds(fileIds, { afterId, limit });
   const lastId = page.data.at(-1)?.id;
 
   return res.json({
@@ -58,7 +60,7 @@ const addRoute = nextRouteForContract(addProjectFilesContract, {
     req.validatedParams.id,
     fileIds
   );
-  return res.json(toPublicProject(project));
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 export const config = {

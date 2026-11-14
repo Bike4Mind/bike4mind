@@ -17,6 +17,10 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'export.completed',
   'export.failed',
   'export.downloaded',
+  'library.published',
+  'library.pinned',
+  'library.unpinned',
+  'library.removed',
 ] as const;
 
 export type OrganizationAuditAction = (typeof ORGANIZATION_AUDIT_ACTIONS)[number];

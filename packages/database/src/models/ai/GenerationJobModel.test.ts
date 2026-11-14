@@ -158,6 +158,35 @@ describe('GenerationJobRepository', () => {
     expect(await generationJobRepository.claimTerminalHandling(job.id, plus(1))).toBe(false);
   });
 
+  it('claimGroupCompletionNotice succeeds exactly once, including on a doc stored before the field existed', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
+    await GenerationJobModel.updateOne({ _id: job.id }, { $unset: { groupCompletionNotifiedAt: 1 } });
+    expect(await generationJobRepository.claimGroupCompletionNotice(job.id, t0)).toBe(true);
+    expect(await generationJobRepository.claimGroupCompletionNotice(job.id, plus(1))).toBe(false);
+  });
+
+  it("findByGroup returns one requester's image jobs in the group, oldest first", async () => {
+    const groupPayload = (groupId: string) => ({ ...newJob().payload, groupId });
+    const first = await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    const second = await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'image', payload: groupPayload('g2') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'image', requestedBy: 'u2', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+    await generationJobRepository.createJob(
+      newJob({ kind: 'video', payload: groupPayload('g1') } as Partial<IGenerationJob>)
+    );
+
+    const members = await generationJobRepository.findByGroup('u1', 'g1');
+    expect(members.map(member => member.id)).toEqual([first.id, second.id]);
+  });
+
   it('enforces one idempotency key per owner', async () => {
     await generationJobRepository.createJob(newJob({ idempotencyKey: 'k1' }));
     await expect(generationJobRepository.createJob(newJob({ idempotencyKey: 'k1' }))).rejects.toMatchObject({

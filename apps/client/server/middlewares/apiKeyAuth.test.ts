@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import {
   ApiKeyScope,
+  orgApiKeyReachOf,
   CreditHolderType,
   ForbiddenError,
   InternalServerError,
@@ -18,6 +19,7 @@ const {
   findByIdMock,
   resolveUntrustedKeyLimitsMock,
   isApiKeyAccessAllowedMock,
+  resolveOrgApiKeyReachMock,
 } = vi.hoisted(() => ({
   validateUserApiKeyMock: vi.fn(),
   findOwnerOfDisabledUserApiKeyMock: vi.fn(),
@@ -27,7 +29,9 @@ const {
     ownerUntrusted: false,
   })),
   isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
+  resolveOrgApiKeyReachMock: vi.fn(),
 }));
+vi.mock('@server/organizations/orgApiKeyReach', () => ({ resolveOrgApiKeyReach: resolveOrgApiKeyReachMock }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
   // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
@@ -720,6 +724,29 @@ describe('apiKeyAuth with an exchange key', () => {
     ).toBe('client-1');
   });
 
+  it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {
+    const admitsOnlyExchange = async (_user: unknown, billing?: unknown) =>
+      !!(billing as { oauthExchangeClientId?: string } | undefined)?.oauthExchangeClientId;
+    isApiKeyAccessAllowedMock.mockImplementationOnce(admitsOnlyExchange).mockImplementationOnce(admitsOnlyExchange);
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    expect((await run([ApiKeyScope.ME_READ], makeReq())).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      expect.anything()
+    );
+
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    const { passed, error } = await run([ApiKeyScope.ME_READ], makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: undefined }),
+      expect.anything()
+    );
+  });
+
   it('still admits a personal key with the same scopes on a scope-less route', async () => {
     validateUserApiKeyMock.mockResolvedValue(keyWith({}));
     expect((await run(undefined, makeReq())).passed).toBe(true);
@@ -746,5 +773,69 @@ describe('apiKeyAuth with an exchange key', () => {
       validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT] }));
       expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
     });
+  });
+});
+
+describe('apiKeyAuth org key reach', () => {
+  const ORG_ID = 'org-1';
+  const grants = [{ resourceType: 'group', resourceId: 'g1', permission: 'read' }];
+  const reach = { organizationId: ORG_ID, readGroupIds: ['g1'], dataLakeOrgIds: [] as string[] };
+
+  const validation = (extra: Record<string, unknown>) => ({
+    isValid: true,
+    keyId: 'key-1',
+    userId: 'user-1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...extra,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env[SCOPE_STAGING_ENV_VAR];
+    resolveOrgApiKeyReachMock.mockResolvedValue(reach);
+  });
+
+  it("attaches the resolved reach for an org key on that org's service account", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ orgOwnedGrants: grants, organizationId: ORG_ID }));
+    findByIdMock.mockResolvedValue({
+      id: 'user-1',
+      isBanned: false,
+      isSystem: true,
+      serviceAccountOrganizationId: ORG_ID,
+    });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).toHaveBeenCalledWith(ORG_ID, grants);
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toEqual(reach);
+  });
+
+  it("attaches nothing when the resolved user is not that org's service account", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ orgOwnedGrants: grants, organizationId: ORG_ID }));
+    findByIdMock.mockResolvedValue({
+      id: 'user-1',
+      isBanned: false,
+      isSystem: true,
+      serviceAccountOrganizationId: 'another-org',
+    });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).not.toHaveBeenCalled();
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toBeUndefined();
+  });
+
+  it('attaches nothing for an ordinary key', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({}));
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).not.toHaveBeenCalled();
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toBeUndefined();
   });
 });

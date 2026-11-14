@@ -25,19 +25,27 @@ describe('approval mode copy', () => {
     expect(full.description).toMatch(/without asking/i);
   });
 
-  it('names the opaque-command floor and bounded Git exceptions in full access', () => {
+  it('names what full access still asks about', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/"Full access" asks before spending credits/);
     expect(notes).toMatch(/cannot be undone/i);
     expect(notes).toMatch(/browser page you are signed in to/i);
     expect(notes).toMatch(/permission and hook settings/i);
-    expect(notes).toMatch(/asks when Desktop cannot follow a command or its operands/i);
+    expect(notes).toMatch(/WSL distro this project has no folder in/i);
   });
 
   it('does not promise that approve-for-me checks everything', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/outside this project/i);
     expect(approvalModeOption('auto').description).toMatch(/send data out/i);
+    expect(approvalModeOption('auto').description).toMatch(/write protected settings/i);
+  });
+
+  it('says approve-for-me and full access run what Desktop cannot follow, and when they still ask', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/"Approve for me" and "Full access" run commands Desktop cannot fully follow or parse/);
+    expect(notes).toMatch(/names permission and hook settings and may write/i);
+    expect(notes).toMatch(/names a \.env file or runs outside your folders/i);
   });
 
   it('says approve-for-me asks before sending data out and after reading untrusted content', () => {

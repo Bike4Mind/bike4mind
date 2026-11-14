@@ -16,4 +16,4 @@ dependencyResolutionManagement {
     }
 }
 
-include(":client")
+include(":client", ":kit", ":app")

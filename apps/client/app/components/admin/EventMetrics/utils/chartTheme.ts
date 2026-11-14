@@ -1,7 +1,7 @@
-import { ACCENT, AXIS_TICK, BAD, BORDER, GOOD, INK, INK_MUTED } from '../../Revenue/chartParts';
+import { ACCENT, AXIS_TICK, BAD, BORDER, GOOD, INK, INK_MUTED } from '../../shared/chartParts';
 
 // recharts paints SVG attributes and inline styles, so colors are the admin CSS variables (shared with
-// Revenue/chartParts.tsx) rather than sx tokens. The presets below replace every recharts default that
+// shared/chartParts.tsx) rather than sx tokens. The presets below replace every recharts default that
 // paints a hex color on these charts: grid, axes, tooltip, cursor, slice edges and line dots. (The
 // legend's inactive color never shows: no series can be hidden.)
 const SURFACE = 'var(--joy-palette-admin-surface)';

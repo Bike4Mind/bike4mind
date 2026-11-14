@@ -58,6 +58,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+// The org's product access, real by default; a test grants an entitlement by overriding it once.
+const resolveOrgScopeAccess = vi.hoisted(() => vi.fn());
+vi.mock('@server/entitlements/apiKeyScopeAccess', async orig => {
+  const actual = await orig<typeof import('@server/entitlements/apiKeyScopeAccess')>();
+  resolveOrgScopeAccess.mockImplementation(actual.resolveApiKeyScopeAccessForOrganization);
+  return { ...actual, resolveApiKeyScopeAccessForOrganization: resolveOrgScopeAccess };
+});
 // The paid-only switch has its own suite; here it always admits.
 vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   assertApiKeyAccessAllowed: vi.fn().mockResolvedValue(undefined),
@@ -380,7 +387,7 @@ describe('org-owned API keys', () => {
     expect((await authenticate(created.data.key, orgId)).ok).toBe(true);
   });
 
-  // Gated on the holder's entitlement at use, and the service account holds none.
+  // Product gates are judged on the org's own entitlement, never the minting admin's.
   const [gatedScope] = Object.keys(GATED_API_KEY_SCOPES);
 
   it('has an entitlement-gated scope to refuse', () => {
@@ -389,11 +396,87 @@ describe('org-owned API keys', () => {
 
   it.each([
     ['a dedicated-flow scope', ApiKeyScope.EMBED_CHAT],
-    ['an entitlement-gated scope', gatedScope],
-  ])('refuses %s', async (_label, scope) => {
+    ['an entitlement-gated scope the org is not entitled to', gatedScope],
+  ])('refuses %s (403) and mints nothing', async (_label, scope) => {
     const { creator, orgId } = await seedOrg();
     const refused = await call(listHandler, 'POST', creator.id, { id: orgId }, { name: 'Svc', scopes: [scope] });
-    expect(refused.statusCode).toBe(400);
+    expect(refused.statusCode).toBe(403);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('accepts an entitlement-gated scope once the org is entitled to it', async () => {
+    const { creator, orgId } = await seedOrg();
+    resolveOrgScopeAccess.mockResolvedValueOnce({
+      hasOptiAccess: true,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set<string>(),
+    });
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [gatedScope] }
+    );
+    expect(created.statusCode).toBe(201);
+    expect(created.data.apiKey.scopes).toEqual([gatedScope]);
+    expect(resolveOrgScopeAccess).toHaveBeenCalledWith(orgId);
+  });
+
+  it('stores and audits the deduplicated grants, and refuses a grant outside the org (400)', async () => {
+    const { creator, orgId } = await seedOrg();
+    const orgGrant = { resourceType: 'organization', resourceId: orgId, permission: 'read' } as const;
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT], grants: [orgGrant, orgGrant] }
+    );
+    expect(created.statusCode).toBe(201);
+    expect(created.data.apiKey.grants).toEqual([orgGrant]);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.api_key.created',
+        details: expect.objectContaining({ grants: [orgGrant] }),
+      })
+    );
+
+    const foreignOrg = String(new mongoose.Types.ObjectId());
+    const foreignGroup = String(new mongoose.Types.ObjectId());
+    for (const grant of [
+      { resourceType: 'organization', resourceId: foreignOrg, permission: 'read' },
+      { resourceType: 'group', resourceId: foreignGroup, permission: 'read' },
+    ]) {
+      const refused = await call(
+        listHandler,
+        'POST',
+        creator.id,
+        { id: orgId },
+        { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT], grants: [grant] }
+      );
+      expect(refused.statusCode).toBe(400);
+    }
+  });
+
+  it('mints with no grants (default deny) when none are given', async () => {
+    const { creator, orgId } = await seedOrg();
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT] }
+    );
+    expect(created.statusCode).toBe(201);
+    expect(created.data.apiKey.grants).toEqual([]);
+    const validation = await userApiKeyService.validateUserApiKey(created.data.key, {
+      db: { userApiKeys: userApiKeyRepository },
+    });
+    expect(validation.orgOwnedGrants).toEqual([]);
   });
 
   it("acts as the service account, which reaches none of a member's own resources", async () => {
