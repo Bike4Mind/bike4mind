@@ -126,11 +126,25 @@ export interface ILLMEvent<T = unknown> {
   publish(detail: T): Promise<void>;
 }
 
+export interface QuickAskRequestedDetail {
+  /** Stable Slack modal identity for duplicate submissions; older events use the bus envelope ID. */
+  requestId?: string;
+  /** Original admission time, retained when a new-format request is replayed. */
+  requestedAt?: string;
+  slackUserId: string;
+  b4mUserId: string;
+  question: string;
+  workspaceId: string;
+}
+
 export interface IEventBus {
   LLMEvents: {
     CompletionStart: ILLMEvent;
     CompletionCompleted: ILLMEvent;
     [key: string]: ILLMEvent;
+  };
+  SlackEvents: {
+    QuickAskRequested: ILLMEvent<QuickAskRequestedDetail>;
   };
 }
 

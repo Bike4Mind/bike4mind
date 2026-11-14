@@ -19,7 +19,7 @@ import defineAbilitiesFor from '../../auth/ability';
 import { isAvailable } from '../../services/integrationCircuitBreaker';
 import { recordRateLimitEvent } from '../../utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '../../utils/chatCompletionDefaults';
-import { LLMEvents } from '../../utils/eventBus';
+import { slackEventPublisher } from './slackEventPublisher';
 import { buildMcpEnvVariables } from '../../utils/mcpEnv';
 
 import { invokeMcpHandler } from '../../utils/invokeMcpHandler';
@@ -56,15 +56,6 @@ import {
 } from '@bike4mind/database';
 import { slackDevWorkspaceRepository, orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 
-// Publish Slack-originated completions as 'slack.completion.started' so they reach
-// slackQuestProcessor rather than the web completion path.
-const slackEventPublisher = {
-  LLMEvents: {
-    ...LLMEvents,
-    CompletionStart: LLMEvents.SlackCompletionStart,
-  },
-};
-
 let initialized = false;
 
 export function initializeSlackPackage(): void {
@@ -97,7 +88,7 @@ export function initializeSlackPackage(): void {
       defaultChatCompletionOptions: getDefaultChatCompletionOptions(),
       getSharedTokenizer,
     },
-    eventBus: slackEventPublisher as any,
+    eventBus: slackEventPublisher as unknown as ISlackServerDependencies['eventBus'],
     mcpEnv: {
       buildMcpEnvVariables,
     },

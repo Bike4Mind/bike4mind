@@ -15,6 +15,7 @@ export type {
   IChatCompletionDefaults,
   ILLMEvent,
   IEventBus,
+  QuickAskRequestedDetail,
   IMcpEnv,
   EnvVariable,
   IMcpHandler,

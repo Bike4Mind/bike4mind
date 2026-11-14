@@ -5,11 +5,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { WebClient } from '@slack/web-api';
 import {
   SHORTCUT_CALLBACK_IDS,
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
+  processQuickAskInDM,
   GlobalShortcutPayload,
   ViewSubmissionPayload,
 } from '../handlers/globalShortcutHandlers';
@@ -19,6 +21,7 @@ const mockViewsOpen = vi.fn();
 const mockConversationsOpen = vi.fn();
 const mockChatPostMessage = vi.fn();
 const mockChatUpdate = vi.fn();
+const mockQuickAskPublish = vi.fn();
 
 vi.mock('@slack/web-api', () => ({
   WebClient: vi.fn().mockImplementation(function () {
@@ -69,6 +72,9 @@ vi.mock('../di/registry', () => ({
         CompletionStart: {
           publish: vi.fn(),
         },
+      },
+      SlackEvents: {
+        QuickAskRequested: { publish: (...args: unknown[]) => mockQuickAskPublish(...args) },
       },
     },
     chatCompletionDefaults: {
@@ -398,11 +404,52 @@ describe('GlobalShortcutHandlers', () => {
     it('should DM the user with notebook link when bot token provided', async () => {
       await handleCreateNotebookSubmission(basePayload, 'xoxb-token');
 
-      // Wait for async DM to be triggered
-      await new Promise(resolve => setTimeout(resolve, 10));
-
       expect(mockConversationsOpen).toHaveBeenCalledWith({ users: 'U12345' });
       expect(mockChatPostMessage).toHaveBeenCalled();
+    });
+
+    it('uses the remaining acknowledgement budget for each non-retrying Slack request', async () => {
+      let clock = 0;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      mockConversationsOpen.mockImplementationOnce(async () => {
+        clock = 1_500;
+        return { ok: true, channel: { id: 'D12345' } };
+      });
+      try {
+        expect(await handleCreateNotebookSubmission(basePayload, 'xoxb-token')).toEqual({});
+        expect(vi.mocked(WebClient).mock.calls.map(([, options]) => options)).toEqual([
+          { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true, timeout: 1_000 },
+          { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true, timeout: 500 },
+        ]);
+        expect(mockChatPostMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('skips the DM when notebook creation exhausts its notification budget', async () => {
+      let clock = 0;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      mockCreateSession.mockImplementationOnce(async () => {
+        clock = 2_001;
+        return { id: 'session123' };
+      });
+      try {
+        expect(await handleCreateNotebookSubmission(basePayload, 'xoxb-token')).toEqual({});
+        expect(mockCreateSession).toHaveBeenCalledTimes(1);
+        expect(mockConversationsOpen).not.toHaveBeenCalled();
+        expect(mockChatPostMessage).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('still closes the modal when the notebook DM fails', async () => {
+      mockConversationsOpen.mockRejectedValueOnce(new Error('slack down'));
+
+      const result = await handleCreateNotebookSubmission(basePayload, 'xoxb-token');
+
+      expect(result).toEqual({});
     });
 
     it('should return error when session creation fails', async () => {
@@ -445,6 +492,7 @@ describe('GlobalShortcutHandlers', () => {
       mockSessionFindById.mockResolvedValue({ id: 'session123' });
       mockAddMessageToSession.mockResolvedValue({ id: 'quest123' });
       mockInvoke.mockResolvedValue({});
+      mockQuickAskPublish.mockResolvedValue(undefined);
     });
 
     it('should return empty response on valid submission', async () => {
@@ -452,9 +500,75 @@ describe('GlobalShortcutHandlers', () => {
       expect(result).toEqual({});
     });
 
+    it('preserves the Slack view identity and original time in a new-format request', async () => {
+      const now = new Date('2026-11-14T00:00:00Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      try {
+        expect(
+          await handleQuickAskSubmission({ ...basePayload, view: { ...basePayload.view, id: 'view-1' } }, 'xoxb-token')
+        ).toEqual({});
+        expect(mockQuickAskPublish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestId: 'view-1',
+            requestedAt: now.toISOString(),
+          })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('publishes the quick ask request and does no Slack or DB work', async () => {
+      mockConversationsOpen.mockClear();
+      mockInvoke.mockClear();
+      mockUserFindById.mockClear();
+
+      const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
+
+      expect(result).toEqual({});
+      expect(mockQuickAskPublish).toHaveBeenCalledTimes(1);
+      const detail = mockQuickAskPublish.mock.calls[0][0];
+      expect(detail).toEqual({
+        slackUserId: 'U12345',
+        b4mUserId: 'user123',
+        question: 'What is the meaning of life?',
+        workspaceId: 'ws123',
+      });
+      expect(Object.keys(detail).some(k => k.toLowerCase().includes('token'))).toBe(false);
+      expect(mockConversationsOpen).not.toHaveBeenCalled();
+      expect(mockUserFindById).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('returns a modal error when publish fails', async () => {
+      mockQuickAskPublish.mockRejectedValue(new Error('bus down'));
+
+      const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
+
+      expect(result).toEqual({
+        response_action: 'errors',
+        errors: { question_block: 'Failed to submit your question. Please try again.' },
+      });
+    });
+
+    it('returns a modal error when workspaceId is missing', async () => {
+      const payload = {
+        ...basePayload,
+        view: { ...basePayload.view, private_metadata: JSON.stringify({ userId: 'user123' }) },
+      };
+
+      const result = await handleQuickAskSubmission(payload, 'xoxb-token');
+
+      expect(result).toEqual({
+        response_action: 'errors',
+        errors: { question_block: 'Unable to identify workspace. Please try again.' },
+      });
+      expect(mockQuickAskPublish).not.toHaveBeenCalled();
+    });
+
     it('invokes the completion as an internal-origin caller', async () => {
-      await handleQuickAskSubmission(basePayload, 'xoxb-token');
-      await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalled());
+      await processQuickAskInDM('U12345', 'user123', 'q', 'xoxb-token', 'ws123');
       expect(mockInvoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
     });
 
@@ -549,6 +663,7 @@ describe('GlobalShortcutHandlers', () => {
 
       const result = await handleQuickAskSubmission(payload, 'xoxb-token', 'passed-ws-id');
       expect(result).toEqual({});
+      expect(mockQuickAskPublish).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'passed-ws-id' }));
     });
 
     it('should handle invalid JSON in private_metadata gracefully', async () => {
