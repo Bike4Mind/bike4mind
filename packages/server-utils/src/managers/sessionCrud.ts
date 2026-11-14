@@ -535,7 +535,7 @@ export const createSession = async (
     ...defaultData,
     ...data,
     userId,
-    retentionOrganizationId: owner ? await resolveRetentionOrganization(owner) : undefined,
+    retentionOrganizationId: owner ? await resolveRetentionOrganization(owner, data.organizationId) : undefined,
   };
   const notebook = new Session(finalData);
   await notebook.save({ session });
