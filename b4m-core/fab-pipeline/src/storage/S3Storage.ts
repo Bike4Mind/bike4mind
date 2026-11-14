@@ -207,8 +207,13 @@ export class S3Storage extends BaseStorage {
 
   /** Remove the object, all retained storage versions, and delete markers. */
   async deletePermanently(path: string): Promise<void> {
+    await this.deletePermanentlyWithCount(path);
+  }
+
+  /** Count observed versions and markers so an empty sweep cannot discharge an ambiguous upload. */
+  async deletePermanentlyWithCount(path: string): Promise<number> {
     if (!path) throw new Error('Permanent deletion requires an object key');
-    await this.deleteStoredVersions(path, true);
+    return this.deleteStoredVersions(path, true);
   }
 
   /** Permanently erase one entity folder, including versions hidden by delete markers. */

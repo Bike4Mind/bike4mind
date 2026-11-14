@@ -42,17 +42,22 @@ vi.mock('@bike4mind/server-utils/organizations/retentionPolicy', () => ({
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/organizations/[id]/retention';
 
-async function call(method: string, body?: unknown) {
-  const { req, res } = createMocks({ method: method as 'GET', query: { id: 'org' }, body });
+const orgId = 'abcdefabcdefabcdefabcdef';
+const subjectId = '123456781234567812345678';
+
+async function call(method: string, body?: unknown, id: string | string[] = orgId, impersonatedBy?: string) {
+  const { req, res } = createMocks({ method: method as 'GET', query: { id }, body });
   return h.handlers[method](
-    Object.assign(req, { user: { id: 'actor', isAdmin: false } }) as unknown as Request,
+    Object.assign(req, {
+      user: { id: subjectId, isAdmin: false, ...(impersonatedBy ? { impersonatedBy } : {}) },
+    }) as unknown as Request,
     res as unknown as Response
   );
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  h.access.mockResolvedValue({ personal: false, retentionVersion: 2 });
-  h.member.mockResolvedValue({});
+  h.access.mockResolvedValue({ id: orgId, personal: false, retentionVersion: 2 });
+  h.member.mockResolvedValue({ id: orgId });
 });
 describe('retention route authorization', () => {
   it('requires first-party session authentication', () => expect(h.options).toEqual({ auth: 'jwtOnly' }));
@@ -71,7 +76,38 @@ describe('retention route authorization', () => {
   });
   it('forwards only a validated policy and server actor', async () => {
     await call('PUT', { policy: { chats: 1, files: null, media: null }, version: 2 });
-    expect(h.save).toHaveBeenCalledWith('org', 'actor', { chats: 1, files: null, media: null }, 2, undefined);
+    expect(h.save).toHaveBeenCalledWith(
+      orgId,
+      subjectId,
+      { chats: 1, files: null, media: null },
+      2,
+      undefined,
+      undefined,
+      { auditActorUserId: subjectId, canAdminister: expect.any(Function) }
+    );
+  });
+  it.each(['GET', 'POST', 'PUT'])(
+    'rejects malformed %s organization IDs before authorization or work',
+    async method => {
+      for (const invalid of ['not-an-id', [orgId, orgId]]) {
+        await expect(call(method, undefined, invalid)).rejects.toThrow('Invalid organization id');
+      }
+      expect(h.access).not.toHaveBeenCalled();
+      expect(h.member).not.toHaveBeenCalled();
+      expect(h.estimate).not.toHaveBeenCalled();
+      expect(h.save).not.toHaveBeenCalled();
+    }
+  );
+  it('uses the verified canonical org for estimates and keeps impersonation separate from token ownership', async () => {
+    const policy = { chats: 1, files: null, media: null };
+    await call('POST', { policy, version: 2 }, orgId.toUpperCase());
+    expect(h.estimate).toHaveBeenCalledWith(orgId, subjectId, 2, policy);
+    const realActor = 'fedcbafedcbafedcbafedcba';
+    await call('PUT', { policy, version: 2 }, orgId.toUpperCase(), realActor);
+    expect(h.save).toHaveBeenCalledWith(orgId, subjectId, policy, 2, undefined, undefined, {
+      auditActorUserId: realActor,
+      canAdminister: expect.any(Function),
+    });
   });
   it.each([
     ['zero days', { chats: 0, files: null, media: null }],

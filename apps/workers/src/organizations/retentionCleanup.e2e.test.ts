@@ -21,6 +21,8 @@ import {
   createRetentionEstimate,
   estimateRetention,
   saveRetentionPolicy,
+  RETENTION_SESSION_PAGE_SIZE,
+  RETENTION_ESTIMATE_MS,
 } from '@bike4mind/server-utils/organizations/retentionPolicy';
 
 const effects = vi.hoisted(() => ({ files: vi.fn(), media: vi.fn(), unpublish: vi.fn(), flush: vi.fn() }));
@@ -100,7 +102,9 @@ afterAll(async () => {
   await database?.stop();
 });
 beforeEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
+  for (const effect of Object.values(effects)) effect.mockReset();
   for (const model of [
     FabFile,
     Organization,
@@ -257,6 +261,10 @@ describe('explicit organization retention on disposable data', () => {
     expect(effects.media).not.toHaveBeenCalled();
   });
   it('respects the per-run batch and deadline', async () => {
+    await Organization.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(orgId) },
+      { $set: { retentionPolicy: { chats: 1, files: null, media: null } } }
+    );
     const sessionId = await notebook(orgId);
     for (let i = 0; i < 55; i++) await message(sessionId);
     expect((await cleanupOrganizationRetention(orgId, { ...options(), deadline: Date.now() - 1 })).chats).toBe(0);
@@ -303,7 +311,7 @@ describe('explicit organization retention on disposable data', () => {
       );
       await expect(saveRetentionPolicy(orgId, ownerId, foreverRetention, 1)).rejects.toThrow('team organization');
     });
-    // An erased uploader no longer resolves, so deleting their file throws.
+    // Trusted retention deletion must not require this uploader to resolve.
     const erasedUploaderFile = async () => {
       const _id = await file(orgId, new Date('2026-10-01T12:00:00Z'));
       await FabFile.collection.updateOne({ _id }, { $set: { userId: new mongoose.Types.ObjectId().toString() } });
@@ -318,16 +326,24 @@ describe('explicit organization retention on disposable data', () => {
         createdAt: old,
       });
 
-    it('rotates a full batch of erased-uploader failures so later content progresses', async () => {
+    it('deletes erased-uploader files without starving chats across hourly scheduling drift', async () => {
       for (let i = 0; i < 50; i++) await erasedUploaderFile();
       await file(orgId);
       await message(await notebook(orgId));
-      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
-      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 1, files: 1, media: 0 });
+      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 1, files: 12, media: 0 });
+      expect(await FabFile.countDocuments({ deletedAt: null })).toBe(39);
+      const later = new Date(now.getTime() + 3_605_000);
+      await message(await notebook(orgId));
+      expect(await cleanupOrganizationRetention(orgId, { ...options(), now: later })).toEqual({
+        chats: 1,
+        files: 12,
+        media: 0,
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
     });
-
     it('logs a failed file delete and keeps sweeping later files, chats and media', async () => {
       const bad = await erasedUploaderFile();
+      effects.files.mockRejectedValueOnce(new Error('storage unavailable'));
       await file(orgId);
       const sessionId = await notebook(orgId);
       const target = await message(sessionId);
@@ -351,28 +367,167 @@ describe('explicit organization retention on disposable data', () => {
       expect(await OrganizationGeneratedObject.countDocuments({ deletedAt: null })).toBe(0);
     });
 
-    it('stops the whole sweep when the policy version changes mid-run', async () => {
-      await erasedUploaderFile();
+    it('stops the whole sweep when the policy fence is no longer current', async () => {
       await file(orgId);
       const target = await message(await notebook(orgId));
-      logger.warn.mockImplementationOnce(() =>
-        Organization.collection.updateOne(
-          { _id: new mongoose.Types.ObjectId(orgId) },
-          { $inc: { retentionVersion: 1 } }
-        )
-      );
+      vi.spyOn(Organization.collection, 'updateOne').mockResolvedValueOnce({
+        acknowledged: true,
+        matchedCount: 0,
+        modifiedCount: 0,
+        upsertedCount: 0,
+        upsertedId: null,
+      });
       await expect(cleanupOrganizationRetention(orgId, options())).rejects.toThrow('Retention policy changed');
       expect(effects.files).not.toHaveBeenCalled();
       expect((await Quest.collection.findOne({ _id: target }))?.deletedAt).toBeNull();
     });
-
     it('reaches an eligible media object past a full batch of non-generated keys', async () => {
       for (let i = 0; i < 55; i++) await generatedObject(await notebook(orgId), `not-a-generated-key-${i}.png`);
       await generatedObject(await notebook(orgId));
       await cleanupOrganizationRetention(orgId, options());
       expect(effects.media).not.toHaveBeenCalled();
-      expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
+      for (let i = 0; i < 4; i++) await cleanupOrganizationRetention(orgId, options());
       expect(effects.media).toHaveBeenCalledExactlyOnceWith(key);
     });
+
+    it('leaves work for chats and inline media when fifty file deletions fail again after an hour', async () => {
+      for (let i = 0; i < 50; i++) await file(orgId);
+      const origin = await notebook(orgId);
+      await message(origin);
+      await generatedObject(origin);
+      effects.files.mockRejectedValue(new Error('persistent storage failure'));
+      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 1, files: 0, media: 1 });
+      expect(effects.files).toHaveBeenCalledTimes(12);
+      await message(origin);
+      const laterKey = 'abcdefab-abcd-abcd-abcd-abcdefabcdef.png';
+      await generatedObject(origin, laterKey);
+      const later = new Date(now.getTime() + 3_605_000);
+      expect(await cleanupOrganizationRetention(orgId, { ...options(), now: later })).toEqual({
+        chats: 1,
+        files: 0,
+        media: 1,
+      });
+      expect(effects.files).toHaveBeenCalledTimes(24);
+      expect(await FabFile.countDocuments({ deletedAt: null })).toBe(50);
+      expect(effects.media).toHaveBeenCalledWith(laterKey);
+    });
+  });
+  it('counts every indexed Session page while cleanup keeps its global fifty-message budget', async () => {
+    await Organization.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(orgId) },
+      { $set: { retentionPolicy: { chats: 1, files: null, media: null } } }
+    );
+    const aggregate = vi.spyOn(Session, 'aggregate');
+    const total = RETENTION_SESSION_PAGE_SIZE + 1;
+    for (let index = 0; index < total; index++) await message(await notebook(orgId));
+    expect((await estimateRetention(orgId, { chats: 1, files: null, media: null }, now)).chats).toBe(total);
+    expect((await cleanupOrganizationRetention(orgId, options())).chats).toBe(50);
+    expect((await cleanupOrganizationRetention(orgId, options())).chats).toBe(50);
+    expect((await cleanupOrganizationRetention(orgId, options())).chats).toBe(1);
+    expect(aggregate).not.toHaveBeenCalled();
+  });
+  it('refuses a partial timed-out count before minting any confirmation token', async () => {
+    for (let index = 0; index <= RETENTION_SESSION_PAGE_SIZE; index++) await message(await notebook(orgId));
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const count = Quest.collection.countDocuments.bind(Quest.collection);
+    vi.spyOn(Quest.collection, 'countDocuments').mockImplementationOnce(async (...args) => {
+      const result = await count(...args);
+      clock.mockReturnValue(start + RETENTION_ESTIMATE_MS + 1);
+      return result;
+    });
+    try {
+      await expect(
+        createRetentionEstimate(orgId, ownerId, 1, { chats: 1, files: null, media: null }, now)
+      ).rejects.toThrow('timed out');
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await OrganizationRetentionEstimate.countDocuments({})).toBe(0);
+  });
+  it('cannot recreate a subject estimate after erasure wins during the count', async () => {
+    await message(await notebook(orgId));
+    let releaseCount: (() => void) | undefined;
+    let counted: (() => void) | undefined;
+    const reachedCount = new Promise<void>(resolve => {
+      counted = resolve;
+    });
+    const released = new Promise<void>(resolve => {
+      releaseCount = resolve;
+    });
+    const count = Quest.collection.countDocuments.bind(Quest.collection);
+    vi.spyOn(Quest.collection, 'countDocuments').mockImplementationOnce(async (...args) => {
+      const result = await count(...args);
+      counted?.();
+      await released;
+      return result;
+    });
+    const pending = createRetentionEstimate(orgId, ownerId, 1, { chats: 1, files: null, media: null }, now);
+    await reachedCount;
+    await User.deleteOne({ _id: ownerId });
+    releaseCount?.();
+    await expect(pending).rejects.toThrow('no longer active');
+    expect(await OrganizationRetentionEstimate.countDocuments({})).toBe(0);
+  });
+  it('deletes organization files after the uploader is erased and refunds the organization exactly once', async () => {
+    const id = await file(orgId);
+    await User.deleteOne({ _id: ownerId });
+    expect((await cleanupOrganizationRetention(orgId.toUpperCase(), options())).files).toBe(1);
+    expect((await Organization.findById(orgId).lean())?.currentStorageSize).toBe(990);
+    expect((await FabFile.findById(id).setOptions({ includeDeleted: true }).lean())?.deletedAt).toBeInstanceOf(Date);
+    expect((await cleanupOrganizationRetention(orgId, options())).files).toBe(0);
+    expect((await Organization.findById(orgId).lean())?.currentStorageSize).toBe(990);
+    expect(effects.files).toHaveBeenCalledTimes(1);
+  });
+  it('uses immutable organization ownership when the creator and original notebook are gone', async () => {
+    const origin = await notebook(orgId);
+    await OrganizationGeneratedObject.create({
+      key,
+      organizationId: orgId,
+      userId: 'deleted-account',
+      sessionId: origin,
+      createdAt: old,
+    });
+    await Session.collection.deleteOne({ _id: new mongoose.Types.ObjectId(origin) });
+    await User.deleteOne({ _id: ownerId });
+    expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
+    expect(effects.media).toHaveBeenCalledWith(key);
+    expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(0);
+  });
+  it('retains a deleted foreign notebook legal hold beyond the first reference page', async () => {
+    const origin = await notebook(orgId);
+    await OrganizationGeneratedObject.create({
+      key,
+      organizationId: orgId,
+      userId: ownerId,
+      sessionId: origin,
+      createdAt: old,
+    });
+    const unheld = await notebook(otherOrg);
+    const held = await notebook(otherOrg);
+    await Session.collection.updateMany(
+      { _id: { $in: [new mongoose.Types.ObjectId(unheld), new mongoose.Types.ObjectId(held)] } },
+      { $set: { deletedAt: now } }
+    );
+    await Session.collection.updateOne({ _id: new mongoose.Types.ObjectId(held) }, { $set: { legalHold: true } });
+    for (let index = 0; index < 50; index++) await message(unheld, old, { images: [key], deletedAt: now });
+    await message(held, old, { images: [key], deletedAt: now });
+    expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(0);
+    expect(effects.media).not.toHaveBeenCalled();
+    await Session.collection.updateOne({ _id: new mongoose.Types.ObjectId(held) }, { $unset: { legalHold: 1 } });
+    expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
+  });
+  it('keeps the ledger locator after storage failure and retries the same owned object', async () => {
+    await OrganizationGeneratedObject.create({
+      key,
+      organizationId: orgId,
+      userId: 'deleted-account',
+      sessionId: new mongoose.Types.ObjectId().toString(),
+      createdAt: old,
+    });
+    effects.media.mockRejectedValueOnce(new Error('storage unavailable'));
+    expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
+    expect((await OrganizationGeneratedObject.findOne({ key }).lean())?.deletedAt).toBeUndefined();
+    expect((await cleanupOrganizationRetention(orgId, options())).media).toBe(1);
   });
 });

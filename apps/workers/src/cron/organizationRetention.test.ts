@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ find: vi.fn(), update: vi.fn(), cleanup: vi.fn() }));
+const h = vi.hoisted(() => ({ find: vi.fn(), update: vi.fn(), cleanup: vi.fn(), fileCleanup: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ connectDB: vi.fn(), Organization: { find: h.find, updateOne: h.update } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
-vi.mock('@server/organizations/retentionCleanup', () => ({ cleanupOrganizationRetention: h.cleanup }));
-import { runOrganizationRetention } from './organizationRetention';
+vi.mock('@workers/organizations/retentionCleanup', () => ({ cleanupOrganizationRetention: h.cleanup }));
+vi.mock('@bike4mind/server-utils/utils/generatedFileCleanup', () => ({ retryGeneratedFileCleanup: h.fileCleanup }));
+import { runOrganizationRetention, organizationRetentionFilter } from './organizationRetention';
+import { registerOrganizationRetention } from '../selfhost/organizationRetention';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.fileCleanup.mockReset().mockResolvedValue(0);
   const query = {
     sort: vi.fn(),
     limit: vi.fn(),
@@ -25,7 +28,7 @@ beforeEach(() => {
 describe('organization retention schedule', () => {
   it('visits opted-in organizations only and advances their rotation', async () => {
     await runOrganizationRetention();
-    expect(h.find).toHaveBeenCalledWith({ personal: false, retentionVersion: { $gt: 0 } });
+    expect(h.find).toHaveBeenCalledWith(organizationRetentionFilter);
     expect(h.cleanup).toHaveBeenCalledTimes(2);
     expect(h.update).toHaveBeenCalledTimes(2);
   });
@@ -34,5 +37,26 @@ describe('organization retention schedule', () => {
     await expect(runOrganizationRetention()).rejects.toThrow('1 organization');
     expect(h.cleanup).toHaveBeenCalledTimes(2);
     expect(h.update).toHaveBeenCalledTimes(2);
+  });
+  it('drains abandoned generated Files even when no organization opted into a retention policy', async () => {
+    h.find.mockReturnValue({ sort: () => ({ limit: () => ({ maxTimeMS: async () => [] }) }) });
+    await runOrganizationRetention();
+    expect(h.fileCleanup).toHaveBeenCalledWith({ deadline: expect.any(Number) });
+    expect(h.cleanup).not.toHaveBeenCalled();
+  });
+  it('registers the named hourly self-host task and executes the real scheduler callback', async () => {
+    type Register = Parameters<typeof registerOrganizationRetention>[0]['registerScheduledTask'];
+    const register = vi.fn<Register>();
+    registerOrganizationRetention({ registerScheduledTask: register });
+    expect(register).toHaveBeenCalledExactlyOnceWith('organizationRetention', 60 * 60_000, expect.any(Function));
+    await register.mock.calls[0][2]();
+    expect(h.fileCleanup).toHaveBeenCalledOnce();
+    expect(h.cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports failed Files receipts while still visiting organizations', async () => {
+    h.fileCleanup.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(runOrganizationRetention()).rejects.toThrow('1 generated Files cleanup batch');
+    expect(h.cleanup).toHaveBeenCalledTimes(2);
   });
 });

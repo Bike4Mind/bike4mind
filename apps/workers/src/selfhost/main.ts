@@ -54,6 +54,7 @@ import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
 import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
 import { registerAccountDeletionSweep } from './accountDeletionSweep';
+import { registerOrganizationRetention } from './organizationRetention';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -139,9 +140,7 @@ async function main() {
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
   registerAccountDeletionSweep(worker);
-  worker.registerScheduledTask('organizationRetention', 60 * 60_000, async () => {
-    await (await import('@workers/cron/organizationRetention')).runOrganizationRetention();
-  });
+  registerOrganizationRetention(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);

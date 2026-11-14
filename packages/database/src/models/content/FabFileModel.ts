@@ -4348,11 +4348,14 @@ FabFileSchema.index(
 );
 FabFileSchema.index(
   { organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 },
-  { name: 'retention_files_partial', partialFilterExpression: { organizationId: { $type: 'string' } } }
+  { name: 'retention_files_present', partialFilterExpression: { organizationId: { $exists: true } } }
 );
 FabFileSchema.index(
   { 'sourceMetadata.retentionOrganizationId': 1, deletedAt: 1, createdAt: 1, _id: 1 },
-  { partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $type: 'string' } } }
+  {
+    name: 'retention_generated_files_present',
+    partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $exists: true } },
+  }
 );
 
 // An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including

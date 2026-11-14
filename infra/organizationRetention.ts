@@ -22,6 +22,7 @@ const cron =
           runtime: 'nodejs24.x',
           timeout: '3 minutes',
           retries: 0,
+          logging: { retention: '1 week' },
           link: [...allSecrets, fabFileBucket, generatedImagesBucket, routerDistributionId],
           environment: DEFAULT_LAMBDA_ENVIRONMENT,
           permissions: [

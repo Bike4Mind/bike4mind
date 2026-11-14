@@ -248,7 +248,10 @@ OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCu
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
-OrganizationSchema.index({ personal: 1, retentionLastSweptAt: 1, _id: 1 });
+OrganizationSchema.index(
+  { personal: 1, retentionLastSweptAt: 1, _id: 1 },
+  { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
+);
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??

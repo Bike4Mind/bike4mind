@@ -2,6 +2,10 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  GeneratedFileCleanup: {
+    kind: 'noUserData',
+    note: 'Exact server-generated UUID Files paths awaiting cleanup; no account or session identifier.',
+  },
   OrganizationGeneratedObject: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],

@@ -995,7 +995,7 @@ SessionSchema.plugin(organizationContentPolicyPlugin);
 // Optimize session listing - used on homepage and many screens
 SessionSchema.index(
   { retentionOrganizationId: 1, deletedAt: 1, _id: 1 },
-  { name: 'retention_sessions_partial', partialFilterExpression: { retentionOrganizationId: { $type: 'string' } } }
+  { name: 'retention_sessions_present', partialFilterExpression: { retentionOrganizationId: { $exists: true } } }
 );
 SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
 
