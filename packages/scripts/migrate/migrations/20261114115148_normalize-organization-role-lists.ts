@@ -29,7 +29,7 @@ const BILLING_MANAGER_INDEX_KEY = { billingManagerUserIds: 1 } as const;
  * BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) stays last.
  */
 const migration: MigrationFile = {
-  id: 20260921249995,
+  id: 20261114115148,
   name: 'normalize organization role lists',
 
   up: async () => {
