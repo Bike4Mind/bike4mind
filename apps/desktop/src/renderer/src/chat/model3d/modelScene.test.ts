@@ -540,6 +540,10 @@ describe('drivingJoint / jointDragFrame', () => {
     return root;
   };
 
+  it('refuses a drag frame for a part that is not a joint', () => {
+    expect(() => jointDragFrame(assembly().getObjectByName('body')!)).toThrow(/is not a joint/);
+  });
+
   it('finds the part itself, its jointed parent, or nothing', () => {
     const root = assembly();
     expect(drivingJoint(root.getObjectByName('lid')!)?.name).toBe('lid');

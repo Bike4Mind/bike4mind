@@ -10,7 +10,7 @@ import {
   type ScreenPoint,
 } from './jointDrag';
 import { JointGuide } from './jointGuide';
-import { drivingJoint, jointDragFrame, poseJoints } from './modelScene';
+import { drivingJoint, jointDragFrame, meshAt, poseJoints } from './modelScene';
 
 /** Pointer travel, in CSS px, under which a press and release is a click rather than a drag or an orbit. */
 export const CLICK_SLOP = 4;
@@ -144,12 +144,11 @@ export class JointDragController {
     if (!shown) return null;
     const bounds = this.deps.canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return null;
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(
-      new THREE.Vector2((point.x / bounds.width) * 2 - 1, 1 - (point.y / bounds.height) * 2),
-      this.deps.camera
+    const hit = meshAt(
+      shown,
+      this.deps.camera,
+      new THREE.Vector2((point.x / bounds.width) * 2 - 1, 1 - (point.y / bounds.height) * 2)
     );
-    const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
     const node = hit ? drivingJoint(hit.object) : null;
     return hit && node ? { node, hit: hit.point } : null;
   }
@@ -207,6 +206,8 @@ export class JointDragController {
     const dragged = !!press.drag && !press.cancelled;
     this.endPress();
     if (dragged) this.settle(press);
+    // The revert's last frame ran while the button was still down and the AO pass held back.
+    else if (press.cancelled) this.deps.render();
   };
 
   private onPointerLeave = () => {
@@ -294,6 +295,10 @@ export class JointDragController {
       // Already released.
     }
     this.deps.canvas.style.cursor = this.hovered ? 'grab' : '';
+    if (!this.hovered) {
+      this.guide.hide();
+      this.kick();
+    }
   }
 
   private startTween(name: string, from: number, to: number, ms: number): void {

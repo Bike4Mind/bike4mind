@@ -228,6 +228,13 @@ export function drivingJoint(object: THREE.Object3D): THREE.Object3D | null {
   return null;
 }
 
+/** The first mesh of `root` under `ndc` (normalised device coordinates, -1 to 1), or null. */
+export function meshAt(root: THREE.Object3D, camera: THREE.Camera, ndc: THREE.Vector2): THREE.Intersection | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.intersectObject(root, true).find(entry => entry.object instanceof THREE.Mesh) ?? null;
+}
+
 /** The joint a part's arrow-key nudge moves (see drivingJoint), by name; null for a fixed or unknown part. */
 export function drivingJointName(root: THREE.Object3D, partName: string): string | null {
   let part: THREE.Object3D | null = null;

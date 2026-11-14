@@ -11,6 +11,7 @@ import {
   extendsPastView,
   fitAngle,
   frameCamera,
+  meshAt,
   partsBox,
   poseJoints,
   VIEW_DIRECTIONS,
@@ -316,9 +317,7 @@ export function ModelViewport({
         ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1
       );
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
+      const hit = meshAt(shown, camera, pointer);
       onPickRef.current({
         name: hit ? hit.object.name : null,
         additive: event.shiftKey,
