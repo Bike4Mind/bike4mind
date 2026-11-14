@@ -4700,6 +4700,19 @@ async function processSubagentDispatch(
     // line need its signal: a tool that runs its own llm.complete (deep_research, blog_draft, ...)
     // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
     const abortController = new AbortController();
+    // Set when the per-iteration account check stops the run, so the terminal write reports the refusal
+    // rather than a user abort. Mirrors stopBlockedAccountIteration on the parent loop.
+    let accountDenial: string | null = null;
+    let lastAccountCheckIteration: number | null = null;
+    const stopIfAccountBlocked = async (iteration: number): Promise<void> => {
+      if (iteration === lastAccountCheckIteration || abortController.signal.aborted) return;
+      lastAccountCheckIteration = iteration;
+      const denial = await readUserAccessDenial(child.userId);
+      if (!denial) return;
+      logger.warn('[SubagentDispatch] Account can no longer use AI; stopping subagent', { childExecutionId });
+      accountDenial = denial;
+      abortController.abort();
+    };
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
@@ -4750,6 +4763,7 @@ async function processSubagentDispatch(
           iteration,
           step: truncatedStep,
         });
+        await stopIfAccountBlocked(iteration);
       },
       onChildProgress: async ({ status }) => {
         await sendWs('subagent_progress', {
@@ -4969,8 +4983,20 @@ async function processSubagentDispatch(
       // fired by our own deadline watchdog (mark failed with isTimeout). The
       // distinction matters for the WS event and downstream telemetry.
       if (runAborted) {
-        const userAborted = await agentExecutionRepository.checkAbortFlag(childExecutionId).catch(() => false);
-        if (userAborted) {
+        const userAborted =
+          accountDenial === null &&
+          (await agentExecutionRepository.checkAbortFlag(childExecutionId).catch(() => false));
+        if (accountDenial !== null) {
+          await agentExecutionRepository.markFailed(childExecutionId, { message: accountDenial });
+          await sendWs('subagent_failed', {
+            executionId: parentId,
+            childExecutionId,
+            agentName,
+            error: accountDenial,
+            isTimeout: false,
+            partialAnswer: result.finalAnswer,
+          });
+        } else if (userAborted) {
           await agentExecutionRepository.markAborted(childExecutionId, {
             steps: result.steps,
             partialAnswer: result.finalAnswer,
@@ -5072,9 +5098,18 @@ async function processSubagentDispatch(
       // rather than a fragile `errorMessage.includes('aborted')` heuristic,
       // which would misclassify any error containing the word "aborted".
       const isAbortError = err instanceof Error && err.name === 'AbortError';
-      const wasAborted = signalAborted || isAbortError;
+      const wasAborted = accountDenial === null && (signalAborted || isAbortError);
 
-      if (wasAborted) {
+      if (accountDenial !== null) {
+        await agentExecutionRepository.markFailed(childExecutionId, { message: accountDenial, timedOut: false });
+        await sendWs('subagent_failed', {
+          executionId: parentId,
+          childExecutionId,
+          agentName,
+          error: accountDenial,
+          isTimeout: false,
+        });
+      } else if (wasAborted) {
         await agentExecutionRepository.markAborted(childExecutionId);
         await sendWs('subagent_failed', {
           executionId: parentId,
