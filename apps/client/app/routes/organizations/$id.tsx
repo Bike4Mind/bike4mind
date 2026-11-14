@@ -22,6 +22,7 @@ import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgC
 import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
+import OrganizationRetentionSection from '@client/app/components/organizations/OrganizationRetentionSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
 import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
 import { isAxiosError } from 'axios';
@@ -473,6 +474,7 @@ const OrganizationPage: FC = () => {
                 />
               )}
               <OrganizationOverviewSection organization={organization} />
+              <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
             <TabPanel value={OrganizationTabs.Library} {...panelAccessibility(OrganizationTabs.Library)}>
               {selectedTab === OrganizationTabs.Library && (
@@ -608,7 +610,11 @@ const OrganizationHeader: FC<{
   return (
     <Card variant="outlined" sx={{ mx: { xs: 2, sm: 3 }, p: { xs: 2, sm: 3 } }} data-testid="organization-header">
       <Stack direction="row" spacing={{ xs: 2, sm: 3 }} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-        <OrganizationAvatar organization={organization} size="lg" sx={{ '--Avatar-size': { xs: '48px', sm: '64px' } }} />
+        <OrganizationAvatar
+          organization={organization}
+          size="lg"
+          sx={{ '--Avatar-size': { xs: '48px', sm: '64px' } }}
+        />
         <Stack spacing={1} flex={1} minWidth={0}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" useFlexGap gap={1}>
             <Typography level="h3" sx={{ overflowWrap: 'anywhere' }}>

@@ -37,6 +37,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
@@ -52,6 +53,7 @@ vi.mock('@client/app/components/organizations/OrganizationBillingSection', () =>
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({
   default: () => <input aria-label="Unsaved settings draft" defaultValue="original" />,
 }));
+vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
