@@ -84,7 +84,13 @@ export function outsideFoldersReason(
 ): string | null {
   if (directories.length === 0) return null;
   const written = [...(always.writes ?? []), ...(always.writtenTrees ?? [])];
-  const writes = directories.filter(directory => written.some(path => isWithin(directory, path)));
+  // `writtenDirectories` also holds the folders a command only runs in or removes from, which no write path names;
+  // a command that sends data out marks every folder there, so it says nothing about writing.
+  const sends = always.commands.some(command => command.ask?.kinds.includes('outbound'));
+  const writes = directories.filter(
+    directory =>
+      written.some(path => isWithin(directory, path)) || (!sends && always.writtenDirectories?.includes(directory))
+  );
   const reaches = directories.filter(directory => !writes.includes(directory));
   const list = (folders: readonly string[]): string =>
     capped(folders.map(folder => shownPath(shortenDirectory(folder, workingDirectory, home)))).join(', ');
