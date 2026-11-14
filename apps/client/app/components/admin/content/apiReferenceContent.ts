@@ -145,6 +145,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
   \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`, \`/api/v1/text-refinements\`
+- Web tools (search, page fetch, weather): \`/api/v1/tools/web-search\`, \`/api/v1/tools/web-fetch\`,
+  \`/api/v1/tools/weather\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Skills (create and update from a SKILL.md): \`/api/v1/skills\`, \`/api/v1/skills/mine\`, \`/api/v1/skills/{id}\`
@@ -218,16 +220,6 @@ POST   /api/v1/agents/[id]/enhance-field
 | DELETE | /api/agents/[id] | Delete agent |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### Tools
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/tools/web-search | Web search |
-| POST | /api/tools/web-fetch | Fetch web page content |
-| POST | /api/tools/weather | Get weather data |
 
 ---
 

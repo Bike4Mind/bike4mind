@@ -13,7 +13,8 @@ import { ApiErrorSchema } from '../../schemas/chat';
  * `auth: 'jwtOnly'` and no `scopes`. Served by a Lambda Function URL in prod
  * (apps/workers/src/cli/tools.ts via defineLambdaRoute) and a thin Next route in
  * local dev (apps/client/pages/api/ai/v1/tools.ts). Rate-limited to 100
- * requests/hour.
+ * requests/hour. A separate surface from the API-key-callable /api/v1/tools/* contracts
+ * (webTools.contract.ts), which run the same three web tools one route each.
  */
 export const executeToolContract = defineEndpoint({
   method: 'post',
@@ -23,7 +24,8 @@ export const executeToolContract = defineEndpoint({
   description:
     'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and ' +
     'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
-    'accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from ' +
+    'accepted on this endpoint. To call `web_search`, `web_fetch` or `weather_info` with an API key, use ' +
+    '`POST /api/v1/tools/web-search`, `/api/v1/tools/web-fetch` or `/api/v1/tools/weather`. Rate-limited to 100 requests/hour per user, counted separately from ' +
     "other endpoints. `web_search` and `web_fetch` are billed per call from the caller's credits (or " +
     "their organization's), and refused with a 422 `insufficient_credits` before the provider is called. " +
     '`request_id` echoes the X-Request-ID response header.',
