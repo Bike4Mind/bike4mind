@@ -213,7 +213,7 @@ describe('gradeEvalSet', () => {
   };
   const assessment = (
     detectionId: string,
-    result: 'abuse' | 'legitimate_automation' | 'insufficient_evidence',
+    result: 'abuse' | 'legitimate_automation' | 'insufficient_evidence' | 'unknown',
     abuseProbability: number | null = 0.9
   ) => ({
     detectionId,
@@ -297,23 +297,23 @@ describe('gradeEvalSet', () => {
     });
   });
 
-  it('calibrates each assessment model over labelled flagged examples with a judgment', () => {
-    // d1 (abuse, 0.9) and d2 (legit, 0.9) are judged; d3 abstains; unflagged examples have no assessment.
+  it('calibrates each assessment model over labelled flagged examples with an answer and a p(abuse)', () => {
+    // d1, d2 and d3 (insufficient_evidence, 0.9) all count; unflagged examples have no assessment.
     expect(report.calibration).toHaveLength(1);
-    expect(report.calibration[0]).toMatchObject({ model: 'm1', flaggedLabelled: 3, n: 2, brier: 0.41 });
+    expect(report.calibration[0]).toMatchObject({ model: 'm1', flaggedLabelled: 3, n: 3, brier: 0.2767 });
     expect(report.calibration[0].buckets[4]).toEqual({
       lower: 0.8,
       upper: 1,
-      n: 2,
+      n: 3,
       meanPredicted: 0.9,
-      observedAbuseRate: 0.5,
+      observedAbuseRate: 0.667,
     });
   });
 
   it('reports a model with no usable assessment as n 0', () => {
     const none = gradeEvalSet(set, {
       ...noPredictions,
-      assessments: [assessment('d1', 'insufficient_evidence'), assessment('d2', 'abuse', null)],
+      assessments: [assessment('d1', 'unknown'), assessment('d2', 'abuse', null)],
     });
     expect(none.calibration).toEqual([expect.objectContaining({ model: 'm1', n: 0, brier: null })]);
   });

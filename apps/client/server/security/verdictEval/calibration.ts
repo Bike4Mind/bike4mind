@@ -3,7 +3,7 @@ import {
   type EvalSetCalibration,
   type EvalSetCalibrationBucket,
 } from '@client/app/utils/verdictEvalSets';
-import { ASSESSMENT_PREDICTIONS, ratio, type EvalAssessment } from './gradeVerdicts';
+import { ratio, type EvalAssessment } from './gradeVerdicts';
 
 /**
  * Calibration of the advisory assessment model on an evaluation set: how often the accounts it gave
@@ -19,28 +19,36 @@ export type CalibratedAssessment = EvalAssessment & {
   abuseProbability: number | null;
 };
 
-/** The `abuse` probability of a stored distribution, or null when it is missing or out of [0, 1]. */
+/**
+ * The `abuse` probability of a stored distribution, renormalised by the stored entries' sum (the
+ * raw probabilities need not sum to exactly 1, see common/src/decisions/normalize.ts). Null when
+ * there is no abuse entry, the sum is not positive, or the result falls outside [0, 1].
+ */
 export function abuseProbabilityOf(probabilities: readonly { value: string; probability: number }[]): number | null {
   const entry = probabilities.find(candidate => candidate.value === 'abuse');
-  if (!entry || !Number.isFinite(entry.probability)) return null;
-  return entry.probability >= 0 && entry.probability <= 1 ? entry.probability : null;
+  if (!entry) return null;
+  const total = probabilities.reduce((sum, candidate) => sum + candidate.probability, 0);
+  if (!Number.isFinite(entry.probability) || !Number.isFinite(total) || total <= 0) return null;
+  const normalised = entry.probability / total;
+  return normalised >= 0 && normalised <= 1 ? normalised : null;
 }
 
 /**
- * The p(abuse) an example is calibrated on: each of its detections' newest assessment (the one the
- * grader scores), then the newest of those that judged and carry a p(abuse). Null when none does.
+ * The p(abuse) an example is calibrated on: each detection's newest assessment (the one the grader
+ * scores) that has an answer and a p(abuse), then the highest across detections, mirroring the
+ * scoreboard's "any detection positive" rule. Null when none qualifies.
  */
 export function calibrationProbability(
   detectionIds: readonly string[],
   newestByDetection: ReadonlyMap<string, CalibratedAssessment>
 ): number | null {
-  let chosen: CalibratedAssessment | null = null;
+  let highest: number | null = null;
   for (const detectionId of detectionIds) {
     const row = newestByDetection.get(detectionId);
-    if (!row || row.abuseProbability === null || ASSESSMENT_PREDICTIONS[row.result] === 'abstain') continue;
-    if (!chosen || row.assessedAt > chosen.assessedAt) chosen = row;
+    if (!row || row.abuseProbability === null || row.result === 'unknown') continue;
+    if (highest === null || row.abuseProbability > highest) highest = row.abuseProbability;
   }
-  return chosen?.abuseProbability ?? null;
+  return highest;
 }
 
 export type CalibrationPoint = { predicted: number; abuse: boolean };

@@ -18,14 +18,30 @@ describe('abuseProbabilityOf', () => {
         { value: 'abuse', probability: 0.7 },
         { value: 'insufficient_evidence', probability: 0.1 },
       ])
-    ).toBe(0.7);
+    ).toBeCloseTo(0.7, 10);
   });
 
-  it('is null without an abuse entry or with one outside [0, 1]', () => {
+  it('renormalises by the stored entries when they do not sum to 1', () => {
+    expect(
+      abuseProbabilityOf([
+        { value: 'legitimate_automation', probability: 0.3 },
+        { value: 'abuse', probability: 0.6 },
+        { value: 'insufficient_evidence', probability: 0.3 },
+      ])
+    ).toBe(0.5);
+  });
+
+  it('is null without an abuse entry, a positive sum, or a result inside [0, 1]', () => {
     expect(abuseProbabilityOf([])).toBeNull();
     expect(abuseProbabilityOf([{ value: 'legitimate_automation', probability: 1 }])).toBeNull();
-    expect(abuseProbabilityOf([{ value: 'abuse', probability: 1.2 }])).toBeNull();
+    expect(abuseProbabilityOf([{ value: 'abuse', probability: 0 }])).toBeNull();
     expect(abuseProbabilityOf([{ value: 'abuse', probability: Number.NaN }])).toBeNull();
+    expect(
+      abuseProbabilityOf([
+        { value: 'abuse', probability: 1.2 },
+        { value: 'legitimate_automation', probability: -0.5 },
+      ])
+    ).toBeNull();
   });
 });
 
@@ -45,16 +61,24 @@ describe('calibrationProbability', () => {
   });
   const newest = (...rows: CalibratedAssessment[]) => new Map(rows.map(entry => [entry.detectionId, entry]));
 
-  it('takes the newest assessment across the detections when they disagree', () => {
+  it('takes the highest p(abuse) across the detections, as the scoreboard calls any positive', () => {
     const byDetection = newest(row('d1', 'abuse', 0.9, 1), row('d2', 'legitimate_automation', 0.1, 3));
-    expect(calibrationProbability(['d1', 'd2'], byDetection)).toBe(0.1);
-    expect(calibrationProbability(['d2', 'd1'], byDetection)).toBe(0.1);
+    expect(calibrationProbability(['d1', 'd2'], byDetection)).toBe(0.9);
+    expect(calibrationProbability(['d2', 'd1'], byDetection)).toBe(0.9);
   });
 
-  it('skips abstaining assessments and ones without a p(abuse)', () => {
+  it('counts an insufficient_evidence answer and lands it in a bucket', () => {
+    const byDetection = newest(row('d1', 'insufficient_evidence', 0.45, 1));
+    const predicted = calibrationProbability(['d1'], byDetection);
+    expect(predicted).toBe(0.45);
+    const report = calibrate('m1', 1, [{ predicted: predicted ?? 0, abuse: true }]);
+    expect(report.buckets[2]).toMatchObject({ n: 1, meanPredicted: 0.45 });
+  });
+
+  it('skips unknown results and ones without a p(abuse)', () => {
     const byDetection = newest(
       row('d1', 'abuse', 0.8, 1),
-      row('d2', 'insufficient_evidence', 0.3, 5),
+      row('d2', 'unknown', 0.99, 5),
       row('d3', 'unknown', null, 6),
       row('d4', 'legitimate_automation', null, 7)
     );
