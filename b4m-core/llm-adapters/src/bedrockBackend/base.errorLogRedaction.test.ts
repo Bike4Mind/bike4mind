@@ -169,4 +169,24 @@ describe('BaseBedrockBackend error log redaction', () => {
       '[BaseBedrockBackend] Error invoking model test-model: ValidationException: messages.1.content.1: `tool_use` ids must be unique'
     );
   });
+
+  it.each([
+    ['caps a long provider message', 'x'.repeat(400), `ValidationException: ${'x'.repeat(300)}`],
+    ['uses the name alone when the message is empty', '', 'ValidationException'],
+    ['uses the name alone when the message repeats it', 'ValidationException', 'ValidationException'],
+  ])('error title %s', async (_label, message, expectedReason) => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    const error = Object.assign(new Error(message), { name: 'ValidationException' });
+
+    await expect(
+      failingBackend(error).complete(
+        'test-model' as ChatModels,
+        [{ role: 'user', content: SECRET_PROMPT }],
+        { stream: true } as Partial<ICompletionOptions>,
+        async () => {}
+      )
+    ).rejects.toThrow();
+
+    expect(errorSpy.mock.calls[0][0]).toBe(`[BaseBedrockBackend] Error invoking model test-model: ${expectedReason}`);
+  });
 });

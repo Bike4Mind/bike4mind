@@ -266,6 +266,20 @@ describe('ensureToolPairingIntegrity duplicate tool ids', () => {
     expect(result[4]).toEqual({ role: 'user', content: '[Tool results removed during adjacency repair]' });
   });
 
+  it('warns once with the number of removed blocks', () => {
+    const logger = { log: vi.fn(), warn: vi.fn() };
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+
+    ensureToolPairingIntegrity(messages, logger);
+
+    const duplicateWarnings = logger.warn.mock.calls.filter(([msg]) => String(msg).includes('Removed 2 tool block(s)'));
+    expect(duplicateWarnings).toHaveLength(1);
+  });
+
   it('leaves the input array untouched', () => {
     const messages = asMessages([
       { role: 'user', content: 'go' },
