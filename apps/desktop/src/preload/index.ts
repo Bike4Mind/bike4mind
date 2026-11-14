@@ -331,9 +331,9 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.chatSessionSummary, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionSummary, handler);
     },
-    listSkills: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, sessionId),
-    setProjectSkillsTrusted: (sessionId, trusted) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
+    listSkills: scope => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, scope),
+    setProjectSkillsTrusted: (scope, trusted, expectedProjectDirectory) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, scope, trusted, expectedProjectDirectory),
   },
   skillMarket: {
     browse: (filters, page) => ipcRenderer.invoke(IPC_CHANNELS.skillMarketBrowse, filters, page),

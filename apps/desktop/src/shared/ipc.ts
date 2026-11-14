@@ -82,7 +82,7 @@ import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pul
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { WorkspaceChanges } from './workspaceChanges';
-import type { SkillsState } from './skills';
+import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
@@ -1114,16 +1114,20 @@ export interface DesktopApi {
     onSessionSummary(listener: (summary: ChatSessionSummary) => void): () => void;
     /**
      * The skills this conversation can run as `/name`, for the composer picker. Scoped to the
-     * session: a Chat session gets the user's own, a Code session also gets its project's once
+     * session or draft: a Chat one gets the user's own, a Code one also gets its project's once
      * that project is trusted.
      */
-    listSkills(sessionId: string): Promise<SkillsState>;
+    listSkills(scope: SkillsScope): Promise<SkillsState>;
     /**
-     * Trust (or untrust) this session's project to contribute its `.claude/skills/`. Called from
-     * the picker's prompt in response to a click, and from nowhere else - see IPC_CHANNELS.
-     * Returns the state the picker should now draw.
+     * Trust (or untrust) this session's or draft's project to contribute its `.claude/skills/`.
+     * Called from the picker's prompt in response to a click, and from nowhere else - see
+     * IPC_CHANNELS. Returns the state the picker should now draw.
      */
-    setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+    setProjectSkillsTrusted(
+      scope: SkillsScope,
+      trusted: boolean,
+      expectedProjectDirectory: string
+    ): Promise<SkillsState>;
   };
   /**
    * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or

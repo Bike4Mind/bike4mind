@@ -13,6 +13,7 @@ import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
+import type { SkillsScope } from '@shared/skills';
 import {
   canSpawnDeeper,
   findModelOption,
@@ -347,7 +348,13 @@ export function ChatShell({
   const background = useBackgroundProcesses(persistedId);
   const loop = useLoop(persistedId);
   const videoJobs = useVideoJobs(persistedId);
-  const skills = useSkills(persistedId);
+  const draftSession = draftActive ? sessionDraft.session : null;
+  const skillsScope: SkillsScope | null = persistedId
+    ? { sessionId: persistedId }
+    : draftActive
+      ? { draftDirectory: draftSession?.mode === 'code' ? (draftSession.project?.directory ?? null) : null }
+      : null;
+  const skills = useSkills(skillsScope);
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
   const noLocal = localMode ? noLocalModels(catalog) : null;
