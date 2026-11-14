@@ -24,6 +24,20 @@ describe('usage parsing', () => {
       credits: { used: 12, usdCost: 0.03 },
     });
   });
+
+  it('keeps the thinking tokens and the 1-hour cache writes', () => {
+    const event = parseStreamEvent({
+      type: 'tool_use',
+      tools: [],
+      usage: { outputTokens: 900, reasoningTokens: 700, cacheCreationInputTokens: 40, cacheWrite1hInputTokens: 30 },
+    });
+    expect(foldUsage(undefined, event!)).toEqual({
+      outputTokens: 900,
+      reasoningTokens: 700,
+      cacheCreationInputTokens: 40,
+      cacheWrite1hInputTokens: 30,
+    });
+  });
 });
 
 describe('foldUsage', () => {
@@ -62,6 +76,23 @@ describe('addUsage', () => {
       outputTokens: 4,
       creditsUsed: 3,
       usdCost: 0.75,
+    });
+  });
+
+  it('sums thinking tokens and 1-hour cache writes, absent staying absent', () => {
+    expect(
+      addUsage(
+        { outputTokens: 10, reasoningTokens: 6, cacheWrite1hInputTokens: 4 },
+        { outputTokens: 20, reasoningTokens: 15 }
+      )
+    ).toEqual({ outputTokens: 30, reasoningTokens: 21, cacheWrite1hInputTokens: 4 });
+    expect(addUsage({ outputTokens: 1 }, { outputTokens: 2 })).toEqual({ outputTokens: 3 });
+  });
+
+  it("sums a self-hosted server's cached prompt count across requests", () => {
+    expect(addUsage({ inputTokens: 900, cachedPromptTokens: 850 }, { inputTokens: 950 })).toEqual({
+      inputTokens: 1850,
+      cachedPromptTokens: 850,
     });
   });
 

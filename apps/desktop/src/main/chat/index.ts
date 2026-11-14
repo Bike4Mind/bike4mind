@@ -329,6 +329,8 @@ export interface RegisteredChat {
   capabilityLedger: CapabilityLedger;
   /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
   respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
+  /** The session store, which the profile screen's local usage is counted from. */
+  store: SessionStore;
 }
 
 /**
@@ -1563,6 +1565,7 @@ export function registerChat(
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store,
   };
 }
 

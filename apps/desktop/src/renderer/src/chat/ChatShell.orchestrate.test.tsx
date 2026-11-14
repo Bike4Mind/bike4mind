@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 import { DOOR_POINT } from './orchestrator/tavern/scene';
+import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -696,5 +697,46 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('chat-session-title').textContent).toBe(CHILD.title);
     // The agent has spawned nothing itself, so its own session is plain chat.
     expect(query('orchestrator-stage')).toBeNull();
+  });
+});
+
+describe('the reply stats rail with the orchestrator', () => {
+  let restoreWidth: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreWidth?.();
+    restoreWidth = null;
+  });
+
+  it('draws the rail beside the full-width thread, and keeps the stats under the reply in the dock', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'table');
+    reloadReplyStatsPrefs();
+    const at = '2026-10-01T00:00:00.000Z';
+    parentMessages = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'An answer',
+        createdAt: at,
+        stats: { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } },
+        usage: { outputTokens: 120 },
+      },
+    ] as ChatMessage[];
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1400 } as DOMRect);
+    restoreWidth = () => width.mockRestore();
+    await openParent();
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
+    expect(query('chat-message-cost')).toBeNull();
+
+    await enterOrchestrate();
+    expect(query('orchestrator-dock')).not.toBeNull();
+    expect(query('chat-reply-stats-rail')).toBeNull();
+    expect(el('orchestrator-dock').contains(el('chat-message-cost'))).toBe(true);
+    expect(el('chat-message-cost').textContent).toContain('4.0s total');
+
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(el('chat-thread').contains(el('chat-reply-stats-rail'))).toBe(true);
   });
 });

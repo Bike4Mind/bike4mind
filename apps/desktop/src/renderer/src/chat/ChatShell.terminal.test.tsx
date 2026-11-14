@@ -164,7 +164,7 @@ describe('the terminal toggle', () => {
     await pickPane('terminal');
     const promoted = [...document.querySelectorAll<HTMLElement>('[data-testid^="chat-toggle-"]')]
       .map(button => button.dataset.testid)
-      .filter(id => id !== 'chat-toggle-session-panel-btn');
+      .filter(id => id !== 'chat-toggle-session-panel-btn' && id !== 'chat-toggle-reply-stats-btn');
     expect(promoted).toEqual(['chat-toggle-terminal-btn', 'chat-toggle-browser-btn']);
   });
 

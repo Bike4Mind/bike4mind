@@ -2,6 +2,7 @@ import { OrchestrationSettings } from './OrchestrationSettings';
 import { useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Checkbox from '@mui/joy/Checkbox';
 import IconButton from '@mui/joy/IconButton';
 import List from '@mui/joy/List';
 import ListItem from '@mui/joy/ListItem';
@@ -35,13 +36,13 @@ import {
   ContrastIcon,
   DownloadIcon,
   FolderIcon,
-  ModelsIcon,
   PullRequestIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
   SoundIcon,
   SparkIcon,
+  StatsIcon,
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
@@ -49,7 +50,14 @@ import { useMenuBarSetting } from './menuBarSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
-import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
+import { REPLY_STAT_TEXT, REPLY_STATS } from './replyStats';
+import {
+  replyStatsSummary,
+  setReplyStatShown,
+  setReplyStatsRail,
+  useReplyStatsPrefs,
+  type ReplyStatsPrefs,
+} from './replyStatsPrefs';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -254,23 +262,42 @@ function dollarCostsEntry(enabled: boolean, setEnabled: (enabled: boolean) => vo
   };
 }
 
-function tokenRateEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+function replyStatsEntry(prefs: ReplyStatsPrefs): ConfigEntry {
   return {
-    id: 'token-rate',
-    icon: <ModelsIcon />,
-    label: 'Self-hosted model speed',
-    summary: tokenRateSummary(enabled),
+    id: 'reply-stats',
+    icon: <StatsIcon />,
+    label: 'Reply stats',
+    summary: replyStatsSummary(prefs),
     description:
-      'Show tokens per second for self-hosted models. Hover the rate for prompt speed, load time, and draft acceptance when available. A rate starting with ~ is timed by this app.',
+      'Timing, tokens and speed for each reply, beside it when the window is wide enough. Narrower, the speed, total and thinking time show under the reply on hover, and the rest in its tooltip. Each shows only where the model or server reports it; a figure starting with ~ is an estimate. Draft acceptance is reported by llama-server running a draft model.',
     control: (
-      <Switch
-        size="sm"
-        checked={enabled}
-        onChange={toggle}
-        slotProps={{
-          input: { 'aria-label': 'Self-hosted model speed', 'data-testid': 'settings-token-rate-switch' },
-        }}
-      />
+      <Stack spacing={1.25} sx={{ alignItems: { xs: 'flex-start', md: 'flex-end' } }}>
+        <Switch
+          size="sm"
+          checked={prefs.rail}
+          onChange={event => setReplyStatsRail(event.target.checked)}
+          endDecorator="Beside the conversation"
+          sx={{ alignSelf: { xs: 'flex-start', md: 'flex-end' } }}
+          slotProps={{
+            input: {
+              'aria-label': 'Show reply stats beside the conversation',
+              'data-testid': 'settings-reply-stats-rail-switch',
+            },
+          }}
+        />
+        <Stack spacing={0.75} role="group" aria-label="Stats to show">
+          {REPLY_STATS.map(id => (
+            <Checkbox
+              key={id}
+              size="sm"
+              label={REPLY_STAT_TEXT[id].setting}
+              checked={!prefs.hidden.has(id)}
+              onChange={event => setReplyStatShown(id, event.target.checked)}
+              slotProps={{ input: { 'data-testid': `settings-reply-stat-${id}-checkbox` } }}
+            />
+          ))}
+        </Stack>
+      </Stack>
     ),
   };
 }
@@ -537,7 +564,7 @@ function useSettingsEntries(
 ): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
-  const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
+  const replyStatsPrefs = useReplyStatsPrefs();
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -585,7 +612,7 @@ function useSettingsEntries(
         ),
       },
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
-      tokenRateEntry(showTokenRate, toggleTokenRate),
+      replyStatsEntry(replyStatsPrefs),
       curatedListEntry(
         curatedList.settings,
         enabled => void curatedList.setEnabled(enabled),
@@ -632,7 +659,7 @@ const GENERAL_GROUPS = [
     label: 'Conversations & code',
     entries: ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
   },
-  { id: 'models', label: 'Models', entries: ['local-context', 'token-rate', 'curated-list'] },
+  { id: 'models', label: 'Models', entries: ['local-context', 'reply-stats', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },
   { id: 'connection', label: 'Connection & updates', entries: ['server', 'updates', 'dollar-costs'] },
 ];

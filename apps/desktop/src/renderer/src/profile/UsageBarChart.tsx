@@ -3,18 +3,19 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { UsageBar, UsageGranularity } from '@shared/usage';
+import type { UsageGranularity } from '@shared/usage';
 import { barPercent, bucketLabel, bucketTitle, tickIndices } from './usageView';
 
 const PLOT_HEIGHT = 132;
 
-export interface UsageBarChartProps {
+export interface UsageBarChartProps<M extends string> {
   title: string;
   /** The window total, already formatted - the chart states what it draws. */
   total: string;
-  bars: UsageBar[];
+  bars: readonly ({ startsAt: string } & Record<M, number>)[];
   granularity: UsageGranularity;
-  metric: 'creditsSpent' | 'requests';
+  /** The numeric field of each bar that is drawn. */
+  metric: M;
   /** Joy palette family the bars are painted from, so both modes are covered by the theme. */
   color: 'primary' | 'neutral';
   /** Formats one bar's value for the hover. */
@@ -32,7 +33,7 @@ export interface UsageBarChartProps {
  * desktop bundle for it. Bars are painted from the palette families rather than fixed colours
  * so light and dark are the theme's problem, not this file's.
  */
-export function UsageBarChart({
+export function UsageBarChart<M extends string>({
   title,
   total,
   bars,
@@ -42,7 +43,7 @@ export function UsageBarChart({
   format,
   emptyMessage,
   testId,
-}: UsageBarChartProps) {
+}: UsageBarChartProps<M>) {
   const max = bars.reduce((highest, bar) => Math.max(highest, bar[metric]), 0);
   const ticks = new Set(tickIndices(bars, granularity));
 
