@@ -50,7 +50,7 @@ const MusicStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: M
     },
     [ordered, replace]
   );
-  useConsumeStudioRestore('music', applyRestore);
+  useConsumeStudioRestore(createV2 ? 'music' : null, applyRestore);
 
   if (!model) return null;
 

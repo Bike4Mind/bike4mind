@@ -13,8 +13,9 @@ const DOG = 'b'.repeat(24);
 
 const restoreOf = (
   request: Record<string, unknown>,
-  fileNames: StudioRestoreRequest['fileNames'] = {}
-): StudioRestoreRequest => ({ medium: 'image', request, fileNames });
+  fileNames: StudioRestoreRequest['fileNames'] = {},
+  lineageInputs: StudioRestoreRequest['lineageInputs'] = []
+): StudioRestoreRequest => ({ medium: 'image', request, lineageInputs, fileNames });
 
 describe('restoreImageForm', () => {
   it('fills the prompt, model, shape, quality and references of a stored image job request', () => {
@@ -101,9 +102,8 @@ describe('restoreImageForm', () => {
     expect(value.form.intent.references).toEqual([{ fileId: CAT, fileName: 'cat.png' }]);
     expect(notices).toEqual([
       'Create makes new images rather than edits, so the edit source comes back as a reference image.',
-      "Create does not take a mask, so the take's mask was left out.",
-      "Create does not set the output format, so the model's default is used.",
-      "Create does not set the seed, so the model's default is used.",
+      "Create does not take a mask, so the take's was left out.",
+      "Create does not set the seed, output format, so the model's defaults are used.",
     ]);
   });
 
@@ -134,5 +134,37 @@ describe('restoreImageForm', () => {
     );
     expect(value.form.intent.quality).toBeUndefined();
     expect(notices).toEqual(["The take's quality (ultra) is no longer valid, so the default is used."]);
+  });
+
+  it('reads a chat-made request: snake_case keys, a count, and an edit source kept only in the lineage', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf(
+        {
+          model: ImageModels.GPT_IMAGE_2,
+          prompt: 'paint it gold',
+          n: 3,
+          aspect_ratio: '3:2',
+          output_format: 'png',
+          safety_tolerance: 2,
+        },
+        { [CAT]: 'cat.png' },
+        [
+          { fileId: CAT, role: 'edit_source' },
+          { fileId: DOG, role: 'mask' },
+        ]
+      ),
+      MODELS
+    );
+
+    expect(value.form).toEqual({
+      prompt: 'paint it gold',
+      count: 3,
+      intent: { aspectRatio: '3:2', references: [{ fileId: CAT, fileName: 'cat.png' }] },
+    });
+    expect(notices).toEqual([
+      'Create makes new images rather than edits, so the edit source comes back as a reference image.',
+      "Create does not take a mask, so the take's was left out.",
+      "Create does not set the output format, safety tolerance, so the model's defaults are used.",
+    ]);
   });
 });

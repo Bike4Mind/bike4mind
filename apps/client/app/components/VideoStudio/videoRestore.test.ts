@@ -10,7 +10,7 @@ const MODELS: NonEmptyList<typeof rangeModel> = [rangeModel, discreteModel, opti
 const restoreOf = (
   request: Record<string, unknown>,
   fileNames: StudioRestoreRequest['fileNames'] = {}
-): StudioRestoreRequest => ({ medium: 'video', request, fileNames });
+): StudioRestoreRequest => ({ medium: 'video', request, lineageInputs: [], fileNames });
 
 describe('restoreVideoForm', () => {
   it('fills every control of a stored video request, with its first frame as the starting image', () => {
@@ -106,5 +106,16 @@ describe('restoreVideoForm', () => {
     );
     expect(value.aspectRatio).toBe('1:1');
     expect(notices).toEqual([]);
+  });
+
+  it('says when a fallback model sets its own audio', () => {
+    const { value, notices } = restoreVideoForm(
+      restoreOf({ model: 'retired-video-model', prompt: 'x', audio: false }),
+      [discreteModel]
+    );
+    expect(value.audio).toBeNull();
+    expect(notices).toContain(
+      `${discreteModel.display_name} sets its own audio, so the take's audio setting was not kept.`
+    );
   });
 });

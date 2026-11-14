@@ -61,6 +61,9 @@ function restoreSpeech(
 }
 
 function restoreSoundEffect(request: Record<string, unknown>, notices: string[]): Partial<AudioGenSettingValues> {
+  if (request.format !== undefined) {
+    notices.push("Studio does not set a sound effect's format, so the default is used.");
+  }
   const promptInfluence = readStoredField(
     sfxShape.promptInfluence,
     request.promptInfluence,

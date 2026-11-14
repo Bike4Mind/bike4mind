@@ -33,6 +33,7 @@ const MODELS: NonEmptyList<PublicMusicModel> = [exact, fixed];
 const restoreOf = (request: Record<string, unknown>): StudioRestoreRequest => ({
   medium: 'music',
   request,
+  lineageInputs: [],
   fileNames: {},
 });
 
@@ -89,5 +90,14 @@ describe('restoreMusicForm', () => {
       'retired-music-model is no longer one of your music models, so Exact is picked.',
       "The take's duration (-5) is no longer valid, so the default is used.",
     ]);
+  });
+
+  it('says when a fixed-length fallback model drops the stored duration', () => {
+    const { value, notices } = restoreMusicForm(
+      restoreOf({ model: 'retired-music-model', prompt: 'x', durationSeconds: 90 }),
+      [fixed]
+    );
+    expect(value.durationSeconds).toBeNull();
+    expect(notices).toContain("Fixed makes songs of a fixed length, so the take's duration was not kept.");
   });
 });

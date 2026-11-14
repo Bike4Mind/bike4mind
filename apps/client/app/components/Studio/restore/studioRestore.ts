@@ -12,6 +12,8 @@ import type { StudioMedium } from '@client/app/components/Studio/studioModality'
 export type StudioRestoreRequest = {
   medium: StudioMedium;
   request: Record<string, unknown>;
+  /** The take's input files as its lineage (`derivedFrom`) recorded them, for requests that do not list them. */
+  lineageInputs: readonly { fileId: string; role: GeneratedAssetLineageRole }[];
   /**
    * The names of the files the trail walked, by id: a string for one the user can read, null for one it redacted.
    * Requests store input files by id only, and the forms show each input by name.
@@ -29,6 +31,7 @@ type StudioRestoreState = {
   requestRestore: (restore: StudioRestoreRequest) => void;
   /** Takes the pending restore if it is still `id`; true only for the first caller, so one restore applies once. */
   consume: (id: number) => boolean;
+  clear: () => void;
 };
 
 let nextRestoreId = 1;
@@ -45,14 +48,19 @@ export const useStudioRestore = create<StudioRestoreState>()((set, get) => ({
     set({ pending: null });
     return true;
   },
+  clear: () => set({ pending: null }),
 }));
 
-/** Runs `apply` once for each restore aimed at `medium`, as soon as the calling form is mounted. */
-export function useConsumeStudioRestore(medium: StudioMedium, apply: (restore: StudioRestore) => void) {
+/**
+ * Runs `apply` once for each restore aimed at `medium`, as soon as the calling form is mounted. A null medium takes
+ * none, for a form shared with the legacy Studio, which has no trail to restore from.
+ */
+export function useConsumeStudioRestore(medium: StudioMedium | null, apply: (restore: StudioRestore) => void) {
   const pending = useStudioRestore(state => state.pending);
   useEffect(() => {
     // consume() guards the re-runs a changed `apply` or a strict-mode double effect would cause.
-    if (pending?.medium === medium && useStudioRestore.getState().consume(pending.id)) apply(pending);
+    if (medium !== null && pending?.medium === medium && useStudioRestore.getState().consume(pending.id))
+      apply(pending);
   }, [pending, medium, apply]);
 }
 

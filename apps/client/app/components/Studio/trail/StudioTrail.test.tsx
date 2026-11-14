@@ -86,6 +86,7 @@ describe('StudioTrail', () => {
     expect(onRestore).toHaveBeenCalledWith({
       medium: 'image',
       request: { prompt: 'prompt source' },
+      lineageInputs: [{ fileId: 'upload', role: 'first_frame' }],
       fileNames: {
         take: 'take.png',
         source: 'source.png',

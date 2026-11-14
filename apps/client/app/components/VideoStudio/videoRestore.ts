@@ -66,6 +66,9 @@ export function restoreVideoForm(
   const base = initialFormFor(model);
   const inputImage = restoreFirstFrame(request, fileNames, notices);
   const audio = readStoredField(z.boolean(), request.audio, base.audio, 'audio setting', notices);
+  if (typeof request.audio === 'boolean' && model.audio !== 'optional') {
+    notices.push(`${model.display_name} sets its own audio, so the take's audio setting was not kept.`);
+  }
   const value: VideoFormState = {
     ...base,
     mode: readStoredField(shape.mode, request.mode, base.mode, 'mode', notices),

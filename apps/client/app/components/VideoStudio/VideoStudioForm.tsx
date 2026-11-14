@@ -49,7 +49,7 @@ const VideoStudioForm = ({ models, isSubmitting, onSubmit, createV2 = false }: V
     },
     [ordered, replace]
   );
-  useConsumeStudioRestore('video', applyRestore);
+  useConsumeStudioRestore(createV2 ? 'video' : null, applyRestore);
   const imageBrowser = useImageBrowser();
 
   if (!model) return null;

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConsumeStudioRestore, useStudioRestore } from './studioRestore';
 
-const REQUEST = { medium: 'video' as const, request: { prompt: 'waves' }, fileNames: {} };
+const REQUEST = { medium: 'video' as const, request: { prompt: 'waves' }, lineageInputs: [], fileNames: {} };
 
 describe('useConsumeStudioRestore', () => {
   beforeEach(() => useStudioRestore.setState({ pending: null }));

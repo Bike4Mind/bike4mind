@@ -1,5 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
+import StudioTrailButton from '@client/app/components/Studio/trail/StudioTrailButton';
+import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { extensionFromMimeType, type GenerationJobState, type MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
@@ -53,7 +55,8 @@ const creditsLabel = (job: Pick<MusicGeneration, 'credits' | 'state'>): string |
 // useCancelMusicGeneration).
 const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending'];
 
-const MusicJobCard = ({ jobId }: { jobId: string }) => {
+// `onRestore` (Studio Create v2 only) adds the take's trail; chat and legacy Studio cards go without it.
+const MusicJobCard = ({ jobId, onRestore }: { jobId: string; onRestore?: StudioTrailRestore }) => {
   const { data: job, isPending, refetch } = useMusicGeneration(jobId);
   const cancel = useCancelMusicGeneration();
   const openFiles = useFileBrowser(state => state.setOpen);
@@ -191,6 +194,9 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
           <Button size="sm" variant="plain" onClick={() => openFiles(true)} data-testid="music-job-card-open-files-btn">
             Open in Files
           </Button>
+        )}
+        {output?.file_id && onRestore && (
+          <StudioTrailButton fileId={output.file_id} testId="music-job-card-trail-btn" onRestore={onRestore} />
         )}
       </Stack>
     </Card>

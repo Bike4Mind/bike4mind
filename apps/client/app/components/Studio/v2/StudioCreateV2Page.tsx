@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
@@ -14,6 +15,11 @@ const StudioCreateV2Page = ({ medium }: { medium: StudioMedium }) => {
   useDocumentTitle(`${railLabel} Studio`);
   const navigate = useNavigate();
   const requestRestore = useStudioRestore(state => state.requestRestore);
+  // A restore whose form never took it (no models there, or the user moved on first) must not land later.
+  useEffect(() => {
+    const { pending, clear } = useStudioRestore.getState();
+    if (pending && pending.medium !== medium) clear();
+  }, [medium]);
   // The take's medium may not be this one: the form there picks the request up once it mounts.
   const restore: StudioTrailRestore = request => {
     requestRestore(request);

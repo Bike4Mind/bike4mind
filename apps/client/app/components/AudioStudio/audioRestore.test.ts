@@ -6,6 +6,7 @@ import { restoreAudioForm } from './audioRestore';
 const restoreOf = (medium: 'speech' | 'sound-effects', request: Record<string, unknown>): StudioRestoreRequest => ({
   medium,
   request,
+  lineageInputs: [],
   fileNames: {},
 });
 
@@ -79,5 +80,14 @@ describe('restoreAudioForm: sound effects', () => {
     );
     expect(value.settings).toEqual({ durationSeconds: null });
     expect(notices).toEqual(["The take's duration (90) is no longer valid, so the default is used."]);
+  });
+
+  it('names a stored format that Studio does not set for sound effects', () => {
+    const { notices } = restoreAudioForm(
+      restoreOf('sound-effects', { text: 'boom', format: 'mp3_44100_128' }),
+      'sound-effects',
+      []
+    );
+    expect(notices).toEqual(["Studio does not set a sound effect's format, so the default is used."]);
   });
 });

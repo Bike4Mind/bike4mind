@@ -40,7 +40,7 @@ const GENERATOR_MEDIUM: Record<GeneratedAssetGenerator, StudioMedium> = {
 
 export type StudioTrailRestore = (restore: StudioRestoreRequest) => void;
 
-type StepRestore = (request: Record<string, unknown>, medium: StudioMedium) => void;
+type StepRestore = (fileId: string, request: Record<string, unknown>, medium: StudioMedium) => void;
 
 type StudioTrailProps = {
   fileId: string;
@@ -150,7 +150,7 @@ const VisibleStep = ({ node, roles, isCurrent, onRestore }: StepProps & { node: 
         data-testid={`studio-trail-step-${node.fileId}`}
         data-restorable="true"
         title="Use these settings"
-        onClick={() => onRestore(request, medium)}
+        onClick={() => onRestore(node.fileId, request, medium)}
         sx={{ borderRadius: 'sm' }}
       >
         {content}
@@ -199,6 +199,10 @@ const rolesInto = (edges: LineageEdge[], parentId: string, childId: string) =>
 
 /** Oldest generation first, so the list reads top to bottom in the order the take was made. */
 const stepsInOrder = (lineage: FileLineage) => [...lineage.ancestors].sort((a, b) => b.depth - a.depth);
+
+/** The files `fileId` was made from, with their roles, as its `derivedFrom` recorded them. */
+const inputsOf = (lineage: FileLineage, fileId: string) =>
+  lineage.edges.filter(edge => edge.childId === fileId).map(({ parentId, role }) => ({ fileId: parentId, role }));
 
 /** Every walked file's name by id (null when redacted), so a restored request can show its input files by name. */
 const fileNamesOf = (lineage: FileLineage): Record<string, string | null> =>
@@ -262,7 +266,14 @@ const StudioTrail = ({ fileId, onRestore }: StudioTrailProps) => {
       <TrailBody
         lineage={lineage.data}
         onRestore={
-          onRestore && ((request, medium) => onRestore({ medium, request, fileNames: fileNamesOf(lineage.data) }))
+          onRestore &&
+          ((stepFileId, request, medium) =>
+            onRestore({
+              medium,
+              request,
+              lineageInputs: inputsOf(lineage.data, stepFileId),
+              fileNames: fileNamesOf(lineage.data),
+            }))
         }
       />
     </Box>

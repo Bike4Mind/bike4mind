@@ -32,7 +32,8 @@ export function restoreMusicForm(
   models: NonEmptyList<PublicMusicModel>
 ): Restored<MusicFormState> {
   const notices: string[] = [];
-  const model = restoreModel(request.model ?? request.modelId, models, notices);
+  const storedModel = request.model ?? request.modelId;
+  const model = restoreModel(storedModel, models, notices);
   const base = initialFormFor(model);
   const legacySeconds = typeof request.lengthMs === 'number' ? Math.round(request.lengthMs / MS_PER_SECOND) : undefined;
   const durationSeconds = readStoredField(
@@ -42,6 +43,9 @@ export function restoreMusicForm(
     'duration',
     notices
   );
+  if (base.durationSeconds === null && durationSeconds !== undefined && storedModel !== model.id) {
+    notices.push(`${model.display_name} makes songs of a fixed length, so the take's duration was not kept.`);
+  }
   const value: MusicFormState = {
     ...base,
     prompt: readStoredField(shape.prompt, request.prompt, base.prompt, 'prompt', notices),
