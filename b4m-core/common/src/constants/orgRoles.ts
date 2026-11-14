@@ -29,7 +29,7 @@ export const ORG_PERMISSIONS = [
   'manageBilling',
   /** The team's credit spend, ledger and per-session usage. */
   'viewUsage',
-  /** Team-wide policy: the custom MCP connector policy, member credit budgets and team branding. */
+  /** Team-wide policy: the custom MCP connector policy, member credit budgets, data retention and team branding. */
   'managePolicies',
   /** Team-wide integration wiring and its secrets: Slack, the team GitHub connection, webhooks. */
   'manageIntegrations',
