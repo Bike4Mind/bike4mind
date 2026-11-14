@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -320,15 +320,34 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(screen.getByTestId('signup-domain-holds-previous')).toBeDisabled());
   });
 
-  it('sends one decision for a double-click on Retry pending grants', async () => {
-    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
+  it('sends one decision for two connected Retry clicks before React re-renders', async () => {
+    const pendingDecision = Promise.withResolvers<unknown>();
+    postMock.mockReturnValue(pendingDecision.promise);
     renderTab();
     await openMenu('gamma.test');
     const retry = screen.getByTestId('signup-domain-release-gamma.test');
-    fireEvent.click(retry);
-    fireEvent.click(retry);
-    await waitFor(() => expect(screen.getByText(/Released 0 credits/)).toBeInTheDocument());
-    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveTextContent('Retry pending grants');
+    expect(retry).toBeEnabled();
+    expect(retry.isConnected).toBe(true);
+    try {
+      act(() => {
+        fireEvent.click(retry);
+        expect(retry.isConnected).toBe(true);
+        fireEvent.click(retry);
+      });
+      await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+      expect(postMock).toHaveBeenCalledWith(endpoint, {
+        domain: 'gamma.test',
+        action: 'release',
+        afterUserId: undefined,
+      });
+      expect(screen.queryByText(/Released 0 credits/)).not.toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        pendingDecision.resolve({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
+      });
+    }
+    expect(await screen.findByText(/Released 0 credits/)).toBeInTheDocument();
   });
 
   it('does not release until the dialog is confirmed', async () => {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -262,6 +262,26 @@ describe('PartnerSignupRulesTab admin frame', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Partner signups (1)' })).toBeInTheDocument();
     expect(screen.queryByTestId('partner-rule-count')).not.toBeInTheDocument();
+  });
+
+  it('opens the existing rule for editing when its domain cell is activated', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(
+      listOf([makeRule({ label: 'Partner label', notes: 'Saved note', signupCredits: 5 })])
+    );
+    renderTab();
+    const row = await screen.findByTestId('partner-rule-row-partner.com');
+    await userEvent.click(within(row).getByText('partner.com', { exact: true }));
+
+    expect(screen.getByTestId('partner-rule-modal')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Edit signup rule' })).toBeInTheDocument();
+    const domain = within(screen.getByTestId('partner-rule-domain-input')).getByRole('textbox');
+    expect(domain).toBeDisabled();
+    expect(domain).toHaveValue('partner.com');
+    expect(within(screen.getByTestId('partner-rule-label-input')).getByRole('textbox')).toHaveValue('Partner label');
+    expect(within(screen.getByTestId('partner-rule-notes-input')).getByRole('textbox')).toHaveValue('Saved note');
+    expect(within(screen.getByTestId('partner-rule-credits-input')).getByRole('spinbutton')).toHaveValue(5);
+    expect(api.createPartnerSignupRule).not.toHaveBeenCalled();
+    expect(api.updatePartnerSignupRule).not.toHaveBeenCalled();
   });
 
   it('offers Add rule from the empty state', async () => {

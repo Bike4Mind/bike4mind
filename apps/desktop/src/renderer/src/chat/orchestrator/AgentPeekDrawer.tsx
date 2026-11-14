@@ -1,4 +1,5 @@
 import { TaskDecisionPanel } from './TaskDecisionPanel';
+import { TaskDecisionCard } from '../TaskDecisionCards';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -302,7 +303,11 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
             </Typography>
           )}
         </Box>
-        <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
+        <AgentStateChip
+          state={agent.state}
+          preparing={agent.preparing !== undefined}
+          deciding={agent.decision !== undefined}
+        />
         <IconButton
           size="sm"
           variant="plain"
@@ -314,6 +319,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </IconButton>
       </Box>
 
+      {agent.decision && <TaskDecisionCard sessionId={agent.id} title={agent.title} decision={agent.decision} />}
       <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
 

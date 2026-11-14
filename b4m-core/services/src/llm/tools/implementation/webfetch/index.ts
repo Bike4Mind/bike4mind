@@ -181,6 +181,12 @@ type FirecrawlFetchOptions = {
   screenshot?: boolean;
   /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
   mobile?: boolean;
+  /** Probe the page's origin for /llms-full.txt and /llms.txt after a first read that comes back
+   *  truncated, and return the one found as WebFetchResult.llmsTxtUrl (the web_fetch hint).
+   *  Defaults to true. Pass false when the caller never reads llmsTxtUrl: the probe is two direct
+   *  GETs to the site, with Node's default user agent and no robots.txt check, and the read waits up
+   *  to LLMS_TXT_PROBE_TIMEOUT_MS for them. */
+  llmsTxtHint?: boolean;
 };
 
 /**
@@ -298,7 +304,9 @@ export async function firecrawlFetch(
   if (!app) {
     const startedAt = Date.now();
     const { markdown, title } = await plainFetchScrape(url, { timeoutMs });
-    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt);
+    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt, {
+      llmsTxtHint: options?.llmsTxtHint,
+    });
   }
 
   Logger.globalInstance.log(
@@ -341,14 +349,10 @@ export async function firecrawlFetch(
     throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(
-    result.markdown,
-    result.metadata?.title,
-    url,
-    options?.offset,
-    durationMs,
-    wantScreenshot ? result.screenshot : undefined
-  );
+  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs, {
+    screenshot: wantScreenshot ? result.screenshot : undefined,
+    llmsTxtHint: options?.llmsTxtHint,
+  });
 }
 
 /**
@@ -368,7 +372,7 @@ async function buildWebFetchResult(
   url: string,
   rawOffset: number | undefined,
   durationMs: number,
-  screenshot?: string
+  { screenshot, llmsTxtHint = true }: { screenshot?: string; llmsTxtHint?: boolean } = {}
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -391,8 +395,9 @@ async function buildWebFetchResult(
 
   // Probe for an llms.txt hint only on the FIRST truncated read (offset 0): that is the
   // long-form case where a curated source helps, and gating on offset avoids re-probing the
-  // same origin on every continuation call once the model is already paging.
-  const llmsTxtUrl = truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
+  // same origin on every continuation call once the model is already paging. A caller that opts out
+  // (llmsTxtHint: false) never reads the hint, so the origin gets no probe at all.
+  const llmsTxtUrl = llmsTxtHint && truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
 
   return {
     markdown,

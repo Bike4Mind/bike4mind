@@ -354,12 +354,12 @@ export class AdminPage extends BasePage {
       .toBe(expected);
   }
 
-  /** Delete a specific invite code by finding its row and clicking the delete button */
+  /** Delete a specific invite code by finding its row and choosing Delete from its actions menu */
   async deleteInviteByCode(code: string) {
     const row = this.page.getByTestId('invite-code-card').filter({ hasText: code });
     await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    const deleteBtn = row.getByTestId('delete-invite-code-btn');
-    await deleteBtn.click();
+    await row.getByTestId(/^invite-row-actions-/).click();
+    await this.page.getByTestId('delete-invite-code-btn').click();
     await this.waitForResponseOrUI(
       resp => resp.url().includes('/api/reg-invites') && resp.request().method() === 'DELETE' && resp.ok(),
       () => expect(row).toBeHidden({ timeout: TIMEOUTS.ACTION })

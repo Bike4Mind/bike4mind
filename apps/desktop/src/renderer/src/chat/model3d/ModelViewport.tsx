@@ -5,7 +5,17 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
 import { changedParts, startEditFlash, type EditFlash } from './editFlash';
-import { explodeModel, fitAngle, frameCamera, partsBox, poseJoints, VIEW_DIRECTIONS } from './modelScene';
+import { CLICK_SLOP, JointDragController } from './jointDragController';
+import {
+  explodeModel,
+  extendsPastView,
+  fitAngle,
+  frameCamera,
+  meshAt,
+  partsBox,
+  poseJoints,
+  VIEW_DIRECTIONS,
+} from './modelScene';
 import {
   addGlowLights,
   enableShadows,
@@ -34,6 +44,8 @@ export type ModelViewportHandle = {
   recordTurntable: (joints: readonly ModelJoint[], onProgress?: (progress: number) => void) => Promise<Uint8Array>;
   /** Frames the model from one side, or from the default three-quarter view when `view` is null. */
   setView: (view: ModelView | null) => void;
+  /** Glides the camera back until the whole model is in view, from the angle it is looked at now. */
+  fit: () => void;
   /** Orbits the camera by these angles (radians): positive azimuth turns right, positive polar tilts down. */
   orbit: (azimuth: number, polar: number) => void;
   /** Moves the camera towards the target (factor below 1) or away from it (above 1). */
@@ -69,8 +81,12 @@ type Props = {
   exploded: boolean;
   /** The parts to highlight, by name. */
   picked: readonly string[];
-  /** A click (not an orbit drag) on a part, or on empty space (a null name). */
+  /** A click (not an orbit or joint drag) on a part, or on empty space (a null name). */
   onPick: (pick: ViewportPick) => void;
+  /** A joint dragged in the view (jointDragController.ts), clamped to its range. */
+  onPoseChange?: (name: string, value: number) => void;
+  /** A joint drag began. */
+  onJointDragStart?: () => void;
   /**
    * Parts a point-and-edit turn is waiting on. The next rebuild settles the request: the ones it
    * changed get the before/after moment (editFlash.ts), and `onEditSettled` fires either way, so a
@@ -80,17 +96,24 @@ type Props = {
   onEditSettled: () => void;
   /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
   clip: string | null;
+  /**
+   * Hears whether the model has grown past a camera the user placed: a rebuild never moves that
+   * camera, so the pane offers a fit instead. False again once the model is back in view.
+   */
+  onCroppedChange?: (cropped: boolean) => void;
+  /** A parameter slider is being dragged: its preview rebuilds never move the camera. */
+  adjusting?: boolean;
   /** Filled with the viewport's handle while it is mounted. */
   handleRef?: MutableRefObject<ModelViewportHandle | null>;
 };
 
-/** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
-const CLICK_SLOP = 4;
 const PICK_GLOW = new THREE.Color('#2f7cf6');
 /** Quiet time, in ms, after the last orbit or slider frame before the AO pass is drawn again. */
 const IDLE_RENDER_DELAY = 150;
 /** How long the parts take to pull apart or come back together, in ms. */
 const EXPLODE_MS = 700;
+/** How long a refit glides when a rebuild grows the model out of frame, in ms. */
+const FIT_MS = 450;
 
 /** Tints the picked parts' (cloned, per-view) materials so they read as selected; clears the rest. */
 function highlightParts(root: THREE.Object3D, names: readonly string[]): void {
@@ -120,6 +143,12 @@ type Viewer = {
   render: () => void;
   /** Frames the current model again, unless the user has moved the camera since it was framed. */
   reframe: () => void;
+  /** Stops a fit glide midway, so another camera move (explode, the user) takes over from there. */
+  stopFit: () => void;
+  /** Hover guide and press-and-drag posing of the model's joints. */
+  joints: JointDragController;
+  /** Re-checks whether the shown model reaches past the view and tells the pane when that changes. */
+  checkCropped: () => boolean;
 } & ModelViewportHandle;
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
@@ -135,9 +164,13 @@ export function ModelViewport({
   exploded,
   picked,
   onPick,
+  onPoseChange,
+  onJointDragStart,
   editing,
   onEditSettled,
   clip,
+  onCroppedChange,
+  adjusting = false,
   handleRef,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -157,6 +190,10 @@ export function ModelViewport({
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const onPoseChangeRef = useRef(onPoseChange);
+  onPoseChangeRef.current = onPoseChange;
+  const onJointDragStartRef = useRef(onJointDragStart);
+  onJointDragStartRef.current = onJointDragStart;
   const editingRef = useRef(editing);
   editingRef.current = editing;
   const onEditSettledRef = useRef(onEditSettled);
@@ -165,6 +202,12 @@ export function ModelViewport({
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
   const userMoved = useRef(false);
+  // Set by any camera move since the model was last framed whole; a rebuild only refits while false.
+  const movedSinceFit = useRef(false);
+  const onCroppedChangeRef = useRef(onCroppedChange);
+  onCroppedChangeRef.current = onCroppedChange;
+  const adjustingRef = useRef(adjusting);
+  adjustingRef.current = adjusting;
 
   useEffect(() => {
     const element = host.current;
@@ -188,21 +231,57 @@ export function ModelViewport({
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     // While a turntable records, it alone draws: orbit, rebuild and resize frames would land in the clip.
     let recording = false;
+    // Assigned just below; a joint drag holds the AO pass back until it settles, as an orbit does.
+    let jointDrag: JointDragController | null = null;
     const render = () => {
       if (recording) return;
       composer.render(false);
       clearTimeout(idleTimer);
+      if (jointDrag?.busy) return;
       idleTimer = setTimeout(() => composer.render(true), IDLE_RENDER_DELAY);
     };
-    controls.addEventListener('change', render);
+    jointDrag = new JointDragController({
+      host: element,
+      canvas: renderer.domElement,
+      camera,
+      controls,
+      scene,
+      shown: () => shownCopy.current,
+      pose: () => poseRef.current,
+      enabled: () => !recording,
+      onChange: (name, value) => onPoseChangeRef.current?.(name, value),
+      onStart: () => onJointDragStartRef.current?.(),
+      render,
+    });
+    stage.unreflected.add(jointDrag.overlay);
+    let fitFrame = 0;
+    const stopFit = () => cancelAnimationFrame(fitFrame);
+    let cropped = false;
+    const checkCropped = () => {
+      const shown = shownCopy.current;
+      const now = !!shown && extendsPastView(camera, new THREE.Box3().setFromObject(shown));
+      if (now !== cropped) {
+        cropped = now;
+        onCroppedChangeRef.current?.(now);
+      }
+      return now;
+    };
+    controls.addEventListener('change', () => {
+      render();
+      // Only while flagged: the box walk is not worth doing on every orbit frame otherwise.
+      if (cropped) checkCropped();
+    });
     controls.addEventListener('start', () => {
       userMoved.current = true;
+      movedSinceFit.current = true;
+      stopFit();
     });
     // A camera the user placed keeps its angle and target, and moves in or out as the pane's
     // narrower side does, so the model keeps its size in the pane instead of cropping.
     const reframe = (previousFit = fitAngle(camera)) => {
       if (!shownObject.current) return;
       if (!userMoved.current) {
+        stopFit();
         controls.target.copy(frameCamera(camera, shownObject.current));
       } else {
         const offset = camera.position.clone().sub(controls.target);
@@ -220,6 +299,7 @@ export function ModelViewport({
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
       reframe(previousFit);
+      checkCropped();
       render();
     };
     let pressedAt: { x: number; y: number } | null = null;
@@ -237,9 +317,7 @@ export function ModelViewport({
         ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1
       );
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
+      const hit = meshAt(shown, camera, pointer);
       onPickRef.current({
         name: hit ? hit.object.name : null,
         additive: event.shiftKey,
@@ -257,6 +335,8 @@ export function ModelViewport({
       controls.target.copy(frameCamera(camera, shown, view === null ? VIEW_DIRECTIONS.iso : VIEW_DIRECTIONS[view]));
       // A preset is a deliberate camera; only the default view goes back to following the pane's size.
       userMoved.current = view !== null;
+      movedSinceFit.current = false;
+      stopFit();
       controls.update();
     };
     const partPoint = (names: readonly string[]): ViewportPoint | null => {
@@ -268,8 +348,37 @@ export function ModelViewport({
       const bounds = renderer.domElement.getBoundingClientRect();
       return { x: ((centre.x + 1) / 2) * bounds.width, y: ((1 - centre.y) / 2) * bounds.height };
     };
+    const fit = () => {
+      const shown = shownCopy.current;
+      if (!shown || recording) return;
+      stopFit();
+      movedSinceFit.current = false;
+      const fromPosition = camera.position.clone();
+      const fromTarget = controls.target.clone();
+      const direction = fromPosition.clone().sub(fromTarget);
+      const toTarget = frameCamera(camera, shown, [direction.x, direction.y, direction.z]);
+      const toPosition = camera.position.clone();
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        controls.target.copy(toTarget);
+        controls.update();
+        checkCropped();
+        return;
+      }
+      camera.position.copy(fromPosition);
+      const started = performance.now();
+      fitFrame = requestAnimationFrame(function step(now) {
+        const t = Math.min(1, (now - started) / FIT_MS);
+        const eased = swing(t / 2);
+        camera.position.lerpVectors(fromPosition, toPosition, eased);
+        controls.target.lerpVectors(fromTarget, toTarget, eased);
+        controls.update();
+        if (t < 1) fitFrame = requestAnimationFrame(step);
+        else checkCropped();
+      });
+    };
     const orbit = (azimuth: number, polar: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       spherical.theta -= azimuth;
@@ -277,13 +386,16 @@ export function ModelViewport({
       spherical.phi = THREE.MathUtils.clamp(spherical.phi + polar, 0.05, Math.PI - 0.05);
       camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
       userMoved.current = true;
+      movedSinceFit.current = true;
       controls.update();
     };
     const zoom = (factor: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       camera.position.copy(controls.target).add(offset);
       userMoved.current = true;
+      movedSinceFit.current = true;
       controls.update();
     };
     const recordTurntable = async (
@@ -295,6 +407,7 @@ export function ModelViewport({
       if (!shown) throw new Error('There is no model to record.');
       recording = true;
       clearTimeout(idleTimer);
+      stopFit();
       controls.enabled = false;
       const canvas = renderer.domElement;
       const startPosition = camera.position.clone();
@@ -351,6 +464,10 @@ export function ModelViewport({
       composer,
       render,
       reframe,
+      stopFit,
+      joints: jointDrag,
+      checkCropped,
+      fit,
       recordTurntable,
       setView,
       orbit,
@@ -363,8 +480,11 @@ export function ModelViewport({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       clearTimeout(idleTimer);
+      stopFit();
+      onCroppedChangeRef.current?.(false);
       cancelAnimationFrame(buildFrame.current);
       if (flash.current) cancelAnimationFrame(flash.current.frame);
+      jointDrag.dispose();
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -383,6 +503,7 @@ export function ModelViewport({
         return viewer.current.recordTurntable(joints, onProgress);
       },
       setView: view => viewer.current?.setView(view),
+      fit: () => viewer.current?.fit(),
       orbit: (azimuth, polar) => viewer.current?.orbit(azimuth, polar),
       zoom: factor => viewer.current?.zoom(factor),
       partPoint: names => viewer.current?.partPoint(names) ?? null,
@@ -404,6 +525,7 @@ export function ModelViewport({
       flash.current.run.finish();
       flash.current = null;
     }
+    current.joints.reset();
     current.content.clear();
     current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
@@ -428,13 +550,16 @@ export function ModelViewport({
       enableShadows(shown);
       if (lightingGlows(lighting)) addGlowLights(shown, current.stage.radius);
       current.content.add(shown);
-      // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
+      // Re-frame when a different model opens. A rebuild keeps the camera unless it grew the model
+      // out of frame: then an untouched camera glides back to fit, and a placed one is only flagged.
       if (framedFor.current !== frameKey) {
         framedFor.current = frameKey;
         userMoved.current = false;
+        movedSinceFit.current = false;
         current.reframe();
       }
       current.controls.update();
+      if (current.checkCropped() && !movedSinceFit.current && !adjustingRef.current) current.fit();
       const carried = building.current?.frameKey === frameKey ? building.current : null;
       const names = new Set([...(carried?.names ?? []), ...added]);
       const start = carried?.start ?? performance.now();
@@ -467,6 +592,8 @@ export function ModelViewport({
           else building.current = null;
         });
       }
+    } else {
+      current.checkCropped();
     }
     current.render();
   }, [object, wireframe, grid, lighting, dark, dimmed, frameKey]);
@@ -474,7 +601,7 @@ export function ModelViewport({
   // A slider drag or playback only turns nodes: no re-clone, no re-frame.
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
-    poseJoints(shownCopy.current, pose);
+    poseJoints(shownCopy.current, viewer.current.joints.posed(pose));
     viewer.current.render();
   }, [pose]);
 
@@ -488,6 +615,7 @@ export function ModelViewport({
       return;
     }
     const { camera, controls } = current;
+    current.stopFit();
     // The camera glides to fit the parts where they end up, from the angle the user is looking at.
     const fromPosition = camera.position.clone();
     const fromTarget = controls.target.clone();
@@ -511,6 +639,7 @@ export function ModelViewport({
       controls.update();
       current.render();
       if (t < 1) frame = requestAnimationFrame(step);
+      else current.checkCropped();
     });
     return () => cancelAnimationFrame(frame);
   }, [exploded]);

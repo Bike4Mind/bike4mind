@@ -32,6 +32,11 @@ const handler = adminApi({
       { field: 'allowedScopes', before: before.allowedScopes, after: after.allowedScopes },
       { field: 'federatedIdp', before: before.federatedIdp ?? null, after: after.federatedIdp ?? null },
       { field: 'rateLimit', before: before.rateLimit ?? null, after: after.rateLimit ?? null },
+      {
+        field: 'unpaidAccountsAllowed',
+        before: before.unpaidAccountsAllowed ?? null,
+        after: after.unpaidAccountsAllowed ?? null,
+      },
     ],
     details: { clientId: after.clientId },
   });
