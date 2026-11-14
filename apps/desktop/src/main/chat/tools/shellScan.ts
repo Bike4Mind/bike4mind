@@ -4854,7 +4854,7 @@ const MODELED_PROGRAMS = new Set([
 
 /** curl options the scan reads: flags, and options whose value is no file (`-o` is noted as a download). */
 const CURL_FLAGS = 'sSfLIivkgG46N#OJ';
-const CURL_VALUED = 'oXHmdAeurxwcbDT';
+const CURL_VALUED = 'oXHmdAeurxwcbDTF';
 const CURL_LONG_FLAGS = new Set([
   'silent',
   'show-error',
@@ -4912,6 +4912,7 @@ const CURL_LONG_VALUED = new Set([
   'cookie-jar',
   'dump-header',
   'upload-file',
+  'form',
 ]);
 
 /** A URL curl fetches over http or https: the scheme as written, or a bare host curl does not guess another for. */
@@ -4963,6 +4964,7 @@ const CURL_SHORT: Readonly<Record<string, string>> = {
   b: 'cookie',
   D: 'dump-header',
   T: 'upload-file',
+  F: 'form',
   d: 'data',
   H: 'header',
   w: 'write-out',
@@ -5010,10 +5012,17 @@ function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]
   const data = values('data', 'data-binary', 'data-urlencode', 'json', 'header')
     .map(wordValue)
     .flatMap(value => (value.includes('@') ? [shellQuoted(value.slice(value.indexOf('@') + 1))] : []));
+  // A form field reads a file through `name=@f` or `name=<f`.
+  const forms = values('form')
+    .map(wordValue)
+    .flatMap(value => {
+      const at = value.search(/=[@<]/);
+      return at === -1 ? [] : [shellQuoted(value.slice(at + 2))];
+    });
   const given = (value: string): boolean => !['', '-'].includes(wordValue(value));
   const cookies = values('cookie').filter(value => !wordValue(value).includes('='));
   return {
-    reads: [...cookies, ...values('upload-file'), ...data].filter(given),
+    reads: [...cookies, ...values('upload-file'), ...data, ...forms].filter(given),
     writes: [...values('output').map(inDirectory), ...values('cookie-jar', 'dump-header'), ...remoteNames].filter(
       given
     ),
@@ -8011,6 +8020,16 @@ export async function scanShell(
         for (const path of curl.writes) {
           noteWrite(path);
           await check(path, state.cwd);
+        }
+      }
+      if (name === 'wget' || name === 'scp' || name === 'rsync') {
+        // A file a send names (`--post-file f`, `scp f host:`) is read where it sits; a URL or `host:path` is not local.
+        for (const arg of wrappedRest) {
+          const word = wordValue(arg);
+          const value = word.startsWith('-') ? word.slice(word.indexOf('=') + 1) : word;
+          if (value === word && word.startsWith('-')) continue;
+          if (value === '' || /^\w+:\/\//.test(value) || /^[^/\\]*:/.test(value)) continue;
+          await check(shellQuoted(value), state.cwd);
         }
       }
       if (
