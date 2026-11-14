@@ -50,8 +50,8 @@ const AreaSwitcher = styled('div')({
   [PHONE]: {
     order: 3,
     flexBasis: '100%',
-    '& [role="tablist"]': { display: 'flex', width: '100%' },
-    '& [role="tab"]': { flex: 1 },
+    '& > nav': { display: 'flex', width: '100%' },
+    '& > nav > button': { flex: 1 },
   },
 });
 
@@ -116,11 +116,11 @@ const StudioV2Frame = ({ area, testId, rail, children }: StudioV2FrameProps) => 
         <AreaSwitcher>
           <StudioSegmentedControl
             aria-label="Studio areas"
-            semantics="tabs"
+            semantics="nav"
             options={areas}
             value={area}
             onChange={goTo}
-            testId="studio-area-tabs"
+            testId="studio-area-nav"
           />
         </AreaSwitcher>
         <HeaderEnd>

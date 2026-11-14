@@ -50,8 +50,11 @@ type StudioSegmentedControlProps<Value extends string> = {
   value: Value;
   onChange: (value: Value) => void;
   'aria-label': string;
-  /** `tabs` for switching views (role=tab, aria-selected); `radio` for picking a value (role=radio, aria-checked). */
-  semantics?: 'tabs' | 'radio';
+  /**
+   * `radio` picks a value (role=radio, aria-checked). `tabs` switches in-page panels (role=tab, aria-selected).
+   * `nav` switches routes: a nav of plain buttons, the current one marked aria-current="page".
+   */
+  semantics?: 'tabs' | 'radio' | 'nav';
   testId?: string;
 };
 
@@ -63,9 +66,9 @@ const focusedIndex = (segments: (HTMLButtonElement | null)[], fallback: number):
 };
 
 /**
- * A pill track of mutually exclusive options with a roving tabindex. As radios, arrows select (the
- * radio-group pattern); as tabs, arrows and Home/End only move focus and Enter/Space activates,
- * because activating a tab here navigates.
+ * A pill track of mutually exclusive options. As radios (roving tabindex), arrows select, the radio-group pattern;
+ * as tabs (roving tabindex), arrows and Home/End only move focus and Enter/Space activates; as nav, every
+ * segment is its own tab stop and activating one navigates.
  */
 const StudioSegmentedControl = <Value extends string>({
   options,
@@ -77,6 +80,8 @@ const StudioSegmentedControl = <Value extends string>({
 }: StudioSegmentedControlProps<Value>) => {
   const segmentRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const isTabs = semantics === 'tabs';
+  const isNav = semantics === 'nav';
+  const segmentRole = isNav ? undefined : isTabs ? 'tab' : 'radio';
 
   const targetIndex = (key: string): number | null => {
     const count = options.length;
@@ -94,6 +99,7 @@ const StudioSegmentedControl = <Value extends string>({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (isNav) return;
     const next = targetIndex(event.key);
     if (next === null) return;
     event.preventDefault();
@@ -102,7 +108,13 @@ const StudioSegmentedControl = <Value extends string>({
   };
 
   return (
-    <Track role={isTabs ? 'tablist' : 'radiogroup'} aria-label={ariaLabel} onKeyDown={onKeyDown} data-testid={testId}>
+    <Track
+      as={isNav ? 'nav' : 'div'}
+      role={isNav ? undefined : isTabs ? 'tablist' : 'radiogroup'}
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
+      data-testid={testId}
+    >
       {options.map((option, index) => {
         const isSelected = option.value === value;
         return (
@@ -112,10 +124,11 @@ const StudioSegmentedControl = <Value extends string>({
               segmentRefs.current[index] = element;
             }}
             type="button"
-            role={isTabs ? 'tab' : 'radio'}
+            role={segmentRole}
             aria-selected={isTabs ? isSelected : undefined}
-            aria-checked={isTabs ? undefined : isSelected}
-            tabIndex={isSelected ? 0 : -1}
+            aria-checked={segmentRole === 'radio' ? isSelected : undefined}
+            aria-current={isNav && isSelected ? 'page' : undefined}
+            tabIndex={isNav || isSelected ? 0 : -1}
             data-selected={isSelected}
             onClick={() => {
               if (!isSelected) onChange(option.value);

@@ -38,7 +38,7 @@ describe('Studio Productions', () => {
   it('is a coming-soon placeholder under the Productions area', () => {
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-productions-page')).toBeInTheDocument();
-    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
   });
 
@@ -58,7 +58,7 @@ describe('Studio Productions', () => {
 describe('Studio Library', () => {
   it('mounts the Studio Library under the Library area', () => {
     render(<StudioLibraryPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-library-page')).toContainElement(screen.getByTestId('studio-library'));
   });
 });

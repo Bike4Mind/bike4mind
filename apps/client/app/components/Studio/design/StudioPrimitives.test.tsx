@@ -120,6 +120,24 @@ describe('StudioSegmentedControl', () => {
     expect(screen.getByRole('tab', { name: '16:9' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('as nav, is a navigation landmark of buttons with the current one marked as the page', () => {
+    const onChange = vi.fn();
+    renderInStudio(
+      <StudioSegmentedControl aria-label="Areas" semantics="nav" options={options} value="wide" onChange={onChange} />
+    );
+    expect(screen.getByRole('navigation', { name: 'Areas' })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    const wide = screen.getByTestId('studio-segmented-control-wide');
+    expect(wide).toHaveAttribute('aria-current', 'page');
+    expect(wide).not.toHaveAttribute('role');
+    expect(screen.getByTestId('studio-segmented-control-square')).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('studio-segmented-control-square')).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(screen.getByRole('navigation'), { key: 'ArrowRight' });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('studio-segmented-control-square'));
+    expect(onChange).toHaveBeenCalledWith('square');
+  });
+
   it('changes on click, but not when the picked option is clicked again', () => {
     const onChange = vi.fn();
     renderInStudio(<StudioSegmentedControl aria-label="Shape" options={options} value="square" onChange={onChange} />);
