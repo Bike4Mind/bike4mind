@@ -148,12 +148,13 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toEqual([]);
   });
 
-  it('does not recount for a status change that neither enters nor leaves needs-action', async () => {
+  it('recounts the badge on a status change that neither enters nor leaves needs-action, without a notice', async () => {
     monitor.observe({ sessionId: 'agent', status: 'processing' });
     monitor.observe({ sessionId: 'agent', status: 'done' });
     await monitor.settled();
-    expect(deps.listSessions).not.toHaveBeenCalled();
-    expect(setBadge).not.toHaveBeenCalled();
+    expect(deps.listSessions).toHaveBeenCalled();
+    expect(setBadge).toHaveBeenLastCalledWith(0);
+    expect(notices).toEqual([]);
   });
 
   it('recounts when a session enters needs-action and again when it leaves', async () => {
