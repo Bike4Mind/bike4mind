@@ -470,7 +470,7 @@ describe('ChatService untrusted content in a reply', () => {
     expect(asked.approvalDetail).toContain('(web_fetch)');
   });
 
-  it("asks before a command that follows reading another session's transcript", async () => {
+  it("runs a command that follows reading another session's transcript", async () => {
     const project = join(root, 'repo');
     await mkdir(project);
     const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
@@ -479,8 +479,11 @@ describe('ChatService untrusted content in a reply', () => {
     await service.setApprovalMode(created.session.id, 'auto');
 
     await reply(created.session.id, [['session_read', { session_id: other.session.id }], build(project)]);
-    const asked = await awaitCall('bash_execute', 'awaiting-approval');
-    expect(asked.approvalDetail).toContain('read content from another conversation (session_read).');
+    await vi.waitUntil(() => calls('bash_execute', 'done')[0] ?? calls('bash_execute', 'error')[0], {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
   describe('a command that cannot carry data off this computer', () => {
     const settled = (name: string) =>

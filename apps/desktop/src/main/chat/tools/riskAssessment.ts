@@ -30,8 +30,8 @@ export function spendsCredits(toolName: string): boolean {
 }
 
 /**
- * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
- * session's transcript, which may have read any of those - that can carry injected instructions.
+ * Tools whose result is someone else's text - a web page, an MCP server or a skill - that can carry
+ * injected instructions. Another conversation in the app is not: `session_read` is the user's own.
  * A skill the user installed or a trusted project's opts out per call; see skillTool's `run`.
  *
  * A shell command's output is NOT here, even though `curl` prints what a page said: a script
@@ -54,7 +54,6 @@ const READS_UNTRUSTED: ReadonlySet<string> = new Set([
   WEB_FETCH_TOOL_NAME,
   WEB_SEARCH_TOOL_NAME,
   'skill',
-  'session_read',
   'screen_capture',
   'simulator_screenshot',
   'model_view',

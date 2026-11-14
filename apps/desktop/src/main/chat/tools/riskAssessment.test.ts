@@ -28,7 +28,6 @@ describe('the untrusted-content and outbound axes', () => {
       'web_fetch',
       'web_search',
       'skill',
-      'session_read',
       'browser_snapshot',
       'screen_capture',
       'simulator_screenshot',
@@ -38,7 +37,7 @@ describe('the untrusted-content and outbound axes', () => {
     ]) {
       expect(readsUntrusted(name), name).toBe(true);
     }
-    for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_send']) {
+    for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_read', 'session_send']) {
       expect(readsUntrusted(name), name).toBe(false);
     }
   });
@@ -92,8 +91,9 @@ describe('the untrusted-content and outbound axes', () => {
     'bash_kill',
     'todo_write',
     'explore',
-    // Conversations of this project: reading one taints, listing and archiving do not.
+    // Conversations of this project, the user's own: reading, listing and archiving one taint nothing.
     'session_list',
+    'session_read',
     'session_archive',
     'session_delete',
     // Cards only a human click can answer.

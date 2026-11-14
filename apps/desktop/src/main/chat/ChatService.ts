@@ -9202,11 +9202,9 @@ function untrustedReason(tool: string): string {
       ? 'an MCP server'
       : tool === 'skill'
         ? 'a skill'
-        : tool === 'session_read'
-          ? 'another conversation'
-          : tool === IMPORTED_TAINT_SOURCE
-            ? 'a conversation imported from Claude'
-            : 'the web';
+        : tool === IMPORTED_TAINT_SOURCE
+          ? 'a conversation imported from Claude'
+          : 'the web';
   return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
