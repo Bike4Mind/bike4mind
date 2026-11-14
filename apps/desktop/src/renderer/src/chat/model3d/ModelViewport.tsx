@@ -5,11 +5,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
 import { changedParts, startEditFlash, type EditFlash } from './editFlash';
+import { CLICK_SLOP, JointDragController } from './jointDragController';
 import {
   explodeModel,
   extendsPastView,
   fitAngle,
   frameCamera,
+  meshAt,
   partsBox,
   poseJoints,
   VIEW_DIRECTIONS,
@@ -79,8 +81,12 @@ type Props = {
   exploded: boolean;
   /** The parts to highlight, by name. */
   picked: readonly string[];
-  /** A click (not an orbit drag) on a part, or on empty space (a null name). */
+  /** A click (not an orbit or joint drag) on a part, or on empty space (a null name). */
   onPick: (pick: ViewportPick) => void;
+  /** A joint dragged in the view (jointDragController.ts), clamped to its range. */
+  onPoseChange?: (name: string, value: number) => void;
+  /** A joint drag began. */
+  onJointDragStart?: () => void;
   /**
    * Parts a point-and-edit turn is waiting on. The next rebuild settles the request: the ones it
    * changed get the before/after moment (editFlash.ts), and `onEditSettled` fires either way, so a
@@ -101,8 +107,6 @@ type Props = {
   handleRef?: MutableRefObject<ModelViewportHandle | null>;
 };
 
-/** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
-const CLICK_SLOP = 4;
 const PICK_GLOW = new THREE.Color('#2f7cf6');
 /** Quiet time, in ms, after the last orbit or slider frame before the AO pass is drawn again. */
 const IDLE_RENDER_DELAY = 150;
@@ -141,6 +145,8 @@ type Viewer = {
   reframe: () => void;
   /** Stops a fit glide midway, so another camera move (explode, the user) takes over from there. */
   stopFit: () => void;
+  /** Hover guide and press-and-drag posing of the model's joints. */
+  joints: JointDragController;
   /** Re-checks whether the shown model reaches past the view and tells the pane when that changes. */
   checkCropped: () => boolean;
 } & ModelViewportHandle;
@@ -158,6 +164,8 @@ export function ModelViewport({
   exploded,
   picked,
   onPick,
+  onPoseChange,
+  onJointDragStart,
   editing,
   onEditSettled,
   clip,
@@ -182,6 +190,10 @@ export function ModelViewport({
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const onPoseChangeRef = useRef(onPoseChange);
+  onPoseChangeRef.current = onPoseChange;
+  const onJointDragStartRef = useRef(onJointDragStart);
+  onJointDragStartRef.current = onJointDragStart;
   const editingRef = useRef(editing);
   editingRef.current = editing;
   const onEditSettledRef = useRef(onEditSettled);
@@ -219,12 +231,29 @@ export function ModelViewport({
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     // While a turntable records, it alone draws: orbit, rebuild and resize frames would land in the clip.
     let recording = false;
+    // Assigned just below; a joint drag holds the AO pass back until it settles, as an orbit does.
+    let jointDrag: JointDragController | null = null;
     const render = () => {
       if (recording) return;
       composer.render(false);
       clearTimeout(idleTimer);
+      if (jointDrag?.busy) return;
       idleTimer = setTimeout(() => composer.render(true), IDLE_RENDER_DELAY);
     };
+    jointDrag = new JointDragController({
+      host: element,
+      canvas: renderer.domElement,
+      camera,
+      controls,
+      scene,
+      shown: () => shownCopy.current,
+      pose: () => poseRef.current,
+      enabled: () => !recording,
+      onChange: (name, value) => onPoseChangeRef.current?.(name, value),
+      onStart: () => onJointDragStartRef.current?.(),
+      render,
+    });
+    stage.unreflected.add(jointDrag.overlay);
     let fitFrame = 0;
     const stopFit = () => cancelAnimationFrame(fitFrame);
     let cropped = false;
@@ -288,9 +317,7 @@ export function ModelViewport({
         ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1
       );
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
+      const hit = meshAt(shown, camera, pointer);
       onPickRef.current({
         name: hit ? hit.object.name : null,
         additive: event.shiftKey,
@@ -438,6 +465,7 @@ export function ModelViewport({
       render,
       reframe,
       stopFit,
+      joints: jointDrag,
       checkCropped,
       fit,
       recordTurntable,
@@ -456,6 +484,7 @@ export function ModelViewport({
       onCroppedChangeRef.current?.(false);
       cancelAnimationFrame(buildFrame.current);
       if (flash.current) cancelAnimationFrame(flash.current.frame);
+      jointDrag.dispose();
       controls.dispose();
       composer.dispose();
       stage.dispose();
@@ -496,6 +525,7 @@ export function ModelViewport({
       flash.current.run.finish();
       flash.current = null;
     }
+    current.joints.reset();
     current.content.clear();
     current.stage.fit(object, { dark, grid, lighting });
     current.composer.fit(current.stage.bounds);
@@ -571,7 +601,7 @@ export function ModelViewport({
   // A slider drag or playback only turns nodes: no re-clone, no re-frame.
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;
-    poseJoints(shownCopy.current, pose);
+    poseJoints(shownCopy.current, viewer.current.joints.posed(pose));
     viewer.current.render();
   }, [pose]);
 
