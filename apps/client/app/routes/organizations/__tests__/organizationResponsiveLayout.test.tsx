@@ -187,7 +187,7 @@ describe('organization detail page - responsive rail', () => {
     expectPhoneNames();
     fireEvent.click(screen.getByRole('combobox', { name: 'Team section' }));
     const listbox = screen.getByRole('listbox', { name: 'Team sections' });
-    expect(within(listbox).getAllByRole('option')).toHaveLength(14);
+    expect(within(listbox).getAllByRole('option')).toHaveLength(15);
     fireEvent.click(within(listbox).getByRole('option', { name: 'Members' }));
     applyNavigation(rerender);
     expectPhoneNames();
