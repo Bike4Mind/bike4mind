@@ -156,4 +156,44 @@ describe('decidePendingAction', () => {
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ errorCode: 'action_already_resolved' });
   });
+
+  it('refuses an expired action on deny too, clearing it without running anything', async () => {
+    const lapsedTs = Date.now() - EXPIRY_MS - 1000;
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'create_issue', params: {}, ts: lapsedTs },
+    } as never);
+
+    const result = await decide({ confirmed: false, pendingActionTs: lapsedTs });
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ errorCode: 'action_expired' });
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, lapsedTs);
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a quest with no session, without looking a session up', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({ pendingAction: undefined } as never);
+
+    await expect(decide()).rejects.toBeInstanceOf(NotFoundError);
+    expect(Session.findById).not.toHaveBeenCalled();
+  });
+
+  it('hides the error text of a tool that threw behind a generic 500', async () => {
+    vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('mongo://user:secret@host timed out'));
+
+    const result = await decide();
+
+    expect(result.status).toBe(500);
+    expect(JSON.stringify(result.body)).not.toContain('secret');
+  });
+
+  it('keeps the error envelope free of the success flag on client errors', async () => {
+    vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['other/repo']);
+
+    const result = await decide();
+
+    expect(result.status).toBeGreaterThanOrEqual(400);
+    expect(result.body).not.toHaveProperty('success');
+  });
 });

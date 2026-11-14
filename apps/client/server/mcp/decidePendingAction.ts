@@ -54,5 +54,10 @@ export async function decidePendingAction({
       body: { error: String(outcome.body.error), errorCode: LIFECYCLE_ERROR_CODES[outcome.reason] },
     };
   }
+  if (outcome.status >= 500) return { status: outcome.status, body: { error: 'Failed to run the pending action' } };
+  if (outcome.status >= 400) {
+    const { success: _success, ...error } = outcome.body;
+    return { status: outcome.status, body: error };
+  }
   return outcome;
 }
