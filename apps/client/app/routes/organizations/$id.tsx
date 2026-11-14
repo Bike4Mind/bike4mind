@@ -11,6 +11,7 @@ import OrganizationLibrarySection from '@client/app/components/organizations/Org
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAvatar from '@client/app/components/organizations/OrganizationAvatar';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
@@ -37,7 +38,6 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
-  Avatar,
   Alert,
   Box,
   Button,
@@ -589,7 +589,6 @@ const OrganizationHeader: FC<{
 }> = ({ organization, onSettingsClick }) => {
   const { t } = useTranslation();
   const { name, description } = organization;
-  const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
@@ -609,9 +608,7 @@ const OrganizationHeader: FC<{
   return (
     <Card variant="outlined" sx={{ mx: { xs: 2, sm: 3 }, p: { xs: 2, sm: 3 } }} data-testid="organization-header">
       <Stack direction="row" spacing={{ xs: 2, sm: 3 }} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-        <Avatar size="lg" sx={{ '--Avatar-size': { xs: '48px', sm: '64px' } }}>
-          {initial}
-        </Avatar>
+        <OrganizationAvatar organization={organization} size="lg" sx={{ '--Avatar-size': { xs: '48px', sm: '64px' } }} />
         <Stack spacing={1} flex={1} minWidth={0}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" useFlexGap gap={1}>
             <Typography level="h3" sx={{ overflowWrap: 'anywhere' }}>

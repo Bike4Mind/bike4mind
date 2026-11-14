@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Button, Sheet, Stack, Typography } from '@mui/joy';
-import { adminSurface } from './adminStyles';
+import { adminSaveBarZIndex, adminSurface } from './adminStyles';
 import { isAdminOverlayOpen } from './adminKeyboard';
 
 export type SaveBarProps = {
@@ -34,7 +34,7 @@ export function SaveBar({ count, pending, blockedReason, error, onSave, onDiscar
     <Sheet
       variant="outlined"
       data-testid="admin-save-bar"
-      sx={{ ...adminSurface, position: 'sticky', bottom: 0, zIndex: 3, p: 2 }}
+      sx={{ ...adminSurface, position: 'sticky', bottom: 0, zIndex: adminSaveBarZIndex, p: 2 }}
     >
       <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
         <Typography role="status" sx={{ flex: 1 }}>
