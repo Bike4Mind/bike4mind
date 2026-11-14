@@ -977,7 +977,6 @@ describe('shell approval in a project with a large node_modules', () => {
         uncoverablePaths: permissionRoots,
       }
     );
-    expect(prompt.contained).toBeUndefined();
     expect(prompt.detail).toContain('Can send data off this computer');
   });
 
@@ -2131,7 +2130,6 @@ describe('shell approval in a project with a large node_modules', () => {
       { command: 'git p https://example.invalid/r main', cwd },
       { roots: [proj], workingDirectory: cwd, signal: new AbortController().signal, protectedPaths: [userData] }
     );
-    expect(elsewhere.contained).toBeUndefined();
     expect(elsewhere.detail).toContain('Can send data off this computer');
   });
 

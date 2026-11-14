@@ -214,86 +214,13 @@ describe('ChatService and skills', () => {
     return { asked, id };
   }
 
-  /** Runs one skill in a reply that then runs out of budget, continues it, and returns any call that asks. */
-  async function resumedAfterSkill(skillName: string) {
-    turnLimits.rounds = 1;
-    const id = await session();
-    await service.send(id, 'go');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
-    streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
-    );
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.stopReason === 'tool_turn_limit'), {
-      timeout: 5000,
-      interval: 5,
-    });
-
-    events.length = 0;
-    await expect(service.continueReply(id)).resolves.toMatchObject({ ok: true });
-    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
-    streams[1].write(
-      frame({
-        type: 'tool_use',
-        tools: [
-          { id: 'c2', name: 'bash_execute', arguments: JSON.stringify({ command: 'node --version', cwd: project }) },
-        ],
-      })
-    );
-    streams[1].write(frame('[DONE]'));
-    await vi.waitUntil(
-      () =>
-        events.some(event => event.type === 'tool-end' && event.call.id === 'c2') ||
-        events.some(
-          event => event.type === 'tool-start' && event.call.id === 'c2' && event.call.status === 'awaiting-approval'
-        ),
-      { timeout: 5000, interval: 5 }
-    );
-    return events
-      .map(event => (event.type === 'tool-start' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
-  }
-
-  it('asks in "Approve for me" before an outbound call that follows an account skill', async () => {
+  it('runs an outbound call in "Approve for me" after an account skill', async () => {
     const { asked } = await afterSkill('web-summary', {
       name: 'web_fetch',
       input: { url: 'https://example.com/' },
     });
 
-    expect(asked?.name).toBe('web_fetch');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
-  });
-
-  it('does not count a skill from a project the user trusted as untrusted content', async () => {
-    await catalog.setTrusted(project, true);
-    const { asked, id } = await afterSkill('ship-it', {
-      name: 'bash_execute',
-      input: { command: 'node --version', cwd: project },
-    });
-
     expect(asked).toBeUndefined();
-    // The card was skipped because the call said its content is the user's own, and that flag
-    // has to survive into the stored turn: a resumed reply replays it. See the tests below.
-    const emitted = events
-      .map(event => (event.type === 'tool-end' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.id === 'c1');
-    expect(emitted?.ownContent).toBe(true);
-    const stored = (await service.getSession(id))?.messages
-      .flatMap(message => message.toolCalls ?? [])
-      .find(call => call.id === 'c1');
-    expect(stored?.ownContent).toBe(true);
-  });
-
-  it('does not start a resumed reply tainted when it replays a trusted project skill', async () => {
-    await catalog.setTrusted(project, true);
-    expect(await resumedAfterSkill('ship-it')).toBeUndefined();
-  });
-
-  it('keeps a resumed reply tainted when it replays an account skill', async () => {
-    const asked = await resumedAfterSkill('web-summary');
-
-    expect(asked?.name).toBe('bash_execute');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {
@@ -305,7 +232,7 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'second', 2))).toBe(first);
   });
 
-  it('sends a /name Skill Market import wrapped as untrusted, and taints the reply it starts', async () => {
+  it('sends a /name Skill Market import wrapped as untrusted', async () => {
     const id = await session();
     await service.send(id, '/market-pick https://example.com/');
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
@@ -315,22 +242,6 @@ describe('ChatService and skills', () => {
     expect(sent).toContain('shared by a Skill Market author');
     expect(sent).toMatch(/<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\\nFetch https:\/\/example.com\//);
     expect((await service.getSession(id))?.messages[0]?.skill).toMatchObject({ name: 'market-pick', imported: true });
-
-    streams[0].write(
-      frame({
-        type: 'tool_use',
-        tools: [{ id: 'c1', name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/' }) }],
-      })
-    );
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(
-      () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
-      { timeout: 5000, interval: 5 }
-    );
-    const asked = events
-      .map(event => (event.type === 'tool-start' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('sends a skill named mid-message as typed, with a note telling the model to run it', async () => {

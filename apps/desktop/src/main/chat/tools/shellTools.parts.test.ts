@@ -58,7 +58,6 @@ describe('shellApproval per part', () => {
     const prompt = await approve('git status && node -e 1');
     expect(prompt.byPart).toBe(true);
     expect(prompt.askInAuto).toBeUndefined();
-    expect(prompt.contained).toBeUndefined();
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ kinds: ['outbound'] }),
@@ -111,13 +110,12 @@ describe('shellApproval per part', () => {
   it.each([
     ['a script written during this session', 'git status && node generated.js', true],
     ['a failed check for session-written scripts', 'git status && printf ok', false],
-  ])('decides %s as a whole, never contained, which auto mode still runs', async (_, command, written) => {
+  ])('decides %s as a whole, which auto mode still runs', async (_, command, written) => {
     const check = vi.spyOn(sessionScripts, 'sessionScriptRun');
     if (written) check.mockResolvedValueOnce({ names: ['generated.js'], hooks: [], untracked: false, generation: '1' });
     else check.mockRejectedValueOnce(new Error('cannot inspect scripts'));
     const prompt = await approve(command, { sessionId: 'written-script' });
     expect(prompt.byPart).toBeUndefined();
-    expect(prompt.contained).toBeUndefined();
     expect(runsCheckedInAuto(prompt)).toBe(true);
   });
 

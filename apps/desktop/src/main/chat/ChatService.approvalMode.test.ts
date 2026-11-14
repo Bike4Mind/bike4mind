@@ -617,9 +617,8 @@ describe('ChatService approval modes', () => {
       expect((await spawnFrom('full')).approvalMode).toBe('auto');
     });
 
-    // Nobody watches a card in a spawned session, so its own spawns keep the approval gate,
-    // which asks in every mode because it spends credits.
-    it('still asks before a spawned session starts another, in auto', async () => {
+    // The depth cap and the concurrency cap bound the chain, not a card nobody watches.
+    it('lets a spawned session start another in auto without a card', async () => {
       const child = await spawnFrom('auto');
       const childStream = await vi.waitUntil(
         () => {
@@ -633,8 +632,11 @@ describe('ChatService approval modes', () => {
       childStream.write(toolTurn('g1', 'session_spawn', { prompt: 'and another' }));
       childStream.write(frame('[DONE]'));
 
-      const asked = await awaitStatus('awaiting-approval');
-      expect(asked.name).toBe('session_spawn');
+      await vi.waitUntil(
+        () => calls('done').find(call => call.id === 'g1') ?? calls('error').find(call => call.id === 'g1'),
+        { timeout: 5000, interval: 10 }
+      );
+      expect(calls('awaiting-approval').filter(call => call.name === 'session_spawn')).toHaveLength(0);
       expect(child.approvalMode).toBe('auto');
     });
   });

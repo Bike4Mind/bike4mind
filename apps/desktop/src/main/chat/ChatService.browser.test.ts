@@ -346,7 +346,7 @@ describe('ChatService agent browser', () => {
     expect(second.result).toContain('123456');
   });
 
-  it('asks in "Approve for me" before a command that follows a page read', async () => {
+  it('runs a command in "Approve for me" after a page read', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then run the build');
@@ -358,16 +358,16 @@ describe('ChatService agent browser', () => {
     streams[1].write(frame({ type: 'tool_use', tools: [{ id: 'build', name: 'bash_execute', arguments: build }] }));
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'bash_execute' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'bash_execute') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'bash_execute' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain(
-      'Asked because this reply read content from a web page in the browser (browser_snapshot).'
-    );
+    expect(settled.type).toBe('tool-end');
   });
 
-  it('asks in "Approve for me" before opening a site once the reply has read a page', async () => {
+  it('does not ask in "Approve for me" before opening a site because the reply read a page', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then open example.com');
@@ -383,14 +383,16 @@ describe('ChatService agent browser', () => {
     );
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'browser_navigate') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+    expect(settled.type).toBe('tool-end');
   });
 
-  it('asks in "Approve for me" before opening a tab once the reply has read a page', async () => {
+  it('does not ask in "Approve for me" before opening a tab because the reply read a page', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then open a tab');
@@ -412,11 +414,13 @@ describe('ChatService agent browser', () => {
     );
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_tabs' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'browser_tabs') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'browser_tabs' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+    expect(settled.type).toBe('tool-end');
   });
 
   it('closes the browser with its conversation', async () => {

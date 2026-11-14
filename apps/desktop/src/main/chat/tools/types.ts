@@ -137,12 +137,6 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
-  /**
-   * This call's result is text the user wrote or chose to load - a skill from their own folder or
-   * from a project they trusted - so reading it does not make the reply untrusted. See
-   * ChatToolCall.ownContent.
-   */
-  ownContent(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -732,12 +726,6 @@ export interface ApprovalPrompt {
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
-  /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
-   */
-  contained?: true;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that

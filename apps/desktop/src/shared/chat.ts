@@ -202,8 +202,8 @@ export interface ChatToolCall {
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
   /**
-   * Set with `approvalId` when the gate asks about this call in every mode: it acts as the signed-in
-   * user (`askInFull`) or spends credits. Only the full app card may answer it, never the menu bar.
+   * Set with `approvalId` when the gate asks about this call in every mode because it acts as the
+   * signed-in user (`askInFull`). Only the full app card may answer it, never the menu bar.
    */
   approvalInAppOnly?: boolean;
   /**
@@ -270,12 +270,6 @@ export interface ChatToolCall {
    * conversation, and only the call that resolved the id knows its title.
    */
   label?: string;
-  /**
-   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
-   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
-   * Kept on the row so a continued reply, which replays it, judges it the same way.
-   */
-  ownContent?: true;
   /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
@@ -918,7 +912,7 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
-  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  /** A Skill Market import, written by someone else, so its body is framed as theirs. */
   imported?: true;
 }
 
@@ -1221,17 +1215,14 @@ export type ChatSessionMode = 'chat' | 'code';
  * goes ahead.
  *
  * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
- * may do without stopping, and it governs one axis only: filesystem and execution. The
- * generation tools are gated on COST, not safety, and ask in every mode - approving
- * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ * may do without stopping.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders, a read of a `.env` file, a
- *           command that writes permission settings, an outbound call after the reply read
- *           untrusted content, or the same call a third time in a row. Over a clean reply, a
- *           command the scan cannot follow or parse, one that sends data out, or one that runs
- *           code written in this conversation runs like any other. Modelled on
+ *           command that writes outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, or the same call a third time in a row.
+ *           A command the scan cannot follow or parse, one that sends data out, or one that
+ *           runs code written in this conversation runs like any other. Modelled on
  *           opencode's permission defaults; see ChatService.autoApproves.
  *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
  *           this user can read and reach the internet with nobody looking. Chosen per

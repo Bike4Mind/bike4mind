@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { basename, sep } from 'node:path';
+import { sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import type { ApprovalAlways, ApprovalPart } from './types';
 
@@ -41,11 +41,6 @@ interface PendingApproval {
 export interface StandingApproval {
   optionId?: string;
   value?: string;
-  /**
-   * Answered on a card that already said the reply had read untrusted content, so the user
-   * consented knowing that, and a later tainted call with the same key need not ask again.
-   */
-  overTaint?: true;
 }
 
 /** The key a standing approval is filed under: the call, plus which way it was allowed. */
@@ -67,15 +62,13 @@ export function patternMatches(pattern: string, command: string): boolean {
 
 /**
  * Whether remembered `patterns` (see ApprovalGate.allowedPatterns) cover one sub-command. Never one the
- * scan could not normalise, nor an inline or stdin script over a tainted reply or with a reason to ask:
- * a prefix would cover whatever code comes next.
+ * scan could not normalise, nor one asked for a reason the pattern was not allowed over.
  */
 export function partAllowed(
   patterns: readonly AllowedPattern[],
-  part: Pick<ApprovalPart, 'text' | 'coverable' | 'opaque' | 'ask'>,
-  tainted = false
+  part: Pick<ApprovalPart, 'text' | 'coverable' | 'ask'>
 ): boolean {
-  if (!part.coverable || (part.opaque && tainted)) return false;
+  if (!part.coverable) return false;
   const kinds = part.ask?.kinds ?? [];
   return patterns.some(
     ({ pattern, askedOver }) => kinds.every(kind => askedOver.has(kind)) && patternMatches(pattern, part.text)
@@ -90,45 +83,12 @@ export interface AllowedPattern {
 
 const NOTHING_ASKED: ReadonlySet<string> = new Set();
 
-const TOOLCHAIN_EXECUTABLES = new Set(['vitest', 'jest', 'tsc', 'eslint', 'prettier', 'turbo']);
-const PACKAGE_RUNNERS = new Set(['pnpm', 'npm', 'yarn', 'bun']);
-const EXEC_SUBCOMMANDS = new Set(['exec', 'x', 'dlx']);
-const SCRIPT_SUBCOMMANDS = new Set(['run', 'run-script', 'task']);
-
-/**
- * A prefix must bind more than a runner or interpreter before its wildcard. Counting words
- * alone mistakes `pnpm exec -- *` and `pnpm exec node *` for a narrower permission than `node *`.
- * Keep their exact-call approval, but ask again when a later tainted call changes the payload.
- */
-function hasBoundedTaintPrefix(pattern: string): boolean {
-  const prefix = pattern.endsWith(' *') ? pattern.slice(0, -2).split(' ') : [];
-  if (prefix.length < 2) return false;
-  const [program, subcommand, target] = prefix.map(word => word.replace(/['"]/g, ''));
-  if (PACKAGE_RUNNERS.has(program) || program === 'deno') {
-    if (EXEC_SUBCOMMANDS.has(subcommand)) {
-      // A package executor needs a fixed tool. Arbitrary interpreters (including unknown ones)
-      // are exact-call approvals; their next argument can select a completely different script.
-      return target !== undefined && TOOLCHAIN_EXECUTABLES.has(target);
-    }
-    if (SCRIPT_SUBCOMMANDS.has(subcommand)) return target !== undefined && !target.startsWith('-');
-    // Bare package tasks may also resolve to binaries. Only known development task names get
-    // prefix replay; an unknown task still retains the exact-call answer.
-    return /(^|[:._/-])(test|tests|spec|unit|e2e|integration|typecheck|types|tsc|lint|eslint|stylelint|format|fmt|prettier|build|compile|check|verify|validate|coverage|vitest|jest)($|[:._/-])/.test(
-      subcommand
-    );
-  }
-  const last = basename(prefix[prefix.length - 1].replace(/['"]/g, ''));
-  return last !== '' && !last.startsWith('-') && !EXEC_SUBCOMMANDS.has(last) && !SCRIPT_SUBCOMMANDS.has(last);
-}
-
 function withinDirectory(directory: string, candidate: string): boolean {
   return candidate === directory || candidate.startsWith(directory.endsWith(sep) ? directory : directory + sep);
 }
 
 interface StandingShell {
   patterns: Set<string>;
-  /** The patterns answered on a card that said the reply had read untrusted content. */
-  overTaint: Set<string>;
   /** Pattern -> the reasons its part asked on the card it was allowed on. */
   askedOver: Map<string, Set<string>>;
   directories: Set<string>;
@@ -152,8 +112,6 @@ export interface ApprovalRequestOptions {
   partial?: boolean;
   /** A question card, which a new message closes via cancelQuestions rather than leaving live. */
   question?: boolean;
-  /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
-  tainted?: boolean;
   /**
    * Whether a standing answer or rule given since the card was shown now covers this call: the
    * answer to settle it with, or null to keep asking. Run by settleCovered after another card's
@@ -230,14 +188,12 @@ export class ApprovalGate {
 
   /**
    * Whether every sub-command of this script has been allowed before, here or in a session that spawned
-   * this one. Over a tainted reply only
-   * patterns answered over taint count, never an unbounded runner pattern such as `node *` or
-   * `pnpm exec -- *`, and never an inline or stdin script.
+   * this one.
    */
-  coversCommands(sessionId: string, always: ApprovalAlways, tainted = false): boolean {
+  coversCommands(sessionId: string, always: ApprovalAlways): boolean {
     if (always.commands.length === 0) return false;
-    const own = this.allowedPatterns(sessionId, always.namespace, tainted);
-    return own.length > 0 && always.commands.every(command => partAllowed(own, command, tainted));
+    const own = this.allowedPatterns(sessionId, always.namespace);
+    return own.length > 0 && always.commands.every(command => partAllowed(own, command));
   }
 
   /**
@@ -260,12 +216,12 @@ export class ApprovalGate {
   }
 
   /** The shell patterns "Allow in this chat" gave for one tool, in this session or one that spawned it. */
-  allowedPatterns(sessionId: string, namespace: string, tainted = false): AllowedPattern[] {
+  allowedPatterns(sessionId: string, namespace: string): AllowedPattern[] {
     const prefix = `${namespace}\x00`;
     const patterns: AllowedPattern[] = [];
     for (const id of this.lineage(sessionId)) {
       for (const entry of this.standingShell.get(id)?.values() ?? []) {
-        for (const stored of tainted ? entry.overTaint : entry.patterns) {
+        for (const stored of entry.patterns) {
           if (!stored.startsWith(prefix)) continue;
           patterns.push({
             pattern: stored.slice(prefix.length),
@@ -321,9 +277,9 @@ export class ApprovalGate {
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
           if (!options.partial) {
-            this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
+            this.remember(sessionId, standingKey(key, answer.optionId), answer);
           }
-          if (options.always) this.rememberShell(sessionId, key, options.always, options.tainted === true);
+          if (options.always) this.rememberShell(sessionId, key, options.always);
         }
         if (announced) this.listener?.settled(sessionId);
         resolve({
@@ -410,11 +366,10 @@ export class ApprovalGate {
     this.parents.clear();
   }
 
-  private rememberShell(sessionId: string, key: string, always: ApprovalAlways, overTaint: boolean): void {
+  private rememberShell(sessionId: string, key: string, always: ApprovalAlways): void {
     const byKey = this.standingShell.get(sessionId) ?? new Map<string, StandingShell>();
     const standing = byKey.get(key) ?? {
       patterns: new Set(),
-      overTaint: new Set(),
       askedOver: new Map(),
       directories: new Set(),
     };
@@ -426,19 +381,17 @@ export class ApprovalGate {
         for (const kind of ask.kinds) over.add(kind);
         standing.askedOver.set(entry, over);
       }
-      if (overTaint && hasBoundedTaintPrefix(pattern)) standing.overTaint.add(entry);
     }
     for (const directory of always.directories) standing.directories.add(directory);
     byKey.set(key, standing);
     this.standingShell.set(sessionId, byKey);
   }
 
-  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer, overTaint: boolean): void {
+  private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {
     const keys = this.standing.get(sessionId) ?? new Map<string, StandingApproval>();
     keys.set(key, {
       ...(answer.optionId ? { optionId: answer.optionId } : {}),
       ...(answer.value === undefined ? {} : { value: answer.value }),
-      ...(overTaint || keys.get(key)?.overTaint ? { overTaint: true as const } : {}),
     });
     this.standing.set(sessionId, keys);
   }

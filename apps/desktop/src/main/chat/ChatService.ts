@@ -263,8 +263,6 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
-import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
@@ -319,12 +317,7 @@ import {
   toolStateReminder,
   type ToolStateMark,
 } from './deferredTools';
-import {
-  IMPORTED_TAINT_SOURCE,
-  importedHistoryNeedsCompaction,
-  importedTurnAsText,
-  isImportedToolTurn,
-} from '../claudeImport/continuation';
+import { importedHistoryNeedsCompaction, importedTurnAsText, isImportedToolTurn } from '../claudeImport/continuation';
 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -517,8 +510,8 @@ const MAX_MESSAGE_HOPS = 5;
  * every session in the project and the total would still be "finite".
  *
  * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
- * That bound is structural and is the only one: session_send is not held at the approval gate
- * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * That bound is structural and is the only one: session_send rides the approval mode like any
+ * other tool, so these two numbers are what keeps a chain finite.
  */
 const MAX_SENDS_PER_TURN = 2;
 
@@ -3758,22 +3751,7 @@ export class ChatService {
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
-      // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
-      // text it had already read is still in front of it: it starts out as tainted as the turn
-      // it carries on.
-      const directoryTurn: DirectoryTurn = {
-        declined: [],
-        granted: [],
-        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
-        // Text brought in from Claude was written outside this app, so a continued import is
-        // treated as having read untrusted content for as long as it lives.
-        ...(session.importOrigin ? { untrusted: IMPORTED_TAINT_SOURCE } : {}),
-        // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
-        // Read off the stored message rather than passed in, so a resumed reply re-taints too.
-        ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
-          ? { untrusted: 'skill' }
-          : {}),
-      };
+      const directoryTurn: DirectoryTurn = { declined: [], granted: [] };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
@@ -5052,7 +5030,6 @@ export class ChatService {
         const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
         let moved = false;
-        let ownContent = false;
         // Set once the turn has stopped waiting on this call. Its work may still be running, and
         // nothing it reports from then on may reach the renderer or the next request.
         let abandoned = false;
@@ -5083,9 +5060,6 @@ export class ChatService {
           moved: () => {
             moved = true;
           },
-          ownContent: () => {
-            ownContent = true;
-          },
         };
         let startedAt = Date.now();
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
@@ -5096,7 +5070,6 @@ export class ChatService {
           ...(attachments.length > 0 ? { media: attachments } : {}),
           ...(notice ? { notice } : {}),
           ...(label ? { label } : {}),
-          ...(ownContent ? { ownContent: true as const } : {}),
           // The one channel above that is NOT kept on a call that failed. A write tool only
           // reports a diff once the bytes are down, so there is nothing to drop here in
           // practice - the condition is what makes that a property of this loop rather than
@@ -5223,18 +5196,6 @@ export class ChatService {
           });
         }
 
-        // A failed call is not a quiet one: an MCP server puts its error in the result body, and
-        // `toolResultContent` sends that text to the model like any other, so only a call the
-        // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          !settled.ownContent &&
-          readsUntrusted(request.name)
-        ) {
-          scope.directories.untrusted = request.name;
-        }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -7084,12 +7045,8 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
-    // Once this reply has read web, MCP or account-skill content, an injected instruction may be
-    // steering it, so a call that can send data out is asked whatever "always" was answered
-    // before - unless the shell scan proved the command has nowhere to send it.
-    const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
-    // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
-    // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
+    // A matching allow rule runs the call in every mode: the user wrote it knowing what the
+    // command does. A loop still stops, and the rule set itself keeps
     // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
     if (verdict.decision === 'allow' && !stuck) {
       return {
@@ -7099,24 +7056,18 @@ export class ChatService {
         patterns,
       };
     }
-    if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    // Read live: a parallel call may taint the reply while this card is open.
-    const writesOnly = (): boolean => mode === 'auto' && !directories.untrusted;
     const standingAnswer = (): ChatApprovalAnswer | null => {
       if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
-      const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
         runnable.map(option => option.id)
       );
-      // Over a tainted reply only an answer given knowing about the taint, or one for a tool
-      // whose "always" already accepted whatever the content could steer it to, still stands.
-      if (standing && (!currentlyTainted || standing.overTaint || alwaysOverridesTaint(call.name))) {
+      if (standing) {
         return {
           decision: 'once',
           ...(standing.optionId ? { optionId: standing.optionId } : {}),
@@ -7124,14 +7075,13 @@ export class ChatService {
         };
       }
       // A shell command whose every sub-command was allowed before, by prefix, runs - but not
-      // past a directory outside the project that the user has not allowed too. Over a tainted
-      // reply, only prefixes the user allowed on a card that already named the taint count.
+      // past a directory outside the project that the user has not allowed too.
       const always = prompt.always;
       if (
         always &&
         !prompt.askInAuto &&
-        gate.coversCommands(sessionId, always, currentlyTainted) &&
-        gate.uncoveredDirectories(sessionId, askedDirectories(always, writesOnly())).length === 0
+        gate.coversCommands(sessionId, always) &&
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, mode)).length === 0
       ) {
         return { decision: 'once' };
       }
@@ -7149,10 +7099,8 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
-    const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode, writesOnly()) : null;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule);
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -7167,7 +7115,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted, writesOnly())) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck)) {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
@@ -7180,27 +7128,17 @@ export class ChatService {
     const outsideReason = askedAlways
       ? outsideFoldersReason(
           askedAlways,
-          gate.uncoveredDirectories(sessionId, askedDirectories(askedAlways, writesOnly())),
+          gate.uncoveredDirectories(sessionId, askedDirectories(askedAlways, mode)),
           context.workingDirectory
         )
       : null;
-    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop, folders not yet allowed.
-    const askedReasons = [
-      askedByRule,
-      tainted ? untrustedReason(tainted) : null,
-      stuck ? LOOP_ASK_REASON : null,
-      outsideReason,
-    ].filter((reason): reason is string => !!reason);
+    // Only the reasons beyond the tool's own: an ask rule, a loop, folders not yet allowed.
+    const askedReasons = [askedByRule, stuck ? LOOP_ASK_REASON : null, outsideReason].filter(
+      (reason): reason is string => !!reason
+    );
     const askedBecause = askedReasons.join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
-    // 'ask' sets no `tainted`, yet a sending call over untrusted content still needs its reason here.
-    const untrusted = directories.untrusted;
-    const untrustedInAsk = !tainted && untrusted && taintedParts() ? untrustedReason(untrusted) : null;
-    const approvalReasons = [
-      ...(asked.prompt.reasons ?? []),
-      ...askedReasons,
-      ...(untrustedInAsk ? [untrustedInAsk] : []),
-    ];
+    const approvalReasons = [...(asked.prompt.reasons ?? []), ...askedReasons];
     let requestedAt: string | undefined;
     // What answered this card when another card's "always" or a newly saved rule covered it.
     let coveredBy: ChatApprovalDecidedBy | undefined;
@@ -7239,7 +7177,7 @@ export class ChatService {
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
-            ...(asked.prompt.askInFull || spendsCredits(call.name) ? { approvalInAppOnly: true } : {}),
+            ...(asked.prompt.askInFull ? { approvalInAppOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,
@@ -7256,7 +7194,6 @@ export class ChatService {
       },
       {
         remember: !prompt.irreversible && !prompt.allowOnce,
-        tainted: !!tainted,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
           try {
@@ -7281,11 +7218,7 @@ export class ChatService {
               coveredBy = { kind: 'chat-allowance' };
               return covering;
             }
-            // A parallel call may have tainted the reply since this card opened.
-            const fresher =
-              byPart && !taintedParts()
-                ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode, writesOnly())
-                : null;
+            const fresher = byPart ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -7722,35 +7655,30 @@ export class ChatService {
    * The mode is read from the store by the caller rather than from the session captured when
    * the turn started, so a user who lowers it mid-reply is obeyed by the very next tool call.
    *
-   * Three exclusions hold in every mode, 'full' included. An irreversible call is asked because
-   * there is nothing to undo it with; a credit-spending call is asked because cost is a
-   * different axis from filesystem risk; and an `askInFull` call is asked because its risk is
+   * Two exclusions hold in every mode, 'full' included. An irreversible call is asked because
+   * there is nothing to undo it with, and an `askInFull` call is asked because its risk is
    * someone else's - a signed-in site's. Deciding the agent may edit files and run the shell
-   * says nothing about whether the user wants to pay for an image, or wants a script run with
-   * their cookies on a site they happen to have open.
+   * says nothing about whether the user wants a script run with their cookies on a site they
+   * happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
-   * own words name, reach permission settings, an outbound call after the reply read untrusted
-   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a folder
-   * outside the project the user has not allowed that the command may write in (after untrusted
-   * content, one it only reads too). Over a clean reply, a command the scan cannot
-   * follow or parse, one that can send data out, or one that runs code written in this
-   * conversation runs like any other.
+   * own words name, reach permission settings, or a folder outside the project the user has not
+   * allowed that the command may write in. A command the scan cannot follow or parse, one that
+   * can send data out, or one that runs code written in this conversation runs like any other.
    */
   private autoApproves(
     mode: ChatApprovalMode,
     sessionId: string,
     call: ChatToolCall,
     prompt: ApprovalPrompt,
-    stuck: boolean,
-    writesOnly: boolean
+    stuck: boolean
   ): boolean {
-    if (prompt.irreversible || spendsCredits(call.name) || prompt.askInFull) return false;
+    if (prompt.irreversible || prompt.askInFull) return false;
     if (mode === 'ask') return false;
     if (mode === 'full') return true;
     if (stuck || prompt.askInAuto) return false;
-    const directories = prompt.always ? askedDirectories(prompt.always, writesOnly) : [];
+    const directories = prompt.always ? askedDirectories(prompt.always, mode) : [];
     return (this.deps.approvals?.uncoveredDirectories(sessionId, directories) ?? directories).length === 0;
   }
 
@@ -9042,12 +8970,9 @@ interface PartDecision {
   decidedBy: ChatApprovalDecidedBy;
 }
 
-/**
- * The folders outside the shared ones to ask about. `writesOnly` (auto mode over a clean reply) leaves out the
- * ones a command only reads: a read sends nothing anywhere, and after untrusted content every folder counts again.
- */
-function askedDirectories(always: ApprovalAlways, writesOnly: boolean): readonly string[] {
-  return writesOnly ? (always.writtenDirectories ?? always.directories) : always.directories;
+/** The folders outside the shared ones a mode asks about: 'auto' only the ones the command may write in. */
+function askedDirectories(always: ApprovalAlways, mode: ChatApprovalMode): readonly string[] {
+  return mode === 'auto' ? (always.writtenDirectories ?? always.directories) : always.directories;
 }
 
 /** Whether the conversation's mode runs this part unasked. */
@@ -9066,8 +8991,7 @@ function decideParts(
   rules: PermissionRuleSet | undefined,
   gate: ApprovalGate,
   sessionId: string,
-  mode: ChatApprovalMode,
-  writesOnly: boolean
+  mode: ChatApprovalMode
 ): PartDecision | null {
   const always = prompt.always;
   if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
@@ -9084,7 +9008,7 @@ function decideParts(
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);
-  const asked = askedDirectories(always, writesOnly);
+  const asked = askedDirectories(always, mode);
   const outside = allByRule ? asked.filter(directory => !rules?.coversFolder(directory)) : asked;
   const directories = gate.uncoveredDirectories(sessionId, outside);
   const decidedBy: ChatApprovalDecidedBy = allowance
@@ -9172,20 +9096,6 @@ interface DirectoryTurn {
   declined: string[];
   /** Folders this round's cards granted; their own results already told the model. */
   granted: string[];
-  /**
-   * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
-   * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.
-   */
-  untrusted?: string;
-}
-
-/**
- * The first untrusted source a turn that ran out of budget had read. The reply that carries it
- * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
- */
-function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
-  const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
-  return source ? { untrusted: source.name } : {};
 }
 
 /** `work`'s result, or `stopped` once `signal` aborts; a later result or rejection then goes nowhere. */
@@ -9193,19 +9103,6 @@ async function unlessStopped<T>(work: Promise<T>, signal: AbortSignal, stopped: 
   const outcome = await untilStopped(work, signal, () => false, 0);
   if (outcome.kind === 'threw') throw outcome.error;
   return outcome.kind === 'returned' ? outcome.value : stopped;
-}
-
-function untrustedReason(tool: string): string {
-  const source = tool.startsWith('browser_')
-    ? 'a web page in the browser'
-    : tool.startsWith(MCP_TOOL_PREFIX)
-      ? 'an MCP server'
-      : tool === 'skill'
-        ? 'a skill'
-        : tool === IMPORTED_TAINT_SOURCE
-          ? 'a conversation imported from Claude'
-          : 'the web';
-  return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
 /** `first`, then whatever of `second` it does not already hold, in order. */

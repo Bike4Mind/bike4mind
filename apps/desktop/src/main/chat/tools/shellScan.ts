@@ -116,8 +116,7 @@ export interface ShellScan {
   sends: { reason: string; target: RepositoryWrite | null }[];
   /**
    * True when every command is one `containedCommand` accepts and nothing in the script sets the
-   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
-   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
+   * environment, so no part of it can carry data to a host of the caller's choosing.
    */
   contained: boolean;
   /**
@@ -4513,10 +4512,8 @@ function ghCommandWords(words: readonly string[], valued: boolean): number[] {
 const GH_CREATE = /^(create|new)$/;
 
 /**
- * Why one simple command can send data off this computer, or null. Defence in depth only: a
- * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command `containedCommand` does not vouch for (see
- * ChatService's DirectoryTurn.untrusted).
+ * Why one simple command can send data off this computer, or null, for the card. A script file, a
+ * decoded payload or a wrapper not listed here slips past.
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
@@ -6063,8 +6060,7 @@ function packageTask(manager: string, args: readonly string[]): boolean {
  * `jest`, `tsc`, `eslint`, `prettier`, a dev-task `turbo` pipeline or a `node` script inside the
  * folder, directly or through `pnpm`/`npm`/`yarn`/`npx`, with no option that opens a port, reads a
  * remote cache or installs a package. Only decides whether a tuning env prefix keeps the command
- * coverable. It is NOT contained: these run code the project defines, which a tainted reply can
- * write unasked first, so running one is the barrier the taint check keeps.
+ * coverable. It is NOT contained: these run code the project defines.
  */
 function localToolchainCommand(raw: readonly string[]): boolean {
   if (raw.length === 0 || raw.some(isDynamic)) return false;

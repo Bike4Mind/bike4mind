@@ -19,9 +19,6 @@ const RESULT_EXCERPT_CHARS = 1500;
  */
 export const IMPORTED_COMPACT_CHARS = 160_000;
 
-/** The taint source a continued imported session's replies start with; see ChatService DirectoryTurn. */
-export const IMPORTED_TAINT_SOURCE = 'imported_conversation';
-
 export function isImportedToolTurn(message: ChatMessage): boolean {
   return isImportedMessageId(message.id) && (message.toolCalls?.length ?? 0) > 0;
 }

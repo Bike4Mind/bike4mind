@@ -471,7 +471,7 @@ async function partAsk(entry: ShellScan['commands'][number]): Promise<ApprovalPa
     kinds.push('gitUnlisted');
   }
   if (kinds.length === 0) return undefined;
-  // Only reading secrets stops 'auto' here; sending data out stops it once the reply read untrusted content (ChatService).
+  // Only reading secrets stops 'auto' here.
   return {
     mode: kinds.includes('env') ? 'auto' : 'ask',
     reason: reasons.join(' '),
@@ -555,8 +555,7 @@ export async function shellApproval(
   // An `.env` read by redirect belongs to no one part.
   const partEnvFiles = new Set(scan.commands.flatMap(entry => entry.envFiles ?? []));
   const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
-  // A part that can send data out says so on the card but does not stop auto mode by itself; a reply
-  // that has read untrusted content asks anyway, as such a part is never contained.
+  // A part that can send data out says so on the card but does not stop auto mode.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
   const unchecked =
@@ -565,8 +564,6 @@ export async function shellApproval(
     scan.commands.some(entry => entry.unread || entry.gitUnlisted);
   // The scan cannot rule out a protected write in what it cannot follow, but the command's own words can name one.
   const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
-  // Code this session wrote runs in auto mode, but is never contained, so once the reply has read
-  // untrusted content it asks; the scan cannot vouch for what such a script does.
   const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
     envScript ||
@@ -652,7 +649,6 @@ export async function shellApproval(
     ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
-    ...(scan.contained && !runsSessionCode ? { contained: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {
       namespace: tool,

@@ -1191,8 +1191,8 @@ a deny refuses the call, while an allow still requires the tool's interactive re
 
 The approval card's "Allow in this chat" remembers consent for this conversation.
 "Always allow" saves the displayed allow rules in Settings -> Permissions, and also
-answers waiting cards those rules cover. For web fetches, both buttons cover every site,
-including after a reply has read web content; the saved rule is `WebFetch`.
+answers waiting cards those rules cover. For web fetches, both buttons cover every site;
+the saved rule is `WebFetch`.
 Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
 Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
 Settings also shows imported Claude Code sources read-only. Turn off "Use them here"

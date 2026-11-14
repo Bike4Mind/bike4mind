@@ -27,7 +27,8 @@ describe('approval mode copy', () => {
 
   it('names what full access still asks about', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/"Full access" asks before spending credits/);
+    expect(notes).toMatch(/"Full access" asks before an action that cannot be undone/);
+    expect(notes).not.toMatch(/credits/i);
     expect(notes).toMatch(/cannot be undone/i);
     expect(notes).toMatch(/browser page you are signed in to/i);
     expect(notes).toMatch(/permission and hook settings/i);
@@ -36,8 +37,7 @@ describe('approval mode copy', () => {
 
   it('does not promise that approve-for-me checks everything', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
-    expect(approvalModeOption('auto').description).toMatch(/outside this project/i);
-    expect(approvalModeOption('auto').description).toMatch(/send data out/i);
+    expect(approvalModeOption('auto').description).toMatch(/write outside this project/i);
     expect(approvalModeOption('auto').description).toMatch(/write protected settings/i);
   });
 
@@ -48,37 +48,20 @@ describe('approval mode copy', () => {
     expect(notes).toMatch(/names a \.env file or runs outside your folders/i);
   });
 
-  it('says approve-for-me asks before sending data out and after reading untrusted content', () => {
+  it('says approve-for-me runs reads outside your folders and commands that send data out', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/only reads outside your folders runs/i);
     expect(notes).toMatch(/send data off this computer/i);
-    expect(notes).toMatch(/read web, browser, MCP or account skill content/i);
-    expect(notes).toMatch(/browsing a site/i);
-  });
-
-  it('names the commands that still run after untrusted content, and the skills that do not count', () => {
-    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/only read files or read from GitHub/i);
-    expect(notes).toMatch(/gh pr view/);
-    expect(notes).toMatch(/skill from your own skills folder or from a project you trusted is not counted/i);
+    expect(notes).toMatch(/whatever the reply has read/i);
   });
 
   it('names the folders file edits can never reach', () => {
     expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/~\/\.ssh are refused in every mode/);
   });
 
-  /**
-   * The copy states the gap rather than implying the list is exhaustive: what a shell command
-   * prints does not count as content the reply read, so a page reached with `curl` does not by
-   * itself turn on the asks above.
-   */
-  it('admits that what a command printed is not counted as reading', () => {
-    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed, which is covered by the command rules/i);
-  });
-
-  /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */
+  /** The limits that hold in every mode, plus the two scoping rules. */
   it('states the limits that hold in every mode', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/spend credits/i);
     expect(notes).toMatch(/cannot be undone/i);
     expect(notes).toMatch(/folders you have shared/i);
     expect(notes).toMatch(/until you quit/i);
