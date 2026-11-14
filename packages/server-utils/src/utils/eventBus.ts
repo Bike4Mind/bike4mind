@@ -351,6 +351,7 @@ export const JiraHistoryAnalysisEvents = {
       analysisJobId: z.string(),
       projectKey: z.string(), // Jira project key, e.g. "PROJ"
       userId: z.string(),
+      cloudId: z.string().optional(),
     })
   ),
   Progress: event(
