@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { appUrlFromEnv, postAlarmToSlack, resolveAlarmWebhookUrl } from '../events/alarmSlackMessage';
 import { readAlarmMention } from '../events/alarmSlackMention';
 import { defaultPaidScopeDeps } from './spendMonitor/paidScopes';
+import { defaultTopAccountContextDeps } from './spendMonitor/topAccountContext';
 import { bucketsToRoll } from './spendMonitor/buckets';
 import { evaluateSpend } from './spendMonitor/evaluate';
 import { defaultResolveScopeDeps } from './spendMonitor/resolveScope';
@@ -103,6 +104,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       resolveScopeDeps: defaultResolveScopeDeps(),
       paidScopeDeps: defaultPaidScopeDeps(),
       accountContextDeps: defaultAccountContextDeps(),
+      topAccountContextDeps: defaultTopAccountContextDeps(),
       post: createSpendPost(slackEnabled, message => postAlarmToSlack(webhookUrl, message), logger),
       messageContext: {
         creditUsd: MIN_PRICE_PER_CREDIT_USD,
