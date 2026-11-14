@@ -66,12 +66,20 @@ async function retainedMedia(key: string): Promise<boolean> {
     .maxTimeMS(RETENTION_QUERY_MS));
 }
 
+class RetentionPolicyChangedError extends Error {}
+
+// One bad item must not stall the rest of the sweep; a changed policy must stop it.
+async function skipFailedItem(error: unknown, logger: Logger, kind: RetentionKind, id: string) {
+  if (error instanceof RetentionPolicyChangedError) throw error;
+  logger.warn('Retention delete failed; continuing with the next item', { kind, id, error });
+}
+
 async function lockPolicy(organizationId: string, version: number) {
   const result = await Organization.updateOne(
     { _id: organizationId, deletedAt: null, personal: false, retentionVersion: version },
     { $inc: { retentionSweepRevision: 1 } }
   );
-  if (result.modifiedCount !== 1) throw new Error('Retention policy changed; sweep stopped');
+  if (result.modifiedCount !== 1) throw new RetentionPolicyChangedError('Retention policy changed; sweep stopped');
 }
 
 async function audit(organizationId: string, kind: RetentionKind, id: string, version: number) {
@@ -117,35 +125,41 @@ export async function cleanupOrganizationRetention(
     for (const candidate of files) {
       if (Date.now() >= deadline || remaining-- <= 0) break;
       if (isModerationEvidenceHold(candidate)) continue;
-      const result = await withTransaction(async () => {
-        await lockPolicy(organizationId, version);
-        const file = await FabFile.findOne({ ...filter, _id: candidate._id });
-        if (!file || isModerationEvidenceHold(file)) return null;
-        await unpublishUserArtifactsBySource(file.userId, { kind: 'fabfile', fabFileIds: [file.id] }, { logger });
-        const deleted = await fabFilesService.deleteFabFile(
-          file.userId,
-          { id: file.id },
-          {
-            db: {
-              fabFiles: fabFileRepository,
-              users: userRepository,
-              sessions: sessionRepository,
-              fabFileChunks: fabFileChunkRepository,
-              dataLakes: dataLakeRepository,
-              ...lakeMembershipAuditDb,
-            },
-            storage: getFilesStorage(),
-            // Inline media has its own policy and explicit object ledger; file deletion must not remove it early.
-            generatedCopies: { storage: { delete: async () => undefined }, quests: questRepository },
-            searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
-            logger,
-          }
-        );
-        if (deleted.action !== 'deleted') throw new Error('Retention file delete did not complete');
-        await organizationRepository.incrementCurrentStorage(organizationId, -chargedBytes(file));
-        await audit(organizationId, kind, file.id, version);
-        return deleted;
-      });
+      let result: Awaited<ReturnType<typeof fabFilesService.deleteFabFile>> | null = null;
+      try {
+        result = await withTransaction(async () => {
+          await lockPolicy(organizationId, version);
+          const file = await FabFile.findOne({ ...filter, _id: candidate._id });
+          if (!file || isModerationEvidenceHold(file)) return null;
+          await unpublishUserArtifactsBySource(file.userId, { kind: 'fabfile', fabFileIds: [file.id] }, { logger });
+          const deleted = await fabFilesService.deleteFabFile(
+            file.userId,
+            { id: file.id },
+            {
+              db: {
+                fabFiles: fabFileRepository,
+                users: userRepository,
+                sessions: sessionRepository,
+                fabFileChunks: fabFileChunkRepository,
+                dataLakes: dataLakeRepository,
+                ...lakeMembershipAuditDb,
+              },
+              storage: getFilesStorage(),
+              // Inline media has its own policy and explicit object ledger; file deletion must not remove it early.
+              generatedCopies: { storage: { delete: async () => undefined }, quests: questRepository },
+              searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+              logger,
+            }
+          );
+          if (deleted.action !== 'deleted') throw new Error('Retention file delete did not complete');
+          await organizationRepository.incrementCurrentStorage(organizationId, -chargedBytes(file));
+          await audit(organizationId, kind, file.id, version);
+          return deleted;
+        });
+      } catch (error) {
+        await skipFailedItem(error, logger, kind, candidate.id);
+        continue;
+      }
       if (result?.references) {
         await fabFilesService.cleanUpDeletedFileReferences(
           result.references,
@@ -165,54 +179,60 @@ export async function cleanupOrganizationRetention(
     ]).option({ maxTimeMS: RETENTION_QUERY_MS });
     for (const message of messages) {
       if (Date.now() >= deadline || remaining-- <= 0) break;
-      const deleted = await withTransaction(async () => {
-        await lockPolicy(organizationId, version);
-        const session = await Session.findOne({
-          _id: message.sessionId,
-          retentionOrganizationId: organizationId,
-          deletedAt: null,
-          ...notHeld,
+      let deleted = false;
+      try {
+        deleted = await withTransaction(async () => {
+          await lockPolicy(organizationId, version);
+          const session = await Session.findOne({
+            _id: message.sessionId,
+            retentionOrganizationId: organizationId,
+            deletedAt: null,
+            ...notHeld,
+          });
+          const quest = session
+            ? await Quest.findOne({
+                _id: message._id,
+                sessionId: session.id,
+                timestamp: { $lt: chatCutoff },
+                deletedAt: null,
+                ...notHeld,
+              })
+            : null;
+          if (!session || !quest) return false;
+          await unpublishUserArtifactsBySource(
+            session.userId,
+            { kind: 'replyMessage', sessionId: session.id, messageIds: [quest.id] },
+            { logger }
+          );
+          await sessionService.deleteSessionMessage(
+            session.userId,
+            { sessionId: session.id, messageId: quest.id },
+            {
+              db: { sessions: sessionRepository, chatHistories: questRepository },
+            }
+          );
+          await Session.updateOne(
+            { _id: session._id },
+            {
+              $unset: {
+                summary: 1,
+                summaryAt: 1,
+                summaryModelId: 1,
+                summaryTrigger: 1,
+                contextSummary: 1,
+                contextSummaryUpToQuestId: 1,
+                contextSummaryAt: 1,
+                contextSummaryModelId: 1,
+              },
+            }
+          );
+          await audit(organizationId, 'chats', quest.id, version);
+          return true;
         });
-        const quest = session
-          ? await Quest.findOne({
-              _id: message._id,
-              sessionId: session.id,
-              timestamp: { $lt: chatCutoff },
-              deletedAt: null,
-              ...notHeld,
-            })
-          : null;
-        if (!session || !quest) return false;
-        await unpublishUserArtifactsBySource(
-          session.userId,
-          { kind: 'replyMessage', sessionId: session.id, messageIds: [quest.id] },
-          { logger }
-        );
-        await sessionService.deleteSessionMessage(
-          session.userId,
-          { sessionId: session.id, messageId: quest.id },
-          {
-            db: { sessions: sessionRepository, chatHistories: questRepository },
-          }
-        );
-        await Session.updateOne(
-          { _id: session._id },
-          {
-            $unset: {
-              summary: 1,
-              summaryAt: 1,
-              summaryModelId: 1,
-              summaryTrigger: 1,
-              contextSummary: 1,
-              contextSummaryUpToQuestId: 1,
-              contextSummaryAt: 1,
-              contextSummaryModelId: 1,
-            },
-          }
-        );
-        await audit(organizationId, 'chats', quest.id, version);
-        return true;
-      });
+      } catch (error) {
+        await skipFailedItem(error, logger, 'chats', String(message._id));
+        continue;
+      }
       if (deleted) counts.chats++;
     }
   }
@@ -230,65 +250,84 @@ export async function cleanupOrganizationRetention(
       .maxTimeMS(RETENTION_QUERY_MS);
     for (const object of objects) {
       if (Date.now() >= deadline || remaining-- <= 0) break;
-      if (!isGeneratedContentKey(object.key)) continue;
-      const eligible = await withTransaction(async () => {
-        await lockPolicy(organizationId, version);
-        const session = await Session.findOne({
-          _id: object.sessionId,
-          userId: object.userId,
-          retentionOrganizationId: organizationId,
-          ...notHeld,
-        }).setOptions({ includeDeleted: true });
-        if (!session) return false;
-        // Only this org's original notebook loses references. Copies in personal/foreign notebooks retain their media.
-        const references = await Quest.find({
-          sessionId: session.id,
-          ...notHeld,
-          $or: [{ images: object.key }, { videos: object.key }],
-        })
-          .select('_id')
-          .limit(RETENTION_BATCH_SIZE)
-          .maxTimeMS(RETENTION_QUERY_MS);
-        const detached = await Quest.updateMany(
-          { _id: { $in: references.map(row => row._id) }, sessionId: session.id, ...notHeld },
-          { $pull: { images: object.key, videos: object.key } }
-        );
-        if (detached.modifiedCount)
-          await OrganizationAuditEventModel.create({
-            organizationId,
-            actorUserId,
-            action: 'retention.media_detached',
-            targetId: object.key,
-          });
-        await OrganizationGeneratedObject.updateOne(
-          { _id: object._id, organizationId },
-          { $set: { lastCheckedAt: now } }
-        );
-        return true;
-      });
-      if (!eligible || (await retainedMedia(object.key))) continue;
-      await withTransaction(async () => {
-        await lockPolicy(organizationId, version);
-        const stillOwned = await OrganizationGeneratedObject.findOne({
-          _id: object._id,
-          organizationId,
-          deletedAt: null,
-          ...notHeld,
+      const markChecked = () =>
+        OrganizationGeneratedObject.updateOne({ _id: object._id, organizationId }, { $set: { lastCheckedAt: now } });
+      if (!isGeneratedContentKey(object.key)) {
+        await markChecked();
+        continue;
+      }
+      let eligible = false;
+      try {
+        eligible = await withTransaction(async () => {
+          await lockPolicy(organizationId, version);
+          const session = await Session.findOne({
+            _id: object.sessionId,
+            userId: object.userId,
+            retentionOrganizationId: organizationId,
+            ...notHeld,
+          }).setOptions({ includeDeleted: true });
+          if (!session) return false;
+          // Only this org's original notebook loses references. Copies in personal/foreign notebooks retain their media.
+          const references = await Quest.find({
+            sessionId: session.id,
+            ...notHeld,
+            $or: [{ images: object.key }, { videos: object.key }],
+          })
+            .select('_id')
+            .limit(RETENTION_BATCH_SIZE)
+            .maxTimeMS(RETENTION_QUERY_MS);
+          const detached = await Quest.updateMany(
+            { _id: { $in: references.map(row => row._id) }, sessionId: session.id, ...notHeld },
+            { $pull: { images: object.key, videos: object.key } }
+          );
+          if (detached.modifiedCount)
+            await OrganizationAuditEventModel.create({
+              organizationId,
+              actorUserId,
+              action: 'retention.media_detached',
+              targetId: object.key,
+            });
+          await OrganizationGeneratedObject.updateOne(
+            { _id: object._id, organizationId },
+            { $set: { lastCheckedAt: now } }
+          );
+          return true;
         });
-        if (!stillOwned || (await retainedMedia(object.key))) return;
-        await getGeneratedImageStorage().delete(object.key);
-        const batch = createCdnInvalidationBatch('organization-retention', logger);
-        batch.add(generatedCdnPath(object.key));
-        await batch.flush();
-        const result = await OrganizationGeneratedObject.updateOne(
-          { _id: object._id, organizationId, deletedAt: null },
-          { $set: { deletedAt: now } }
-        );
-        if (result.modifiedCount) {
-          await audit(organizationId, 'media', object.key, version);
-          counts.media++;
-        }
-      });
+      } catch (error) {
+        await skipFailedItem(error, logger, 'media', object.key);
+        continue;
+      }
+      if (!eligible) {
+        await markChecked();
+        continue;
+      }
+      if (await retainedMedia(object.key)) continue;
+      try {
+        await withTransaction(async () => {
+          await lockPolicy(organizationId, version);
+          const stillOwned = await OrganizationGeneratedObject.findOne({
+            _id: object._id,
+            organizationId,
+            deletedAt: null,
+            ...notHeld,
+          });
+          if (!stillOwned || (await retainedMedia(object.key))) return;
+          await getGeneratedImageStorage().delete(object.key);
+          const batch = createCdnInvalidationBatch('organization-retention', logger);
+          batch.add(generatedCdnPath(object.key));
+          await batch.flush();
+          const result = await OrganizationGeneratedObject.updateOne(
+            { _id: object._id, organizationId, deletedAt: null },
+            { $set: { deletedAt: now } }
+          );
+          if (result.modifiedCount) {
+            await audit(organizationId, 'media', object.key, version);
+            counts.media++;
+          }
+        });
+      } catch (error) {
+        await skipFailedItem(error, logger, 'media', object.key);
+      }
     }
   }
   return counts;
