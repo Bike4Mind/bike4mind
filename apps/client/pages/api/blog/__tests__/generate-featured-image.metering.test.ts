@@ -116,7 +116,7 @@ describe('POST /api/blog/generate-featured-image metering', () => {
     m.assertAdmission.mockRejectedValue(new ForbiddenError('Model "gpt-image-1" is not accessible'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
-    expect(m.assertAdmission).toHaveBeenCalledWith('gpt-image-1');
+    expect(m.assertAdmission).toHaveBeenCalledWith('gpt-image-1', undefined);
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
   });

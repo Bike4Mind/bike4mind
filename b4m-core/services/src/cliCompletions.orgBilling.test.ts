@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType, ForbiddenError, ORG_MODEL_NOT_ALLOWED_ERROR_CODE } from '@bike4mind/common';
 
 // Isolate the billing routing: stub the LLM layer, settings, and credit math so
 // the test asserts *which pool* is reserved/settled, not token accounting.
@@ -22,6 +22,7 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  resolveSuccessorChain: (id: string) => id,
   buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
@@ -241,6 +242,49 @@ describe('executeCompletion - org billing routing', () => {
     expect(organizations.incrementCredits).not.toHaveBeenCalled();
     expect(users.incrementCredits).not.toHaveBeenCalled();
     expect(mockSubtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses a model the billing organization does not allow, before reserving', async () => {
+    const modelPolicy = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const { db, users, organizations } = buildDb({ org: buildOrg({ modelPolicy }) });
+
+    const err = await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' }).catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('runs a model the billing organization allows, and ignores org policy for personal billing', async () => {
+    const modelPolicy = { allowedProviders: null, allowedModels: ['test-model'], allowedTools: null };
+    const allowed = buildDb({ org: buildOrg({ modelPolicy }) });
+    await executeCompletion({ ...baseParams, db: allowed.db, billingOrganizationId: 'org1' });
+    expect(allowed.organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+
+    const blocked = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const personal = buildDb({ org: buildOrg({ modelPolicy: blocked }) });
+    await executeCompletion({ ...baseParams, db: personal.db });
+    expect(personal.users.incrementCredits).toHaveBeenCalledWith('user1', -10);
+  });
+
+  it('applies a governing org policy to a personally billed turn, and lets the billing org win', async () => {
+    const blocked = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const governed = buildDb();
+    const err = await executeCompletion({ ...baseParams, db: governed.db, governingOrgModelPolicy: blocked }).catch(
+      e => e
+    );
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(governed.users.incrementCredits).not.toHaveBeenCalled();
+
+    const allows = { allowedProviders: null, allowedModels: ['test-model'], allowedTools: null };
+    const billed = buildDb({ org: buildOrg({ modelPolicy: allows }) });
+    await executeCompletion({
+      ...baseParams,
+      db: billed.db,
+      billingOrganizationId: 'org1',
+      governingOrgModelPolicy: blocked,
+    });
+    expect(billed.organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
   });
 
   it('bills the org for a platform admin, who is on no org roster', async () => {

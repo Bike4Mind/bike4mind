@@ -10,16 +10,40 @@ type LockedModelsSectionProps = {
   onUpgrade?: () => void;
 };
 
-/**
- * Paid-only models a free account can see but not pick (see ModelInfo.access). Rows are deliberately inert so
- * nothing here can set the session model; the only action is the upgrade CTA.
- */
-const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) => {
-  if (models.length === 0) return null;
+type LockGroup = {
+  reason: 'requires_paid_plan' | 'org_policy';
+  heading: string;
+  rowTitle: string;
+  srReason: string;
+};
 
+const PAID_GROUP: LockGroup = {
+  reason: 'requires_paid_plan',
+  heading: 'Available on paid plans',
+  rowTitle: 'Upgrade to a paid plan to use this model',
+  srReason: '(requires a paid plan)',
+};
+
+const ORG_GROUP: LockGroup = {
+  reason: 'org_policy',
+  heading: 'Not allowed by your organization',
+  rowTitle: 'Your organization does not allow this model',
+  srReason: '(not allowed by your organization)',
+};
+
+const LockedGroup = ({
+  group,
+  models,
+  onUpgrade,
+}: {
+  group: LockGroup;
+  models: ModelInfo[];
+  onUpgrade?: () => void;
+}) => {
+  const testIdPrefix = group.reason === 'org_policy' ? 'org-locked' : 'locked';
   return (
     <Box
-      data-testid="locked-models-section"
+      data-testid={`${testIdPrefix}-models-section`}
       sx={{
         display: 'flex',
         flexDirection: 'column',
@@ -34,7 +58,7 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <LockOutlinedIcon sx={{ fontSize: '18px', color: 'text.tertiary' }} />
           <Typography level="h4" sx={{ color: 'text.primary', fontSize: '16px', fontWeight: 500 }}>
-            Available on paid plans
+            {group.heading}
           </Typography>
         </Box>
         {onUpgrade && (
@@ -48,9 +72,9 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
           <Box
             component="li"
             key={model.id}
-            data-testid={`locked-model-row-${model.id}`}
+            data-testid={`${testIdPrefix}-model-row-${model.id}`}
             aria-disabled="true"
-            title="Upgrade to a paid plan to use this model"
+            title={group.rowTitle}
             sx={{
               display: 'flex',
               alignItems: 'center',
@@ -66,12 +90,27 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
               {model.name}
             </Typography>
             <Box component="span" sx={visuallyHidden}>
-              (requires a paid plan)
+              {group.srReason}
             </Box>
           </Box>
         ))}
       </Box>
     </Box>
+  );
+};
+
+/**
+ * Models the caller can see but not pick (see ModelInfo.access), grouped by why. Rows are deliberately inert so
+ * nothing here can set the session model. Only the paid-plan group offers an upgrade: no plan lifts an org lock.
+ */
+const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) => {
+  const orgLocked = models.filter(model => model.access?.reason === 'org_policy');
+  const paidLocked = models.filter(model => model.access?.reason !== 'org_policy');
+  return (
+    <>
+      {paidLocked.length > 0 && <LockedGroup group={PAID_GROUP} models={paidLocked} onUpgrade={onUpgrade} />}
+      {orgLocked.length > 0 && <LockedGroup group={ORG_GROUP} models={orgLocked} />}
+    </>
   );
 };
 

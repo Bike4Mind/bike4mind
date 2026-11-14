@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType, estimateTtsCreditCost, type ApiErrorCode } from '@bike4mind/common';
+import { ApiKeyType, estimateTtsCreditCost, resolveAudioVendorBackend, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
@@ -62,8 +62,10 @@ const handler = baseApi().post(async (req, res) => {
   // Same durable hold as pages/api/ai/tts.ts: reserve before the provider call, settle after it. Unlike
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
-  await (await createModelAdmission(req.user!)).assert(TTS_MODEL);
   const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user && (await isCreditsEnforced())) {
     try {

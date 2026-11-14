@@ -18,6 +18,7 @@ import {
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { getCallerModelList } from '@server/utils/callerModelList';
 import { CLIENT_CONFIG_FEATURE_SETTINGS } from '@server/utils/clientConfigFeatures';
 import { callablePublicModels, toPublicModelWithReasoning } from '@server/utils/publicModels';
@@ -60,7 +61,7 @@ const handler = nextRouteForContract(getClientConfigContract, {
 }).get(async (req, res) => {
   const [settings, { models }] = await Promise.all([
     getSettingsMap({ adminSettings: adminSettingsRepository }, { logger: req.logger }),
-    getCallerModelList(req.user, req.logger),
+    getCallerModelList(req.user, req.logger, { organizationId: resolveRequestBillingOrgId(req) }),
   ]);
 
   const available = callablePublicModels(models)

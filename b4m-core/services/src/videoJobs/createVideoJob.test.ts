@@ -84,7 +84,7 @@ describe('createVideoJob', () => {
     await expect(
       createVideoJob({ user: { ...user, adminRoleWithheld: true }, request: validRequest, source: 'api' }, deps)
     ).rejects.toBe(refusal);
-    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-video', true);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-video', true, null);
     expect(holdCredits).not.toHaveBeenCalled();
     expect(deps.enqueue).not.toHaveBeenCalled();
   });
@@ -332,6 +332,7 @@ describe('createVideoJob', () => {
       { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
       deps
     );
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', expect.any(String), undefined, 'org1');
     expect(result).toMatchObject({ ok: true, job: { ownerType: CreditHolderType.Organization, ownerId: 'org1' } });
     expect(holdCredits).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', organizationId: 'org1', featureLabel: 'video generation' }),

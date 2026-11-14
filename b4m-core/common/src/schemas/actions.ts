@@ -48,6 +48,8 @@ export const DataSubscribeRequestAction = z.object({
   // z.looseObject({}).
   fields: z.record(z.string(), z.union([z.boolean(), z.number()])),
   fetchInitialData: z.boolean().prefault(true).optional(),
+  /** Single-org signal listeners may require snapshot delivery after registration; not a snapshot-consistency guarantee. */
+  initialDataAfterSubscribe: z.boolean().optional(),
   clientId: z.string().optional(),
 });
 export type IDataSubscribeRequestAction = z.infer<typeof DataSubscribeRequestAction>;

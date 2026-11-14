@@ -167,6 +167,9 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     maxCreditsPerMember: { type: Number, required: false },
     serviceAccountUserId: { type: String, required: false },
     redactPushContent: { type: Boolean, default: false },
+    // Preserve raw shapes: [String] casting could repair a corrupt restriction before fail-closed validation.
+    // Writes use OrgModelPolicySchema; every reader must use readOrgModelPolicy.
+    modelPolicy: { type: Schema.Types.Mixed, required: false, default: undefined },
     sharingPolicy: {
       type: new Schema(
         {

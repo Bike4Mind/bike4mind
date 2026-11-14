@@ -2,6 +2,8 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import type { ModelInfo } from '@bike4mind/common';
 import { getModelCatalog, type ModelCatalog } from '@client/app/utils/llm';
 import { useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
+import { useSelectedAccount } from '@client/app/components/Credits/selectedAccountStore';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
 
 /**
  * Cache slot for /api/models. Holds the whole ModelCatalog, not a bare ModelInfo[] -
@@ -10,6 +12,19 @@ import { useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
  */
 export const MODEL_CATALOG_QUERY_KEY = ['llm', 'models'] as const;
 
+// One entry per active org (null = Personal): the org's model policy changes what is listed.
+export const catalogQueryKey = (orgId: string | null) => [...MODEL_CATALOG_QUERY_KEY, orgId] as const;
+
+const activeOrgOf = (state: ReturnType<typeof useSelectedAccount.getState>) =>
+  orgIdOfAccount(state.selectedAccount) ?? null;
+
+/** The catalog entry for the org the account switcher has selected now. */
+export const activeCatalogQueryKey = () => catalogQueryKey(activeOrgOf(useSelectedAccount.getState()));
+
+function useActiveOrgId(): string | null {
+  return useSelectedAccount(activeOrgOf);
+}
+
 const CATALOG_STALE_MS = 60 * 60 * 1000;
 // Matches the server's 30s retry window for a list built without the catalog.
 export const UNAVAILABLE_CATALOG_REFETCH_MS = 30_000;
@@ -17,10 +32,10 @@ const isFallback = (query: { state: { data?: ModelCatalog } }) => query.state.da
 
 // Gate on the fully-authenticated state so this doesn't fire during the login
 // mfaPending window, where /api/models would 401 (#804).
-function catalogQuery(isFullyAuthenticated: boolean) {
+function catalogQuery(isFullyAuthenticated: boolean, orgId: string | null) {
   return {
-    queryKey: MODEL_CATALOG_QUERY_KEY,
-    queryFn: getModelCatalog,
+    queryKey: catalogQueryKey(orgId),
+    queryFn: () => getModelCatalog(orgId),
     staleTime: (query: { state: { data?: ModelCatalog } }) =>
       isFallback(query) ? UNAVAILABLE_CATALOG_REFETCH_MS : CATALOG_STALE_MS,
     refetchInterval: (query: { state: { data?: ModelCatalog } }) =>
@@ -34,22 +49,34 @@ function catalogQuery(isFullyAuthenticated: boolean) {
 export function useModelInfo() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
   // Same query key as useSupersededModels, so both read one fetch of /api/models.
-  return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.models });
+  const orgId = useActiveOrgId();
+  return useQuery({ ...catalogQuery(isFullyAuthenticated, orgId), select: catalog => catalog.models });
 }
 
 /** Retired/superseded model ids paired with their replacements (see SupersededModelInfo). */
 export function useSupersededModels() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
-  return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.supersededModels });
+  const orgId = useActiveOrgId();
+  return useQuery({ ...catalogQuery(isFullyAuthenticated, orgId), select: catalog => catalog.supersededModels });
 }
 
-/** Paid-only models the picker shows a free account as locked; display only (see ModelInfo.access). */
+/** Models the picker shows as locked (paid-only, or not allowed by the org); display only (see ModelInfo.access). */
 export function useLockedModels() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
-  return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.lockedModels });
+  const orgId = useActiveOrgId();
+  return useQuery({ ...catalogQuery(isFullyAuthenticated, orgId), select: catalog => catalog.lockedModels });
+}
+
+/** Listed plus locked models for a given org rather than the account switcher's, for that org's policy editor. */
+export function useOrgModelChoices(orgId: string) {
+  const isFullyAuthenticated = useIsFullyAuthenticated();
+  return useQuery({
+    ...catalogQuery(isFullyAuthenticated, orgId),
+    select: catalog => [...catalog.models, ...catalog.lockedModels],
+  });
 }
 
 /** Model list straight from the cache, for non-React call sites. Undefined until first fetch. */
 export function getCachedModels(queryClient: QueryClient): ModelInfo[] | undefined {
-  return queryClient.getQueryData<ModelCatalog>(MODEL_CATALOG_QUERY_KEY)?.models;
+  return queryClient.getQueryData<ModelCatalog>(activeCatalogQueryKey())?.models;
 }

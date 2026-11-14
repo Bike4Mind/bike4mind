@@ -8,7 +8,7 @@ import {
 } from '../../schemas/agentExecution';
 import { BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION } from '../../schemas/billingOrganization';
 import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from '../../schemas/chat';
-import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE } from '../../apiErrorCodes';
+import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, ORG_TOOL_NOT_ALLOWED_ERROR_CODE } from '../../apiErrorCodes';
 
 /**
  * Contracts for the agent-executor (ReAct) pipeline over REST.
@@ -63,7 +63,8 @@ export const startAgentExecutionContract = defineEndpoint({
       description:
         'The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key ' +
         `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`), ` +
-        'or a non-admin caller sent `confidence_overrides`.',
+        'or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed ' +
+        `organization does not allow (\`errorCode: ${ORG_TOOL_NOT_ALLOWED_ERROR_CODE}\`).`,
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {

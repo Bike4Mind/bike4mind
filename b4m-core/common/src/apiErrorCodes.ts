@@ -13,6 +13,8 @@ export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
+export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
+export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
@@ -72,6 +74,10 @@ export const API_ERROR_CODES = [
   UPGRADE_REQUIRED_ERROR_CODE,
   /** A 404: the completion's `run` was not created by this user and billing owner (or does not exist); mint one with POST /api/v1/completion-runs. */
   RUN_NOT_FOUND_ERROR_CODE,
+  /** A 403: the caller's organization policy does not allow this model; remediation is a model from GET /api/v1/models. */
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  /** A 403: the request names a built-in tool the caller's organization policy does not allow. */
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
   MCP_ACTION_REPLACED_ERROR_CODE,
   /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */

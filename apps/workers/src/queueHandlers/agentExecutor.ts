@@ -72,6 +72,7 @@ import {
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
@@ -265,6 +266,7 @@ import {
   reserveShadowTokenBudget,
   resolveShadowRouting,
 } from '@bike4mind/services/llm/shadowTier';
+import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -792,6 +794,19 @@ export function buildInProcessCreditCapCheck(
   };
 }
 
+/** Strips the built-in tools the run's organization does not allow, after MCP tools are merged in. */
+function withOrgToolPolicy<T extends { toolSchema: { name: string } }>(
+  tools: T[],
+  organization: { modelPolicy?: unknown } | null | undefined,
+  logger: Pick<Logger, 'info'>
+): T[] {
+  const { tools: kept, stripped } = applyOrgToolPolicy(tools, readOrgModelPolicy(organization?.modelPolicy));
+  if (stripped.length > 0) {
+    logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: stripped });
+  }
+  return kept;
+}
+
 /**
  * Live balance of whoever pays for a run, re-read per call so a gate never decides on a
  * snapshot. Shared by the iteration gate and in-process subagent admission.
@@ -1149,6 +1164,7 @@ async function runExecution(
     const organization = execution.organizationId
       ? await organizationRepository.findById(execution.organizationId)
       : null;
+    const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
 
     // If continuation, increment Lambda invocation count and check cap.
     // Subagent resumes (awaiting_subagent -> running) bump `subagentHandoffCount`
@@ -1262,6 +1278,7 @@ async function runExecution(
       requested: modelInfo,
       models,
       adminSettings: adminSettingsRepository,
+      orgModelPolicy,
       logger,
     });
     const runModelInfo = shadowModelInfo ?? modelInfo;
@@ -1288,7 +1305,10 @@ async function runExecution(
 
     // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
     // model that actually runs is the one checked. Admission only: billing stays per-iteration.
-    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models, false, {
+      organizationId: execution.organizationId,
+      orgModelPolicy,
+    });
     const refusal = await modelAdmission.assert(resolvedModelId).then(
       () => null,
       (err: Error) => err
@@ -2401,7 +2421,7 @@ async function runExecution(
       logger,
     });
 
-    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+    const builtTools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
       // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
       // merged inside buildSharedTools after that filter, so the denylist has to travel with them
@@ -2411,6 +2431,7 @@ async function runExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
+      orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: mcpSessionDisabledTools(
         sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
@@ -2425,7 +2446,8 @@ async function runExecution(
       // whatever survived that has no working key. A tool must be both allowed AND offerable.
       toolAvailability,
     });
-    if (!tools) throw new Error('Failed to build tools');
+    if (!builtTools) throw new Error('Failed to build tools');
+    const tools = withOrgToolPolicy(builtTools, organization, logger);
 
     // Log the tool list seen by the parent agent on each invocation. Cheap +
     // CloudWatch-greppable, lets ops verify which tools (e.g.
@@ -4220,6 +4242,7 @@ async function processSubagentDispatch(
       premiumWorkspaceSessionSettings
     );
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
+    const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
 
     // Pre-flight credit check.
     const availableCredits = organization
@@ -4303,6 +4326,7 @@ async function processSubagentDispatch(
       requested: modelInfo,
       models,
       adminSettings: adminSettingsRepository,
+      orgModelPolicy,
       logger,
     });
     const runModel = shadowModelInfo ? shadowModelInfo.id : childModel;
@@ -4360,7 +4384,10 @@ async function processSubagentDispatch(
       ? [shadowModelInfo ?? modelInfo].filter((m): m is NonNullable<typeof m> => !!m)
       : runnableModels;
 
-    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models, false, {
+      organizationId: child.organizationId,
+      orgModelPolicy,
+    });
     const admissionRefusal = await modelAdmission.assert(childModel).then(
       () => null,
       (err: Error) => err
@@ -4701,11 +4728,12 @@ async function processSubagentDispatch(
     // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
     const abortController = new AbortController();
 
-    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+    const builtTools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
+      orgToolPolicy: orgModelPolicy,
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
@@ -4721,7 +4749,8 @@ async function processSubagentDispatch(
       // future change that gives this path native tools cannot silently bypass the filter.
       toolAvailability,
     });
-    if (!tools) throw new Error('Failed to build tools for dispatched subagent');
+    if (!builtTools) throw new Error('Failed to build tools for dispatched subagent');
+    const tools = withOrgToolPolicy(builtTools, organization, logger);
 
     await sendWs('subagent_started', {
       executionId: parentId,

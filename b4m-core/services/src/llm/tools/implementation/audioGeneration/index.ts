@@ -4,6 +4,7 @@ import {
   ApiKeyType,
   DEFAULT_SOUND_MODEL_ID,
   TTS_DEFAULT_MODEL,
+  resolveAudioVendorBackend,
   AudioGenerationToolCall,
   extensionFromMimeType,
   type GeneratedAssetMetadata,
@@ -107,7 +108,9 @@ export const audioGenerationTool: ToolDefinition = {
           return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
 
-        const refusal = await toolModelRefusal(context, admission, DEFAULT_SOUND_MODEL_ID, 'audio_generation');
+        const refusal = await toolModelRefusal(context, admission, DEFAULT_SOUND_MODEL_ID, 'audio_generation', {
+          orgModelBackend: resolveAudioVendorBackend(SFX_PROVIDER),
+        });
         if (refusal) return refusal;
 
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
@@ -208,7 +211,9 @@ export const audioGenerationTool: ToolDefinition = {
         apiKey = fallbackKey;
       }
 
-      const refusal = await toolModelRefusal(context, admission, TTS_DEFAULT_MODEL[provider], 'audio_generation');
+      const refusal = await toolModelRefusal(context, admission, TTS_DEFAULT_MODEL[provider], 'audio_generation', {
+        orgModelBackend: resolveAudioVendorBackend(provider),
+      });
       if (refusal) return refusal;
 
       // Reject over-length input before the paid call, per the resolved provider's cap.

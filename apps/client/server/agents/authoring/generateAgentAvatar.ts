@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { estimateImageCredits } from '@bike4mind/services/imageCost';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { usdToCreditsStochastic } from '@bike4mind/common';
 import { assertMediaModelAdmission } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
@@ -190,7 +191,12 @@ export async function generateAgentAvatar(
     imageBackend: imageModelInfo.backend,
   });
 
-  await assertMediaModelAdmission(user, imageModelId, !user.isAdmin);
+  await assertMediaModelAdmission(
+    user,
+    imageModelId,
+    !user.isAdmin,
+    resolveRequestBillingOrgId(billingRequest ?? { user }, undefined)
+  );
 
   const userPrompt = buildAgentVisualPrompt(agent);
   let generatedPrompt = '';

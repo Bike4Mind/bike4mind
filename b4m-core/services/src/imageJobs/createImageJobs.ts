@@ -127,7 +127,12 @@ export async function createImageJobs(
     return { ok: true, groupId: replayed[0].payload.groupId ?? replayed[0].id, jobs: replayed, created: false };
   }
 
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    request.model,
+    input.user.adminRoleWithheld,
+    input.user.organizationId
+  );
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return refuse(422, 'model_unavailable', `Image model ${request.model} has no API key configured`);
   }

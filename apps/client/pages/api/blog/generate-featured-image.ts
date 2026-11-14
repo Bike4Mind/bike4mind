@@ -27,7 +27,10 @@ import {
   UnsupportedImageModelError,
 } from '@bike4mind/services/imageCost';
 import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-import { reserveRequestCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
 interface GenerateFeaturedImageRequest {
   imagePrompt: string;
@@ -98,7 +101,12 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
         imageLogger.info(`[Blog Image] Using operations image model: ${imageModelId}`);
       }
 
-      if (imageModelInfo) await (await createModelAdmission(req.user!, [imageModelInfo])).assert(imageModelInfo.id);
+      if (imageModelInfo)
+        await (
+          await createModelAdmission(req.user!, [imageModelInfo], false, {
+            organizationId: resolveRequestBillingOrgId(req),
+          })
+        ).assert(imageModelInfo.id);
 
       // Re-asserted here (both branches above already guarantee this): narrows the type for
       // every use below, which the if/else diamond above does not do on its own.

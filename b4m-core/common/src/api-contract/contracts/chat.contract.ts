@@ -46,6 +46,8 @@ export const chatContract = defineEndpoint({
     'fires outside the process try/catch that would classify it onto a quest. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
+    "A model or built-in tool the caller's organization policy does not allow is a 403 with " +
+    '`errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT. ' +
     'Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller ' +
     'that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, ' +

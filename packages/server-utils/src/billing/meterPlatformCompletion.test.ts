@@ -1,4 +1,11 @@
-import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  CreditHolderType,
+  getTextModelCost,
+  ModelBackend,
+  type ModelInfo,
+  type ReadOrgModelPolicy,
+} from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 
@@ -555,6 +562,76 @@ describe('createModelAdmission', () => {
     const system = await createModelAdmission(user(), [{ id: 'off', disabled: true } as unknown as ModelInfo], true);
     expect(await system.admits('gated')).toBe(true);
     expect(await system.admits('off')).toBe(false);
+  });
+
+  describe('organization model policy', () => {
+    const catalog = [
+      { id: 'gpt', backend: 'openai' } as unknown as ModelInfo,
+      { id: 'claude', backend: 'anthropic' } as unknown as ModelInfo,
+    ];
+    const policy = { allowedProviders: null, allowedModels: ['claude'], allowedTools: null };
+    const snapshots: Array<[ReadOrgModelPolicy, boolean]> = [
+      [policy, false],
+      [null, true],
+      ['invalid', false],
+    ];
+
+    it.each(snapshots)(
+      'reuses the supplied snapshot without reloading the organization (%j)',
+      async (snapshot, admitted) => {
+        m.orgFindById.mockRejectedValue(new Error('precomputed policy must not be reloaded'));
+        const admission = await createModelAdmission(user(), catalog, false, {
+          organizationId: 'org1',
+          orgModelPolicy: snapshot,
+        });
+        await expect(admission.admits('gpt')).resolves.toBe(admitted);
+        expect(m.orgFindById).not.toHaveBeenCalled();
+      }
+    );
+
+    it('preserves the platform-selected exemption even when a precomputed policy is invalid', async () => {
+      const admission = await createModelAdmission(user(), catalog, true, {
+        organizationId: 'org1',
+        orgModelPolicy: 'invalid',
+      });
+      await expect(admission.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
+
+    it('forwards authoritative provider metadata through both methods without reloading the org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: { allowedProviders: ['openai'] } });
+      const backend = vi.fn(() => ModelBackend.OpenAI);
+      const scoped = await createModelAdmission(user(), undefined, false, {
+        organizationId: 'org1',
+        getOrgModelBackend: backend,
+      });
+      await expect(scoped.assert('future-tts')).resolves.toBeUndefined();
+      await expect(scoped.admits('future-tts', { orgModelBackend: null })).resolves.toBe(false);
+      await expect(scoped.assert('tts-1', { orgModelBackend: null })).rejects.toMatchObject({
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.admits('tts-1', { orgModelBackend: ModelBackend.OpenAI })).resolves.toBe(true);
+      expect(backend).toHaveBeenCalledExactlyOnceWith('future-tts');
+      expect(m.orgFindById).toHaveBeenCalledExactlyOnceWith('org1');
+    });
+
+    it('refuses a model the given org does not allow, and admits it with no org', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const scoped = await createModelAdmission(user(), catalog, false, { organizationId: 'org1' });
+      await expect(scoped.assert('gpt')).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'org_model_not_allowed' },
+      });
+      await expect(scoped.assert('claude')).resolves.toBeUndefined();
+      await expect((await createModelAdmission(user(), catalog)).assert('gpt')).resolves.toBeUndefined();
+    });
+
+    it('does not apply the org policy to a platform-chosen model', async () => {
+      m.orgFindById.mockResolvedValue({ id: 'org1', modelPolicy: policy });
+      const system = await createModelAdmission(user(), catalog, true, { organizationId: 'org1' });
+      await expect(system.assert('gpt')).resolves.toBeUndefined();
+      expect(m.orgFindById).not.toHaveBeenCalled();
+    });
   });
 
   describe('free-tier gate', () => {

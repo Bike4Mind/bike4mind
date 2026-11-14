@@ -77,6 +77,7 @@ import {
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -200,6 +201,7 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import { applyOrgToolPolicy } from './orgToolPolicy';
 import {
   TurnCreditLimiter,
   accumulatedRoundsUsd,
@@ -2843,6 +2845,7 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const requestedModelInfo = models.find(m => m.id === resolvedModelId);
+      const orgModelPolicy = readOrgModelPolicy(organization?.modelPolicy);
       // Substitute only the executing model; see resolveShadowModelInfo.
       const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
         user: this.user,
@@ -2850,6 +2853,7 @@ export class ChatCompletionProcess {
         models,
         adminSettings: this.db.adminSettings,
         logger,
+        orgModelPolicy,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
       // The model id handed to features and tools that call the backend themselves: the
@@ -2893,6 +2897,7 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
         freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
+        orgModelPolicy,
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
@@ -3844,6 +3849,7 @@ export class ChatCompletionProcess {
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
         sessionDisabledTools: deniedTools,
+        orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3897,6 +3903,15 @@ export class ChatCompletionProcess {
       if (deniedTools && allTools) {
         const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
+      }
+      if (allTools) {
+        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        if (orgFiltered.stripped.length > 0) {
+          logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
+            tools: orgFiltered.stripped,
+          });
+          allTools = orgFiltered.tools;
+        }
       }
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
@@ -4930,7 +4945,9 @@ export class ChatCompletionProcess {
 
       const resolveResearchRunModel = (requested: ModelInfo): ModelInfo =>
         shadowSettings
-          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger) ?? requested)
+          ? (resolveShadowModelInfo(this.user, requested, models, shadowSettings.allowlist, logger, {
+              orgModelPolicy,
+            }) ?? requested)
           : requested;
 
       this.turnCreditLimiter = null;
@@ -6331,7 +6348,9 @@ export class ChatCompletionProcess {
             // the substitution itself (no status, no fallbackInfo, the requested id stays shown).
             // A failing allowlisted requested model starts a substitution here.
             if (shadowSettings) {
-              const next = shadowCandidates(models, shadowSettings.allowlist).find(m => !triedModelIds.has(m.id));
+              const next = shadowCandidates(models, shadowSettings.allowlist, { orgModelPolicy }).find(
+                m => !triedModelIds.has(m.id)
+              );
               const nextLlm =
                 next && getLlmByModel(chatApiKeyTable, { modelInfo: next, logger, endUserId: this.user.id });
               if (!next || !nextLlm) {

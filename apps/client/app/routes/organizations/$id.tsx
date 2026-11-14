@@ -4,6 +4,7 @@ import {
   WithId,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
+  canAdministerOrganization,
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -19,6 +20,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgModelPolicySection from '@client/app/components/organizations/OrgModelPolicySection';
 import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
@@ -145,6 +147,7 @@ const OrganizationPage: FC = () => {
     () => canManageOrgConnectors(currentUser, organization),
     [currentUser, organization]
   );
+  const canManageModelPolicy = !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
 
   const canManageDomains = useMemo(() => canManageOrgDomains(currentUser, organization), [currentUser, organization]);
 
@@ -384,15 +387,15 @@ const OrganizationPage: FC = () => {
               <OrganizationOverviewSection organization={organization} />
               <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
-            {selectedTab === OrganizationTabs.Library && (
-              <TabPanel value={OrganizationTabs.Library}>
+            <TabPanel value={OrganizationTabs.Library}>
+              {selectedTab === OrganizationTabs.Library && (
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
                   canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
                 />
-              </TabPanel>
-            )}
+              )}
+            </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 {t('organization.headings.members_seats', { current: currentSeats, max: maxSeats })}
@@ -484,6 +487,11 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.settings')}
                 </Typography>
                 <OrganizationSettingsSection organization={organization} />
+                {canManageModelPolicy && (
+                  <Box sx={{ mt: 4 }}>
+                    <OrgModelPolicySection key={organization.id} organization={organization} />
+                  </Box>
+                )}
               </TabPanel>
             )}
           </Box>
