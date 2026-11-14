@@ -111,7 +111,7 @@ export async function applyPartnerRuleMembership(
       );
       return { added: false, reason: 'at-capacity', seats: outcome.seats };
     }
-    await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+    await repairOrgPointer(user, userId, organizationId, db);
     await seedUserDetails(user, organizationId, db);
     logger?.info(
       `Partner-rule auto-added user ${userId} to Stripe-billed org ${organizationId} under the existing ceiling`
@@ -146,7 +146,7 @@ export async function applyPartnerRuleMembership(
     return { added: false, reason: 'at-capacity', seats: outcome.seats };
   }
 
-  await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+  await repairOrgPointer(user, userId, organizationId, db);
   await seedUserDetails(user, organizationId, db);
 
   const previousSeats = pre.seats;
@@ -194,7 +194,7 @@ async function repairOrgPointer(
   organizationId: string,
   db: ApplyPartnerRuleMembershipAdapters['db']
 ): Promise<void> {
-  if (user.organizationId !== organizationId) {
+  if (!user.organizationId) {
     await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
   }
 }
