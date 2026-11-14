@@ -264,7 +264,11 @@ describe('executeCompletion - prompt-cache writes near a low balance', () => {
     });
 
     it('refuses before any model call when the balance cannot pay for the cache write', async () => {
-      const startingBalance = Math.floor(getTextModelCost(MODEL_INFO, 41_000, 0) * CREDITS_PER_USD_COST);
+      // Pays for the plain-rate hold (prompt read plain plus the held output) but not the cache-write hold.
+      const startingBalance = Math.floor(exactCredits(41_000, reservationOutputTokens(MAX_TOKENS))) - 1;
+      expect(startingBalance).toBeGreaterThan(
+        getTextModelCost(MODEL_INFO, 41_000, reservationOutputTokens(MAX_TOKENS)) * CREDITS_PER_USD_COST
+      );
       const { db, balance } = buildDb(startingBalance);
 
       await expect(executeCompletion({ ...params, db })).rejects.toBeInstanceOf(InsufficientCreditsError);
@@ -300,7 +304,7 @@ describe('executeCompletion - prompt-cache writes near a low balance', () => {
       expect(balance()).toBeGreaterThanOrEqual(0);
     });
 
-    it('refuses before any model call when the balance covers the warm-cache hold but not a rewrite', async () => {
+    it('refuses before any model call when the balance is below the hold', async () => {
       const startingBalance = Math.floor(exactCredits(68_000, 0));
       const { db, balance } = buildDb(startingBalance);
 
