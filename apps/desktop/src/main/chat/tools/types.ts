@@ -727,7 +727,7 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */
@@ -774,8 +774,11 @@ export interface ApprovalPart {
   words?: string;
   expanded?: string;
   opaque?: string;
-  /** Why this part asks: 'full' requires an explicit decision in every mode. Only set with `byPart`. */
-  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  /**
+   * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
+   */
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
