@@ -379,6 +379,31 @@ Hope this helps!`;
       expect(result.embargoDetected).toBe(false);
       expect(result.suggestedTags).toEqual([]);
     });
+
+    it.each([
+      ['a null summary', { summary: null }],
+      ['a null action item description', { actionItems: [{ description: null, deadline: null }] }],
+      ['a null action item', { actionItems: [null] }],
+      ['a numeric deadline', { actionItems: [{ description: 'Do it', deadline: 20251030 }] }],
+      ['null entities', { entities: null }],
+    ])('still rejects %s', async (_label, override) => {
+      const mockLLMResponse = JSON.stringify({
+        summary: 'Valid summary',
+        entities: { companies: [], people: [], products: [], technologies: [] },
+        sentiment: 'neutral',
+        actionItems: [],
+        privacyRecommendation: 'private',
+        embargoDetected: false,
+        suggestedTags: [],
+        ...override,
+      });
+
+      vi.mocked(mockAdapters.llm.backend.complete).mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback([mockLLMResponse]);
+      });
+
+      await expect(analyzeEmail(mockEmail, mockAdapters)).rejects.toThrow(BadRequestError);
+    });
   });
 
   describe('Privacy Recommendations', () => {
