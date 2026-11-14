@@ -67,6 +67,18 @@ describe('checkBatchSpendCap', () => {
     });
   });
 
+  it('returns null for a batch with no credits to cap', async () => {
+    const { deps } = makeDeps(400);
+    expect(await checkBatchSpendCap({ enforceCredits: true, user, totalCredits: 0 }, deps)).toBeNull();
+  });
+
+  it('returns null without refusing when the user no longer exists', async () => {
+    const { deps, onRefused } = makeDeps(400);
+    vi.mocked(deps.credits.users.findById).mockResolvedValueOnce(null);
+    expect(await checkBatchSpendCap({ enforceCredits: true, user, totalCredits: 5000 }, deps)).toBeNull();
+    expect(onRefused).not.toHaveBeenCalled();
+  });
+
   it('skips the check when credits are not enforced', async () => {
     const { deps } = makeDeps(400);
     expect(await checkBatchSpendCap({ enforceCredits: false, user, totalCredits: 5000 }, deps)).toBeNull();

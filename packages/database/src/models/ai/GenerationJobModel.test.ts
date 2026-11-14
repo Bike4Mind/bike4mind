@@ -428,9 +428,16 @@ describe('GenerationJobRepository', () => {
       await generationJobRepository.createJob(newJob({ state: 'running', creditHold: hold(25) }));
       const since = new Date(Date.now() - 60_000);
       const outstanding = await generationJobRepository.findOutstandingHoldsForUser('u1', since);
-      expect(outstanding.map(sample => sample.credits).sort()).toEqual([25, 40]);
+      expect(outstanding.map(sample => sample.credits).sort((a, b) => a - b)).toEqual([25, 40]);
       const createdAt = (await generationJobRepository.findById(queued.id))?.createdAt;
       expect(outstanding.find(sample => sample.credits === 40)?.at).toEqual(createdAt);
+    });
+
+    it('leaves out a job whose hold was settled to nothing', async () => {
+      const job = await generationJobRepository.createJob(newJob({ state: 'failed', creditHold: hold(6) }));
+      await generationJobRepository.recordSettlement(job.id, 0);
+      const since = new Date(Date.now() - 60_000);
+      expect(await generationJobRepository.findOutstandingHoldsForUser('u1', since)).toEqual([]);
     });
 
     it("leaves out settled, released, unheld, org-billed, older and other users' jobs", async () => {
