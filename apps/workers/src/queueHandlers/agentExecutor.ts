@@ -1871,7 +1871,13 @@ async function runExecution(
             logger
           );
         }
-        await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
+        // Our own account abort surfaces from the orchestrator as a timeout; report it as the refusal it is.
+        const accountDenial = inProcessAccountDenial;
+        const timedOut = accountDenial === null && isTimeout;
+        await agentExecutionRepository.markFailed(childExecutionId, {
+          message: accountDenial ?? error,
+          timedOut,
+        });
         const partialCredits = partialResult?.completionInfo.totalCredits ?? 0;
         if (partialCredits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
@@ -1880,9 +1886,14 @@ async function runExecution(
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
-          error: isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
-          isTimeout,
-          partialAnswer: isTimeout ? partialResult?.finalAnswer : undefined,
+          error:
+            accountDenial !== null
+              ? 'account_blocked'
+              : isTimeout
+                ? 'Subagent timed out'
+                : 'Subagent execution failed',
+          isTimeout: timedOut,
+          partialAnswer: timedOut ? partialResult?.finalAnswer : undefined,
         });
       },
       onLambdaDispatch: async ({ childExecutionId, subagentConfig, depth }) => {

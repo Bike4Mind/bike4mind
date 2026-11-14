@@ -75,6 +75,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
 // so in production the abort lands on the next call already in flight.
 const ITERATIONS = 3;
 const providerCalls = { count: 0 };
+const orchestrator = { throwsAfterRun: false };
 const runResult = {
   steps: [{ content: 'partial work' }],
   finalAnswer: 'partial answer',
@@ -112,6 +113,7 @@ vi.mock('@bike4mind/services/llm', async () => {
           providerCalls.count++;
           await this.tracker.onStep({ step: { content: `step ${iteration}` }, iteration });
         }
+        if (orchestrator.throwsAfterRun) throw new Error('provider failed after abort');
         return runResult;
       }
     },
@@ -191,6 +193,7 @@ describe('processSubagentDispatch per-iteration account check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     providerCalls.count = 0;
+    orchestrator.throwsAfterRun = false;
     mockCheckAbortFlag.mockResolvedValue(false);
   });
 
@@ -206,6 +209,25 @@ describe('processSubagentDispatch per-iteration account check', () => {
     expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: aiAccessDeniedMessage(suspended) });
     expect(mockMarkComplete).not.toHaveBeenCalled();
     expect(mockMarkAborted).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', status: 'failed' }) })
+    );
+  });
+
+  it('records the refusal when the orchestrator throws after a mid-run block', async () => {
+    const suspended = { id: 'user-1', isBanned: true };
+    mockFreshUserRead.mockResolvedValue(suspended);
+    orchestrator.throwsAfterRun = true;
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(mockMarkFailed).toHaveBeenCalledWith('child-1', {
+      message: aiAccessDeniedMessage(suspended),
+      timedOut: false,
+    });
+    expect(mockMarkAborted).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
     expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
       expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', status: 'failed' }) })
     );

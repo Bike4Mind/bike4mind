@@ -1072,6 +1072,24 @@ describe('processExecution tool deps', () => {
       expect(signal.aborted).toBe(true);
     });
 
+    it('records a child stopped by the account abort as refused, not timed out', async () => {
+      const { userRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      const { tracker } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+      await tracker.onStep(step(0));
+
+      await (
+        tracker as unknown as {
+          onFailure: (info: { childExecutionId: string; error: string; isTimeout: boolean }) => Promise<void>;
+        }
+      ).onFailure({ childExecutionId: 'child-1', error: 'timed out', isTimeout: true });
+
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith('child-1', {
+        message: expect.not.stringContaining('timed out'),
+        timedOut: false,
+      });
+    });
+
     it('reads the account once per child iteration and leaves an active run alone', async () => {
       const { userRepository } = await import('@bike4mind/database');
       const { tracker, signal } = await runToolWiring();
