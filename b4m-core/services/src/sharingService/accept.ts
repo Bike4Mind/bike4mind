@@ -62,7 +62,7 @@ interface AcceptInviteAdapters {
     };
     spaces: Pick<ISpaceRepository, 'findLiveById' | 'addMember'>;
   };
-  limits: { spaceMaxMembers: number };
+  limits: { spaceMaxMembers: number; spacesEnabled: boolean };
 }
 
 // Invite types a non-owner can mint, so their accept re-checks the inviter's current access.
@@ -424,6 +424,7 @@ const acceptSpace = async (
   { spaceId, isLink, inviterId }: AcceptSpaceParameters,
   { db, limits }: AcceptInviteAdapters
 ): Promise<AcceptInviteOutcome> => {
+  if (!limits.spacesEnabled) throw new ForbiddenError('Feature not available');
   const space = await db.spaces.findLiveById(spaceId);
   if (!space) throw new NotFoundError('Space not found');
 
@@ -435,10 +436,11 @@ const acceptSpace = async (
 
   if (isLink) {
     if (space.removedUserIds.includes(user.id)) throw new ForbiddenError('You cannot join this space');
-    const minter = inviterId ? await db.users.findById(inviterId) : null;
-    if (!minter || !isSpaceManager(minter.id, space)) {
-      throw new ForbiddenError('The inviter can no longer grant access to this space');
-    }
+  }
+  // Named or link, the invite is only as good as its inviter's current standing.
+  const minter = inviterId ? await db.users.findById(inviterId) : null;
+  if (!minter || !isSpaceManager(minter.id, space)) {
+    throw new ForbiddenError('The inviter can no longer grant access to this space');
   }
 
   const added = await db.spaces.addMember(
@@ -454,6 +456,17 @@ const acceptSpace = async (
       return 'already-member';
     }
     throw new ForbiddenError('This space is full');
+  }
+
+  // A named invite addressed to someone who joined by link is spent by the join; leaving it pending
+  // would let a later removal be undone by accepting it. Inside the caller's transaction.
+  const ownEmail = (user.email ?? '').trim().toLowerCase();
+  if (isLink && ownEmail) {
+    const invites = await db.invites.findAllByDocumentId(spaceId);
+    for (const invite of invites) {
+      const pending = (invite.recipients?.pending ?? []).some(address => address.trim().toLowerCase() === ownEmail);
+      if (pending && !invite.revokedAt) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
+    }
   }
   return 'accepted';
 };

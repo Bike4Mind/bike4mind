@@ -1038,7 +1038,7 @@ describe('sharingService - createInvite (organization share link)', () => {
         },
         adapters()
       )
-    ).rejects.toThrow('Allowed domains apply only to organization share links');
+    ).rejects.toThrow('Allowed domains apply only to share links');
   });
 
   it('still applies the manager gate and role validation to a link', async () => {

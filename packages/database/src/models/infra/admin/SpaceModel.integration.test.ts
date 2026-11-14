@@ -85,6 +85,38 @@ describe('SpaceModel', () => {
       expect(removed?.members).toHaveLength(0);
       expect(removed?.removedUserIds).toEqual(['u2']);
     });
+
+    describe('with an actor', () => {
+      const adminActor = { userId: 'a1', isOwner: false };
+
+      it('lets an admin remove a plain member and the owner remove an admin', async () => {
+        const space = await createSpace({ members: [member('a1', 'admin'), member('u1'), member('a2', 'admin')] });
+        const id = String(space.id);
+        expect(await spaceRepository.removeMember(id, 'u1', { block: true, actor: adminActor })).not.toBeNull();
+        const ownerActor = { userId: OWNER, isOwner: true };
+        expect(await spaceRepository.removeMember(id, 'a2', { block: true, actor: ownerActor })).not.toBeNull();
+      });
+
+      it('refuses an admin when the target was promoted after the read', async () => {
+        const space = await createSpace({ members: [member('a1', 'admin'), member('u1', 'admin')] });
+        const id = String(space.id);
+        expect(await spaceRepository.removeMember(id, 'u1', { block: true, actor: adminActor })).toBeNull();
+        expect((await spaceRepository.findLiveById(id))?.members).toHaveLength(2);
+      });
+
+      it('refuses a caller who was demoted after the read', async () => {
+        const space = await createSpace({ members: [member('a1', 'member'), member('u1')] });
+        const id = String(space.id);
+        expect(await spaceRepository.removeMember(id, 'u1', { block: true, actor: adminActor })).toBeNull();
+        expect((await spaceRepository.findLiveById(id))?.members).toHaveLength(2);
+      });
+
+      it('refuses an owner actor who no longer owns the Space', async () => {
+        const space = await createSpace({ members: [member('u1')] });
+        const stale = { userId: 'former-owner', isOwner: true };
+        expect(await spaceRepository.removeMember(String(space.id), 'u1', { block: true, actor: stale })).toBeNull();
+      });
+    });
   });
 
   describe('setMemberRole', () => {

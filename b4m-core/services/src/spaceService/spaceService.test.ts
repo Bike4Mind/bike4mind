@@ -64,7 +64,11 @@ describe('spaceService', () => {
       findByIds: vi.fn(async () => []),
       update: vi.fn(),
     };
-    const invites = { revokeAllForDocument: vi.fn(async () => 2) };
+    const invites = {
+      revokeAllForDocument: vi.fn(async () => 2),
+      findAllByDocumentId: vi.fn(async () => [] as unknown[]),
+      cancelPendingRecipient: vi.fn(),
+    };
     return { spaces, organizations, users, invites };
   };
   let db: ReturnType<typeof buildAdapters>;
@@ -215,8 +219,9 @@ describe('spaceService', () => {
     it('lets the owner remove anyone, with a block', async () => {
       await run(owner, 'admin');
       await run(owner, 'member');
-      expect(db.spaces.removeMember).toHaveBeenNthCalledWith(1, 'space1', 'admin', { block: true });
-      expect(db.spaces.removeMember).toHaveBeenNthCalledWith(2, 'space1', 'member', { block: true });
+      const actorOwner = { userId: 'owner', isOwner: true };
+      expect(db.spaces.removeMember).toHaveBeenNthCalledWith(1, 'space1', 'admin', { block: true, actor: actorOwner });
+      expect(db.spaces.removeMember).toHaveBeenNthCalledWith(2, 'space1', 'member', { block: true, actor: actorOwner });
       expectNoOrgOrUserWrite();
     });
 
@@ -224,6 +229,24 @@ describe('spaceService', () => {
       await run(admin, 'member');
       await expect(run(admin, 'admin')).rejects.toBeInstanceOf(ForbiddenError);
       await expect(run(admin, 'owner')).rejects.toBeInstanceOf(ForbiddenError);
+    });
+
+    it('tells an admin the membership changed when the guarded write loses a race', async () => {
+      db.spaces.removeMember.mockResolvedValueOnce(null as never);
+      await expect(run(admin, 'member')).rejects.toBeInstanceOf(ConflictError);
+      expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
+    });
+
+    it('cancels the removed user pending named invites so they cannot accept them', async () => {
+      usersById.member = user('member', { email: ' Member@Example.com ' });
+      db.invites.findAllByDocumentId.mockResolvedValue([
+        { id: 'inv1', recipients: { pending: ['member@example.com', 'other@example.com'] } },
+        { id: 'inv2', recipients: { pending: ['other@example.com'] } },
+        { id: 'inv3', revokedAt: new Date(), recipients: { pending: ['member@example.com'] } },
+      ]);
+      await run(admin, 'member');
+      expect(db.invites.cancelPendingRecipient).toHaveBeenCalledTimes(1);
+      expect(db.invites.cancelPendingRecipient).toHaveBeenCalledWith('inv1', 'member@example.com');
     });
 
     it('refuses a plain member and reports an unknown target', async () => {

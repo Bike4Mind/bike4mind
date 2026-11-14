@@ -66,7 +66,8 @@ describe('sharingService - acceptInvite (Space)', () => {
     },
   });
 
-  const run = (limits = { spaceMaxMembers: 1000 }) => acceptInvite(userId, { id: 'tok1' }, { db, limits } as never);
+  const run = (limits = { spaceMaxMembers: 1000, spacesEnabled: true }) =>
+    acceptInvite(userId, { id: 'tok1' }, { db, limits } as never);
 
   beforeEach(() => {
     space = makeSpace();
@@ -76,7 +77,7 @@ describe('sharingService - acceptInvite (Space)', () => {
   });
 
   it('joins through a link as a link member and spends the slot', async () => {
-    await run({ spaceMaxMembers: 7 });
+    await run({ spaceMaxMembers: 7, spacesEnabled: true });
     expect(db.spaces.addMember).toHaveBeenCalledWith(
       spaceId,
       expect.objectContaining({ userId, role: 'member', joinedVia: 'link' }),
@@ -125,6 +126,34 @@ describe('sharingService - acceptInvite (Space)', () => {
       expect.objectContaining({ joinedVia: 'invite' }),
       expect.objectContaining({ clearRemoved: true })
     );
+  });
+
+  it('refuses a named invite whose inviter was demoted', async () => {
+    space = makeSpace({ members: [{ userId: 'minter', role: 'member', joinedVia: 'invite', joinedAt: new Date() }] });
+    invite = makeLink({
+      isLinkOnly: false,
+      recipients: { pending: ['joiner@example.com'], refused: [], accepted: [] },
+    });
+    await expect(run()).rejects.toThrow('The inviter can no longer grant access to this space');
+    expect(db.spaces.addMember).not.toHaveBeenCalled();
+    expect(db.invites.acceptRecipient).not.toHaveBeenCalled();
+  });
+
+  it('refuses with the flag off before any write', async () => {
+    await expect(run({ spaceMaxMembers: 1000, spacesEnabled: false })).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.spaces.addMember).not.toHaveBeenCalled();
+    expect(db.invites.acceptRecipient).not.toHaveBeenCalled();
+  });
+
+  it('cancels the joiner pending named invites on a link join', async () => {
+    db.invites.findAllByDocumentId.mockResolvedValue([
+      { id: 'named1', recipients: { pending: [' Joiner@Example.com '] } },
+      { id: 'named2', recipients: { pending: ['someone@else.com'] } },
+      { id: 'named3', revokedAt: new Date(), recipients: { pending: ['joiner@example.com'] } },
+    ] as never);
+    await run();
+    expect(db.invites.cancelPendingRecipient).toHaveBeenCalledTimes(1);
+    expect(db.invites.cancelPendingRecipient).toHaveBeenCalledWith('named1', 'joiner@example.com');
   });
 
   it('refuses a link whose minter lost admin', async () => {

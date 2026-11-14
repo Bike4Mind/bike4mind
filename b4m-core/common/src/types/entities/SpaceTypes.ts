@@ -43,7 +43,15 @@ export interface ISpaceRepository extends IBaseRepository<ISpaceDocument> {
   countOwned: (userId: string) => Promise<number>;
   /** `null` when the Space is gone or full, or the user is the owner, a member, or blocked. */
   addMember: (spaceId: string, member: ISpaceMember, options: AddSpaceMemberOptions) => Promise<ISpaceDocument | null>;
-  removeMember: (spaceId: string, userId: string, options: { block: boolean }) => Promise<ISpaceDocument | null>;
+  /**
+   * With `actor`, the write itself requires the actor's current role: the owner, or an admin removing a
+   * plain member. `null` when the Space is gone, the target is not removable, or that check fails.
+   */
+  removeMember: (
+    spaceId: string,
+    userId: string,
+    options: { block: boolean; actor?: { userId: string; isOwner: boolean } }
+  ) => Promise<ISpaceDocument | null>;
   setMemberRole: (spaceId: string, userId: string, role: SpaceMemberRole) => Promise<ISpaceDocument | null>;
   /** `null` unless `fromUserId` owns the Space and `toUserId` is one of its admins. */
   transferOwnership: (

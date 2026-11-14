@@ -627,3 +627,25 @@ describe('DELETE /api/[type]/[id]/invites', () => {
     expect(cancelInvite).not.toHaveBeenCalled();
   });
 });
+
+describe('Space invites on the generic [type] route', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['GET', () => mockRefs.getHandler],
+    ['POST', () => mockRefs.postHandler],
+    ['DELETE', () => mockRefs.deleteHandler],
+  ])('refuses %s and points at the Space routes', async (method, handlerOf) => {
+    const { req, res } = createMocks({
+      method: method as 'GET',
+      query: { type: 'Space', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await expect(handlerOf()!(req, res)).rejects.toThrow(/space invites/);
+    expect(listInvitesForDocument).not.toHaveBeenCalled();
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(cancelInvite).not.toHaveBeenCalled();
+  });
+});

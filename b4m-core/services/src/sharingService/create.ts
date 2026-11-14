@@ -92,9 +92,9 @@ export const createInvite = async (
   );
   const isOrgLink = link === true && type === InviteType.Organization;
   const isLinkInvite = link === true && (type === InviteType.Organization || type === InviteType.Space);
-  if (link && !isLinkInvite) throw new BadRequestError('Share links with these options are only for organizations');
+  if (link && !isLinkInvite) throw new BadRequestError('Share links are only for organizations and spaces');
   if (allowedDomains?.length && !isLinkInvite) {
-    throw new BadRequestError('Allowed domains apply only to organization share links');
+    throw new BadRequestError('Allowed domains apply only to share links');
   }
   if (isLinkInvite && recipients?.length) throw new BadRequestError('A share link cannot name recipients');
 

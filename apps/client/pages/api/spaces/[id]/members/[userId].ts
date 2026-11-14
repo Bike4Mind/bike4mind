@@ -1,5 +1,5 @@
 // DELETE/PATCH /api/spaces/:id/members/:userId - remove a member; change a member's role (owner only).
-import { spaceRepository, withTransaction } from '@bike4mind/database';
+import { inviteRepository, spaceRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { spaceService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -19,7 +19,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         spaceService.removeMember(
           req.user!,
           { spaceId: req.query.id ?? '', userId: req.query.userId ?? '' },
-          { db: { spaces: spaceRepository } }
+          { db: { spaces: spaceRepository, invites: inviteRepository, users: userRepository } }
         )
       );
       res.status(204).end();

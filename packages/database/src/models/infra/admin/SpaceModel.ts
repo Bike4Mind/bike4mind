@@ -52,15 +52,31 @@ export class SpaceRepository extends BaseRepository<ISpaceDocument> implements I
     return doc?.toJSON() ?? null;
   }
 
-  async removeMember(spaceId: string, userId: string, { block }: { block: boolean }) {
+  async removeMember(
+    spaceId: string,
+    userId: string,
+    { block, actor }: { block: boolean; actor?: { userId: string; isOwner: boolean } }
+  ) {
     if (!mongoose.isValidObjectId(spaceId)) return null;
     const update: Record<string, unknown> = { $pull: { members: { userId } } };
     if (block) update.$addToSet = { removedUserIds: userId };
-    const doc = await this.model.findOneAndUpdate(
-      { _id: spaceId, deletedAt: null, ownerUserId: { $ne: userId }, 'members.userId': userId },
-      update,
-      { new: true }
-    );
+    const filter: Record<string, unknown> = {
+      _id: spaceId,
+      deletedAt: null,
+      ownerUserId: { $ne: userId },
+      'members.userId': userId,
+    };
+    if (actor?.isOwner) {
+      filter.ownerUserId = actor.userId;
+    } else if (actor) {
+      // The service read the roles earlier; this re-checks them in the write so a concurrent
+      // promotion of the target or demotion of the caller cannot slip through.
+      filter.members = {
+        $all: [{ $elemMatch: { userId: actor.userId, role: 'admin' } }, { $elemMatch: { userId, role: 'member' } }],
+      };
+      delete filter['members.userId'];
+    }
+    const doc = await this.model.findOneAndUpdate(filter, update, { new: true });
     return doc?.toJSON() ?? null;
   }
 

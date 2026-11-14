@@ -8,6 +8,7 @@ const h = vi.hoisted(() => {
   };
   return {
     state,
+    settings: { SpaceMaxMembers: 25, EnableSpaces: true } as Record<string, unknown>,
     userUpdate: vi.fn(),
     orgAddMember: vi.fn(),
     addMember: vi.fn(),
@@ -23,13 +24,15 @@ vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: vi.fn(async () => ({})),
-  getSettingsValue: () => 25,
+  getSettingsValue: (name: string) => h.settings[name],
 }));
 vi.mock('@bike4mind/database', () => ({
   inviteRepository: {
     findByToken: vi.fn(async () => h.state.invite),
     findById: vi.fn(async () => h.state.invite),
     acceptRecipient: h.acceptRecipient,
+    findAllByDocumentId: vi.fn(async () => []),
+    cancelPendingRecipient: vi.fn(),
   },
   organizationRepository: { addMemberIfUnderCeiling: h.orgAddMember, findById: vi.fn(async () => null) },
   sessionRepository: {},
@@ -55,6 +58,7 @@ import { acceptInviteForUser } from './inviteResponses';
 describe('acceptInviteForUser (Space link)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.settings.EnableSpaces = true;
     h.state.user = { id: 'joiner', email: 'joiner@example.com', emailVerified: true, organizationId: 'org-before' };
     h.state.space = {
       id: 'space1',
@@ -89,5 +93,14 @@ describe('acceptInviteForUser (Space link)', () => {
     expect(h.userUpdate).not.toHaveBeenCalled();
     expect(h.orgAddMember).not.toHaveBeenCalled();
     expect(user.organizationId).toBe('org-before');
+  });
+
+  it('refuses with the flag off and spends nothing', async () => {
+    h.settings.EnableSpaces = false;
+    await expect(acceptInviteForUser({ user: h.state.user, logger: undefined } as never, 'tok1')).rejects.toThrow(
+      'Feature not available'
+    );
+    expect(h.addMember).not.toHaveBeenCalled();
+    expect(h.acceptRecipient).not.toHaveBeenCalled();
   });
 });
