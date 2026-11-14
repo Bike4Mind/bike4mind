@@ -1,13 +1,22 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { dataLakeRepository, dataLakeSpendNotificationRepository, withTransaction } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import {
+  dataLakeRepository,
+  dataLakeSpendNotificationRepository,
+  organizationRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  assertDelegateCanCreditOrganization,
+  assertDelegateCanCreditUser,
+} from '@server/admin/creditGrants/delegateTargets';
 
 /**
- * Admin-only: zero a lake's lifetime embedding-spend meter (embeddingSpendMicroUsd).
+ * Admin (credits:adjust): zero a lake's lifetime embedding-spend meter (embeddingSpendMicroUsd).
  *
  * The supported remedy for a poisoned meter. Reservations are released when a provider call
  * fails, but the release is best-effort (a hard crash between reserve and release leaks), the
@@ -16,20 +25,19 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
  * lake would raise the ceiling for every lake on the platform. This gives an operator the
  * narrow tool instead: one lake, back to zero, indexing resumes.
  *
- * Deliberately admin-only rather than lake-owner: the meter enforces a platform cost control,
- * and letting an owner zero their own spend would let them mint unlimited budget.
+ * Deliberately an admin permission rather than lake-owner: the meter enforces a platform cost control,
+ * and letting an owner zero their own spend would let them mint unlimited budget. For the same
+ * reason a credits:adjust delegate cannot reset a lake they created or one owned by an organization
+ * they belong to.
  */
-const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
+const handler = adminApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES, adminPermissions: { POST: 'credits:adjust' } })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
     await withTransaction(async () => {
       const lake = await dataLakeRepository.findById(id);
       if (!lake) throw new NotFoundError('Data lake not found');
+      await assertDelegateCanReset(req.user, lake);
       const reset = await dataLakeRepository.resetEmbeddingSpend(id);
       if (!reset) throw new NotFoundError('Data lake not found');
 
@@ -53,5 +61,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     req.logger?.log?.(`[spendGate] admin ${req.user.id} reset embeddingSpendMicroUsd for lake ${id}`);
     res.status(200).json({ ok: true });
   });
+
+const VERB = 'reset embedding spend for';
+
+async function assertDelegateCanReset(
+  actor: Request['user'],
+  lake: { createdByUserId?: string | null; organizationId?: string | null }
+): Promise<void> {
+  if (lake.createdByUserId) await assertDelegateCanCreditUser(actor, lake.createdByUserId, VERB);
+  if (!lake.organizationId) return;
+  const organization = await organizationRepository.findById(lake.organizationId);
+  if (organization) await assertDelegateCanCreditOrganization(actor, organization, VERB);
+}
 
 export default handler;
