@@ -163,6 +163,23 @@ describe('Approvals queue', () => {
     const list = screen.getByTestId('admin-approval-details-user-ids');
     expect(Array.from(list.querySelectorAll('li')).map(li => li.textContent)).toEqual(['u-a', 'u-b']);
   });
+
+  it('offers no details item on a pending request with no parameters', () => {
+    rows.push(row('bare', { params: null }));
+    renderQueue();
+
+    openActions('bare');
+    expect(screen.queryByTestId('admin-approval-details-btn')).toBeNull();
+    expect(screen.getByTestId('admin-approve-btn')).toBeTruthy();
+  });
+
+  it('says why a decision is unavailable inside the disabled item', () => {
+    rows.push(row('other', { canDecide: false }));
+    renderQueue();
+
+    openActions('other');
+    expect(screen.getByTestId('admin-approve-btn').textContent).toContain('permission');
+  });
   it('offers the next page when the server returned a cursor', () => {
     queryFlags.hasNextPage = true;
     renderQueue();

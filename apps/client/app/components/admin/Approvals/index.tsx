@@ -63,6 +63,16 @@ const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a 
 const decideHint = (row: AdminApprovalRow) =>
   row.own ? 'Another admin must approve your own request.' : 'You do not have the permission this request needs.';
 
+const DecisionLabel = ({ label, hint }: { label: string; hint?: string }) =>
+  hint ? (
+    <Stack>
+      <span>{label}</span>
+      <Typography level="body-xs">{hint}</Typography>
+    </Stack>
+  ) : (
+    <>{label}</>
+  );
+
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
 const targetUserIdOf = (row: AdminApprovalRow) =>
@@ -258,22 +268,23 @@ const Approvals: React.FC = () => {
         {isPending && (
           <MenuItem
             disabled={!row.canDecide || approve.isPending}
-            title={row.canDecide ? undefined : hint}
             onClick={() => void onApprove(row)}
             data-testid="admin-approve-btn"
           >
-            Approve
+            <DecisionLabel label="Approve" hint={row.canDecide ? undefined : hint} />
           </MenuItem>
         )}
         {/* The server lets the requester withdraw, and otherwise rejects on the same check as approve. */}
         {isPending && (
           <MenuItem
             disabled={!isRequester && !row.canDecide}
-            title={isRequester || row.canDecide ? undefined : hint}
             onClick={() => setRejecting(row)}
             data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
           >
-            {isRequester ? 'Withdraw' : 'Reject'}
+            <DecisionLabel
+              label={isRequester ? 'Withdraw' : 'Reject'}
+              hint={isRequester || row.canDecide ? undefined : hint}
+            />
           </MenuItem>
         )}
       </RowActionsMenu>
