@@ -1,6 +1,8 @@
 package com.bike4mind.app
 
 import android.app.Application
+import com.bike4mind.app.push.FcmClient
+import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +19,8 @@ class B4MApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         environments = EnvironmentStore(this)
+        PushNotifications.createChannel(this)
+        FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
     }
 

@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- allowBackup is off: the encrypted tokens are useless without their Keystore key, which never leaves the device. -->
     <application
@@ -12,6 +13,19 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- FCM: a notification message shown while the app is backgrounded uses this channel (created in B4MApplication). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="b4m_default" />
+
+        <service
+            android:name=".push.B4MMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <!-- singleTask so the OAuth redirect returns to the running activity (onNewIntent) instead of a new one. -->
         <activity

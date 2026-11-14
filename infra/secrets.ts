@@ -55,6 +55,9 @@ export const secrets = {
   APNS_TEAM_ID: new sst.Secret('APNS_TEAM_ID', 'not-configured'),
   APNS_KEY: new sst.Secret('APNS_KEY', 'not-configured'),
   APNS_TOPIC: new sst.Secret('APNS_TOPIC', 'not-configured'),
+  // FCM push delivery to the Android client: the Firebase service account JSON, verbatim. Left on
+  // 'not-configured', Android push is off (APNs is unaffected). It is a secret because it holds a private key.
+  FCM_SERVICE_ACCOUNT: new sst.Secret('FCM_SERVICE_ACCOUNT', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),

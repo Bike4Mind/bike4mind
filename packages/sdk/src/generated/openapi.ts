@@ -327,7 +327,7 @@ export interface paths {
     put?: never;
     /**
      * Register a device push token
-     * @description Registers a push token for the signed-in device so the server can notify it. Idempotent: re-registering the same token refreshes it and rebinds it to the calling user and session, which is how a token moves when a different account signs in on the same device. The token is removed automatically when the registering session ends. Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session. A token with no session claim (legacy access token) is refused with `401`; sign in again.
+     * @description Registers a push token for the signed-in device so the server can notify it. Idempotent: re-registering the same token refreshes it and rebinds it to the calling user and session, which is how a token moves when a different account signs in on the same device. The token is removed automatically when the registering session ends. `platform` selects the delivery service: `ios` (APNs) or `android` (FCM; send `production` as the environment). Authenticate with a JWT access token only: the token is bound to the signed-in session that registers it, and API keys have no session. A token with no session claim (legacy access token) is refused with `401`; sign in again.
      */
     post: operations['registerPushToken'];
     /**
@@ -3862,7 +3862,7 @@ export interface components {
       /** @enum {string} */
       kind: 'device' | 'liveActivity';
       /** @enum {string} */
-      platform: 'ios';
+      platform: 'ios' | 'android';
       /** @enum {string} */
       environment: 'sandbox' | 'production';
       activityId?: string;
