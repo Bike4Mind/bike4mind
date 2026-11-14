@@ -106,6 +106,14 @@ describe('Approvals queue', () => {
     expect(isDisabled('admin-reject-btn')).toBe(true);
   });
 
+  it('shows no actions menu on a settled request with nothing to inspect', () => {
+    rows.push(row('done', { status: 'rejected', params: null, canDecide: false }));
+    renderQueue();
+
+    expect(screen.getByTestId('admin-approval-row-done')).toBeTruthy();
+    expect(screen.queryByTestId('admin-approval-actions-done')).toBeNull();
+  });
+
   it('asks for a reason before rejecting', () => {
     rows.push(row('a2'));
     renderQueue();
