@@ -1,4 +1,4 @@
-import { FC, useState } from 'react';
+import { FC, useLayoutEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -36,6 +36,7 @@ import {
   useOrgApiKeys,
   useRevokeOrgApiKey,
   useRotateOrgApiKey,
+  useRotateOrgApiKeyCallbackSecret,
 } from '@client/app/hooks/data/orgApiKeys';
 import { toast } from 'sonner';
 import { STATUS_LABEL, effectiveStatus, formatDate } from './orgApiKeyDisplay';
@@ -50,18 +51,68 @@ const todayLocal = (): string => {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 };
 
+const CONFIRM_COPY = {
+  rotate: {
+    title: 'Rotate API key?',
+    description: (name: string) => `"${name}" gets a new secret and the current one stops working immediately.`,
+    confirmText: 'Rotate',
+  },
+  revoke: {
+    title: 'Revoke API key?',
+    description: (name: string) => `"${name}" stops working immediately. This cannot be undone.`,
+    confirmText: 'Revoke',
+  },
+  'callback-secret': {
+    title: 'Generate a new callback signing secret?',
+    description: (name: string) =>
+      `Generation callbacks for "${name}" will be signed with a new secret. Any previous secret stops verifying on the next delivery.`,
+    confirmText: 'Generate secret',
+  },
+} as const;
+
+/** Owns one request until settlement, and rejects completions after its scope unmounts. */
+const useKeyRequest = () => {
+  const mounted = useRef(false);
+  const inFlight = useRef(false);
+  const [pending, setPending] = useState(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return {
+    pending,
+    isPending: () => inFlight.current,
+    isCurrent: () => mounted.current,
+    start: () => {
+      if (!mounted.current || inFlight.current) return false;
+      inFlight.current = true;
+      setPending(true);
+      return true;
+    },
+    finish: () => {
+      inFlight.current = false;
+      if (mounted.current) setPending(false);
+    },
+  };
+};
+
 /** Shown once, right after a create or rotate: the server never returns the secret again. */
-const SecretModal: FC<{ secret: { name: string; key: string } | null; onClose: () => void }> = ({
-  secret,
-  onClose,
-}) => {
+type ShownSecret = { name: string; key: string; kind?: 'key' | 'callback' };
+
+const SecretModal: FC<{ secret: ShownSecret | null; onClose: () => void }> = ({ secret, onClose }) => {
   const copy = async () => {
     if (!secret) return;
     try {
       await navigator.clipboard.writeText(secret.key);
-      toast.success('API key copied');
+      toast.success(secret.kind === 'callback' ? 'Callback signing secret copied' : 'API key copied');
     } catch {
-      toast.error('Could not copy; select the key and copy it manually');
+      toast.error(
+        secret.kind === 'callback'
+          ? 'Could not copy; select the callback signing secret and copy it manually'
+          : 'Could not copy; select the API key and copy it manually'
+      );
     }
   };
 
@@ -69,12 +120,15 @@ const SecretModal: FC<{ secret: { name: string; key: string } | null; onClose: (
     // Only Done or the close button dismiss it: a stray Escape or backdrop click would lose the secret.
     <Modal open={!!secret}>
       <ModalDialog sx={{ maxWidth: 560 }} data-testid="org-api-key-secret-modal">
-        <ModalClose onClick={onClose} />
-        <DialogTitle>Copy your API key</DialogTitle>
+        <ModalClose aria-label="Close" onClick={onClose} />
+        <DialogTitle>
+          {secret?.kind === 'callback' ? 'Copy your callback signing secret' : 'Copy your API key'}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
             <Alert color="warning" variant="soft">
-              This is the only time the key for &quot;{secret?.name}&quot; is shown. Store it somewhere safe now.
+              This is the only time the {secret?.kind === 'callback' ? 'callback signing secret' : 'key'} for &quot;
+              {secret?.name}&quot; is shown. Store it somewhere safe now.
             </Alert>
             <Input
               readOnly
@@ -111,6 +165,7 @@ const CreateKeyModal: FC<{
   onCreated: (secret: { name: string; key: string }) => void;
 }> = ({ open, onClose, organizationId, onCreated }) => {
   const createKey = useCreateOrgApiKey(organizationId);
+  const request = useKeyRequest();
   const [name, setName] = useState('');
   const [access, setAccess] = useState(() => accessValueOf([], []));
   const [expiresOn, setExpiresOn] = useState('');
@@ -122,33 +177,45 @@ const CreateKeyModal: FC<{
   };
 
   const close = () => {
+    if (request.isPending()) return;
     reset();
     onClose();
   };
 
   const submit = async () => {
-    const created = await createKey
-      .mutateAsync({
+    if (!request.start()) return;
+    try {
+      const created = await createKey.mutateAsync({
         name: name.trim(),
         scopes: access.scopes,
         grants: access.grants,
         ...(expiresOn ? { expiresAt: new Date(`${expiresOn}T23:59:59`).toISOString() } : {}),
-      })
-      .catch(() => null);
-    if (!created) return;
-    // Hand the secret to the show-once modal and drop it from the mutation cache.
-    createKey.reset();
-    close();
-    onCreated({ name: created.apiKey.name, key: created.key });
+      });
+      if (!request.isCurrent()) return;
+      reset();
+      onClose();
+      onCreated({ name: created.apiKey.name, key: created.key });
+    } catch {
+      // The mutation reports the error; keep the form and its draft available for retry.
+    } finally {
+      // Detach this observer even if the owner unmounted; gcTime:0 removes the secret result.
+      createKey.reset();
+      request.finish();
+    }
   };
 
   return (
     <Modal open={open} onClose={close}>
       <ModalDialog sx={{ maxWidth: 560, width: '100%' }} data-testid="org-api-key-create-modal">
-        <ModalClose />
+        <ModalClose aria-label="Close" />
         <DialogTitle>New organization API key</DialogTitle>
         <DialogContent>
-          <Stack spacing={2}>
+          <Stack
+            component="fieldset"
+            disabled={request.pending}
+            spacing={2}
+            sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}
+          >
             <FormControl required>
               <FormLabel>Name</FormLabel>
               <Input
@@ -175,7 +242,7 @@ const CreateKeyModal: FC<{
               </Button>
               <Button
                 onClick={submit}
-                loading={createKey.isPending}
+                loading={request.pending}
                 disabled={!name.trim() || !isAccessComplete(access)}
                 data-testid="org-api-key-create-submit-btn"
               >
@@ -193,33 +260,55 @@ const CreateKeyModal: FC<{
  * Org-owned API keys: held by the organization rather than a member, billed to the org, and unaffected by
  * any member leaving. Owner, managers and platform admins (the same gate as the routes, verifyOrgAccess).
  */
-const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
+const OrgApiKeysContent: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
+  const request = useKeyRequest();
   const { data: keys, isLoading, isError } = useOrgApiKeys(organizationId);
   const rotateKey = useRotateOrgApiKey(organizationId);
   const revokeKey = useRevokeOrgApiKey(organizationId);
   const { data: options } = useOrgApiKeyOptions(organizationId);
   const groupNames = options ? new Map(options.groups.map(group => [group.id, group.name])) : undefined;
   const [createOpen, setCreateOpen] = useState(false);
-  const [secret, setSecret] = useState<{ name: string; key: string } | null>(null);
+  const rotateCallbackSecret = useRotateOrgApiKeyCallbackSecret(organizationId);
+  const [secret, setSecret] = useState<ShownSecret | null>(null);
+  const [pending, setPending] = useState<{
+    action: 'rotate' | 'revoke' | 'callback-secret';
+    key: IOrgApiKeyView;
+  } | null>(null);
   const [editing, setEditing] = useState<IOrgApiKeyView | null>(null);
-  const [pending, setPending] = useState<{ action: 'rotate' | 'revoke'; key: IOrgApiKeyView } | null>(null);
 
+  const openAction = (action: 'rotate' | 'revoke' | 'callback-secret', key: IOrgApiKeyView) => {
+    if (!request.isPending()) setPending({ action, key });
+  };
+  const closeAction = () => {
+    if (!request.isPending()) setPending(null);
+  };
   const confirm = async () => {
-    if (!pending) return;
+    if (!pending || !request.start()) return;
     const { action, key } = pending;
-    if (action === 'rotate') {
-      const rotated = await rotateKey.mutateAsync(key.id).catch(() => null);
-      setPending(null);
-      rotateKey.reset();
-      if (rotated) setSecret({ name: rotated.apiKey.name, key: rotated.key });
-      return;
+    try {
+      if (action === 'rotate') {
+        const rotated = await rotateKey.mutateAsync(key.id);
+        if (!request.isCurrent()) return;
+        setPending(null);
+        setSecret({ name: rotated.apiKey.name, key: rotated.key });
+      } else if (action === 'callback-secret') {
+        const minted = await rotateCallbackSecret.mutateAsync(key.id);
+        if (!request.isCurrent()) return;
+        setPending(null);
+        setSecret({ name: minted.name, key: minted.callbackSigningSecret, kind: 'callback' });
+      } else {
+        await revokeKey.mutateAsync(key.id);
+        if (!request.isCurrent()) return;
+        setPending(null);
+        toast.success(`Revoked "${key.name}"`);
+      }
+    } catch {
+      // The mutation reports the error; retain this confirmation so the same action can be retried.
+    } finally {
+      if (action === 'rotate') rotateKey.reset();
+      if (action === 'callback-secret') rotateCallbackSecret.reset();
+      request.finish();
     }
-    const revoked = await revokeKey
-      .mutateAsync(key.id)
-      .then(() => true)
-      .catch(() => false);
-    setPending(null);
-    if (revoked) toast.success(`Revoked "${key.name}"`);
   };
 
   return (
@@ -231,7 +320,10 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
         </Typography>
         <Button
           startDecorator={<AddIcon />}
-          onClick={() => setCreateOpen(true)}
+          onClick={() => {
+            if (!request.isPending()) setCreateOpen(true);
+          }}
+          disabled={request.pending}
           sx={{ flexShrink: 0 }}
           data-testid="org-api-key-new-btn"
         >
@@ -306,7 +398,10 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                             <Button
                               size="sm"
                               variant="plain"
-                              onClick={() => setEditing(key)}
+                              onClick={() => {
+                                if (!request.isPending()) setEditing(key);
+                              }}
+                              disabled={request.pending}
                               data-testid={`org-api-key-edit-btn-${key.id}`}
                             >
                               Edit access
@@ -316,17 +411,30 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
                             <Button
                               size="sm"
                               variant="plain"
-                              onClick={() => setPending({ action: 'rotate', key })}
+                              onClick={() => openAction('rotate', key)}
+                              disabled={request.pending}
                               data-testid={`org-api-key-rotate-btn-${key.id}`}
                             >
                               Rotate
+                            </Button>
+                          )}
+                          {active && (
+                            <Button
+                              size="sm"
+                              variant="plain"
+                              onClick={() => openAction('callback-secret', key)}
+                              disabled={request.pending}
+                              data-testid={`org-api-key-callback-secret-btn-${key.id}`}
+                            >
+                              Callback secret
                             </Button>
                           )}
                           <Button
                             size="sm"
                             variant="plain"
                             color="danger"
-                            onClick={() => setPending({ action: 'revoke', key })}
+                            onClick={() => openAction('revoke', key)}
+                            disabled={request.pending}
                             data-testid={`org-api-key-revoke-btn-${key.id}`}
                           >
                             Revoke
@@ -352,21 +460,22 @@ const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
       <EditOrgApiKeyAccessModal organizationId={organizationId} apiKey={editing} onClose={() => setEditing(null)} />
       <ConfirmationModal
         open={!!pending}
-        onClose={() => setPending(null)}
+        onClose={closeAction}
         onConfirm={confirm}
-        loading={rotateKey.isPending || revokeKey.isPending}
+        loading={request.pending}
         showToast={false}
-        title={pending?.action === 'rotate' ? 'Rotate API key?' : 'Revoke API key?'}
-        description={
-          pending?.action === 'rotate'
-            ? `"${pending.key.name}" gets a new secret and the current one stops working immediately.`
-            : `"${pending?.key.name}" stops working immediately. This cannot be undone.`
-        }
-        confirmText={pending?.action === 'rotate' ? 'Rotate' : 'Revoke'}
-        confirmColor={pending?.action === 'rotate' ? 'primary' : 'danger'}
+        title={CONFIRM_COPY[pending?.action ?? 'revoke'].title}
+        description={pending ? CONFIRM_COPY[pending.action].description(pending.key.name) : ''}
+        confirmText={CONFIRM_COPY[pending?.action ?? 'revoke'].confirmText}
+        confirmColor={pending?.action === 'revoke' ? 'danger' : 'primary'}
       />
     </Stack>
   );
 };
+
+// A scope change discards every old-org modal and request owner, including A → B → A navigation.
+const OrgApiKeysSection: FC<OrgApiKeysSectionProps> = ({ organizationId }) => (
+  <OrgApiKeysContent key={organizationId} organizationId={organizationId} />
+);
 
 export default OrgApiKeysSection;

@@ -12,11 +12,13 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
+import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
 import {
   CreditHolderType,
@@ -171,8 +173,8 @@ const handler = baseApi()
     // must commit together, or a partial failure leaves dangling group or lake access or an org that
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(async () => {
-      await organizationService.deleteOrganization(
+    const { revokedApiKeyIds } = await withTransaction(async () => {
+      const result = await organizationService.deleteOrganization(
         req.user!,
         { id },
         {
@@ -180,6 +182,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            userApiKeys: userApiKeyRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             ...lakeConfigAuditDb,
@@ -201,9 +204,21 @@ const handler = baseApi()
         }
       );
       await orgDomainClaimRepository.deleteByOrganization(id);
+      return result;
     });
 
     await clearDeletedOrganizationReferences(id, req.logger);
+    // The delete has committed, so a failed teardown is logged rather than turned into an error response.
+    const teardowns = await Promise.allSettled(
+      revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger))
+    );
+    teardowns.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        req.logger.warn(
+          `Failed to end realtime connections for revoked key ${revokedApiKeyIds[i]}: ${String(outcome.reason)}`
+        );
+      }
+    });
 
     return res.json({ id });
   });

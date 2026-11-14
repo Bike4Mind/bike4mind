@@ -38,6 +38,7 @@ export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 
 export const MAX_ACTIVE_KEYS_PER_USER = 10;
+export const MAX_ACTIVE_KEYS_PER_ORG = MAX_ACTIVE_KEYS_PER_USER;
 /** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
 export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
 /** Longest lifetime of a federated-exchange key, measured from mint time. */
@@ -406,9 +407,12 @@ const mintUserApiKey = async (
     const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
     if (result === 'at_cap') {
       if (untrusted) throw apiKeyTrustRequiredError(untrusted);
+      // Org-owned keys all live on the org's one service account, so its per-user cap is a per-org cap.
       const message = isExchangeKey
         ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
-        : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
+        : params.orgOwned
+          ? `Maximum ${MAX_ACTIVE_KEYS_PER_ORG} active API keys allowed per organization`
+          : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
       throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
     }
     apiKeyDocument = result;

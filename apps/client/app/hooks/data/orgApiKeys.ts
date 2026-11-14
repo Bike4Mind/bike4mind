@@ -56,6 +56,8 @@ export function useUpdateOrgApiKey(organizationId: string) {
 export function useCreateOrgApiKey(organizationId: string) {
   const queryClient = useQueryClient();
   return useMutation<IOrgApiKeySecretResponse, unknown, CreateOrgApiKeyRequest>({
+    // Plaintext results are show-once; discard them as soon as their observer detaches.
+    gcTime: 0,
     mutationFn: async body => (await api.post(`/api/organizations/${organizationId}/api-keys`, body)).data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: orgApiKeysQueryKey(organizationId) }),
     onError: error => toast.error(errorMessage(error, 'Failed to create the API key')),
@@ -65,6 +67,8 @@ export function useCreateOrgApiKey(organizationId: string) {
 export function useRotateOrgApiKey(organizationId: string) {
   const queryClient = useQueryClient();
   return useMutation<IOrgApiKeySecretResponse, unknown, string>({
+    // Plaintext results are show-once; discard them as soon as their observer detaches.
+    gcTime: 0,
     mutationFn: async keyId => (await api.post(`/api/organizations/${organizationId}/api-keys/${keyId}/rotate`)).data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: orgApiKeysQueryKey(organizationId) }),
     onError: error => toast.error(errorMessage(error, 'Failed to rotate the API key')),
@@ -97,5 +101,22 @@ export function useRevokeOrgMemberApiKey(organizationId: string) {
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: orgMemberApiKeysQueryKey(organizationId) }),
     onError: error => toast.error(errorMessage(error, 'Failed to revoke the API key')),
+  });
+}
+
+export type OrgApiKeyCallbackSecret = {
+  id: string;
+  name: string;
+  callbackSigningSecret: string;
+  callbackSigningSecretCreatedAt: string;
+};
+
+export function useRotateOrgApiKeyCallbackSecret(organizationId: string) {
+  return useMutation<OrgApiKeyCallbackSecret, unknown, string>({
+    // Plaintext results are show-once; discard them as soon as their observer detaches.
+    gcTime: 0,
+    mutationFn: async keyId =>
+      (await api.post(`/api/organizations/${organizationId}/api-keys/${keyId}/callback-secret`, {})).data,
+    onError: error => toast.error(errorMessage(error, 'Failed to generate the callback signing secret')),
   });
 }

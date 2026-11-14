@@ -32,6 +32,7 @@ import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const MAX_DEVICE_NAME_LENGTH = 64;
@@ -194,6 +195,14 @@ const handler = baseApi({ auth: false })
         logError('invalid_grant', 400);
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
+      try {
+        requireNonSystemUser(user);
+      } catch {
+        logError('invalid_grant', 400);
+        return res
+          .status(400)
+          .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+      }
 
       const idToken = generateIdToken({
         ...idTokenUserParams(user),
@@ -343,6 +352,7 @@ const handler = baseApi({ auth: false })
         return res.status(400).json(invalidGrant);
       }
       try {
+        requireNonSystemUser(user);
         assertAccountStateUsable(user);
       } catch {
         logError('invalid_grant', 400);
