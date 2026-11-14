@@ -14,7 +14,7 @@ export type ChatCompletedPushDeps = {
     status?: string;
     type?: string;
     reply?: string | null;
-    pendingAction?: { tool: string } | null;
+    pendingAction?: { tool: string; ts?: number } | null;
   } | null>;
   sessionDeepLink(sessionId: string): string;
   /** Must not throw (publishPushNotification). */
@@ -58,6 +58,7 @@ export async function publishChatCompletedPush(
         collapseId: `approval:${turn.questId}`,
         questId: turn.questId,
         sessionId: turn.sessionId,
+        pendingActionTs: quest.pendingAction.ts,
       });
       return;
     }

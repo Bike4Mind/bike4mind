@@ -17,6 +17,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/system-prompts',
   },
+  approvePendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/approve',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -136,6 +140,10 @@ export const operations = {
   deleteSessionMessage: {
     method: 'DELETE',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  denyPendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/deny',
   },
   editImage: {
     method: 'POST',
