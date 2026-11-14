@@ -690,4 +690,37 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
     expect(db.fabFiles.findAccessibleInIds).not.toHaveBeenCalled();
   });
+  describe('organization binding', () => {
+    const boundSession = (ownerId: string) => ({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      organizationId: 'org-1',
+      knowledgeIds: [],
+      tags: [],
+    });
+    const organization = { userId: 'owner-1', users: [{ userId: 'member-1', permissions: ['read'] }] };
+
+    it('makes a personal copy when a non-member share holder clones an org-bound session', async () => {
+      const { db, createdSessions } = makeAdapters('owner-1');
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce(boundSession('owner-1'));
+      db.organizations = { findById: vi.fn().mockResolvedValue(organization) };
+
+      await cloneSession('caller-1', { id: 'session-1' }, { db, workspaceSessionSettings: {} });
+
+      expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
+      expect(createdSessions[0].organizationId).toBeUndefined();
+    });
+
+    it('keeps the organization when a member clones it', async () => {
+      const { db, createdSessions } = makeAdapters('owner-1');
+      db.users.findById.mockResolvedValue({ id: 'member-1' });
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce(boundSession('owner-1'));
+      db.organizations = { findById: vi.fn().mockResolvedValue(organization) };
+
+      await cloneSession('member-1', { id: 'session-1' }, { db, workspaceSessionSettings: {} });
+
+      expect(createdSessions[0].organizationId).toBe('org-1');
+    });
+  });
 });

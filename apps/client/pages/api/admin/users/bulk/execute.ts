@@ -5,7 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
 import { usersBulkExecuteDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
-import { assertCanRunUsersBulkAction } from '@server/admin/usersBulk/authorize';
+import { assertCanRunUsersBulkAction, tagsAddedBy } from '@server/admin/usersBulk/authorize';
 import { requestUsersBulkApprovalIfNeeded } from '@server/admin/usersBulk/approvalGate';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import {
@@ -33,7 +33,10 @@ const handler = adminApi({
   .post(
     asyncHandler(async (req, res) => {
       const request = AdminUsersBulkExecuteRequestSchema.parse(req.body);
-      assertCanRunUsersBulkAction(req, request.action.type, { blocks: blocksEmailDomains(request.action) });
+      assertCanRunUsersBulkAction(req, request.action.type, {
+        blocks: blocksEmailDomains(request.action),
+        tags: tagsAddedBy(request.action),
+      });
       const gate = await requestUsersBulkApprovalIfNeeded(req as unknown as Request, request);
       if (gate.pending) return res.status(202).json(gate.pending);
       try {

@@ -1209,6 +1209,24 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     }
   );
 
+  it.each([InviteType.FabFile, InviteType.Session])(
+    'refuses a %s link on org-bound content once its org disallows public links',
+    async type => {
+      const adapters = makeAdapters(type, shareLink, { ...makeDoc(shareLink), organizationId: 'org-1' }, sharerId);
+      adapters.db.organization.findById.mockResolvedValue({
+        userId: 'org-owner',
+        users: [],
+        sharingPolicy: { allowPublicLinks: false, allowExternalSharing: true, allowedDomains: [] },
+      });
+
+      await expect(acceptInvite(userId, { id: inviteId }, adapters as never)).rejects.toThrow('public links');
+      expect(adapters.db.organization.findById).toHaveBeenCalledWith('org-1');
+      expect(adapters.db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
+      expect(adapters.db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
+      expect(adapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
+    }
+  );
+
   it('accepts an empty non-owner invite as a no-op grant, like an owner-minted one', async () => {
     const adapters = makeAdapters(InviteType.FabFile, [], makeDoc(shareLink), sharerId);
 

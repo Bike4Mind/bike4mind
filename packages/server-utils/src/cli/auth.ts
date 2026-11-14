@@ -136,8 +136,8 @@ export async function verifyJwtToken(
     }
 
     // P0-B abuse gate: the REST consent middleware (auth.ts) only guards baseApi routes,
-    // but the same session JWT authenticates the WebSocket + CLI Lambda LLM surfaces (cliCompletion,
-    // agentExecute, completions function-URL, etc.) through THIS primitive. A brand-new OAuth account
+    // but the same session JWT authenticates the WebSocket + CLI Lambda LLM surfaces (agentExecute,
+    // completions function-URL, etc.) through THIS primitive. A brand-new OAuth account
     // is created without a recorded acceptance, so without this check it could drive provider spend
     // via a bearer token alone. Enforce the same fail-closed rule here - the JWT chokepoint every
     // JWT-authed LLM surface funnels through. (The API-key path is intentionally NOT gated: keys are
@@ -155,8 +155,8 @@ export async function verifyJwtToken(
     assertNoPendingDeletion(user);
 
     // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
-    // ForbiddenError so a transport that maps error classes (the Function-URL adapter, the
-    // ws-completions JWT catch) answers 403 with this message rather than a generic 401.
+    // ForbiddenError so a transport that maps error classes (the Function-URL adapter) answers 403
+    // with this message rather than a generic 401.
     if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
@@ -277,6 +277,7 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
     billingOwnerType: info.billingOwnerType,
     organizationId: info.organizationId,
     createdByUserId: info.createdByUserId,
+    oauthExchangeClientId: info.oauthExchangeClientId,
   });
   if (!accessAllowed) {
     Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {

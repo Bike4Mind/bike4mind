@@ -68,9 +68,10 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
   resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
 }));
 
-import handler, { FULL_ADMIN_SETTING_KEYS } from '../update';
+import handler from '../update';
 import {
   formatUsdPerCredit,
+  FULL_ADMIN_SETTING_KEYS,
   MIN_PRICE_PER_CREDIT_USD,
   SENSITIVE_SETTING_MASK,
   resolveSettingDefinition,
@@ -109,6 +110,7 @@ describe('settings/update settings that constrain delegated admins', () => {
   beforeEach(() => {
     findOneAndUpdate.mockReset();
     vi.clearAllMocks();
+    stored = null;
   });
 
   it.each([...FULL_ADMIN_SETTING_KEYS])(
@@ -150,6 +152,44 @@ describe('settings/update settings that constrain delegated admins', () => {
   it('lets a settings:manage delegate update an ordinary setting', async () => {
     stageWriteResult('defaultEmbeddingModel', 'text-embedding-3-small');
     await runHandler('defaultEmbeddingModel', 'text-embedding-3-small', {}, DELEGATE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a settings:manage delegate adding a managed tag to defaultTags before any write', async () => {
+    await expect(runHandler('defaultTags', 'beta, Developer', {}, DELEGATE)).rejects.toThrow(
+      'Only full administrators can assign managed tags'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a settings:manage delegate set ordinary defaultTags', async () => {
+    stageWriteResult('defaultTags', 'beta, alpha');
+    await runHandler('defaultTags', 'beta, alpha', {}, DELEGATE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a settings:manage delegate edit ordinary defaultTags while a stored managed tag stays', async () => {
+    stored = { settingName: 'defaultTags', settingValue: 'beta, Developer' };
+    stageWriteResult('defaultTags', 'alpha, Developer');
+    await runHandler('defaultTags', 'alpha, Developer', {}, DELEGATE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['removing', 'beta'],
+    ['clearing', ''],
+    ['re-casing', 'beta, DEVELOPER'],
+  ])('refuses a settings:manage delegate %s a stored managed tag in defaultTags', async (_label, value) => {
+    stored = { settingName: 'defaultTags', settingValue: 'beta, Developer' };
+    await expect(runHandler('defaultTags', value, {}, DELEGATE)).rejects.toThrow(
+      'Only full administrators can assign managed tags'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin set a managed tag in defaultTags', async () => {
+    stageWriteResult('defaultTags', 'Developer');
+    await runHandler('defaultTags', 'Developer');
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 });

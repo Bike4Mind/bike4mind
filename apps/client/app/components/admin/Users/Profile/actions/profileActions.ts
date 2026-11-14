@@ -24,6 +24,7 @@ export type ProfileAction =
   | 'scheduleDeletion'
   | 'cancelDeletion'
   | 'dataExport'
+  | 'erase'
   | 'delete';
 
 /**

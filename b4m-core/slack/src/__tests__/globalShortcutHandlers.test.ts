@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { WebClient } from '@slack/web-api';
 import {
   SHORTCUT_CALLBACK_IDS,
   handleGlobalShortcut,
@@ -407,6 +408,42 @@ describe('GlobalShortcutHandlers', () => {
       expect(mockChatPostMessage).toHaveBeenCalled();
     });
 
+    it('uses the remaining acknowledgement budget for each non-retrying Slack request', async () => {
+      let clock = 0;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      mockConversationsOpen.mockImplementationOnce(async () => {
+        clock = 1_500;
+        return { ok: true, channel: { id: 'D12345' } };
+      });
+      try {
+        expect(await handleCreateNotebookSubmission(basePayload, 'xoxb-token')).toEqual({});
+        expect(vi.mocked(WebClient).mock.calls.map(([, options]) => options)).toEqual([
+          { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true, timeout: 1_000 },
+          { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true, timeout: 500 },
+        ]);
+        expect(mockChatPostMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('skips the DM when notebook creation exhausts its notification budget', async () => {
+      let clock = 0;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      mockCreateSession.mockImplementationOnce(async () => {
+        clock = 2_001;
+        return { id: 'session123' };
+      });
+      try {
+        expect(await handleCreateNotebookSubmission(basePayload, 'xoxb-token')).toEqual({});
+        expect(mockCreateSession).toHaveBeenCalledTimes(1);
+        expect(mockConversationsOpen).not.toHaveBeenCalled();
+        expect(mockChatPostMessage).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
     it('still closes the modal when the notebook DM fails', async () => {
       mockConversationsOpen.mockRejectedValueOnce(new Error('slack down'));
 
@@ -461,6 +498,25 @@ describe('GlobalShortcutHandlers', () => {
     it('should return empty response on valid submission', async () => {
       const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
       expect(result).toEqual({});
+    });
+
+    it('preserves the Slack view identity and original time in a new-format request', async () => {
+      const now = new Date('2026-11-14T00:00:00Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      try {
+        expect(
+          await handleQuickAskSubmission({ ...basePayload, view: { ...basePayload.view, id: 'view-1' } }, 'xoxb-token')
+        ).toEqual({});
+        expect(mockQuickAskPublish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestId: 'view-1',
+            requestedAt: now.toISOString(),
+          })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('publishes the quick ask request and does no Slack or DB work', async () => {

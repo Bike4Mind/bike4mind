@@ -10,7 +10,7 @@ import {
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { UserApiKeyEvents, attachOrgApiKeyReach, isOrgServiceAccountOf } from '@bike4mind/common';
 import ability from '@bike4mind/server-utils/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
@@ -34,6 +34,7 @@ import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRoute
 import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
+import { resolveOrgApiKeyReach } from '@server/organizations/orgApiKeyReach';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
@@ -201,6 +202,7 @@ export const apiKeyAuth = (
             billingOwnerType: validation.billingOwnerType,
             organizationId: validation.organizationId,
             createdByUserId: validation.createdByUserId,
+            oauthExchangeClientId: validation.oauthExchangeClientId,
           },
           req
         ))
@@ -226,6 +228,16 @@ export const apiKeyAuth = (
 
       // Admin authority over an API key comes from the key's scope, not from who minted it.
       if (!apiKeyGrantsAdmin(validation.scopes)) withholdAdminRole(user);
+
+      // An org-owned key reads org-shared content only through its own grants, resolved live here
+      // and attached before the ability below is built from this user (orgApiKeyReach.ts).
+      if (
+        validation.orgOwnedGrants &&
+        validation.organizationId &&
+        isOrgServiceAccountOf(user, validation.organizationId)
+      ) {
+        attachOrgApiKeyReach(user, await resolveOrgApiKeyReach(validation.organizationId, validation.orgOwnedGrants));
+      }
 
       req.apiKeyInfo = {
         keyId: validation.keyId!,

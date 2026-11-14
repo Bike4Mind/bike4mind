@@ -51,13 +51,14 @@ describe('InviteTable', () => {
     expect(within(rows[0]).getByTestId('invite-code-value')).toHaveTextContent('ALPHA-1');
   });
 
-  it('copies a code and deletes through the row buttons', () => {
+  it('copies a code and deletes from the row menu', async () => {
     const props = setup();
     const row = screen.getAllByTestId('invite-code-card')[1];
 
     fireEvent.click(within(row).getByTestId('invite-code-copy-btn'));
     expect(props.copyToClipboard).toHaveBeenCalledWith('BETA-2');
-    fireEvent.click(within(row).getByTestId('delete-invite-code-btn'));
+    fireEvent.click(within(row).getByTestId('invite-row-actions-i2'));
+    fireEvent.click(await screen.findByTestId('delete-invite-code-btn'));
     expect(props.handleDelete).toHaveBeenCalledWith(['i2']);
   });
 

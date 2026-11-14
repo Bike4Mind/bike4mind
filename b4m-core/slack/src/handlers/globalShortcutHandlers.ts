@@ -11,6 +11,7 @@ import { KnownBlock, WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
 import { IChatHistoryItemDocument, ISessionDocument, IUserDocument, requireEnv } from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from '../di/registry';
+import { NOTEBOOK_DM_BUDGET_MS, NOTEBOOK_DM_CLIENT_OPTIONS } from './notebookNotification';
 
 /** Payload structure for global shortcut events */
 export interface GlobalShortcutPayload {
@@ -552,6 +553,7 @@ export interface ViewSubmissionPayload {
     name?: string;
   };
   view: {
+    id?: string;
     callback_id: string;
     private_metadata?: string;
     state: {
@@ -574,6 +576,7 @@ export async function handleCreateNotebookSubmission(
   payload: ViewSubmissionPayload,
   botToken?: string
 ): Promise<ViewSubmissionResponse> {
+  const notificationDeadline = Date.now() + NOTEBOOK_DM_BUDGET_MS;
   const { view, user: slackUser } = payload;
 
   // Parse private_metadata to get userId
@@ -653,7 +656,7 @@ export async function handleCreateNotebookSubmission(
 
     // Awaited: Lambda freezes un-awaited work once the response is sent. Errors are caught inside.
     if (botToken && slackUser?.id) {
-      await sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken);
+      await sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken, notificationDeadline);
     }
 
     // Modal closes automatically on success (empty response)
@@ -676,14 +679,25 @@ async function sendNotebookCreatedDM(
   slackUserId: string,
   sessionId: string,
   notebookName: string,
-  botToken: string
+  botToken: string,
+  deadline: number
 ): Promise<void> {
-  // No retries: this runs before the view_submission ack, which Slack drops after 3s.
-  const client = new WebClient(botToken, { retryConfig: { retries: 0 } });
+  const clientForRemainingBudget = () => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
+    return new WebClient(botToken, {
+      ...NOTEBOOK_DM_CLIENT_OPTIONS,
+      timeout: Math.min(remainingMs, NOTEBOOK_DM_CLIENT_OPTIONS.timeout),
+    });
+  };
 
   try {
-    // Open DM channel
-    const dmResult = await client.conversations.open({
+    const openingClient = clientForRemainingBudget();
+    if (!openingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook DM after its acknowledgement budget elapsed');
+      return;
+    }
+    const dmResult = await openingClient.conversations.open({
       users: slackUserId,
     });
 
@@ -700,8 +714,12 @@ async function sendNotebookCreatedDM(
     const brand = process.env.APP_NAME || '';
     const openLinkLabel = brand ? `Open in ${brand}` : 'Open Notebook';
 
-    // Send the notebook link
-    await client.chat.postMessage({
+    const postingClient = clientForRemainingBudget();
+    if (!postingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook link after its acknowledgement budget elapsed');
+      return;
+    }
+    await postingClient.chat.postMessage({
       channel: dmResult.channel.id,
       text: `✅ Notebook "${escapeSlackMrkdwn(notebookName)}" created!\n\n<${notebookUrl}|${openLinkLabel}>`,
       blocks: [
@@ -814,6 +832,7 @@ export async function handleQuickAskSubmission(
       b4mUserId: userId,
       question,
       workspaceId,
+      ...(view.id ? { requestId: view.id, requestedAt: new Date().toISOString() } : {}),
     });
   } catch (error) {
     logger.error('[Slack Shortcut] Failed to publish quick ask request', { error, userId });

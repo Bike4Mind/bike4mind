@@ -55,7 +55,7 @@ const slackQuickAskSubscription = eventBus.subscribe(
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, websocketApi, eventBus],
     vpc: lambdaVpc,
     timeout: '1 minute',
-    // A retry would re-post the question and create a second quest; unhandled errors go to the DLQ.
+    // Admission claims prevent duplicate work; partial failures need inspection, not automatic replay.
     retries: 0,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,

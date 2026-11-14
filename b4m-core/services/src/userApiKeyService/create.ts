@@ -15,6 +15,8 @@ import {
   isBuiltInApiKeyScope,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
+  OrgApiKeyGrant,
+  OrgApiKeyGrantsSchema,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -94,7 +96,7 @@ const createUserApiKeySchema = z.object({
   // rather than gated by a scope.
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
   // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
-  orgOwned: z.object({ createdByUserId: z.string().min(1) }).optional(),
+  orgOwned: z.object({ createdByUserId: z.string().min(1), grants: OrgApiKeyGrantsSchema.optional() }).optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -180,7 +182,7 @@ export interface CreateUserApiKeyResult {
   branding?: IEmbedBranding;
   spendCap?: number;
   preauthorizedLakeIds?: string[];
-  orgOwned?: { createdByUserId: string };
+  orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
   createdAt: Date;
 }
 

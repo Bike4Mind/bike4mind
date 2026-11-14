@@ -10,7 +10,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
  *
  * Every credit hold calls this before any balance moves: holdCredits (creditHold.ts), the completion
  * holds (apps/client/server/billing/completionCreditHolds.ts), ChatCompletionProcess's inline
- * reservation, the agent executor's iteration gate and voice session holds.
+ * reservation, the agent executor's iteration gate and voice session holds. A multi-job image batch
+ * is also checked as a whole before its per-job holds (generationJobs/createJob.ts checkBatchSpendCap).
  */
 
 const MINUTE_MS = 60_000;

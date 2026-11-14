@@ -207,7 +207,7 @@ export type NotebookImportAdaptersStayNarrowed = Expect<
 /**
  * Fails typecheck if `adminSettings` is made optional again. Both tsconfigs exclude *.test.ts and
  * every test construction casts its adapters, so without this the required-ness is enforced by the
- * single typechecked construction in apps/client/server/s3/notebookImportComplete.ts - and a caller
+ * single typechecked construction in packages/server-utils/src/s3/notebookImportComplete.ts - and a caller
  * that omits it falls back to MAX_FILE_SIZE_DEFAULT_MB, silently admitting what the upload door
  * refuses.
  */
@@ -219,7 +219,7 @@ export type NotebookImportAdminSettingsStayRequired = Expect<
  * One instance per import. The admission state below is per-import instance state, and
  * `importNotebooks` resets it on entry, so sharing one instance across concurrent imports would let
  * one run zero another run's accumulator. The live caller builds a fresh service per S3 event
- * (apps/client/server/s3/notebookImportComplete.ts).
+ * (packages/server-utils/src/s3/notebookImportComplete.ts).
  */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}

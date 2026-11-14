@@ -727,7 +727,7 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
   /** An "always" on this card allows this call only and is never recorded. */
@@ -748,6 +748,8 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
+  unchecked?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
@@ -762,6 +764,11 @@ export interface ApprovalPrompt {
   mcp?: { server: string; tool: string };
   /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
   alwaysCovers?: string;
+  /**
+   * What "Allow in this chat" is filed under when it stands for more than this one call. A write
+   * tool's `key` names the exact change, which the stale-file check needs; this names the file.
+   */
+  chatKey?: string;
 }
 
 /** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */
@@ -773,10 +780,10 @@ export interface ApprovalPart {
   expanded?: string;
   opaque?: string;
   /**
-   * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in
-   * every mode. Only set on a prompt with `byPart`.
+   * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
    */
-  ask?: { mode: 'auto' | 'full'; reason: string; kinds: readonly PartAskKind[] };
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
 }
 
 /** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */

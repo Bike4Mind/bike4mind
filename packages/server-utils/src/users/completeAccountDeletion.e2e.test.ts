@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
+import { Logger } from '@bike4mind/observability';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { AdminAuditLogModel, Invite, Organization, PartnerSignupRule, User } from '@bike4mind/database';
+import {
+  AdminAuditLogModel,
+  Invite,
+  Organization,
+  OrgDomainClaim,
+  orgDomainClaimRepository,
+  PartnerSignupRule,
+  User,
+} from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { InviteType } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '../lib/subscriptions/types';
@@ -39,7 +48,7 @@ vi.mock('../services/hardDeleteUser', async () => {
     },
   };
 });
-import { completeAccountDeletion } from './completeAccountDeletion';
+import { completeAccountDeletion, type ErasureRegistry } from './completeAccountDeletion';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let database: MongoMemoryReplSet;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -48,6 +57,7 @@ beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
+  await OrgDomainClaim.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -66,7 +76,11 @@ async function seedUser() {
   });
   return String(id);
 }
-const complete = (userId: string) => completeAccountDeletion(userId, { logger: logger as never, now });
+const erasureRegistry: ErasureRegistry = {
+  scope: async () => [],
+  audit: async () => ({ remaining: [], unclassified: [] }),
+};
+const complete = (userId: string) => completeAccountDeletion(userId, { logger: logger as never, now, erasureRegistry });
 describe('account deletion purge claims with Mongo', () => {
   it.each(['first', 'retry'] as const)('waits for an active export lease on the %s purge claim', async phase => {
     const userId = await seedUser();
@@ -79,7 +93,7 @@ describe('account deletion purge claims with Mongo', () => {
         },
       }
     );
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).not.toHaveBeenCalled();
     expect(h.purgeContent).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
@@ -260,7 +274,7 @@ describe('account deletion purge claims with Mongo', () => {
     });
     const first = complete(userId);
     await claimed;
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).toHaveBeenCalledTimes(1);
     unblock?.();
     await expect(first).resolves.toEqual({ deleted: true });
@@ -301,5 +315,56 @@ describe('account deletion purge claims with Mongo', () => {
       expect(pending?.deletion?.purgeLeaseId).not.toBe('abandoned-worker');
     });
     await expect(complete(userId)).resolves.toEqual({ deleted: true });
+  });
+});
+
+describe('domain claims share organization deletion transactions', () => {
+  it('rolls back claim deletion and preserves retry through account erasure', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({ name: 'Claim rollback', userId, personal: false });
+    const organizationId = String(org.id);
+    const domain = `${organizationId}.example.test`;
+    await orgDomainClaimRepository.create({
+      organizationId,
+      domain,
+      status: 'verified',
+      verificationToken: 'local-test-verifier',
+      verifiedAt: new Date(),
+      policy: 'off',
+      createdBy: userId,
+    });
+    const deletionLogger = new Logger({ metadata: { service: 'domainDeletionTest' } });
+    const remove = async () => {
+      const { deleteSoleOwnedOrganizations } = await import('./ownedOrganizations');
+      await deleteSoleOwnedOrganizations(userId, { logger: deletionLogger });
+    };
+    const deleteClaims = orgDomainClaimRepository.deleteByOrganization.bind(orgDomainClaimRepository);
+    const failure = vi.spyOn(orgDomainClaimRepository, 'deleteByOrganization').mockImplementationOnce(async id => {
+      await deleteClaims(id);
+      throw new Error('claim cleanup interrupted');
+    });
+    try {
+      await expect(remove()).rejects.toThrow('claim cleanup interrupted');
+      expect(await Organization.findById(org.id)).not.toBeNull();
+      expect(await OrgDomainClaim.countDocuments({ organizationId })).toBe(1);
+      expect(await User.exists({ _id: userId })).not.toBeNull();
+    } finally {
+      failure.mockRestore();
+    }
+
+    await remove();
+    expect(await Organization.findById(org.id)).toBeNull();
+    expect(await OrgDomainClaim.countDocuments({ organizationId })).toBe(0);
+    await expect(
+      orgDomainClaimRepository.create({
+        organizationId: new mongoose.Types.ObjectId().toString(),
+        domain,
+        status: 'verified',
+        verificationToken: 'new-local-test-verifier',
+        verifiedAt: new Date(),
+        policy: 'off',
+        createdBy: null,
+      })
+    ).resolves.toBeTruthy();
   });
 });

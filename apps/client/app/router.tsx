@@ -25,6 +25,7 @@ import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
+import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -46,6 +47,7 @@ import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
+  PERSONA_LOGIN_PAGE_PATH,
   SUBSCRIBER_SOURCES,
   type IntegrationsPageSource,
   type SubscriberSource,
@@ -96,6 +98,7 @@ const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
 const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
@@ -117,6 +120,7 @@ const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassi
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
+const PersonaRedeemPage = lazy(() => import('./routes/personas/redeem'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -1109,6 +1113,17 @@ const artifactsDemoRoute = createRoute({
   ),
 });
 
+// Composer status-line states with mock data, for design work (routes/composer-lab.tsx).
+const composerLabRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/composer-lab',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ComposerLabPage />
+    </Suspense>
+  ),
+});
+
 // The standalone Data Lakes page was retired in #1943 - its capabilities live in the in-chat
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
@@ -1330,6 +1345,19 @@ const bedrockNewsClaimRoute = createRoute({
   }),
 });
 
+// Test-persona sign-in (the mint response's login_path) - no layout, public. The code arrives in the
+// fragment and is moved out of the address before render; the page POSTs it to the redeem API.
+const personaRedeemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: PERSONA_LOGIN_PAGE_PATH,
+  beforeLoad: () => captureCodeFromFragment(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <PersonaRedeemPage />
+    </Suspense>
+  ),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1402,6 +1430,7 @@ const routeTree = rootRoute.addChildren([
     organizationsRoute,
     organizationDetailRoute,
     artifactsDemoRoute,
+    composerLabRoute,
     dataLakesRoute,
     hudRoute,
     hearthRoute,
@@ -1446,6 +1475,7 @@ const routeTree = rootRoute.addChildren([
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
   bedrockNewsClaimRoute,
+  personaRedeemRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect

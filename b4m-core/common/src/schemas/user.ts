@@ -286,7 +286,7 @@ export const selfUserResponseSchema = z.object({
     .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
   _id: passthroughField,
-  mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),
+  mfa: redactedSubdocument(['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt']),
   googleDrive: redactedSubdocument(['expiresAt']),
   atlassianConnect: redactedSubdocument([
     'siteName',

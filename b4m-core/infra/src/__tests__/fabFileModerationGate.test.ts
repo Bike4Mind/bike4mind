@@ -188,6 +188,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
+  'apps/client/pages/api/notebooks/mirror.ts':
+    'DI passthrough - same fileStorageService adapter as notebooks/export.ts, consumed by the already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
   'apps/workers/src/queueHandlers/researchEngineQueue.ts':
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
   'apps/workers/src/queueHandlers/notebookCuration.ts':
@@ -204,7 +206,7 @@ const ALLOWLIST: Record<string, string> = {
     'text-only mime, never an image — throws BadRequestError for any mimeType outside a fixed text/code allowlist before ever minting a signed URL',
   'apps/client/pages/api/notebooks/download.ts':
     'text-only mime, never an image — downloads/converts only the curated-notebook document (markdown/html/txt), identified via session.curatedNotebookFileId',
-  'apps/client/pages/api/agents/create-from-context.ts':
+  'apps/client/server/agents/createAgentFromContext.ts':
     'images filtered out (mimeType.startsWith("image/")) before the shared getFileContent extractor is ever called on a file',
 
   'apps/client/pages/api/files/createFabFile.ts':

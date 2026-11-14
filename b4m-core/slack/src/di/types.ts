@@ -127,6 +127,10 @@ export interface ILLMEvent<T = unknown> {
 }
 
 export interface QuickAskRequestedDetail {
+  /** Stable Slack modal identity for duplicate submissions; older events use the bus envelope ID. */
+  requestId?: string;
+  /** Original admission time, retained when a new-format request is replayed. */
+  requestedAt?: string;
   slackUserId: string;
   b4mUserId: string;
   question: string;

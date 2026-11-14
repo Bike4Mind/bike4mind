@@ -46,6 +46,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
@@ -59,11 +60,13 @@ vi.mock('@client/app/components/organizations/Member', () => ({ default: () => n
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
@@ -130,6 +133,24 @@ describe('organization detail page - ?tab= deep link', () => {
     navigateSpy.mockClear();
   });
 
+  it('admits a read-only current manager to settings and renders exactly one audit tab', () => {
+    user.current = { id: 'read-manager' };
+    searchParams.current = { tab: 'settings' };
+    orgQuery.current = {
+      data: {
+        ...ORG,
+        adminUserIds: ['read-manager'],
+        users: [...ORG.users, { userId: 'read-manager', permissions: [Permission.read] }],
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(selectedTabName()).toContain('Settings');
+    expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+  });
+
   it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
     orgQuery.current = {
       data: undefined,
@@ -188,6 +209,24 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Usage' })).toBeNull();
+  });
+
+  it('opens the Domains tab for the owner', () => {
+    searchParams.current = { tab: 'domains' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Domains');
+  });
+
+  it('falls back to Overview on ?tab=domains for a member who is not a manager', () => {
+    searchParams.current = { tab: 'domains' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
   });
 
   // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
@@ -295,17 +334,11 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
-  // The header grants its own button on isAdmin while the page's canManageOrg does not, so a
-  // platform admin who is not a member sees a button the page refuses to act on. That disagreement
-  // predates the URL sync and is left as found; what is pinned here is that the page-side guard is
-  // still what decides, and a refusal writes nothing.
-  it('leaves the URL alone when the page refuses the header settings click', () => {
+  it('honors the header settings click for a platform policy administrator', () => {
     user.current = { id: 'admin9', isAdmin: true };
-
     renderThroughLoad();
     fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
-
-    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
   // Rewriting ?tab=usage to ?tab=overview for a caller who may not see Usage destroys the link for

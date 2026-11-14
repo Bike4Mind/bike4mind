@@ -37,10 +37,21 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: unknown) => unknown) => selector({ currentUser: { id: 'u1', mfa: null } }),
 }));
 
+const { setVerifiedSession, startRegistration } = vi.hoisted(() => ({
+  setVerifiedSession: vi.fn(),
+  startRegistration: vi.fn(),
+}));
+// The browser ceremony: the passkey routes themselves are served by the api mock above.
+vi.mock('@simplewebauthn/browser', () => ({
+  browserSupportsWebAuthn: () => true,
+  startAuthentication: vi.fn(),
+  startRegistration: (...args: unknown[]) => startRegistration(...args),
+}));
+
 // Not impersonating; getState is touched on the verify path and by the sign-out's funnel report.
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign((selector: (s: unknown) => unknown) => selector({ impersonating: false }), {
-    getState: () => ({ forceLogoutTokens: vi.fn(), accessToken: 'session-tok' }),
+    getState: () => ({ forceLogoutTokens: vi.fn(), accessToken: 'session-tok', setVerifiedSession }),
   }),
 }));
 
@@ -59,16 +70,25 @@ vi.mock('@client/app/components/common/MFAModal', () => ({
     mode,
     onVerify,
     onSignOut,
+    onPasskeyEnroll,
+    passkeyBackupCodes,
+    onPasskeyEnrollDone,
   }: {
     error?: string | null;
     mode?: string;
     onVerify: (code: string, remember: boolean) => void;
     onSignOut?: () => void;
+    onPasskeyEnroll?: () => void;
+    passkeyBackupCodes?: string[];
+    onPasskeyEnrollDone?: () => void;
   }) => (
     <div data-testid="mfa-modal-stub" data-mode={mode}>
       <span data-testid="mfa-modal-stub-error">{error}</span>
       <button data-testid="mfa-modal-stub-verify" onClick={() => onVerify('000000', false)} />
       {onSignOut && <button data-testid="mfa-modal-stub-sign-out" onClick={onSignOut} />}
+      {onPasskeyEnroll && <button data-testid="mfa-modal-stub-passkey-enroll" onClick={onPasskeyEnroll} />}
+      {passkeyBackupCodes && <span data-testid="mfa-modal-stub-codes">{passkeyBackupCodes.join(',')}</span>}
+      {onPasskeyEnrollDone && <button data-testid="mfa-modal-stub-passkey-done" onClick={onPasskeyEnrollDone} />}
     </div>
   ),
 }));
@@ -638,5 +658,131 @@ describe('MFAEnforcementWrapper - a user with no hint (first load on this browse
 
     await screen.findByTestId('app-content');
     expect(mfaStatusCalls()).toBe(0);
+  });
+});
+
+describe('MFAEnforcementWrapper - enrolling a passkey as the factor', () => {
+  const registerCalls = () => post.mock.calls.filter(([url]) => url === '/api/auth/mfa/passkey/register').length;
+
+  const servePasskeyRoutes = (registerResult: () => Promise<unknown>) =>
+    post.mockImplementation((url: string) => {
+      if (url === '/api/auth/mfa/setup') {
+        return Promise.resolve({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+      }
+      if (url === '/api/auth/mfa/passkey/register-options') return Promise.resolve({ data: { challenge: 'c' } });
+      if (url === '/api/auth/mfa/passkey/register') return registerResult();
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    startRegistration.mockReset();
+    startRegistration.mockResolvedValue({ id: 'cred' });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('stores the minted session, shows the codes, and unblocks the app on Continue', async () => {
+    servePasskeyRoutes(() =>
+      Promise.resolve({
+        data: { passkey: { id: 'pk-1' }, backupCodes: ['c1', 'c2'], accessToken: 'fresh-tok', user: { id: 'u1' } },
+      })
+    );
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-passkey-enroll'));
+
+    await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-codes').textContent).toBe('c1,c2'));
+    expect(setVerifiedSession).toHaveBeenCalledWith('fresh-tok');
+
+    // Continue runs the same completion as the authenticator-app path: the setup modal closes.
+    fireEvent.click(screen.getByTestId('mfa-modal-stub-passkey-done'));
+    await waitFor(() => expect(screen.queryByTestId('mfa-modal-stub')).toBeNull());
+  });
+
+  it('completes without codes when the server says MFA was already on (stale status)', async () => {
+    servePasskeyRoutes(() => Promise.resolve({ data: { passkey: { id: 'pk-1' } } }));
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-passkey-enroll'));
+
+    await waitFor(() => expect(registerCalls()).toBe(1));
+    expect(setVerifiedSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('mfa-modal-stub')).toBeNull());
+  });
+
+  it('shows the failure inline and keeps the modal open', async () => {
+    servePasskeyRoutes(() => Promise.reject(Object.assign(new Error('boom'), { name: 'NotAllowedError' })));
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-passkey-enroll'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe(
+        'The passkey prompt was cancelled or timed out.'
+      )
+    );
+    expect(setVerifiedSession).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the verification prompt was dismissed', async () => {
+    startRegistration.mockResolvedValue({ id: 'cred' });
+    post.mockImplementation((url: string) =>
+      url === '/api/auth/mfa/setup'
+        ? Promise.resolve({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } })
+        : Promise.reject(new Error(CANCELLED))
+    );
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-passkey-enroll'));
+
+    await waitFor(() =>
+      expect(post.mock.calls.some(([url]) => url === '/api/auth/mfa/passkey/register-options')).toBe(true)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe('');
+  });
+});
+
+describe('MFAEnforcementWrapper - a user the server exempts from enrollment', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the app and never starts setup when the status says enrollment is not required', async () => {
+    get.mockResolvedValue({ data: { enabled: false, required: false } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
+    // The hint tracks the factor only: an exemption must never mark the user enrolled.
+    expect(JSON.parse(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY) ?? 'null')).toEqual({
+      userId: 'u1',
+      enrolled: false,
+    });
+  });
+
+  it('still blocks an unenrolled user whose status says enrollment is required', async () => {
+    get.mockResolvedValue({ data: { enabled: false, required: true } });
+
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
   });
 });
