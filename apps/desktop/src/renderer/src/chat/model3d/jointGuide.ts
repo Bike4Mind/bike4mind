@@ -102,7 +102,8 @@ export class JointGuide {
 
   /** Advances the fade and flash to `now` (ms); true while another frame would change the look. */
   tick(now: number): boolean {
-    const elapsed = this.lastTick === null ? 0 : now - this.lastTick;
+    // A frame's worth on the first tick of a run, so a fade starts moving at once.
+    const elapsed = this.lastTick === null ? 16 : now - this.lastTick;
     this.lastTick = now;
     const step = this.reducedMotion() ? 1 : elapsed / FADE_MS;
     this.opacity =
@@ -113,8 +114,10 @@ export class JointGuide {
     const warmth = this.reducedMotion() ? (sinceFlash < FLASH_MS ? 1 : 0) : Math.max(0, 1 - sinceFlash / FLASH_MS);
     this.applyLook(warmth);
     this.object.visible = this.opacity > 0;
-    if (!this.object.visible) this.lastTick = null;
-    return this.opacity !== this.targetOpacity || warmth > 0;
+    const moving = this.opacity !== this.targetOpacity || warmth > 0;
+    // The run is over: the next one starts its own clock rather than jumping by the idle gap.
+    if (!moving) this.lastTick = null;
+    return moving;
   }
 
   dispose(): void {
@@ -160,7 +163,7 @@ export class JointGuide {
     const segments = frame.motion === 'slide' ? 1 : ARC_SEGMENTS;
     for (let index = 0; index <= segments; index += 1)
       points.push(this.pointAt(from + ((to - from) * index) / segments));
-    this.track.geometry.setFromPoints(points);
+    replaceGeometry(this.track, points);
     // A short tick across the track at each limit: radial for an arc, square to the line for a slide.
     const tick = size * TICK_SIZE;
     const tickPoints = [from, to].flatMap(limit => {
@@ -172,8 +175,17 @@ export class JointGuide {
       across.normalize().multiplyScalar(tick / 2);
       return [at.clone().sub(across), at.clone().add(across)];
     });
-    this.ticks.geometry.setFromPoints(tickPoints);
+    replaceGeometry(this.ticks, tickPoints);
   }
+}
+
+/**
+ * Gives `line` fresh geometry: `setFromPoints` writes into an existing buffer in place, so a slide's
+ * two points after an arc's 65 would leave the old arc drawn on behind them.
+ */
+function replaceGeometry(line: THREE.Line, points: THREE.Vector3[]): void {
+  line.geometry.dispose();
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points);
 }
 
 /** Some unit vector square to `axis`. */

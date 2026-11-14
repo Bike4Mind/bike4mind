@@ -22,7 +22,8 @@ export type ScreenPoint = { x: number; y: number };
 /**
  * How pointer motion becomes a value, fixed at press:
  * - `plane`: a turn whose axis faces the camera; the pointer ray meets the plane normal to the axis.
- * - `tangent`: a turn seen edge-on; pointer travel along the grab point's on-screen arc tangent.
+ * - `tangent`: a turn seen obliquely or edge-on; pointer travel along the on-screen tangent of the
+ *   grabbed point's arc, re-read at the current angle each move so the drag follows the part round.
  * - `ray`: a slide; the point on the axis line nearest the pointer ray.
  * - `screen`: a slide whose axis points at the camera; pointer travel along its screen projection.
  */
@@ -43,10 +44,16 @@ export type JointDrag = {
   /** tangent and screen: the on-screen direction that increases the value, and value per px along it. */
   readonly direction?: THREE.Vector2;
   readonly perPixel?: number;
+  /** tangent: where the pointer was at the last move, since each move adds its own turn. */
+  lastPointer?: ScreenPoint;
 };
 
-/** |axis . view| at or above which a turn reads the pointer in its own plane rather than along the tangent. */
-const PLANE_FACING = 0.35;
+/**
+ * |axis . view| at or above which a turn reads the pointer in its own plane rather than along the
+ * tangent. Below it the plane is oblique: its horizon caps the angle a ray can reach (a lid seen
+ * from a three-quarter view stalls well short of open).
+ */
+const PLANE_FACING = 0.7;
 /** |axis . view| above which a slide's axis is too close to the view ray for a ray-axis read (about 15 degrees). */
 const SLIDE_RAY_LIMIT = Math.cos(THREE.MathUtils.degToRad(15));
 /** Below this many px per unit (or per radian) a screen direction is degenerate. */
@@ -145,11 +152,37 @@ export function beginJointDrag(
   // Positive turn (right-hand rule) moves the grab point along axis x radius.
   const tangent = frame.axis.clone().cross(grab.clone().sub(frame.pivot));
   const rate = tangent.lengthSq() > EPSILON ? screenRate(view, grab, tangent) : null;
+  const lastPointer = { ...pointer };
   if (rate) {
     // The tangent's length is the radius, so `pixels` is px per radian.
-    return { ...base, mode: 'tangent', direction: rate.direction, perPixel: THREE.MathUtils.radToDeg(1) / rate.pixels };
+    const perPixel = THREE.MathUtils.radToDeg(1) / rate.pixels;
+    return { ...base, mode: 'tangent', direction: rate.direction, perPixel, lastPointer };
   }
-  return { ...base, mode: 'tangent', direction: new THREE.Vector2(0, -1), perPixel: FALLBACK_DEGREES_PER_PIXEL };
+  return {
+    ...base,
+    mode: 'tangent',
+    direction: new THREE.Vector2(0, -1),
+    perPixel: FALLBACK_DEGREES_PER_PIXEL,
+    lastPointer,
+  };
+}
+
+/**
+ * The on-screen tangent of the grabbed point's arc with the joint at `value`, and degrees per px
+ * along it. Where the arc turns towards the camera the rate is held to the one at press (at most
+ * four times slower per px), so the part keeps moving instead of stalling or leaping.
+ */
+function tangentRate(drag: JointDrag, value: number): { direction: THREE.Vector2; perPixel: number } {
+  const { frame, view } = drag;
+  const fallback = { direction: drag.direction ?? new THREE.Vector2(0, -1), perPixel: drag.perPixel ?? 0 };
+  const turn = new THREE.Quaternion().setFromAxisAngle(frame.axis, THREE.MathUtils.degToRad(value - drag.start));
+  const radius = drag.grab.clone().sub(frame.pivot).applyQuaternion(turn);
+  const tangent = frame.axis.clone().cross(radius);
+  if (tangent.lengthSq() < EPSILON) return fallback;
+  const rate = screenRate(view, frame.pivot.clone().add(radius), tangent);
+  if (!rate) return fallback;
+  const perPixel = THREE.MathUtils.radToDeg(1) / rate.pixels;
+  return { direction: rate.direction, perPixel: Math.min(perPixel, fallback.perPixel * 4) };
 }
 
 /** The joint's raw value with the pointer at `pointer`; also stored on `drag.value`. */
@@ -169,6 +202,13 @@ export function jointDragValue(drag: JointDrag, pointer: ScreenPoint): number {
     const travel = axisParameter(pointerRay(view, pointer), drag.grab, frame.axis);
     if (travel === null) return drag.value;
     drag.value = drag.start + travel / frame.scale;
+    return drag.value;
+  }
+  if (drag.mode === 'tangent') {
+    const last = drag.lastPointer ?? drag.startPointer;
+    const { direction, perPixel } = tangentRate(drag, drag.value);
+    drag.value += new THREE.Vector2(pointer.x - last.x, pointer.y - last.y).dot(direction) * perPixel;
+    drag.lastPointer = { ...pointer };
     return drag.value;
   }
   const direction = drag.direction ?? new THREE.Vector2(0, -1);

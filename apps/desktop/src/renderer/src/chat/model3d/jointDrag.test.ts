@@ -87,6 +87,29 @@ describe('hinge drag', () => {
     expect(value).toBeCloseTo(THREE.MathUtils.radToDeg(0.1), 0);
   });
 
+  it('opens an obliquely seen lid all the way when dragged straight up', () => {
+    // A lid lying along +Z, hinged about -X, seen from a three-quarter view: its plane is oblique.
+    const view = viewFrom([100, 80, 100]);
+    const grab = new THREE.Vector3(0, 0, 30);
+    const start = screenOf(view, grab);
+    const drag = beginJointDrag(hinge([-1, 0, 0]), view, grab, start, 0);
+    expect(drag.mode).toBe('tangent');
+    for (let step = 1; step <= 60; step += 1) jointDragValue(drag, { x: start.x, y: start.y - step * 10 });
+    expect(drag.value).toBeGreaterThan(90);
+  });
+
+  it('follows a pointer that tracks the grabbed point round an oblique hinge', () => {
+    const view = viewFrom([100, 80, 100]);
+    const grab = new THREE.Vector3(0, 0, 30);
+    const frame = hinge([-1, 0, 0]);
+    const drag = beginJointDrag(frame, view, grab, screenOf(view, grab), 0);
+    for (let degrees = 5; degrees <= 120; degrees += 5) {
+      const turn = new THREE.Quaternion().setFromAxisAngle(frame.axis, THREE.MathUtils.degToRad(degrees));
+      jointDragValue(drag, screenOf(view, grab.clone().applyQuaternion(turn)));
+    }
+    expect(drag.value).toBeCloseTo(120, -1);
+  });
+
   it('stays finite with the axis exactly along the view ray', () => {
     const view = viewFrom([0, 0, 100]);
     const grab = new THREE.Vector3(5, 5, 0);

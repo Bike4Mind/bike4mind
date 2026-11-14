@@ -96,6 +96,11 @@ export class JointDragController {
     window.addEventListener('keyup', this.onKey, true);
   }
 
+  /** The guide drawn over the model: an overlay, kept out of the floor's reflection. */
+  get overlay(): THREE.Object3D {
+    return this.guide.object;
+  }
+
   /** True while a drag, a settle or a guide fade is running: the viewer holds its AO pass until it ends. */
   get busy(): boolean {
     return !!this.press?.drag || this.looping;

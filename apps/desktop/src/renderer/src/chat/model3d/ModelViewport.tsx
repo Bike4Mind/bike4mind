@@ -252,6 +252,7 @@ export function ModelViewport({
       onStart: () => onJointDragStartRef.current?.(),
       render,
     });
+    stage.unreflected.add(jointDrag.overlay);
     let fitFrame = 0;
     const stopFit = () => cancelAnimationFrame(fitFrame);
     let cropped = false;
