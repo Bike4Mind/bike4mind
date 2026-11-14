@@ -6,7 +6,14 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+import {
+  ChatModels,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  insufficientCreditsError,
+  ModelBackend,
+  TooManyRequestsError,
+  type ModelInfo,
+} from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -79,14 +86,15 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   },
 }));
 
-const { default: handler } = await import('@pages/api/ai/optimize-input');
+const { default: handler, optimizeCompletionOptions } = await import('@pages/api/ai/optimize-input');
 
 async function call(body: Record<string, unknown> = { text: 'make this better' }) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+  Object.assign(req, { user: { id: 'u1' }, logger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
-  return res;
+  return Object.assign(res, { logger });
 }
 
 beforeEach(() => {
@@ -199,5 +207,70 @@ describe('POST /api/ai/optimize-input metering', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('logs the model id, stop reason and error class when the model returns no text', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+      await cb([''], { inputTokens: 200, outputTokens: 134, stopReason: 'length' });
+    });
+
+    const res = await call({ text: 'secret prompt text' });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(res.logger.error).toHaveBeenCalledOnce();
+    const [, fields, wrapped] = res.logger.error.mock.calls[0];
+    expect(fields).toEqual({
+      modelId: 'ops-model',
+      errorName: 'EmptyOptimizationError',
+      errorMessage: expect.stringContaining('stopReason: length'),
+      stopReason: 'length',
+    });
+    expect((wrapped as Error).cause).toMatchObject({ name: 'EmptyOptimizationError', modelId: 'ops-model' });
+    expect(JSON.stringify(res.logger.error.mock.calls)).not.toContain('secret prompt text');
+  });
+
+  it('logs the provider error class and message and keeps it as the cause', async () => {
+    class ProviderError extends Error {
+      override name = 'ProviderError';
+    }
+    const providerError = new ProviderError('400 unsupported parameter');
+    m.complete.mockRejectedValue(providerError);
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(500);
+    const [, fields, wrapped] = res.logger.error.mock.calls[0];
+    expect(fields).toMatchObject({
+      modelId: 'ops-model',
+      errorName: 'ProviderError',
+      errorMessage: '400 unsupported parameter',
+      stopReason: null,
+    });
+    expect((wrapped as Error).cause).toBe(providerError);
+  });
+
+  it('sends the answer-sized budget to a model that does not reason', async () => {
+    await call();
+
+    expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 134, temperature: 0.3 });
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('reasoningEffort');
+  });
+});
+
+describe('optimizeCompletionOptions', () => {
+  it('reserves reasoning headroom and asks for the lowest effort on a model that reasons in its budget', () => {
+    const options = optimizeCompletionOptions(
+      { id: ChatModels.GPT5_6_LUNA, backend: ModelBackend.OpenAI } as ModelInfo,
+      undefined
+    );
+
+    expect(options).toEqual({ maxTokens: 134 + 2_000, temperature: 0.3, reasoningEffort: 'low' });
+  });
+
+  it('keeps the answer cap bounded by maxLength for a plain model', () => {
+    const plain = { id: 'plain-model', backend: ModelBackend.OpenAI } as ModelInfo;
+
+    expect(optimizeCompletionOptions(plain, 30)).toEqual({ maxTokens: 60, temperature: 0.3 });
+    expect(optimizeCompletionOptions(plain, 10_000)).toEqual({ maxTokens: 800, temperature: 0.3 });
   });
 });
