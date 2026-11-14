@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import Tooltip from '@mui/joy/Tooltip';
 import { AGENT_STATE_LABEL, describeAgentStates, type AgentState } from '@shared/agentState';
-import type { WatchOrchestration } from '@shared/watch';
+import { rootNeedsYou, type WatchOrchestration } from '@shared/watch';
 
 // Matches AgentStateChip, so a dot reads the same colour as the stage's chip.
 const DOT_COLOR: Record<AgentState, ColorPaletteProp> = {
@@ -15,6 +15,12 @@ const DOT_COLOR: Record<AgentState, ColorPaletteProp> = {
 };
 
 /** The tiny window: every orchestration as a cluster of state dots. A click opens it in the app. */
+/** A cluster's name and counts: the same describeAgentStates line as the menu-bar header and the Tavern. */
+export function miniStripLabel(orchestration: WatchOrchestration): string {
+  const states = orchestration.agents.map(agent => agent.state);
+  return `${orchestration.title}: ${describeAgentStates(states, rootNeedsYou(orchestration))}`;
+}
+
 export function MiniStrip({
   orchestrations,
   onOpen,
@@ -37,8 +43,7 @@ export function MiniStrip({
       }}
     >
       {orchestrations.map(orchestration => {
-        const states = orchestration.agents.map(agent => agent.state);
-        const label = `${orchestration.title}: ${describeAgentStates(states) || 'no agents yet'}`;
+        const label = miniStripLabel(orchestration);
         return (
           <Tooltip key={orchestration.rootId} title={label} size="sm">
             <Box

@@ -634,7 +634,10 @@ export function TavernView({
   const paused = useScenePause(pause);
   const announcement = useAgentAnnouncements(agents, shortName);
   const summaryId = useId();
-  const summary = describeAgentStates(agents.map(agent => agent.state));
+  const summary = describeAgentStates(
+    agents.map(agent => agent.state),
+    parent.status === 'needs-action' ? 1 : 0
+  );
   // Laid out for where everyone stands once seated; labels may brush in passing while walking.
   const labels = nameLabelLayout(
     new Map([

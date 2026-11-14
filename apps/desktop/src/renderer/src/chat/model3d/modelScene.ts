@@ -525,6 +525,29 @@ export function frameCamera(
   return frameBox(camera, new THREE.Box3().setFromObject(root), direction);
 }
 
+/** How close to the view's edge, as a share of its half-width, a model may reach before it counts as cropped. */
+export const VIEW_EDGE_MARGIN = 0.02;
+
+/**
+ * Whether some corner of `box` lies past the camera's view, or within `margin` of its edge, or behind
+ * it: a rebuild that grew the model out of frame. Reads the camera's current matrices.
+ */
+export function extendsPastView(camera: THREE.PerspectiveCamera, box: THREE.Box3, margin = VIEW_EDGE_MARGIN): boolean {
+  if (box.isEmpty()) return false;
+  camera.updateMatrixWorld();
+  camera.updateProjectionMatrix();
+  const limit = 1 - margin;
+  const corner = new THREE.Vector3();
+  for (let index = 0; index < 8; index += 1) {
+    corner.set(index & 1 ? box.max.x : box.min.x, index & 2 ? box.max.y : box.min.y, index & 4 ? box.max.z : box.min.z);
+    corner.applyMatrix4(camera.matrixWorldInverse);
+    if (corner.z > -camera.near) return true;
+    corner.applyMatrix4(camera.projectionMatrix);
+    if (Math.abs(corner.x) > limit || Math.abs(corner.y) > limit) return true;
+  }
+  return false;
+}
+
 /** frameCamera for a box rather than a whole object: what a close-up of some parts frames. */
 export function frameBox(
   camera: THREE.PerspectiveCamera,
