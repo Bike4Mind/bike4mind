@@ -6,6 +6,7 @@ import {
   withTransaction,
   deleteFeedbackAiForUser,
   deleteOrgAlertsForUser,
+  eraseOrganizationRetentionForUser,
   FeedbackNoteModel,
   type IErasureRecord,
 } from '@bike4mind/database';
@@ -52,6 +53,7 @@ export async function reapplyErasure(
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
       await deleteFeedbackAiForUser(userId, { session });
       await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
@@ -60,6 +62,7 @@ export async function reapplyErasure(
     await withTransaction(async session => {
       await deleteFeedbackAiForUser(userId, { session });
       await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();

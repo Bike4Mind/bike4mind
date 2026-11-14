@@ -1,9 +1,7 @@
 import { useState } from 'react';
-import { Box, Chip, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Chip, IconButton, ListDivider, MenuItem, Stack, Tooltip, Typography } from '@mui/joy';
 import AllInclusiveIcon from '@mui/icons-material/AllInclusive';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { RegInviteStatusType } from '@bike4mind/common';
 import type { ReactNode } from 'react';
 import UsernameText from '../../../common/UsernameText';
@@ -12,6 +10,7 @@ import { DataTable, type DataColumn } from '../../shared/DataTable';
 import { StatusChip } from '../../shared/StatusChip';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { InviteTableProps, RegInviteData } from '../types';
+import { RowActionsMenu } from '../../shared/RowActionsMenu';
 
 const STATUS_TONES: Record<string, AdminStatusTone> = {
   open: 'good',
@@ -161,45 +160,31 @@ export const InviteTable: React.FC<InviteTableProps & { empty?: ReactNode; label
   ];
 
   const rowActions = (invite: RegInviteData) => (
-    <>
-      <Tooltip title="Delete">
-        <IconButton
-          data-testid="delete-invite-code-btn"
-          aria-label={`Delete code ${invite.code}`}
-          size="sm"
-          variant="plain"
+    <RowActionsMenu testId={`invite-row-actions-${invite.id}`} ariaLabel={`Actions for code ${invite.code}`}>
+      {[
+        [RegInviteStatusType.open, 'Set open'],
+        [RegInviteStatusType.waiting, 'Set waiting'],
+        [RegInviteStatusType.used, 'Set used'],
+      ].map(([status, text]) => (
+        <MenuItem
+          key={status}
           disabled={operating}
-          onClick={() => handleDelete([invite.id])}
+          onClick={() => handleUpdate([invite.id], status as RegInviteStatusType)}
+          data-testid={`invite-set-${status}-btn`}
         >
-          <DeleteOutlineIcon sx={{ fontSize: 18 }} />
-        </IconButton>
-      </Tooltip>
-      <Dropdown>
-        <MenuButton
-          slots={{ root: IconButton }}
-          slotProps={{ root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for code ${invite.code}` } }}
-          data-testid={`invite-row-actions-${invite.id}`}
-        >
-          <MoreHorizIcon sx={{ fontSize: 18 }} />
-        </MenuButton>
-        <Menu size="sm" placement="bottom-end">
-          {[
-            [RegInviteStatusType.open, 'Set open'],
-            [RegInviteStatusType.waiting, 'Set waiting'],
-            [RegInviteStatusType.used, 'Set used'],
-          ].map(([status, text]) => (
-            <MenuItem
-              key={status}
-              disabled={operating}
-              onClick={() => handleUpdate([invite.id], status as RegInviteStatusType)}
-              data-testid={`invite-set-${status}-btn`}
-            >
-              {text}
-            </MenuItem>
-          ))}
-        </Menu>
-      </Dropdown>
-    </>
+          {text}
+        </MenuItem>
+      ))}
+      <ListDivider />
+      <MenuItem
+        color="danger"
+        disabled={operating}
+        onClick={() => handleDelete([invite.id])}
+        data-testid="delete-invite-code-btn"
+      >
+        Delete code
+      </MenuItem>
+    </RowActionsMenu>
   );
 
   return (
@@ -218,9 +203,7 @@ export const InviteTable: React.FC<InviteTableProps & { empty?: ReactNode; label
       sort={{ columnId: 'createdAt', direction: sortDirection }}
       onSortChange={toggleSortDirection}
       rowActions={rowActions}
-      // Delete plus the "..." menu.
-      actionsWidth="5.75rem"
-      minWidth="54.25rem"
+      minWidth="52rem"
       maxHeight="none"
     />
   );

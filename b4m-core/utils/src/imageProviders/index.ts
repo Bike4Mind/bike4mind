@@ -6,3 +6,5 @@ export { OpenAIImageProvider, type OpenAIImageProviderOptions } from './openai/O
 export { GeminiImageProvider } from './gemini/GeminiImageProvider';
 export { BflImageProvider } from './bfl/BflImageProvider';
 export { XaiImageProvider } from './xai/XaiImageProvider';
+export { TestImageProvider } from './test/TestImageProvider';
+export { LocalImageProvider } from './local/LocalImageProvider';

@@ -63,6 +63,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   deleteFeedbackAiForUser: vi.fn().mockResolvedValue(undefined),
   deleteOrgAlertsForUser: vi.fn().mockResolvedValue(undefined),
+  eraseOrganizationRetentionForUser: vi.fn().mockResolvedValue(undefined),
   FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   erasureRecordRepository: { record: mockRecordErasure },
   realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },

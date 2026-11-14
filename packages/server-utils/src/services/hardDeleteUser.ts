@@ -1,6 +1,7 @@
 import {
   deleteFeedbackAiForUser,
   deleteOrgAlertsForUser,
+  eraseOrganizationRetentionForUser,
   FeedbackNoteModel,
   erasureRecordRepository,
   userRepository,
@@ -116,6 +117,7 @@ export async function hardDeleteUser<T>(
             await context.assertInTransaction?.();
             await deleteFeedbackAiForUser(id, { session });
             await deleteOrgAlertsForUser(id, { session });
+            await eraseOrganizationRetentionForUser(id, { session });
             const deleted = await userRepository.delete(id);
             await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });
             // A throw aborts the delete: an erasure with no record could not be repeated after a restore.

@@ -108,17 +108,24 @@ export function useSessions(): SessionsController {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
+  const latestListing = useRef<Promise<void>>(Promise.resolve());
   const localEdits = useRef(0);
   // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
   // would put back the rows it read before them. Import syncs re-list often enough to hit this.
-  const reload = useCallback(async (): Promise<void> => {
+  // An overtaken reload still resolves only once the newer listing is applied: a caller that
+  // selects a session it just created (useSessionDraft) relies on the list holding it by then.
+  const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
-    const next = await window.b4m.chat.listSessions();
-    if (ticket !== latestReload.current) return;
-    if (editsBefore !== localEdits.current) return reload();
-    setSessions(next);
-    setLoading(false);
+    const listing = (async (): Promise<void> => {
+      const next = await window.b4m.chat.listSessions();
+      if (ticket !== latestReload.current) return latestListing.current;
+      if (editsBefore !== localEdits.current) return reload();
+      setSessions(next);
+      setLoading(false);
+    })();
+    latestListing.current = listing;
+    return listing;
   }, []);
   const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
     localEdits.current++;

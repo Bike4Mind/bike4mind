@@ -2,6 +2,19 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  GeneratedFileCleanup: {
+    kind: 'noUserData',
+    note: 'Exact server-generated UUID Files paths awaiting cleanup; no account or session identifier.',
+  },
+  OrganizationGeneratedObject: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  OrganizationRetentionEstimate: {
+    kind: 'holder',
+    references: [{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['token'],
+  },
   // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
   // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
   // Campaign keys are opaque hashes, so no other example names the person. The admin references below
@@ -403,6 +416,8 @@ export const infraHolders = {
       'signupGrantUnlockCount',
       'signupInviteBonusCount',
       'serviceAccountUserId',
+      'retentionSweepRevision',
+      'retentionLastSweptAt',
     ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
