@@ -226,6 +226,8 @@ import {
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  createSubagentAccountCheck,
+  latchedAccountDenial,
   stopOutOfCredits,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
@@ -1643,6 +1645,21 @@ async function runExecution(
       payload => sendWs('subagent_text_delta', { executionId, ...payload }),
       MAX_STEP_CONTENT
     );
+    // In-process subagents run inside one delegating tool call, where the parent's per-iteration account gate
+    // cannot run, so each child step re-checks the account and a refusal aborts the run's tools through
+    // getAbortSignal. The refusal (or a failed read) is then final for the run: the parent's own gate fails it
+    // with this reason on its next iteration rather than re-reading, so the run never continues with its tools
+    // aborted.
+    const accountAbortController = new AbortController();
+    let inProcessAccountDenial: string | null = null;
+    const checkInProcessSubagentAccount = createSubagentAccountCheck({
+      readAccessDenial: () => readUserAccessDenial(execution.userId),
+      onDenied: reason => {
+        inProcessAccountDenial = reason;
+        accountAbortController.abort();
+      },
+      logger,
+    });
     const subagentTracker: ServerSubagentTracker = {
       onStart: async info => {
         // Background children are treated as TOP-LEVEL for cap/billing purposes:
@@ -1773,6 +1790,7 @@ async function runExecution(
           iteration,
           step: truncatedStep,
         });
+        await checkInProcessSubagentAccount(childExecutionId, iteration);
       },
       // Ordered, chunked forwarding lives in agentExecutor.subagentTextDelta.ts.
       onTextDelta: subagentTextDeltas.send,
@@ -1853,7 +1871,13 @@ async function runExecution(
             logger
           );
         }
-        await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
+        // Our own account abort surfaces from the orchestrator as a timeout; report it as the refusal it is.
+        const accountDenial = inProcessAccountDenial;
+        const timedOut = accountDenial === null && isTimeout;
+        await agentExecutionRepository.markFailed(childExecutionId, {
+          message: accountDenial ?? error,
+          timedOut,
+        });
         const partialCredits = partialResult?.completionInfo.totalCredits ?? 0;
         if (partialCredits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
@@ -1862,9 +1886,14 @@ async function runExecution(
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
-          error: isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
-          isTimeout,
-          partialAnswer: isTimeout ? partialResult?.finalAnswer : undefined,
+          error:
+            accountDenial !== null
+              ? 'account_blocked'
+              : isTimeout
+                ? 'Subagent timed out'
+                : 'Subagent execution failed',
+          isTimeout: timedOut,
+          partialAnswer: timedOut ? partialResult?.finalAnswer : undefined,
         });
       },
       onLambdaDispatch: async ({ childExecutionId, subagentConfig, depth }) => {
@@ -2403,6 +2432,7 @@ async function runExecution(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
+      getAbortSignal: () => accountAbortController.signal,
       // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
       // merged inside buildSharedTools after that filter, so the denylist has to travel with them
       // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
@@ -3111,7 +3141,10 @@ async function runExecution(
       const blocked = await stopBlockedAccountIteration(
         {
           executionId,
-          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          readAccessDenial: latchedAccountDenial(
+            () => inProcessAccountDenial,
+            () => readUserAccessDenial((user as IUserDocument).id)
+          ),
           snapshot: () => {
             const checkpoint = agent.toCheckpoint();
             return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -4191,6 +4224,28 @@ async function processSubagentDispatch(
     // Auth + ownership checks (mirror processExecution).
     const storedUser = await User.findById(child.userId);
     if (!storedUser) throw new Error(`User ${child.userId} not found`);
+    // A child queued before its account was blocked must not start: refuse before any setup or provider call.
+    const entryAccountDenial = aiAccessDeniedMessage(storedUser as IUserDocument);
+    if (entryAccountDenial) {
+      logger.warn('[SubagentDispatch] Account can no longer use AI; refusing to start subagent');
+      await agentExecutionRepository.markFailed(childExecutionId, { message: entryAccountDenial });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'account_blocked',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
@@ -4700,6 +4755,17 @@ async function processSubagentDispatch(
     // line need its signal: a tool that runs its own llm.complete (deep_research, blog_draft, ...)
     // otherwise keeps generating past both abort triggers. See ToolContext.getAbortSignal.
     const abortController = new AbortController();
+    // Set when the per-iteration account check stops the run, so the terminal write reports the refusal
+    // rather than a user abort. Mirrors stopBlockedAccountIteration on the parent loop.
+    let accountDenial: string | null = null;
+    const checkAccount = createSubagentAccountCheck({
+      readAccessDenial: () => readUserAccessDenial(child.userId),
+      onDenied: reason => {
+        accountDenial = reason;
+        abortController.abort();
+      },
+      logger,
+    });
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
@@ -4750,6 +4816,7 @@ async function processSubagentDispatch(
           iteration,
           step: truncatedStep,
         });
+        await checkAccount(childExecutionId, iteration);
       },
       onChildProgress: async ({ status }) => {
         await sendWs('subagent_progress', {
@@ -4969,8 +5036,20 @@ async function processSubagentDispatch(
       // fired by our own deadline watchdog (mark failed with isTimeout). The
       // distinction matters for the WS event and downstream telemetry.
       if (runAborted) {
-        const userAborted = await agentExecutionRepository.checkAbortFlag(childExecutionId).catch(() => false);
-        if (userAborted) {
+        const userAborted =
+          accountDenial === null &&
+          (await agentExecutionRepository.checkAbortFlag(childExecutionId).catch(() => false));
+        if (accountDenial !== null) {
+          await agentExecutionRepository.markFailed(childExecutionId, { message: accountDenial });
+          await sendWs('subagent_failed', {
+            executionId: parentId,
+            childExecutionId,
+            agentName,
+            error: 'account_blocked',
+            isTimeout: false,
+            partialAnswer: result.finalAnswer,
+          });
+        } else if (userAborted) {
           await agentExecutionRepository.markAborted(childExecutionId, {
             steps: result.steps,
             partialAnswer: result.finalAnswer,
@@ -5072,9 +5151,18 @@ async function processSubagentDispatch(
       // rather than a fragile `errorMessage.includes('aborted')` heuristic,
       // which would misclassify any error containing the word "aborted".
       const isAbortError = err instanceof Error && err.name === 'AbortError';
-      const wasAborted = signalAborted || isAbortError;
+      const wasAborted = accountDenial === null && (signalAborted || isAbortError);
 
-      if (wasAborted) {
+      if (accountDenial !== null) {
+        await agentExecutionRepository.markFailed(childExecutionId, { message: accountDenial, timedOut: false });
+        await sendWs('subagent_failed', {
+          executionId: parentId,
+          childExecutionId,
+          agentName,
+          error: 'account_blocked',
+          isTimeout: false,
+        });
+      } else if (wasAborted) {
         await agentExecutionRepository.markAborted(childExecutionId);
         await sendWs('subagent_failed', {
           executionId: parentId,

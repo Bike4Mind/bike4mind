@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, CreditHolderType, getMemberCreditPeriodStart, getQuestErrorCode } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CreditHolderType,
+  ForbiddenError,
+  getMemberCreditPeriodStart,
+  getQuestErrorCode,
+} from '@bike4mind/common';
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapters } from './creditHold';
@@ -7,9 +13,9 @@ import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapte
 vi.mock('./deductCreditsWithOrgSupport', () => ({ deductCreditsWithOrgSupport: vi.fn(async () => undefined) }));
 import { deductCreditsWithOrgSupport } from './deductCreditsWithOrgSupport';
 
-const makeAdapters = (balances: { user: number; org?: number }) => {
+const makeAdapters = (balances: { user: number; org?: number }, userFields: Record<string, unknown> = {}) => {
   const state = { user: balances.user, org: balances.org ?? 0 };
-  const user = { id: 'u1', currentCredits: state.user } as unknown as IUserDocument;
+  const user = { id: 'u1', currentCredits: state.user, ...userFields } as unknown as IUserDocument;
   const org = { id: 'o1', currentCredits: state.org } as unknown as IOrganizationDocument;
   const adapters: CreditHoldAdapters = {
     users: {
@@ -70,6 +76,22 @@ describe('holdCredits', () => {
     expect(hold.ownerType).toBe(CreditHolderType.Organization);
     expect(hold.ownerId).toBe('o1');
     expect(state.org).toBe(30);
+  });
+
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['moderation-suspended', { moderation: { status: 'suspended' } }],
+  ])('refuses a %s account before any balance moves', async (_label, userFields) => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 50 }, userFields);
+    const attempt = holdCredits(
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    await expect(attempt).rejects.toBeInstanceOf(ForbiddenError);
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(state).toEqual({ user: 100, org: 50 });
   });
 
   it('rolls back and throws insufficient credits when the hold overdraws', async () => {

@@ -5,6 +5,9 @@ import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import { nextIterationCredits } from './agentExecutor.billing';
 import {
+  ACCOUNT_CHECK_FAILED_MESSAGE,
+  createSubagentAccountCheck,
+  latchedAccountDenial,
   aggregationWakeStartIteration,
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
@@ -256,7 +259,9 @@ describe('processExecution iteration-gate wiring', () => {
     const accountGate = loopSource.indexOf('const blocked = await stopBlockedAccountIteration(');
     expect(accountGate).toBeGreaterThanOrEqual(0);
     expect(accountGate).toBeLessThan(loopSource.indexOf('const gateThisIteration = shouldGateIteration({'));
-    expect(loopSource).toContain('readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),');
+    expect(loopSource).toMatch(
+      /readAccessDenial: latchedAccountDenial\(\s*\(\) => inProcessAccountDenial,\s*\(\) => readUserAccessDenial\(\(user as IUserDocument\)\.id\)\s*\),/
+    );
     expect(loopSource).toMatch(/if \(blocked\) return;/);
   });
 
@@ -344,5 +349,98 @@ describe('aggregation model configuration failures', () => {
         modelAccessOk: false,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('createSubagentAccountCheck', () => {
+  const makeCheck = (readAccessDenial: () => Promise<string | null>) => {
+    const onDenied = vi.fn();
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const read = vi.fn(readAccessDenial);
+    return { check: createSubagentAccountCheck({ readAccessDenial: read, onDenied, logger }), read, onDenied, logger };
+  };
+
+  it('reads once per child and iteration and never denies an active account', async () => {
+    const { check, read, onDenied } = makeCheck(async () => null);
+    await check('child-a', 0);
+    await check('child-a', 0);
+    await check('child-b', 0);
+    await check('child-a', 1);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(onDenied).not.toHaveBeenCalled();
+  });
+
+  it('reports the refusal once, then stops reading', async () => {
+    const { check, read, onDenied } = makeCheck(async () => 'Your account is suspended.');
+    await check('child-a', 0);
+    await check('child-a', 1);
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith('Your account is suspended.');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed with a stated reason when the account read throws', async () => {
+    const { check, onDenied, logger } = makeCheck(async () => {
+      throw new Error('connection reset');
+    });
+    await check('child-a', 0);
+    expect(onDenied).toHaveBeenCalledWith(ACCOUNT_CHECK_FAILED_MESSAGE);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('account check failed'),
+      expect.objectContaining({ error: 'connection reset' })
+    );
+  });
+});
+
+describe('latchedAccountDenial', () => {
+  const gateDeps = () => ({
+    markFailed: vi.fn(async () => undefined),
+    sendWs: vi.fn(async () => undefined),
+    persistRunAsQuest: vi.fn(async () => undefined),
+    logger: { warn: vi.fn() },
+  });
+  const accountGateArgs = (readAccessDenial: () => Promise<string | null>) => ({
+    executionId: 'exec-1',
+    readAccessDenial,
+    snapshot: () => ({ steps: [], partialAnswer: '' }),
+  });
+
+  it('fails the parent run with a latched in-process refusal even when a fresh read is clear', async () => {
+    const read = vi.fn(async () => null);
+    let latched: string | null = null;
+    const check = createSubagentAccountCheck({
+      readAccessDenial: async () => {
+        throw new Error('connection reset');
+      },
+      onDenied: reason => {
+        latched = reason;
+      },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    await check('child-a', 0);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => latched, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', { message: ACCOUNT_CHECK_FAILED_MESSAGE });
+  });
+
+  it('falls back to a fresh read while nothing is latched', async () => {
+    const read = vi.fn(async () => null);
+    const deps = gateDeps();
+
+    const stopped = await stopBlockedAccountIteration(
+      accountGateArgs(latchedAccountDenial(() => null, read)),
+      deps as never
+    );
+
+    expect(stopped).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 });
