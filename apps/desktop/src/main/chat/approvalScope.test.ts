@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeAlways, shortenDirectory } from './approvalScope';
+import { describeAlways, outsideFoldersReason, shortenDirectory } from './approvalScope';
 import type { ApprovalAlways } from './tools/types';
 
 const HOME = '/Users/jude';
@@ -31,6 +31,18 @@ describe('describeAlways', () => {
 
   it('names the patterns a command would allow', () => {
     expect(describeAlways(always(['git status *']), CWD, HOME)?.shown).toBe('`git status *`');
+  });
+
+  it('cuts an exact multi-line command to its first line on the card, and keeps it whole in the title', () => {
+    const script = "mkdir -p /tmp/mig && cat > /tmp/mig/migrate.py <<'EOF'\nimport re\nprint('x')\nEOF";
+    const scope = describeAlways(always([script, 'mkdir *']), CWD, HOME);
+    expect(scope?.shown).toBe("`mkdir -p /tmp/mig && cat > /tmp/mig/migrate.py <<'EOF' ...`, `mkdir *`");
+    expect(scope?.full).toContain("print('x')");
+  });
+
+  it('cuts a long one-line command', () => {
+    const shown = describeAlways(always([`echo ${'a'.repeat(100)}`]), CWD, HOME)?.shown ?? '';
+    expect(shown).toBe(`\`echo ${'a'.repeat(55)} ...\``);
   });
 
   it('counts the patterns past the third rather than listing them', () => {
@@ -112,5 +124,44 @@ describe('shortenDirectory', () => {
 
   it('leaves a path with neither prefix alone', () => {
     expect(shortenDirectory('/opt/homebrew/bin', CWD, HOME)).toBe('/opt/homebrew/bin');
+  });
+});
+
+describe('outsideFoldersReason', () => {
+  it('says nothing when every folder is covered', () => {
+    expect(outsideFoldersReason(always(['echo *']), [], CWD, HOME)).toBeNull();
+  });
+
+  it('names the folders a command writes in apart from the ones it only reaches', () => {
+    const written = { ...always(['echo *', 'cat *']), writes: ['/Users/jude/Desktop/x'] };
+    expect(outsideFoldersReason(written, ['/Users/jude/Desktop', '/opt/data'], CWD, HOME)).toBe(
+      'Writes outside the shared folders: ~/Desktop. Reaches outside the shared folders: /opt/data.'
+    );
+  });
+
+  it('counts a folder the command only runs in or removes from as written', () => {
+    const removed = { ...always(['rm *']), writtenDirectories: ['/opt/out'] };
+    expect(outsideFoldersReason(removed, ['/opt/out', '/opt/data'], CWD, HOME)).toBe(
+      'Writes outside the shared folders: /opt/out. Reaches outside the shared folders: /opt/data.'
+    );
+  });
+
+  it('calls a folder only reached when the command sends data out from every one', () => {
+    const [part] = always(['curl *']).commands;
+    const sending = {
+      ...always(['curl *']),
+      commands: [{ ...part, ask: { mode: 'auto' as const, reason: 'sends', kinds: ['outbound' as const] } }],
+      writtenDirectories: ['/opt/data'],
+    };
+    expect(outsideFoldersReason(sending, ['/opt/data'], CWD, HOME)).toBe(
+      'Reaches outside the shared folders: /opt/data.'
+    );
+  });
+
+  it('counts a folder an archive is extracted into as written', () => {
+    const extracted = { ...always(['tar *']), writtenTrees: ['/opt/out/pkg'] };
+    expect(outsideFoldersReason(extracted, ['/opt/out'], CWD, HOME)).toBe(
+      'Writes outside the shared folders: /opt/out.'
+    );
   });
 });

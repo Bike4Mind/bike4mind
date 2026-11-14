@@ -26,9 +26,9 @@ import {
  * start and remove conversations inside the calling session's own project and can address
  * nothing outside it. A Chat session has no project, so the family is not declared for one.
  *
- * Three of them change what the user sees and declare an approval. `session_spawn` is gated on
- * cost and autonomy together, asked in every mode including 'full' - starting a conversation
- * that calls models and tools with nobody typing is its own decision - and `session_delete` is
+ * Three of them change what the user sees and declare an approval. `session_spawn` asks only in
+ * "Ask for approval" - starting a conversation that calls models and tools with nobody typing is its
+ * own decision, which Approve for me and Full access leave to the user's mode - and `session_delete` is
  * gated as irreversible, which additionally means no "always" answer can ever cover it.
  *
  * With a user present, `session_spawn` does not start anything and so is not gated at all: it
@@ -173,7 +173,7 @@ export const sessionSpawn: ToolDefinition = {
       'dismiss it. If they ask in chat to change the task, use session_suggestion_update on the ' +
       'same id instead of suggesting it again; if they decline it or say to do it here, use ' +
       'session_suggestion_dismiss and do the work yourself. In a session that was itself started ' +
-      'by another one, the user is asked to approve the start instead, and the call waits. ' +
+      'by another one, this requests the start directly instead, and the call waits. ' +
       'A started session runs on its own, does not report into your turn, and tells this ' +
       'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
       'carry the whole task. The USER chooses where it runs: in this working directory, in a ' +
@@ -487,7 +487,7 @@ export const sessionSend: ToolDefinition = {
     const name = (await requireHost(context).describeSession(sessionId, { scope: 'all' })) ?? sessionId;
     return {
       detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
-      // Only 'ask' reaches this card, but the key still has to be exact there: approving one
+      // Ask mode and provenance-sensitive Auto calls reach this card; its key must be exact: approving one
       // message must never cover the next, and the same words to a different conversation are a
       // different act.
       key: `session_send:${sessionId}:${message}`,

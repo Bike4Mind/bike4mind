@@ -67,7 +67,6 @@ async function harness(options: { models?: VideoModel[]; roots?: string[]; prote
       notice: notice => notices.push(notice),
       label: () => undefined,
       moved: () => undefined,
-      ownContent: () => undefined,
       diff: () => undefined,
       detail: () => undefined,
       image: () => undefined,

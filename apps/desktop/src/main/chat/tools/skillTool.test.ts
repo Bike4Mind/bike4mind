@@ -102,27 +102,15 @@ describe('the skill tool', () => {
 });
 
 describe('the skill tool and where the skill came from', () => {
-  it("vouches for a skill in the user's own folder", async () => {
+  it.each(['global', 'project'] as const)('marks only a trusted %s skill as own content', async source => {
     const report = reporter();
-    await skillTool.run({ skill: 'ship' }, contextFor([command('ship', 'Ship it.', { source: 'global' })], [], report));
-
+    await skillTool.run({ skill: 'local' }, contextFor([command('local', 'Do the thing.', { source })], [], report));
     expect(report.ownContent).toHaveBeenCalledTimes(1);
-  });
-
-  it('vouches for a skill from a project the user trusted', async () => {
-    const report = reporter();
+    vi.mocked(report.ownContent!).mockClear();
     await skillTool.run(
-      { skill: 'ship' },
-      contextFor([command('ship', 'Ship it.', { source: 'project' })], [], report)
+      { skill: 'imported' },
+      contextFor([command('imported', 'Do the untrusted thing.', { source, untrusted: true })], [], report)
     );
-
-    expect(report.ownContent).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not vouch for an account skill, which may be someone else's", async () => {
-    const report = reporter();
-    await skillTool.run({ skill: 'ship' }, contextFor([command('ship', 'Ship it.', { source: 'remote' })], [], report));
-
     expect(report.ownContent).not.toHaveBeenCalled();
   });
 
@@ -138,7 +126,6 @@ describe('the skill tool and where the skill came from', () => {
     expect(result).toMatch(
       /<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\nDo the thing\.\n<<<END_UNTRUSTED_SKILL_CONTENT/
     );
-    expect(report.ownContent).not.toHaveBeenCalled();
   });
 });
 

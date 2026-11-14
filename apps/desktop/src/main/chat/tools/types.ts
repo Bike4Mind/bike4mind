@@ -137,12 +137,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
-  /**
-   * This call's result is text the user wrote or chose to load - a skill from their own folder or
-   * from a project they trusted - so reading it does not make the reply untrusted. See
-   * ChatToolCall.ownContent.
-   */
-  ownContent(): void;
+  /** The result comes from a trusted local skill rather than an imported body. */
+  ownContent?(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -733,12 +729,6 @@ export interface ApprovalPrompt {
   /** An "always" on this card allows this call only and is never recorded. */
   allowOnce?: true;
   /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
-   */
-  contained?: true;
-  /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
    * 'full' is a decision about: a script in a page the user has signed in to reads that site's
@@ -750,6 +740,8 @@ export interface ApprovalPrompt {
   askInFull?: true;
   /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
   unchecked?: true;
+  /** The shell scan cannot positively prove every executed command keeps data local. */
+  outbound?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
@@ -799,6 +791,11 @@ export interface ApprovalAlways {
   commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
+   * cannot tell, and then every one counts.
+   */
+  writtenDirectories?: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
   /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */

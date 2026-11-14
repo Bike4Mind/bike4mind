@@ -1165,6 +1165,25 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
+"Approve for me" and "Full access" ask before a shell command Desktop cannot follow or parse.
+That includes unknown curl options and complex multipart forms such as file lists or header-file
+attributes. Simple modeled uploads still check their source paths; listed Git operations retain
+the narrow exception for understood reference changes. Commands run as the user without an OS
+sandbox, so these checks are not filesystem confinement.
+
+After a reply reads web, MCP, browser or imported skill content, "Approve for me" asks before
+outbound calls and shell commands whose local-only behavior the scanner cannot prove. This includes custom programs,
+project builds and Git commands that may invoke configured programs. The approval is for that call;
+older chat allowances do not cover it. This also covers messages and automatically started delegated
+tasks, so another conversation cannot silently drop the source provenance. User-present task
+suggestions still only show a card and start nothing. Explicit user permission rules retain precedence. Proven local
+operations such as `pwd` and `cat` keep their normal decisions, and a new clean reply resets this check.
+Interrupted replies retain the provenance of replayed content. Curl upload lists/ranges are opaque
+unless `-g` or `--globoff` disables curl's own globbing.
+
+Credit-spending tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
+limits remain. Protected paths, irreversible actions and signed-in browser actions keep their own checks.
+
 Settings -> Permissions also shows the local capability ledger: active grants for files,
 tools, browser origins, imported identity, project trust and credit-spending actions,
 followed by their 200 most recent audit events. Tool execution does not
@@ -1191,8 +1210,8 @@ a deny refuses the call, while an allow still requires the tool's interactive re
 
 The approval card's "Allow in this chat" remembers consent for this conversation.
 "Always allow" saves the displayed allow rules in Settings -> Permissions, and also
-answers waiting cards those rules cover. For web fetches, both buttons cover every site,
-including after a reply has read web content; the saved rule is `WebFetch`.
+answers waiting cards those rules cover. For web fetches, both buttons cover every site;
+the saved rule is `WebFetch`.
 Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
 Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
 Settings also shows imported Claude Code sources read-only. Turn off "Use them here"
