@@ -340,8 +340,8 @@ export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHono
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
  * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
- * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
- * caching never lowers a hold.
+ * below discounts a Claude read only on Anthropic and only for `cache` flags (client-sent, or the
+ * first-round breakpoints withFirstRoundCacheBreakpoints adds, which only raise the hold).
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -400,6 +400,7 @@ function buildClaudeCacheStrategy(
  */
 function withFirstRoundCacheBreakpoints(messages: IMessage[], strategy: ICacheStrategy | undefined): IMessage[] {
   if (!strategy?.enableCaching || messages.some(m => m.role === 'assistant')) return messages;
+  // Must stay in sync with the history-anchor rule in AnthropicCachingAdapter, or the hold under-prices the write.
   let anchorIndex = strategy.cacheConversationHistory
     ? messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0)
     : -1;
@@ -449,6 +450,7 @@ function estimateReservationUsd(
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
   const hasAssistant = messages.some(m => m.role === 'assistant');
+  // A first-round Claude on Bedrock is held plain; the per-round cap prices its cache write.
   if (!hasAssistant && modelInfo.backend !== ModelBackend.Anthropic) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
@@ -479,7 +481,8 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  // Priced plain: tool schemas carry no flag here, so no discount is assumed. On a first round the
+  // server's cacheTools writes them, so the hold runs ~0.25x of tool tokens short; the cap covers it.
   let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
@@ -1070,9 +1073,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
       return affordableRoundBudget({
         modelInfo: chargedModelInfo!,
-        // Not estimateReservationUsd: the hold assumes the cached prefix is read, but a lapsed cache
-        // writes it at cache_write, so a cap priced off the hold lets settlement overdraw. Same
-        // pricing as the web chat and agent executor caps.
+        // Not estimateReservationUsd: the hold assumes a warm cache; see the cap note above.
         inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
         inputTokens,
         availableCredits,
