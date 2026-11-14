@@ -53,6 +53,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     rawProviderError: { type: Schema.Types.Mixed, select: false },
     terminalHandlingClaimedAt: { type: Date, default: null },
     terminalHandledAt: { type: Date, default: null },
+    groupCompletionNotifiedAt: { type: Date, default: null },
     questId: { type: String },
     delivery: new Schema(
       {
@@ -73,6 +74,11 @@ GenerationJobSchema.index({ state: 1, nextPollAt: 1 });
 GenerationJobSchema.index({ state: 1, terminalHandledAt: 1, updatedAt: 1 });
 // Serves the public list endpoint (newest first per requester); kind/state/source are residual filters.
 GenerationJobSchema.index({ requestedBy: 1, _id: -1 });
+// Serves findByGroup, run once per finished take to see whether its group is done.
+GenerationJobSchema.index(
+  { requestedBy: 1, 'payload.groupId': 1 },
+  { partialFilterExpression: { 'payload.groupId': { $type: 'string' } } }
+);
 GenerationJobSchema.index(
   { ownerType: 1, ownerId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
@@ -170,6 +176,19 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
 
   async markTerminalHandled(id: string, at: Date) {
     await this.jobModel.updateOne({ _id: id }, { $set: { terminalHandledAt: at } });
+  }
+
+  async findByGroup(requestedBy: string, groupId: string) {
+    const docs = await this.jobModel.find({ requestedBy, kind: 'image', 'payload.groupId': groupId }).sort({ _id: 1 });
+    return docs.map(doc => doc.toJSON() as IGenerationJobDocument);
+  }
+
+  async claimGroupCompletionNotice(id: string, at: Date) {
+    const result = await this.jobModel.updateOne(
+      { _id: id, groupCompletionNotifiedAt: null },
+      { $set: { groupCompletionNotifiedAt: at } }
+    );
+    return result.modifiedCount === 1;
   }
 
   async recordSettlement(id: string, settledCredits: number) {

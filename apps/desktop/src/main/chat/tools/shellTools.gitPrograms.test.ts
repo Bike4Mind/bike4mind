@@ -16,7 +16,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -74,7 +74,7 @@ const ROWS: [string, string, string][] = [
   ['cp -r tpl/.git . && git st', '', 'aaaa'],
   ['cp -r lrepo dist && git -C dist/lrepo st', '', 'aaaa'],
   ['cp -r tpl/. src && git -C src st', '', 'aaaa'],
-  ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrar'],
+  ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
   ['rsync -a --exclude=.git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
   ['rsync -a --exclude=.git/ lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ["rsync -a --exclude='.git' lrepo/ dist3/ && git -C dist3 st", '', 'rrrr'],
@@ -145,15 +145,15 @@ const ROWS: [string, string, string][] = [
   ['git fetch origin', '', 'rrrr'],
   ['git pull', '', 'rrrr'],
   ['git pull origin main', '', 'rrrr'],
-  ['git push', '', 'raar'],
-  ['git push origin main', '', 'raar'],
-  ['git push -u origin main', '', 'raar'],
+  ['git push', '', 'rrrr'],
+  ['git push origin main', '', 'rrrr'],
+  ['git push -u origin main', '', 'rrrr'],
   ['git st', '', 'rrrr'],
   ['git lg -3', '', 'rrrr'],
   ['git co other', '', 'rrrr'],
-  ['git p', '', 'raar'],
+  ['git p', '', 'rrrr'],
   ['git st && git lg', '', 'rrrr'],
-  ['git add -A && git commit -m x && git p', '', 'raar'],
+  ['git add -A && git commit -m x && git p', '', 'rrrr'],
   ['git commit -am x && git st', '', 'rrrr'],
   ['git switch other && git st', '', 'rrrr'],
   ['git co other && git st', '', 'rrrr'],
@@ -203,7 +203,7 @@ const ROWS: [string, string, string][] = [
   ['mkdir x && cd x && git st', '', 'rrrr'],
   ['mkdir -p tmp/a && cd tmp/a && git status', '', 'rrrr'],
   ['git status && pnpm test && git st', '', 'rrrr'],
-  ['pnpm build && git add -A && git commit -m build && git p', '', 'raar'],
+  ['pnpm build && git add -A && git commit -m build && git p', '', 'rrrr'],
   ['git fetch && git rebase origin/main && pnpm test && git p', '', 'aaaa'],
   ['cd lrepo && git st && cd ..', '', 'rrrr'],
   ['git -C lrepo st', '', 'rrrr'],
@@ -428,7 +428,7 @@ const ROWS: [string, string, string][] = [
   ['git -C rem/pushdefault push', '', 'aaaa'],
   ['git -C rem/tracked fetch', '', 'rrrr'],
   ['git -C rem/tracked pull', '', 'rrrr'],
-  ['git -C rem/tracked push', '', 'raar'],
+  ['git -C rem/tracked push', '', 'rrrr'],
   ['echo foo::x | xargs git fetch', '', 'aaaa'],
   ['git -c remote.origin.url=foo::x fetch origin', '', 'aaaa'],
   ['git config url.foo::x.insteadOf https://example.com/ && git fetch https://example.com/r.git', '', 'aaaa'],
@@ -690,8 +690,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     const covered = subject !== null && rules.evaluate(subject).decision === 'allow';
     return [
       covered,
-      !prompt.askInAuto,
-      !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
+      runsCheckedInAuto(prompt),
+      runsCheckedInAuto(withSession) && (withSession.always?.directories ?? []).length === 0,
       runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))

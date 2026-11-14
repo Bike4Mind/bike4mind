@@ -1,7 +1,8 @@
 // Packages a test-identity build at two versions, signs both with one throwaway self-signed
 // certificate, and updates the older to the newer through the app's own update path (electron-updater, then
-// Squirrel.Mac) from a loopback feed. A newer build signed by a second throwaway certificate must
-// be refused. Needs no secrets. Run from the repository root: node apps/desktop/scripts/smoke-mac-update.mjs
+// Squirrel.Mac) from a loopback feed whose manifest is signed with a throwaway update key. A newer build
+// signed by a second throwaway certificate must be refused. Needs no secrets.
+// Run from the repository root: node apps/desktop/scripts/smoke-mac-update.mjs
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, X509Certificate } from 'node:crypto';
@@ -297,8 +298,10 @@ async function main() {
   run('security', ['set-key-partition-list', '-S', 'apple-tool:,apple:', '-s', '-k', password, keychain]);
   await exposeSigningKeychain(certificate.sha1);
 
-  const manifestKeys = generateKeyPairSync('ed25519');
-  const manifestPublicKey = manifestKeys.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+  // The builds trust this key alone, whatever B4M_UPDATE_PUBLIC_KEYS the caller has set: a build that
+  // carries update keys takes only a signed manifest, and the release key cannot sign this feed.
+  const updateKey = generateKeyPairSync('ed25519');
+  const updatePublicKey = updateKey.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
   const feed = new Map();
   server = createServer((request, response) => {
     const entry = feed.get(new URL(request.url, 'http://127.0.0.1').pathname);
@@ -322,14 +325,11 @@ async function main() {
     const manifest = [`version: ${build.version}`, 'files:', `  - url: ${url}`, `    sha512: '${sha512}'`,
       `    size: ${payload.length}`, `path: ${url}`, `sha512: '${sha512}'`, `releaseDate: '${new Date().toISOString()}'`, ''].join('\n');
     feed.set('/latest-mac.yml', { text: manifest });
-    feed.set('/latest-mac.yml.sig', {
-      text: signManifest('latest-mac.yml', Buffer.from(manifest), manifestKeys.privateKey),
-    });
+    feed.set('/latest-mac.yml.sig', { text: signManifest('latest-mac.yml', Buffer.from(manifest), updateKey.privateKey) });
   };
 
-  const built = spawnSync('pnpm', ['build'], { cwd: desktop, env: {
-    ...process.env, B4M_UPDATE_FEED_URL: feedUrl, B4M_UPDATE_PUBLIC_KEYS: manifestPublicKey,
-  },
+  const built = spawnSync('pnpm', ['build'], { cwd: desktop,
+    env: { ...process.env, B4M_UPDATE_FEED_URL: feedUrl, B4M_UPDATE_PUBLIC_KEYS: updatePublicKey },
     encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   if (built.status !== 0) throw new Error(`electron-vite build failed:\n${`${built.stdout}${built.stderr}`.slice(-4000)}`);
   // A zip target, as in a release: electron-builder writes app-update.yml only when it builds one.
