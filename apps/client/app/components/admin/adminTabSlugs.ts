@@ -99,6 +99,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.PrReport]: 'pr-report',
   [AdminTab.RetrievalRate]: 'retrieval-rate',
   [AdminTab.ApiKeyScopePreflight]: 'api-key-scope-preflight',
+  [AdminTab.LegacyApiKeys]: 'legacy-api-keys',
   [AdminTab.ReleaseNotes]: 'release-notes',
   [AdminTab.OAuthClients]: 'oauth-clients',
   [AdminTab.GrowthPricing]: 'growth-pricing',

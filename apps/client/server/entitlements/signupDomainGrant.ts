@@ -1,5 +1,10 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { CreditHolderType, isSignupGrantBlocked } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  isGrantPackageExpired,
+  isSignupGrantBlocked,
+  type GrantPackageRefusalReason,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -20,6 +25,7 @@ import {
   notifySeatCeilingRaised,
   type SeatCeilingRaiseTrigger,
 } from '@server/organizations/notifySeatCeilingRaised';
+import { applyOrgDomainMembership } from '@server/organizations/orgDomainClaims';
 import { premiumPartnerSignupHooks } from '@server/premium-generated/premiumPartnerSignupHooks.generated';
 
 export type SignupDomainGrantResult = {
@@ -35,6 +41,8 @@ export type SignupDomainGrantResult = {
   subscriptionCreditsGranted: number;
   /** Whether this call granted the rule's subscription; false when none applied, already active, or failed. */
   subscriptionGranted: boolean;
+  /** Why the linked package withheld its credits (inactive, expired or capped); null when it did not. */
+  packageRefusal: GrantPackageRefusalReason | null;
 };
 
 const NO_GRANT: SignupDomainGrantResult = {
@@ -44,6 +52,7 @@ const NO_GRANT: SignupDomainGrantResult = {
   tagsApplied: [],
   subscriptionCreditsGranted: 0,
   subscriptionGranted: false,
+  packageRefusal: null,
 };
 
 /**
@@ -56,11 +65,13 @@ async function reservePackageRedemption(
   grantPackageId: string | null,
   userId: string,
   trigger: SeatCeilingRaiseTrigger,
-  logger: Logger
+  logger: Logger,
+  onRefused: (reason: GrantPackageRefusalReason) => void
 ): Promise<(() => Promise<void>) | null> {
   if (!grantPackageId) return async () => {};
   const reservation = await grantPackageRepository.reserveRedemption(grantPackageId, userId);
   if (reservation.outcome !== 'refused') return reservation.release;
+  onRefused(reservation.reason);
   logger.info(
     `Domain-grant signup credits withheld for user ${userId} (${trigger}): grant package ${grantPackageId} ` +
       `refused the redemption (${reservation.reason})`
@@ -101,6 +112,9 @@ async function stampGrantPackage(
  * The credits are part of the one free-credit grant allowed per canonical inbox, so they are
  * withheld when another account already claimed this user's inbox; everything else the
  * domain confers - entitlements, membership, tags, subscription - still applies.
+ *
+ * With no partner rule routing the domain into an org, a verified org domain claim set to auto-join
+ * adds the user instead (`applyOrgDomainMembership`); a partner org rule always takes precedence.
  *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
@@ -152,15 +166,25 @@ export async function applySignupDomainGrant(params: {
 
   const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
   let coreStepFailed = false;
+  // Kept apart from a partner join: the partner hooks below must only ever see the partner's own org.
+  let orgDomainJoinedId: string | null = null;
 
-  // A linked package replaces the rule's own credit amount; a missing or inactive package withholds
-  // the credits only, never the membership, tags or subscription.
+  // A linked package replaces the rule's own credit amount; a missing, inactive or expired package
+  // withholds the credits only, never the membership, tags or subscription.
   if (grantPackageId) {
     try {
       const grantPackage = await grantPackageRepository.findById(grantPackageId);
-      signupCredits = grantPackage?.active ? grantPackage.credits : 0;
-      if (!grantPackage?.active) {
-        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): package unavailable`);
+      const refusal = !grantPackage
+        ? 'missing'
+        : !grantPackage.active
+          ? 'inactive'
+          : isGrantPackageExpired(grantPackage)
+            ? 'expired'
+            : null;
+      signupCredits = refusal || !grantPackage ? 0 : grantPackage.credits;
+      if (refusal) {
+        result.packageRefusal = refusal;
+        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): package ${refusal}`);
       }
     } catch (packageError) {
       logger.error(`Grant package ${grantPackageId} could not be read for user ${userId} (${trigger})`, packageError);
@@ -184,7 +208,9 @@ export async function applySignupDomainGrant(params: {
             `already holds the free-credit claim for this inbox`
         );
       } else {
-        releaseRedemption = await reservePackageRedemption(grantPackageId, userId, trigger, logger);
+        releaseRedemption = await reservePackageRedemption(grantPackageId, userId, trigger, logger, reason => {
+          result.packageRefusal = reason;
+        });
         // Null means a cap refused it: withheld on purpose, so not a failed core step.
         if (releaseRedemption) {
           const holder = await creditService.addCredits(
@@ -230,6 +256,9 @@ export async function applySignupDomainGrant(params: {
     } else {
       coreStepFailed = true;
     }
+  } else {
+    orgDomainJoinedId = await applyOrgDomainJoin(userId, email, trigger, logger);
+    result.joinedOrganizationId = orgDomainJoinedId;
   }
 
   if (partnerTags.length > 0 && (await applyPartnerTags(userId, partnerTags, trigger, logger))) {
@@ -255,7 +284,7 @@ export async function applySignupDomainGrant(params: {
     await runPartnerSignupHooks(premiumPartnerSignupHooks, {
       userId,
       rule: partnerRule,
-      joinedOrganizationId: result.joinedOrganizationId,
+      joinedOrganizationId: orgDomainJoinedId ? null : result.joinedOrganizationId,
       trigger,
       logger,
     });
@@ -263,11 +292,44 @@ export async function applySignupDomainGrant(params: {
 
   // A tag can itself be an entitlement key (getUserEntitlements reads user.tags) and a subscription's
   // price can map to entitlement keys, so both wake the cache too.
-  if (domainGrantKeys.size > 0 || result.tagsApplied.length > 0 || result.subscriptionGranted) {
+  if (
+    domainGrantKeys.size > 0 ||
+    result.tagsApplied.length > 0 ||
+    result.subscriptionGranted ||
+    orgDomainJoinedId !== null
+  ) {
     await pushEntitlementInvalidation(userId, logger);
   }
 
   return result;
+}
+
+/** Org-domain auto-join. Returns the joined org id, or null; logs and swallows every failure. */
+async function applyOrgDomainJoin(
+  userId: string,
+  email: string,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<string | null> {
+  try {
+    const outcome = await applyOrgDomainMembership(userId, email);
+    if (outcome.joined) {
+      logger.info(`Org-domain join: added user ${userId} to org ${outcome.organizationId} (${trigger})`);
+      return outcome.organizationId;
+    }
+    if (outcome.reason === 'at-capacity') {
+      logger.info(
+        `Org-domain join: org ${outcome.organizationId} is at capacity (seats ${outcome.seats}); ` +
+          `user ${userId} not added (${trigger})`
+      );
+    }
+  } catch (joinError) {
+    logger.error(
+      `Org-domain join failed for user ${userId} (${trigger}); membership is idempotent so a retry is safe`,
+      joinError
+    );
+  }
+  return null;
 }
 
 type PartnerMembershipOutcome = { ok: true; joinedOrganizationId: string | null } | { ok: false };

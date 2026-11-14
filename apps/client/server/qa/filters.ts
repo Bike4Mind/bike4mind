@@ -15,6 +15,8 @@ export interface QaFilters {
 const DAY_MS = 86_400_000;
 /** Widest range the page can ask for; the chart and flaky reads are capped by run count too. */
 export const QA_MAX_RANGE_DAYS = 366;
+// Instants lose the viewer's timezone; allow offset transitions while keeping scans below 367 elapsed days.
+const MAX_RANGE_ELAPSED_MS = (QA_MAX_RANGE_DAYS + 1) * DAY_MS;
 
 // The page's "All" option sends ''.
 const optionalSelect = z
@@ -37,7 +39,7 @@ const QaFiltersQuerySchema = z
   })
   .refine(q => (q.from === undefined) === (q.to === undefined), { message: 'from and to go together' })
   .refine(q => !q.from || !q.to || Date.parse(q.from) < Date.parse(q.to), { message: 'from must be before to' })
-  .refine(q => !q.from || !q.to || Date.parse(q.to) - Date.parse(q.from) <= QA_MAX_RANGE_DAYS * DAY_MS, {
+  .refine(q => !q.from || !q.to || Date.parse(q.to) - Date.parse(q.from) < MAX_RANGE_ELAPSED_MS, {
     message: `range is at most ${QA_MAX_RANGE_DAYS} days`,
   });
 

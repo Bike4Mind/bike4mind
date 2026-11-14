@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { parseQaFilters } from './filters';
+import { rangeInstants, resolveRange, spanDays } from '../../app/components/QaStatus/dateRange';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const NOW = new Date('2026-11-13T12:00:00.000Z');
 const daysBefore = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
@@ -43,6 +48,31 @@ describe('parseQaFilters', () => {
       from: daysBefore(30),
       to: NOW,
     });
+  });
+
+  it.each([
+    ['UTC', '2024-11-02', '2025-11-02', '2024-11-02T00:00:00.000Z', '2025-11-03T00:00:00.000Z'],
+    ['America/New_York', '2024-11-02', '2025-11-02', '2024-11-02T04:00:00.000Z', '2025-11-03T05:00:00.000Z'],
+    ['Australia/Lord_Howe', '2024-04-06', '2025-04-06', '2024-04-05T13:00:00.000Z', '2025-04-06T13:30:00.000Z'],
+    ['America/New_York', '2025-03-08', '2026-03-08', '2025-03-08T05:00:00.000Z', '2026-03-09T04:00:00.000Z'],
+  ])('accepts the UI maximum local-day range in %s starting %s', (timezone, from, to, instantFrom, instantTo) => {
+    vi.stubEnv('TZ', timezone);
+    const range = resolveRange({ from, to });
+    expect(spanDays(range)).toBe(366);
+    const bounds = rangeInstants(range);
+    expect(bounds).toEqual({ from: instantFrom, to: instantTo });
+    expect(parseQaFilters({ product: 'product-a', ...bounds })).toMatchObject({
+      from: new Date(bounds.from),
+      to: new Date(bounds.to),
+    });
+  });
+
+  it('rejects 367 whole elapsed days even with the offset-transition allowance', () => {
+    const from = new Date('2024-01-01T00:00:00.000Z');
+    const to = new Date(from.getTime() + 367 * 86_400_000);
+    expect(() => parseQaFilters({ product: 'product-a', from: from.toISOString(), to: to.toISOString() })).toThrow(
+      'at most 366 days'
+    );
   });
 
   it('rejects a missing product, an unknown range and a bad date range', () => {

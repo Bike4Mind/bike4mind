@@ -80,6 +80,7 @@ describe('registerUser', () => {
           update: vi.fn().mockResolvedValue(undefined),
           claimUnused: vi.fn().mockResolvedValue(true),
           releaseClaim: vi.fn().mockResolvedValue(undefined),
+          reopenUnlessClosed: vi.fn().mockResolvedValue(undefined),
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
@@ -575,6 +576,19 @@ describe('registerUser', () => {
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invite code has expired');
   });
 
+  it('refuses an unlimited invite an admin set to used and creates no account', async () => {
+    mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+      ...mockInvite,
+      unlimitedUse: true,
+      status: RegInviteStatusType.used,
+      used: new Date(),
+    });
+
+    await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('This invite code has been disabled');
+    expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+  });
+
   it('allows reuse when invite is unlimited', async () => {
     const unlimitedInvite = {
       ...mockInvite,
@@ -606,9 +620,9 @@ describe('registerUser', () => {
         { userId: 'newUserId', usedAt: expect.any(Date) },
         { userId: 'newUserId', usedAt: expect.any(Date) },
       ],
-      status: RegInviteStatusType.open,
     });
     expect(mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[1]).toEqual({ unset: ['used', 'usedbyId'] });
+    expect(mockAdapters.db.registrationInvites.reopenUnlessClosed).toHaveBeenCalledWith('invite-1');
     expect(updatedUnlimitedInvite?.usageHistory?.length).toBe(2);
   });
 
@@ -928,7 +942,10 @@ describe('registerUser', () => {
         expect(created().signupInvite).toBeUndefined();
         mockAdapters.db.users.create.mockClear();
         mockAdapters.db.users.findByUsernameOrEmail.mockResolvedValue(null);
-        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ unlimitedUse: true }));
+        // The first signup redeemed mockInvite in place (status used), so reopen the copy.
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(
+          referralInvite({ unlimitedUse: true, status: RegInviteStatusType.open })
+        );
         await registerUser(baseParams, mockAdapters);
         expect(created().signupInvite).toBeUndefined();
       });
@@ -997,6 +1014,7 @@ describe('registerViaOTC', () => {
           update: vi.fn(),
           claimUnused: vi.fn().mockResolvedValue(true),
           releaseClaim: vi.fn(),
+          reopenUnlessClosed: vi.fn(),
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),

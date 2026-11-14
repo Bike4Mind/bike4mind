@@ -194,7 +194,7 @@ async function handleChat(
   // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
   // is what lets an org member whose org pool is empty still spend their own credits.
   // An org-billed API key is the exception: its org pays whether or not the body names one, the
-  // same rule as sseRoute/wsRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
+  // same rule as sseRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
   // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
   const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
     ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)

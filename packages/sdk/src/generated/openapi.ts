@@ -671,7 +671,7 @@ export interface paths {
     put?: never;
     /**
      * Create a session
-     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
+     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval. Set `organizationId` to create in an organization you belong to; this binding cannot be changed later.
      */
     post: operations['createSession'];
     delete?: never;
@@ -1159,7 +1159,7 @@ export interface paths {
     put?: never;
     /**
      * Create a project
-     * @description Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.
+     * @description Creates a project owned by the caller, optionally grouping existing sessions and files in it. Every listed session and file must be readable by the caller. Set `organization_id` to create in an organization you belong to; this binding cannot be changed later. A project's `file_ids` and `session_ids` are shared with it: anyone the project is shared with can read every file and session it groups. Sharing the project later shares them too. Unknown body fields are rejected.
      */
     post: operations['createProject'];
     delete?: never;
@@ -2005,7 +2005,7 @@ export interface paths {
     put?: never;
     /**
      * Mint a test persona
-     * @description Creates a throwaway test account for automated QA and returns a single-use login code for it. Only admins and developers can call it: an API key needs the `personas:mint` scope, which is offered only to them, and the key owner is re-checked on every call. The account is a non-admin user with no credits that is disabled when `expires_at` passes. Minting a name you already hold a live persona under returns that persona with a new login code (`200`, `created: false`) instead of creating another. Redeem the code at `login_path`: open it in a browser to land signed in, or `POST` `{ "code": "<login_code>" }` to the same path for an access token and refresh token. A code works once and expires at `login_code_expires_at`.
+     * @description Creates a throwaway test account for automated QA and returns a single-use login code for it. Only admins and developers can call it: an API key needs the `personas:mint` scope, which is offered only to them, and the key owner is re-checked on every call. The account is a non-admin user with no credits that is disabled when `expires_at` passes. Minting a name you already hold a live persona under returns that persona with a new login code (`200`, `created: false`) instead of creating another. Redeem the code at `login_path`: open it in a browser to land signed in, or `POST` `{ "code": "<login_code>" }` to `/api/personas/redeem` for an access token and refresh token. A code works once and expires at `login_code_expires_at`.
      */
     post: operations['mintPersona'];
     delete?: never;
@@ -2464,6 +2464,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -2492,6 +2493,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -2555,6 +2557,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -5291,6 +5294,7 @@ export interface components {
       _id?: string;
       name: string;
       userId: string;
+      organizationId?: string;
       knowledgeIds?: string[];
       artifactIds?: string[];
       tags?: {
@@ -5321,6 +5325,8 @@ export interface components {
      */
     createSessionRequest: {
       name: string;
+      /** @description Organization context for new content. Requires membership; immutable after creation. */
+      organizationId?: string;
       /** @description Adds the new session to this project. */
       projectId?: string;
       /** @description Seeds retrieval defaults from this data lake and turns on forced retrieval. Get ids from `GET /api/v1/data-lakes`. */
@@ -5365,6 +5371,7 @@ export interface components {
         _id?: string;
         name: string;
         userId: string;
+        organizationId?: string;
         knowledgeIds?: string[];
         artifactIds?: string[];
         tags?: {
@@ -6991,6 +6998,8 @@ export interface components {
       /** @description Unique among your live projects. */
       name: string;
       description: string;
+      /** @description Organization context for new content. Requires membership; immutable after creation. */
+      organization_id?: string;
       /** @description Sessions to group in the project. Each must be readable by the caller. */
       session_ids?: string[];
       /** @description Files to group in the project. Each must be readable by the caller. */
@@ -7625,6 +7634,7 @@ export interface components {
         _id?: string;
         name: string;
         userId: string;
+        organizationId?: string;
         knowledgeIds?: string[];
         artifactIds?: string[];
         tags?: {
@@ -9048,7 +9058,7 @@ export interface components {
       login_code: string;
       /** @description When `login_code` stops working, as an ISO 8601 timestamp. */
       login_code_expires_at: string;
-      /** @description Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code`. */
+      /** @description Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code` in the URL fragment. */
       login_path: string;
     };
     mintPersonaResponse201: {
@@ -9065,7 +9075,7 @@ export interface components {
       login_code: string;
       /** @description When `login_code` stops working, as an ISO 8601 timestamp. */
       login_code_expires_at: string;
-      /** @description Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code`. */
+      /** @description Path, relative to the app origin, that signs a browser in as the persona. It carries `login_code` in the URL fragment. */
       login_path: string;
     };
     mintPersonaResponse404: {
@@ -21074,7 +21084,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `projects:write`. */
+      /** @description The API key lacks `projects:write`, or the caller is not a member of the selected organization. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

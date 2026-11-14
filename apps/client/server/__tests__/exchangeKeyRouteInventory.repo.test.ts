@@ -74,10 +74,13 @@ const ALLOWED_CONTRACTS = new Set([
   'createTranscription',
 ]);
 
-// Every endpoint the generated registry lists under ai:generate or me:read. The callback-secret route is
-// here because it names the scope at the door and refuses an exchange key in its handler.
+// Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
+// here because they name the scope at the door and refuse an exchange key in their handlers.
 const ALLOWED_ENDPOINTS = [
+  'GET /api/credits/transactions',
+  'GET /api/gears/status',
   'GET /api/generated-content/:ref',
+  'GET /api/identify',
   'GET /api/models',
   'GET /api/quests/:id/files',
   'GET /api/v1/agent-executions/:id',
@@ -94,6 +97,7 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/quests/:id/files',
   'GET /api/v1/video-generations/:id',
   'GET /api/v1/video-models',
+  'GET /api/users/:id',
   'GET /api/v1/voice/voices',
   'GET /api/voice/v2/agents',
   'GET|POST /api/v1/music-generations',
@@ -133,8 +137,9 @@ const DOOR_ONLY_ROUTES = ['files/[id]/index.ts'];
 // Doors whose scope list the generator cannot resolve. Each needs a reason.
 const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
-// Scoped routes that manage credentials: each refuses an exchange key in its handler.
-const REFUSING_ROUTES = ['user-api-keys/[id]/callback-secret.ts'];
+// Scoped routes an exchange key may not use (credential management, other users' profiles,
+// gamification): each refuses an exchange key in its handler.
+const REFUSING_ROUTES = ['gears/status.ts', 'user-api-keys/[id]/callback-secret.ts', 'users/[id]/index.ts'];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
 const SCOPE_LESS_CREDENTIAL_ROUTES = [
@@ -149,7 +154,6 @@ const SCOPE_LESS_CREDENTIAL_ROUTES = [
 // still contains the identifier, so it shows up here.
 const EXCHANGE_KEY_OPT_IN_OCCURRENCES: Record<string, number> = {
   'client/server/chatCompletion/external/sseRoute.ts': 1,
-  'client/server/chatCompletion/external/wsRoute.ts': 1,
   'server-utils/src/cli/auth.ts': 2,
   'server-utils/src/cli/resolveContractAuth.ts': 3,
 };

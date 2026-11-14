@@ -111,6 +111,7 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
     intervalCount: { type: Number, required: false },
     cancelAtPeriodEnd: { type: Boolean, required: false },
     cancelAt: { type: Date, required: false },
+    endedAt: { type: Date, required: false },
     trialEndsAt: { type: Date, required: false },
     stripeCustomerId: { type: String, required: false },
     lastSyncedAt: { type: Date, required: false },

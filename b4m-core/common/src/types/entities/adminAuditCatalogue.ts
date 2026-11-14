@@ -90,6 +90,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // The request was recorded but could not be queued; the export list shows it as failed.
   'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // A data subject erasure: the dry run, the request (written before the account is locked) and the
+  // check after the user delete of what still names them (counts per collection, no personal data).
+  'user.erasure.previewed': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.erasure.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.erasure.completed': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -117,6 +122,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
   // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
@@ -127,6 +136,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },

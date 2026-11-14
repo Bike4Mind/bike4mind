@@ -33,8 +33,8 @@ export const mintPersonaContract = defineEndpoint({
     'The account is a non-admin user with no credits that is disabled when `expires_at` passes. ' +
     'Minting a name you already hold a live persona under returns that persona with a new login code ' +
     '(`200`, `created: false`) instead of creating another. Redeem the code at `login_path`: open it ' +
-    'in a browser to land signed in, or `POST` `{ "code": "<login_code>" }` to the same path for an ' +
-    'access token and refresh token. A code works once and expires at `login_code_expires_at`.',
+    'in a browser to land signed in, or `POST` `{ "code": "<login_code>" }` to `/api/personas/redeem` ' +
+    'for an access token and refresh token. A code works once and expires at `login_code_expires_at`.',
   tags: ['Account'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.PERSONAS_MINT],

@@ -93,6 +93,14 @@ beforeEach(() => {
 });
 
 describe('UsersTab saved views', () => {
+  it('keeps "Save view" outside the scrolling tab row so it can wrap', async () => {
+    renderTab();
+    const saveButton = await screen.findByTestId('users-save-view-btn');
+    expect(within(screen.getByTestId('admin-users-views')).queryByTestId('users-save-view-btn')).toBeNull();
+    fireEvent.click(saveButton);
+    expect(await screen.findByTestId('users-save-view-dialog')).toBeInTheDocument();
+  });
+
   it('saves the current view, then re-applying it reproduces the same URL params', async () => {
     act(() => fakeAdminRouter.reset(VIEW_SEARCH));
     renderTab();
