@@ -85,6 +85,13 @@ export async function findIdempotentReplay<K extends GenerationJobKind>(
   return existing ? replayOrReject(existing, kind, request) : null;
 }
 
+const insufficientCredits = (message: string): InsufficientCredits => ({
+  ok: false,
+  status: 402,
+  code: 'insufficient_credits',
+  message,
+});
+
 /** Holds `requiredCredits` when credits are enforced; null when they are not. Insufficient credits is a value. */
 export async function holdJobCredits(
   params: {
@@ -110,17 +117,15 @@ export async function holdJobCredits(
     return { ok: true, hold };
   } catch (error) {
     if (getQuestErrorCode(error) === 'insufficient_credits' && error instanceof Error) {
-      return { ok: false, status: 402, code: 'insufficient_credits', message: error.message };
+      return insufficientCredits(error.message);
     }
     throw error;
   }
 }
 
 /**
- * Checks a whole batch against the new-account spend cap before any of its holds. Each hold checks only its own
- * amount, and holds made earlier in the same batch are not on a job yet, so without this a batch could take a
- * young account past its cap one job at a time. The refusal matches holdJobCredits'. Check-then-act like the rest
- * of the cap: holds only become visible once their jobs persist, so a concurrent burst can overshoot by up to one batch.
+ * Checks a multi-job batch's total against the new-account spend cap before its per-job holds. Refuses with
+ * holdJobCredits' shape.
  */
 export async function checkBatchSpendCap(
   params: {
@@ -138,13 +143,12 @@ export async function checkBatchSpendCap(
     {
       user,
       requestedCredits: params.totalCredits,
-      // Same predicate as holdCredits, which bills the org whenever organizationId is set.
-      billedToOrganization: Boolean(params.user.organizationId),
+      billedToOrganization: resolveJobOwner(params.user).ownerType === CreditHolderType.Organization,
       logger: deps.logger,
     },
     deps.credits.newAccountSpendCap
   );
-  return message ? { ok: false, status: 402, code: 'insufficient_credits', message } : null;
+  return message ? insufficientCredits(message) : null;
 }
 
 /**
