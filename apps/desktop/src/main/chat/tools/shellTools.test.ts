@@ -748,3 +748,69 @@ describe('a worktree session reading its main checkout', () => {
     expect(await outsideFolders(`ls "${base}"`)).toEqual([base]);
   });
 });
+
+describe('shellApproval in the temp folders', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    // In the user's home rather than the temp folder, which the scan counts as shared.
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-temp-root-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-temp-outside-')));
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command }, context);
+
+  it('neither asks in auto mode nor names a folder for a script written to /tmp and run from there', async () => {
+    const script = [
+      "mkdir -p /tmp/mig && cat > /tmp/mig/migrate.py <<'EOF'",
+      'import os, re',
+      "base = os.path.join(os.getcwd(), 'apps/client/app/components/admin')",
+      "print(re.sub(r'x', 'y', base))",
+      'EOF',
+      `cd ${root} && python3 /tmp/mig/migrate.py`,
+    ].join('\n');
+    const prompt = await approval(script);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.always?.directories).toEqual([]);
+  });
+
+  it.each(['/tmp/b4m-x/y', '/var/tmp/b4m-x/y'])('writes %s without naming a folder', async target => {
+    expect((await approval(`mkdir -p ${target} && echo a > ${target}/z`)).always?.directories).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'darwin')('treats /private/tmp, where /tmp links, as temp too', async () => {
+    expect((await approval('echo a > /private/tmp/b4m-x')).always?.directories).toEqual([]);
+  });
+
+  it('treats $TMPDIR, as written and with its links followed, as temp', async () => {
+    const temp = tmpdir();
+    expect((await approval(`echo a > ${join(temp, 'b4m-x')}`)).always?.directories).toEqual([]);
+    expect((await approval(`echo a > ${join(await realpath(temp), 'b4m-x')}`)).always?.directories).toEqual([]);
+  });
+
+  it('still names a folder outside the shared ones that a temp write sits beside', async () => {
+    const prompt = await approval(`echo a > /tmp/b4m-x && echo b > ${outside}/y`);
+    expect(prompt.always?.directories).toEqual([outside]);
+  });
+
+  it('still asks in every mode about a protected path under temp', async () => {
+    const guarded = await realpath(await mkdtemp(join(tmpdir(), 'b4m-protected-')));
+    try {
+      context.protectedPaths = [guarded];
+      const prompt = await approval(`echo a > ${guarded}/settings.json`);
+      expect(prompt.askInAuto).toBe(true);
+      expect(prompt.askInFull).toBe(true);
+    } finally {
+      await rm(guarded, { recursive: true, force: true });
+    }
+  });
+});

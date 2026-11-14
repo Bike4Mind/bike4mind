@@ -189,7 +189,8 @@ import {
   type CompletionRequest,
 } from './completions';
 import type { CompletionRunMinter } from './completionRuns';
-import { describeAlways } from './approvalScope';
+import { describeAlways, outsideFoldersReason } from './approvalScope';
+import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
 import type { ModelSettingsStore } from './ModelSettingsStore';
@@ -1721,7 +1722,11 @@ export class ChatService {
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
     const agents = this.mayHaveAgentWorktrees(session) ? await this.agentWorktrees(session.id, project.directory) : [];
-    return { roots: union(union(owned, agents), granted), workingDirectory: project.workingDirectory };
+    const scratch = await ensureScratchDirectory(session.id);
+    return {
+      roots: union(union(union(owned, agents), granted), scratch ? [scratch] : []),
+      workingDirectory: project.workingDirectory,
+    };
   }
 
   /**
@@ -2528,6 +2533,9 @@ export class ChatService {
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
     await forgetSessionWrites(sessionId);
+    await removeScratchDirectory(sessionId).catch(error =>
+      this.deps.logger.warn(`SCRATCH: could not remove the scratch folder: ${String(error)}`)
+    );
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
@@ -7166,11 +7174,20 @@ export class ChatService {
       };
     }
 
-    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
+    const askedAlways = asked.prompt.always;
+    const outsideReason = askedAlways
+      ? outsideFoldersReason(
+          askedAlways,
+          gate.uncoveredDirectories(sessionId, askedAlways.directories),
+          context.workingDirectory
+        )
+      : null;
+    // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop, folders not yet allowed.
     const askedReasons = [
       askedByRule,
       tainted ? untrustedReason(tainted) : null,
       stuck ? LOOP_ASK_REASON : null,
+      outsideReason,
     ].filter((reason): reason is string => !!reason);
     const askedBecause = askedReasons.join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
@@ -7213,7 +7230,7 @@ export class ChatService {
             ...call,
             status: 'awaiting-approval',
             approvalId,
-            approvalDetail: asked.prompt.detail,
+            approvalDetail: outsideReason ? `${asked.prompt.detail}\n\n${outsideReason}` : asked.prompt.detail,
             ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
@@ -8106,8 +8123,7 @@ export function buildSystemMessage(
       'provided tools.',
       ...(project ? projectPreamble(project) : []),
       ...dependencyLines,
-      'These folders are shared with you, including everything beneath them:',
-      ...roots.map(root => `  ${root}`),
+      ...sharedRootLines(roots),
       ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
@@ -8129,6 +8145,17 @@ export function buildSystemMessage(
       ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
     ].join('\n'),
   };
+}
+
+function sharedRootLines(roots: readonly string[]): string[] {
+  const scratch = roots.find(isScratchDirectory);
+  return [
+    'These folders are shared with you, including everything beneath them:',
+    ...roots.map(root => `  ${root}`),
+    ...(scratch
+      ? [`Put throwaway scripts and files in ${scratch}, not the project; it is deleted with this conversation.`]
+      : []),
+  ];
 }
 
 function noAccessLines(ask: boolean): string[] {
@@ -8320,8 +8347,7 @@ export function buildToolStateText(state: {
           'You can read and change files on the user machine, and run bash commands on it, with the',
           'provided tools.',
           ...state.dependencyLines,
-          'These folders are shared with you, including everything beneath them:',
-          ...roots.map(root => `  ${root}`),
+          ...sharedRootLines(roots),
           ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
         ]),
     ...(state.browser ? BROWSER_GUIDANCE : []),

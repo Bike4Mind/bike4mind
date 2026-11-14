@@ -6186,7 +6186,8 @@ const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_a
  */
 export async function shellHome(startDirectory: string): Promise<{ home: string; known: boolean; temp: string[] }> {
   const wsl = wslLocation(startDirectory);
-  if (!wsl) return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp'] };
+  if (!wsl)
+    return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'] };
   const user = await wslUserEnvironment(wsl.distro);
   return { home: user?.home ?? '/', known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
 }
