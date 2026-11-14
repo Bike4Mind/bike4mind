@@ -156,13 +156,22 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it('stops for a command that reads outside the granted folders', async () => {
+    it('runs a command that only reads outside the granted folders', async () => {
       await startTurn('auto');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cat /etc/hosts', cwd: root }));
       streams[0].write(frame('[DONE]'));
 
+      await awaitStatus('done');
+      expect(calls('awaiting-approval')).toHaveLength(0);
+    });
+
+    it('stops for a command that writes outside the granted folders', async () => {
+      await startTurn('auto');
+      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cp notes.txt /etc/b4m-x', cwd: root }));
+      streams[0].write(frame('[DONE]'));
+
       const asked = await awaitStatus('awaiting-approval');
-      expect(asked.approvalDetail).toContain('/etc/hosts');
+      expect(asked.approvalDetail).toContain('/etc');
       expect(calls('done')).toHaveLength(0);
     });
 
@@ -391,7 +400,7 @@ describe('ChatService approval modes', () => {
 
     it.each([
       ['a .env read', 'cat .env', 'usually holds secrets'],
-      ['a folder outside the granted ones', 'cd /etc && ls', '/etc'],
+      ['a folder outside the granted ones it may write in', 'cd /etc && make', '/etc'],
       ['a visible write to .claude/settings.json', 'cp notes.txt .claude/settings.json', 'Desktop protects'],
       ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'cannot follow'],
       ['a script it cannot parse that names .env', 'cat .env; if then fi ((', '.env'],

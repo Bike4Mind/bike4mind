@@ -7104,6 +7104,8 @@ export class ChatService {
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
+    // Read live: a parallel call may taint the reply while this card is open.
+    const writesOnly = (): boolean => mode === 'auto' && !directories.untrusted;
     const standingAnswer = (): ChatApprovalAnswer | null => {
       if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
@@ -7129,7 +7131,7 @@ export class ChatService {
         always &&
         !prompt.askInAuto &&
         gate.coversCommands(sessionId, always, currentlyTainted) &&
-        gate.uncoveredDirectories(sessionId, always.directories).length === 0
+        gate.uncoveredDirectories(sessionId, askedDirectories(always, writesOnly())).length === 0
       ) {
         return { decision: 'once' };
       }
@@ -7150,7 +7152,7 @@ export class ChatService {
     // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
     const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
     const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
-    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
+    const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode, writesOnly()) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
         input: applyOption(call.input, runnable[0]),
@@ -7165,7 +7167,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted, writesOnly())) {
       return {
         input: applyOption(call.input, runnable[0]),
         approval: approvalRecord('allowed', { kind: 'mode', mode }),
@@ -7178,7 +7180,7 @@ export class ChatService {
     const outsideReason = askedAlways
       ? outsideFoldersReason(
           askedAlways,
-          gate.uncoveredDirectories(sessionId, askedAlways.directories),
+          gate.uncoveredDirectories(sessionId, askedDirectories(askedAlways, writesOnly())),
           context.workingDirectory
         )
       : null;
@@ -7281,7 +7283,9 @@ export class ChatService {
             }
             // A parallel call may have tainted the reply since this card opened.
             const fresher =
-              byPart && !taintedParts() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+              byPart && !taintedParts()
+                ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode, writesOnly())
+                : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -7728,8 +7732,9 @@ export class ChatService {
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
    * own words name, reach permission settings, an outbound call after the reply read untrusted
-   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path
-   * outside the project the user has not allowed. Over a clean reply, a command the scan cannot
+   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a folder
+   * outside the project the user has not allowed that the command may write in (after untrusted
+   * content, one it only reads too). Over a clean reply, a command the scan cannot
    * follow or parse, one that can send data out, or one that runs code written in this
    * conversation runs like any other.
    */
@@ -7738,13 +7743,14 @@ export class ChatService {
     sessionId: string,
     call: ChatToolCall,
     prompt: ApprovalPrompt,
-    stuck: boolean
+    stuck: boolean,
+    writesOnly: boolean
   ): boolean {
     if (prompt.irreversible || spendsCredits(call.name) || prompt.askInFull) return false;
     if (mode === 'ask') return false;
     if (mode === 'full') return true;
     if (stuck || prompt.askInAuto) return false;
-    const directories = prompt.always?.directories ?? [];
+    const directories = prompt.always ? askedDirectories(prompt.always, writesOnly) : [];
     return (this.deps.approvals?.uncoveredDirectories(sessionId, directories) ?? directories).length === 0;
   }
 
@@ -9036,6 +9042,14 @@ interface PartDecision {
   decidedBy: ChatApprovalDecidedBy;
 }
 
+/**
+ * The folders outside the shared ones to ask about. `writesOnly` (auto mode over a clean reply) leaves out the
+ * ones a command only reads: a read sends nothing anywhere, and after untrusted content every folder counts again.
+ */
+function askedDirectories(always: ApprovalAlways, writesOnly: boolean): readonly string[] {
+  return writesOnly ? (always.writtenDirectories ?? always.directories) : always.directories;
+}
+
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
   if (mode === 'full') return true;
@@ -9052,7 +9066,8 @@ function decideParts(
   rules: PermissionRuleSet | undefined,
   gate: ApprovalGate,
   sessionId: string,
-  mode: ChatApprovalMode
+  mode: ChatApprovalMode,
+  writesOnly: boolean
 ): PartDecision | null {
   const always = prompt.always;
   if (!prompt.byPart || !always || always.commands.length === 0 || always.ungranted?.length) return null;
@@ -9069,9 +9084,8 @@ function decideParts(
   });
   // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
   const allByRule = always.commands.every((_, index) => byRule?.[index]);
-  const outside = allByRule
-    ? always.directories.filter(directory => !rules?.coversFolder(directory))
-    : always.directories;
+  const asked = askedDirectories(always, writesOnly);
+  const outside = allByRule ? asked.filter(directory => !rules?.coversFolder(directory)) : asked;
   const directories = gate.uncoveredDirectories(sessionId, outside);
   const decidedBy: ChatApprovalDecidedBy = allowance
     ? { kind: 'chat-allowance' }

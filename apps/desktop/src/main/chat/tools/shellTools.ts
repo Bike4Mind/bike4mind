@@ -535,6 +535,17 @@ export async function shellApproval(
   const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
   const protectedPaths = context.protectedPaths ?? [];
   const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
+  const written = [...(scan.writtenPlaces ?? scan.paths ?? []), ...scan.writes, ...scan.writtenTrees];
+  // Reading a protected location stops a mode only for a secret (`secret`); what a command may write there stops it.
+  const writesProtected =
+    touchesProtected &&
+    (scan.writtenPlaces === undefined ||
+      reachesProtected(
+        command,
+        { ...scan, paths: scan.writtenPlaces },
+        protectedPaths,
+        context.uncoverablePaths ?? []
+      ));
   const secret = readsSecret(scan, protectedPaths);
   const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
@@ -563,12 +574,12 @@ export async function shellApproval(
     scan.gitPathUnplaced === true ||
     scan.remoteTree === true ||
     unreachable.length > 0 ||
-    touchesProtected ||
+    writesProtected ||
     secret ||
     uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
-    (touchesProtected && !scan.readOnly) ||
+    (writesProtected && !scan.readOnly) ||
     uncheckedSettingsWrite ||
     secret ||
     writesWhileUnresolved ||
@@ -625,6 +636,9 @@ export async function shellApproval(
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
+  const writtenOutside = outside.filter(directory =>
+    written.some(place => isWithin(directory, place) || isWithin(place, directory))
+  );
   const asks = scriptAsks || parts.some(ask => ask !== undefined && ask.mode !== 'ask');
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
@@ -656,6 +670,7 @@ export async function shellApproval(
         };
       }),
       directories: [...new Set([...directories, ...outside])],
+      writtenDirectories: [...new Set([...directories, ...writtenOutside])],
       paths: scan.paths ?? [],
       ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
       ...(scan.dotlessGlobFolders ? { dotlessGlobFolders: scan.dotlessGlobFolders } : {}),

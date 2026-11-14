@@ -131,6 +131,11 @@ export interface ShellScan {
   /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
   writtenTrees: string[];
   /**
+   * What the commands that are not read-only name, and the folder each runs in. A path named only by a
+   * command that reads lies outside it, so auto mode need not ask about a folder that is only read.
+   */
+  writtenPlaces?: string[];
+  /**
    * Set when a path operand is decided by something the scan cannot read: a variable, a substitution, an xargs
    * replace string, a word joined across lines, or a folder a directory change may or may not have reached.
    */
@@ -6453,6 +6458,13 @@ export async function scanShell(
     const laterChecks: { own: ReadonlySet<number>; anywhere: boolean; alongside: ReadonlySet<number> }[] = [];
     let contained = true;
     let readOnly = true;
+    // What each command names, and whether it only reads; a writer's places, cwd included, go to `writtenPlaces`.
+    let part: { places: string[]; reads: boolean } | null = null;
+    const writtenPlaces = new Set<string>();
+    const addPath = (path: string): void => {
+      paths.add(path);
+      part?.places.push(path);
+    };
     let remoteTree = false;
 
     const noteEnvFile = (raw: string): string | null => {
@@ -6713,7 +6725,7 @@ export async function scanShell(
         const target = guardForm(settings);
         if (!guardFormWithin(form, target) || form === target) continue;
         if (dotless && target.slice(form.length).replace(/^\/+/, '').startsWith('.')) continue;
-        paths.add(settings);
+        addPath(settings);
       }
       if (dotless) return;
       const settings = await lstat(join(folder, '.claude')).then(
@@ -6721,7 +6733,7 @@ export async function scanShell(
         (error: unknown) => (missing(error) ? false : null)
       );
       if (settings === null) unreadOperands++;
-      else if (settings) paths.add(join(folder, '.claude'));
+      else if (settings) addPath(join(folder, '.claude'));
     };
 
     const processPath = (text: string, cwd: string): boolean =>
@@ -7197,7 +7209,7 @@ export async function scanShell(
       const reached = async (place: string): Promise<void> => {
         if (operand.start !== null) await reachFolder(place, dotless, reach);
         else if (reach) await reachFolder(place, false, reach);
-        if (shape?.namesSettings) paths.add(join(place, '.claude'));
+        if (shape?.namesSettings) addPath(join(place, '.claude'));
       };
       const places = await operandPlaces(prefix, allowed, cwd, reader);
       let own = false;
@@ -7206,25 +7218,25 @@ export async function scanShell(
           // Outside without a look: reading it over the share would start that distro.
           ungranted.add(lexical);
         } else if (inside && physical !== null) {
-          paths.add(physical);
+          addPath(physical);
           if (operand.start === null) own = true;
           await reached(physical);
         } else {
           await reached(lexical);
-          paths.add(lexical);
+          addPath(lexical);
           // Named without a look, so the scan opens no connection to that computer.
           if (physical === null && onAnotherComputer(lexical)) {
             directories.add(dirname(lexical));
             continue;
           }
-          paths.add(await realpathNearest(lexical));
+          addPath(await realpathNearest(lexical));
           if (reader !== 'windows' && HARMLESS_DEVICES.has(lexical)) continue;
           if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
           directories.add(isDirectory ? lexical : dirname(lexical));
         }
       }
-      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) paths.add(place);
+      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) addPath(place);
       const landed = places[0];
       return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
     };
@@ -7280,10 +7292,20 @@ export async function scanShell(
       writer = node.id;
       // `env -C DIR`, `sudo -D DIR`: the command runs from DIR, and this shell stays where it was.
       const saved = effects.folders.length > 0 ? snapshot() : null;
+      const outerPart = part;
+      const current = { places: [] as string[], reads: false };
+      part = current;
+      let ranIn: string | null = null;
       try {
         for (const folder of effects.folders) await enterFolder(folder);
+        ranIn = state.lost ? null : state.cwd;
         return await runCommand(node, tokens, effects, unreadBefore);
       } finally {
+        part = outerPart;
+        if (!current.reads) {
+          for (const place of current.places) writtenPlaces.add(place);
+          if (ranIn !== null) writtenPlaces.add(ranIn);
+        }
         if (saved) restore(saved);
         writer = outer;
       }
@@ -7837,6 +7859,8 @@ export async function scanShell(
 
       if (CHANGES_DIRECTORY.has(program)) {
         directoryChanges++;
+        // Moving changes no file; the commands that run in the new folder count it as theirs.
+        if (part) part.reads = true;
         // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
         const statement = node.parent?.type === 'redirected_statement' ? node.parent : node;
         if (await changeDirectory(program, rest, listMembers.has(statement.id))) {
@@ -7953,6 +7977,8 @@ export async function scanShell(
         !onlyReads(tokens)
       ) {
         readOnly = false;
+      } else if (part) {
+        part.reads = true;
       }
       for (const arg of rest) {
         const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
@@ -8124,10 +8150,10 @@ export async function scanShell(
       const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\', state.cwd);
       if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
       const record = async (physical: string): Promise<void> => {
-        paths.add(physical);
+        addPath(physical);
         if (operand.start !== null) await reachFolder(physical, shape?.dotless === true, reach);
         else if (reach) await reachFolder(physical, false, reach);
-        if (shape?.namesSettings) paths.add(join(physical, '.claude'));
+        if (shape?.namesSettings) addPath(join(physical, '.claude'));
       };
       const targets = operandTargets(state.cwd, prefix);
       const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
@@ -8138,7 +8164,7 @@ export async function scanShell(
           const volume = [parse(targets[0] ?? prefix).root];
           await record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
           const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
-          for (const place of own) paths.add(place);
+          for (const place of own) addPath(place);
         }
         return;
       }
@@ -8150,7 +8176,7 @@ export async function scanShell(
         if (!inside || physical === null) throw new PathAccessDenied(prefix);
         await record(physical);
       }
-      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) paths.add(place);
+      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) addPath(place);
     };
 
     /**
@@ -8795,6 +8821,7 @@ export async function scanShell(
       readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],
       writtenTrees: [...writtenTrees],
+      writtenPlaces: [...writtenPlaces],
       ...(unreadOperands > 0 ? { unread: true as const } : {}),
       ...(unreadScript ? { unreadScript: true as const } : {}),
       ...(setsEnvironment ? { setsEnvironment: true as const } : {}),

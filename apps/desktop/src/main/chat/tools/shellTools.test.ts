@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
@@ -809,6 +809,66 @@ describe('shellApproval in the temp folders', () => {
       const prompt = await approval(`echo a > ${guarded}/settings.json`);
       expect(prompt.askInAuto).toBe(true);
       expect(prompt.askInFull).toBe(true);
+    } finally {
+      await rm(guarded, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('shellApproval for folders a command only reads', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-root-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-outside-')));
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command }, context);
+
+  it('leaves a folder that is only read, and a read under ~/.claude, out of what auto mode asks about', async () => {
+    const memory = join(homedir(), '.claude', 'projects', 'p', 'memory', 'notes.md');
+    const prompt = await approval(
+      `curl -s -o /dev/null -w "%{http_code}\\n" -m 5 http://localhost:3000/; cd ${outside}; git worktree list | head -5; ls ${memory}`
+    );
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.always?.directories).toContain(outside);
+    expect(prompt.always?.writtenDirectories).toEqual([]);
+  });
+
+  it.each([
+    ['a write there', (dir: string) => `echo a > ${dir}/x`],
+    ['a command that may write, run from there', (dir: string) => `cd ${dir} && make`],
+    ['a copy into it', (dir: string) => `cp README.md ${dir}/`],
+  ])('still counts a folder that %s reaches', async (_, command) => {
+    expect((await approval(command(outside))).always?.writtenDirectories).toEqual([outside]);
+  });
+
+  it('still asks in every mode about a write under ~/.claude', async () => {
+    const prompt = await approval(`echo '{}' > ${join(homedir(), '.claude', 'settings.json')}`);
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
+  });
+
+  it('still asks in every mode about reading a secret', async () => {
+    const prompt = await approval(`cat ${join(homedir(), '.claude', '.credentials.json')}`);
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
+  });
+
+  it("still asks about reading the app's own data", async () => {
+    const guarded = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-read-guarded-')));
+    try {
+      context.protectedPaths = [guarded];
+      expect((await approval(`cat ${guarded}/approval-log.jsonl`)).askInAuto).toBe(true);
     } finally {
       await rm(guarded, { recursive: true, force: true });
     }

@@ -794,6 +794,11 @@ export interface ApprovalAlways {
   commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
+   * cannot tell, and then every one counts.
+   */
+  writtenDirectories?: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
   /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */

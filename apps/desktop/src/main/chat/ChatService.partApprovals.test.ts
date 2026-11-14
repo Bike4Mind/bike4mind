@@ -233,10 +233,19 @@ describe('ChatService approvals decided per part', () => {
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
-  it('still asks about a folder outside the shared ones when every part is covered', async () => {
+  it('runs a read of a folder outside the shared ones in auto mode without a card', async () => {
+    const id = await session('auto');
+    await runCommand(id, `git status && ls "${outside}"; cd "${outside}" && git status`);
+
+    const ran = await settled();
+    expect(ran.status).toBe('done');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('still asks about a folder outside the shared ones that a command may write in', async () => {
     const id = await session('auto');
     // Not the temp folder, which the scan counts as shared.
-    await runCommand(id, `git status && ls "${outside}"`);
+    await runCommand(id, `git status && touch "${outside}/x"`);
 
     const card = await awaitCall('bash_execute', 'awaiting-approval');
     expect(card.approvalAlways).toContain('*');
@@ -303,7 +312,7 @@ describe('ChatService approvals decided per part', () => {
   });
 
   it('says a read outside the shared folders reaches it', async () => {
-    const id = await session('auto');
+    const id = await session('ask');
     await runCommand(id, `ls "${outside}"`);
 
     const card = await awaitCall('bash_execute', 'awaiting-approval');
@@ -313,7 +322,7 @@ describe('ChatService approvals decided per part', () => {
   it('does not let a Read rule clear a folder outside the shared ones for a part only the mode covers', async () => {
     await permissions.setRules({ kind: 'user' }, { allow: [`Read(/${outside}/**)`], ask: [], deny: [] });
     const id = await session('auto');
-    await runCommand(id, `git status && ls "${outside}"`);
+    await runCommand(id, `git status && ls "${outside}" && touch "${outside}/x"`);
     await awaitCall('bash_execute', 'awaiting-approval');
   });
 
