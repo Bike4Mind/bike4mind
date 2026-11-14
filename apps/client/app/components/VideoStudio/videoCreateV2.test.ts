@@ -42,8 +42,8 @@ const sharedForm = () => form({ durationSeconds: 6, aspectRatio: '16:9', resolut
 describe('videoModelCards', () => {
   it('describes each model, ranked for the form, with why the fitting ones were picked', () => {
     const cards = videoModelCards([omniModel, rangeModel], sharedForm());
-    expect(cards.map(card => card.id)).toEqual([omniModel.id, rangeModel.id]);
-    expect(cards[1]).toMatchObject({
+    expect(cards.map(card => card.id)).toEqual([rangeModel.id, omniModel.id]);
+    expect(cards[0]).toMatchObject({
       id: rangeModel.id,
       name: 'Grok Imagine Video 1.5',
       provider: 'xAI',

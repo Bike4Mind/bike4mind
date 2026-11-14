@@ -42,20 +42,9 @@ export const IMAGE_MODEL_FOCUS: Record<ImageModels, string> = {
   [ImageModels.GEMINI_3_PRO_IMAGE]: 'multi-image composition',
 };
 
-// House order among models that fit: quality per credit first. Unlisted models follow in the caller's order.
-export const IMAGE_MODEL_PREFERENCE: readonly ImageModels[] = [
-  ImageModels.GPT_IMAGE_1_5,
-  ImageModels.GPT_IMAGE_2,
-  ImageModels.GEMINI_3_1_FLASH_IMAGE,
-  ImageModels.GEMINI_3_PRO_IMAGE,
-  ImageModels.FLUX_2_PRO,
-  ImageModels.FLUX_2_MAX,
-  ImageModels.FLUX_PRO_ULTRA,
-  ImageModels.FLUX_3_IMAGE,
-  ImageModels.GPT_IMAGE_1_MINI,
-];
-
 const isCatalogImageId = (id: string): id is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, id);
+
+const imageStanding = (id: string) => (isCatalogImageId(id) ? IMAGE_MODEL_CATALOG[id] : undefined);
 
 /** The parts of the request a model was picked for, in the order the "Picked for" line lists them. */
 const imageRequestSignals = (request: ImageCapabilityRequest): string[] => {
@@ -96,7 +85,7 @@ export const rankImageModels = <TId extends string>(
   const signals = imageRequestSignals(request);
   return rankCandidates(
     ids.map(id => ({ ...toCandidate(id, request, signals), id })),
-    IMAGE_MODEL_PREFERENCE,
+    imageStanding,
     options
   );
 };

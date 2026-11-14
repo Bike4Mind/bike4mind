@@ -18,19 +18,12 @@ export const MUSIC_MODEL_FOCUS: Record<MusicModelId, string> = {
   music_v1: 'long lyrics',
 };
 
-// House order among models that fit. Unlisted models (the test provider) follow in the caller's order.
-export const MUSIC_MODEL_PREFERENCE: readonly MusicModelId[] = [
-  'lyria-3.5',
-  'music_v2_5',
-  'music_v2',
-  'lyria-3-clip-preview',
-  'music_v1',
-];
-
 /** The request a music model is ranked against: a create request without the model and prompt. */
 export type MusicRankingRequest = Omit<MusicGenerationRequest, 'model' | 'prompt'>;
 
 const isCatalogMusicId = (id: string): id is MusicModelId => Object.hasOwn(MUSIC_MODEL_CATALOG, id);
+
+const musicStanding = (id: string) => (isCatalogMusicId(id) ? MUSIC_MODEL_CATALOG[id] : undefined);
 
 const musicRequestSignals = (request: MusicRankingRequest): string[] => [
   ...(request.instrumental ? ['instrumental'] : []),
@@ -61,7 +54,7 @@ export const rankMusicModels = <TId extends string>(
   const signals = musicRequestSignals(request);
   return rankCandidates(
     ids.map(id => ({ ...toCandidate(id, request, signals), id })),
-    MUSIC_MODEL_PREFERENCE,
+    musicStanding,
     options
   );
 };

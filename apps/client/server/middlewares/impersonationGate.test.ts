@@ -88,6 +88,7 @@ describe('impersonation route policy', () => {
     '/api/gears/status',
     '/api/models/stats',
     '/api/help/recently-viewed',
+    '/api/v1/image-models',
     '/api/v1/video-models',
     '/api/v1/music-models',
   ])('admits notebook navigation without enabling writes: %s', path => {

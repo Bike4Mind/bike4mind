@@ -321,6 +321,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listImageModels: {
+    method: 'GET',
+    path: '/api/v1/image-models',
+  },
   listModels: {
     method: 'GET',
     path: '/api/v1/models',
