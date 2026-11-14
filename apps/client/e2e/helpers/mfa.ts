@@ -121,8 +121,8 @@ function withEnforcedMfa(rows: unknown): SettingRow[] {
  * every unenrolled session on a shared stage for a cache TTL after it is restored. This covers
  * MFAEnforcementWrapper, not the server's 403 gate.
  * Patches every source the client reads enforcement from: the public CDN artifact,
- * /api/settings/fetch, and the `required` field of /api/auth/mfa/status, so the page sees the
- * same picture whether the stage's real setting is on or off.
+ * /api/settings/fetch, and the `required` field of /api/auth/mfa/status. Sign-in is decided by
+ * the server, so with the stage's real setting on, an unenrolled user is sent to setup at sign-in.
  */
 export async function stubEnforcedMfaSetting(page: Page): Promise<void> {
   await page.route('**/app-config/public-settings.json', async route => {
