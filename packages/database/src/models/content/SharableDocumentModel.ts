@@ -8,8 +8,14 @@ import {
   UserShareGrant,
   UserShareMatch,
   UserSharesChange,
+  readableGroupIds,
 } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
+import {
+  assertOrganizationUserGrants,
+  assertProjectContentGrants,
+  checkedOrganizationSharingQuery,
+} from '../../utils/organizationSharingPolicy';
 
 export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
@@ -89,6 +95,15 @@ export const updateAccessArms = (
 ];
 
 /**
+ * readAccessArms without the owner arm. The group arm reads `readableGroupIds`, which adds an
+ * org-owned key's granted groups (b4m-core/common utils/orgApiKeyReach.ts) to the caller's own.
+ */
+const sharedReadArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Record<string, unknown>[] => [
+  { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
+  { groups: { $elemMatch: { groupId: { $in: readableGroupIds(user) }, permissions: { $in: ['read', 'write'] } } } },
+];
+
+/**
  * The `$or` arms granting read access: owner, users[] read|write, groups[] read|write. Deliberately
  * no `isGlobalRead` arm. Shared by findAccessibleById/findAllAccessibleByIds and the public project
  * list (ProjectRepository.listAccessibleAfterId), so every id that list returns is one the by-id
@@ -96,8 +111,7 @@ export const updateAccessArms = (
  */
 export const readAccessArms = (user: Pick<IUserDocument, 'id' | 'groups'>): Record<string, unknown>[] => [
   { userId: user.id },
-  { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-  { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
+  ...sharedReadArms(user),
 ];
 
 // Pipeline updates skip Mongoose casting, so values go in as `$literal` and stored ids compare via
@@ -178,22 +192,11 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   }
 
   async findAllAccessible(user: IUserDocument): Promise<T[]> {
-    return this.model.find({
-      $or: [
-        { userId: user.id },
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
-      ],
-    });
+    return this.model.find({ $or: readAccessArms(user) });
   }
 
   async findAllShared(user: IUserDocument): Promise<T[]> {
-    return this.model.find({
-      $or: [
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['read', 'write'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['read', 'write'] } } } },
-      ],
-    });
+    return this.model.find({ $or: sharedReadArms(user) });
   }
 
   /**
@@ -274,6 +277,18 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   async updateUserShares(id: string, changes: UserSharesChange): Promise<T | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const { remove, add = [], includeDeleted } = changes;
+    if (add.length > 0) {
+      const content = await this.model
+        .findById(id)
+        .lean<{ organizationId?: string; sessionIds?: string[]; fileIds?: string[] }>();
+      if (content) {
+        await assertOrganizationUserGrants(content, add);
+        await assertProjectContentGrants(
+          content,
+          add.map(grant => grant.userId)
+        );
+      }
+    }
     if (remove && remove.userId === undefined && remove.projectId === undefined) {
       throw new Error('updateUserShares: remove needs a userId or projectId');
     }
@@ -315,10 +330,12 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
       { $unset: USERS_BEFORE }
     );
 
-    const doc = await this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
-      new: true,
-      ...(includeDeleted ? { includeDeleted: true } : {}),
-    });
+    const doc = await checkedOrganizationSharingQuery(
+      this.model.findOneAndUpdate({ _id: id }, stages as mongoose.UpdateWithAggregationPipeline, {
+        new: true,
+        ...(includeDeleted ? { includeDeleted: true } : {}),
+      })
+    );
     return (doc?.toJSON() ?? null) as T | null;
   }
 }

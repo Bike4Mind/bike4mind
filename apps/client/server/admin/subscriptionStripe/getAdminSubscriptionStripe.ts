@@ -1,6 +1,6 @@
 import type Stripe from 'stripe';
 import type { Logger } from '@bike4mind/observability';
-import { CreditTransaction, mongoose } from '@bike4mind/database';
+import { BillingEventModel, CreditTransaction, mongoose } from '@bike4mind/database';
 import { getStripe, isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { isCompSubscription, type AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionDetail';
@@ -121,6 +121,29 @@ const creditsByKey = async (doc: OwnedSubscription, keys: string[]): Promise<Map
   return credits;
 };
 
+/**
+ * Refunded amount per payment intent, from the stored charge.refunded events (server/billing/billingEventStore.ts).
+ * Each carries the charge's cumulative amount_refunded, so the largest one is the total.
+ */
+const refundsByIntent = async (doc: OwnedSubscription, intents: string[]): Promise<Map<string, number>> => {
+  if (intents.length === 0) return new Map();
+  const rows = await BillingEventModel.find({
+    ownerType: doc.ownerType === 'User' ? 'user' : 'organization',
+    ownerId: doc.ownerId,
+    type: 'charge.refunded',
+    'data.paymentIntentId': { $in: intents },
+  })
+    .select('amount data.paymentIntentId')
+    .maxTimeMS(READ_MAX_TIME_MS)
+    .lean<{ amount: number | null; data: { paymentIntentId?: string } }[]>();
+  const refunds = new Map<string, number>();
+  for (const row of rows) {
+    const intent = row.data.paymentIntentId;
+    if (intent) refunds.set(intent, Math.max(refunds.get(intent) ?? 0, row.amount ?? 0));
+  }
+  return refunds;
+};
+
 const lifetimePaidOf = (invoices: Stripe.Invoice[]): CachedStripe['lifetimePaid'] => {
   const totals = new Map<string, number>();
   for (const invoice of invoices) {
@@ -175,7 +198,10 @@ export async function getAdminSubscriptionStripe(
       invoiceIds: unexpanded.map(i => i.id),
     });
   const keys = invoices.flatMap(invoice => [invoicePaymentKey(invoice), invoice.id]);
-  const credits = await creditsByKey(doc, [...new Set(keys)]);
+  const [credits, refunds] = await Promise.all([
+    creditsByKey(doc, [...new Set(keys)]),
+    refundsByIntent(doc, [...new Set(invoices.map(invoicePaymentKey).filter(key => key.startsWith('pi_')))]),
+  ]);
 
   const rows: AdminStripeInvoice[] = invoices.map(invoice => ({
     id: invoice.id,
@@ -189,6 +215,7 @@ export async function getAdminSubscriptionStripe(
     attempts: invoice.attempt_count,
     hostedInvoiceUrl: invoice.hosted_invoice_url ?? null,
     creditsGranted: credits.get(invoicePaymentKey(invoice)) ?? credits.get(invoice.id) ?? null,
+    amountRefunded: refunds.get(invoicePaymentKey(invoice)) ?? 0,
   }));
 
   const value: CachedStripe = {

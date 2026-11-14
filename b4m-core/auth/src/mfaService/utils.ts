@@ -1,7 +1,7 @@
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { timingSafeEqual, createHash } from 'crypto';
-import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
+import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS, canAccessAdmin } from '@bike4mind/common';
 
 export interface TOTPSetupData {
   secret: string;
@@ -115,20 +115,33 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
 }
 
 /**
- * Check if a user requires MFA based on enforcement settings
- * When MFA is enforced, it applies to ALL users
+ * Test personas never owe MFA enrollment: they exist to exercise the rest of the platform, and MFA
+ * has its own e2e coverage. Shared by userRequiresMFA and the server gate (isMfaEnrollmentOwed).
+ * A persona holding any admin access is not exempt, matching isPersonaAccount in the persona module.
  */
+export function isMfaEnforcementExempt(
+  user: Pick<IUserDocument, 'isPersona' | 'isAdmin' | 'adminPermissions'>
+): boolean {
+  return user.isPersona === true && !user.isAdmin && !canAccessAdmin(user);
+}
+
+/** When MFA is enforced it applies to every user except the exempt ones (isMfaEnforcementExempt). */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting; // Enforcement applies to all users
+  return enforceMFASetting && !isMfaEnforcementExempt(user);
 }
 
 /**
- * Check if a user has MFA configured
+ * True when the user has at least one second factor: an authenticator app or a passkey. Both
+ * flags are NOT select:false, so this works even when the user was loaded without the secrets
+ * (e.g. OTC login). Every "is MFA on" check must go through here so the factors stay in step.
  */
 export function userHasMFAConfigured(user: IUserDocument): user is IUserDocument & { mfa: IMFAConfig } {
-  // totpEnabled is the source of truth and is NOT select:false - so this works even
-  // when the user was loaded without the (select:false) totpSecret (e.g. OTC login).
-  return !!(user.mfa && user.mfa.totpEnabled);
+  return !!(user.mfa && (user.mfa.totpEnabled || user.mfa.passkeyEnabled));
+}
+
+/** True when the user can answer with an authenticator-app code (not just a passkey or backup code). */
+export function userHasTotpConfigured(user: IUserDocument): boolean {
+  return !!user.mfa?.totpEnabled;
 }
 
 export const MAX_FAILED_ATTEMPTS = MFA_MAX_FAILED_ATTEMPTS;

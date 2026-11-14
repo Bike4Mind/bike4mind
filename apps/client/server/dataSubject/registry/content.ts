@@ -107,6 +107,10 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  OrganizationLibrary: {
+    kind: 'noUserData',
+    note: 'Organization-owned definition snapshots with no author identity or personal source reference.',
+  },
   Project: {
     kind: 'holder',
     references: [

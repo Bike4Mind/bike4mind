@@ -15,12 +15,15 @@ const key: IOrgApiKeyView = {
   name: 'Webhook service',
   keyPrefix: 'b4m_live_abc',
   scopes: [ApiKeyScope.AI_GENERATE],
+  grants: [],
   status: ApiKeyStatus.ACTIVE,
   createdAt: new Date('2026-01-01'),
 } as IOrgApiKeyView;
 
 vi.mock('@client/app/hooks/data/orgApiKeys', () => ({
   useOrgApiKeys: () => ({ data: [key], isLoading: false, isError: false }),
+  useOrgApiKeyOptions: () => ({ data: { scopes: [ApiKeyScope.AI_GENERATE], groups: [] } }),
+  useUpdateOrgApiKey: () => idle,
   useCreateOrgApiKey: () => idle,
   useRotateOrgApiKey: () => idle,
   useRevokeOrgApiKey: () => idle,
@@ -51,5 +54,7 @@ describe('OrgApiKeysSection callback signing secret', () => {
     await waitFor(() => expect(screen.getByTestId('org-api-key-secret-value')).toHaveValue('whsec_test'));
     expect(rotateCallbackSecret.mutateAsync).toHaveBeenCalledWith('key1');
     expect(screen.getByText('Copy your callback signing secret')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('org-api-key-secret-done-btn'));
+    await waitFor(() => expect(screen.queryByTestId('org-api-key-secret-value')).toBeNull());
   });
 });

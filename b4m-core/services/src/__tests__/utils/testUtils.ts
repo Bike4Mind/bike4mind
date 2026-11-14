@@ -55,6 +55,7 @@ export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> =
 export const createMockProjectRepository = (): IProjectRepository => ({
   ...createMockRepository<IProjectDocument>(),
   shareable: createMockShareableRepository<IProjectDocument>(),
+  setOwnedGroupReadAccess: vi.fn(),
   // Echoes the patch so a test that does not care about the write-time re-check sees a success.
   updateWithUpdateAccess: vi.fn(async (_user, data) => data as IProjectDocument),
   findByIdAndUserId: vi.fn(),
@@ -329,6 +330,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     markInviteBonusPaid: vi.fn().mockResolvedValue(true),
     restoreReleasedGrantState: vi.fn().mockResolvedValue(true),
     atomicEnableMfa: vi.fn(),
+    atomicEnablePasskeyMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     pullSystemFilesForUsers: vi.fn(),

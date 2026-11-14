@@ -33,7 +33,7 @@
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { verifyEmbedApiKey } from '@server/cli/auth';
+import { verifyEmbedApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { parseBrandingColor, parseBrandingDisplayName } from '@bike4mind/common';
 

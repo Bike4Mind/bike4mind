@@ -13,7 +13,7 @@ describe('getOrCreateOrgServiceAccount', () => {
     const update = vi.fn();
     const user = await getOrCreateOrgServiceAccount(
       { id: 'org1', name: 'Acme' },
-      { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
+      { db: { users: { findOrCreateByEmail }, organizations: { update } } }
     );
 
     expect(findOrCreateByEmail).toHaveBeenCalledWith(
@@ -31,7 +31,7 @@ describe('getOrCreateOrgServiceAccount', () => {
       return asUser({ id: 'sa1', ...defaults });
     });
     const adapters = {
-      db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update: vi.fn() } },
+      db: { users: { findOrCreateByEmail }, organizations: { update: vi.fn() } },
     };
     await getOrCreateOrgServiceAccount({ id: 'org1' }, adapters);
     await getOrCreateOrgServiceAccount({ id: 'org1' }, adapters);
@@ -49,7 +49,7 @@ describe('getOrCreateOrgServiceAccount', () => {
     const update = vi.fn();
     await getOrCreateOrgServiceAccount(
       { id: 'org1', serviceAccountUserId: 'sa1' },
-      { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
+      { db: { users: { findOrCreateByEmail }, organizations: { update } } }
     );
     expect(update).not.toHaveBeenCalled();
   });
@@ -59,7 +59,7 @@ describe('getOrCreateOrgServiceAccount', () => {
     await expect(
       getOrCreateOrgServiceAccount(
         { id: 'org1' },
-        { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update: vi.fn() } } }
+        { db: { users: { findOrCreateByEmail }, organizations: { update: vi.fn() } } }
       )
     ).rejects.toThrow(/not its service account/);
   });
@@ -72,7 +72,7 @@ describe('getOrCreateOrgServiceAccount', () => {
     await expect(
       getOrCreateOrgServiceAccount(
         { id: 'org1' },
-        { db: { users: { findByEmail: vi.fn(), findOrCreateByEmail }, organizations: { update } } }
+        { db: { users: { findOrCreateByEmail }, organizations: { update } } }
       )
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(update).not.toHaveBeenCalled();
@@ -88,14 +88,14 @@ describe('findOrgServiceAccount', () => {
       null,
     ],
   ])('returns null when %s', async (_label, stored, expected) => {
-    const findByEmail = vi.fn(async () => stored);
-    expect(await findOrgServiceAccount('org1', { db: { users: { findByEmail } } })).toBe(expected);
+    const findOne = vi.fn(async () => stored);
+    expect(await findOrgServiceAccount('org1', { db: { users: { findOne } } })).toBe(expected);
   });
 
-  it('returns the org service account', async () => {
+  it('uses an exact generated-address query without human email collation', async () => {
     const account = asUser({ id: 'sa1', isSystem: true, serviceAccountOrganizationId: 'org1' });
-    expect(await findOrgServiceAccount('org1', { db: { users: { findByEmail: vi.fn(async () => account) } } })).toBe(
-      account
-    );
+    const findOne = vi.fn(async () => account);
+    expect(await findOrgServiceAccount('org1', { db: { users: { findOne } } })).toBe(account);
+    expect(findOne).toHaveBeenCalledExactlyOnceWith({ email: orgServiceAccountEmail('org1') });
   });
 });

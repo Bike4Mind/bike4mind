@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -11,6 +12,8 @@ import {
   FeedbackModel,
   FeedbackAiModel,
   FeedbackNoteModel,
+  OrganizationGeneratedObject,
+  OrganizationRetentionEstimate,
   erasureRecordRepository,
   realtimeConnectionRepository,
 } from '@bike4mind/database';
@@ -46,10 +49,12 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
 vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
-vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.email }));
+vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
+  sendAccountDeletionCompleteEmail: effects.email,
+}));
 // Spy, not replace: the revokes are called from inside this module, so only the arguments can show them skipped.
-vi.mock('@server/services/purgeDeletedUserData', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/services/purgeDeletedUserData')>();
+vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/services/purgeDeletedUserData')>();
   effects.purge.mockImplementation(actual.purgeDeletedUserData);
   return { ...actual, purgeDeletedUserData: effects.purge };
 });
@@ -60,7 +65,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
 }));
 
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { reapplyErasure } from './reapplyErasure';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -90,6 +95,8 @@ async function seedAccount() {
   const orgId = new mongoose.Types.ObjectId();
   const reportId = new mongoose.Types.ObjectId();
   const createdAt = new Date();
+  const mediaKey = `${randomUUID()}.png`;
+  const estimateToken = randomUUID();
   const expiresAt = new Date(Date.now() + 86400000);
   const insertRows = async () => {
     await raw(User).insertOne({ _id: userId, username: `u-${userId}`, email: `u-${userId}@example.test` });
@@ -125,6 +132,35 @@ async function seedAccount() {
       },
       { upsert: true }
     );
+    await OrganizationGeneratedObject.collection.updateOne(
+      { key: mediaKey },
+      {
+        $set: {
+          organizationId: 'abcdefabcdefabcdefabcdef',
+          key: mediaKey,
+          userId: String(userId),
+          sessionId: String(orgId),
+          createdAt,
+        },
+      },
+      { upsert: true }
+    );
+    await OrganizationRetentionEstimate.collection.updateOne(
+      { token: estimateToken },
+      {
+        $set: {
+          token: estimateToken,
+          organizationId: 'abcdefabcdefabcdefabcdef',
+          actorUserId: String(userId),
+          version: 1,
+          policy: { chats: 1, files: null, media: null },
+          counts: { chats: 0, files: 0, media: 0 },
+          estimatedAt: createdAt,
+          expiresAt,
+        },
+      },
+      { upsert: true }
+    );
     await raw(Organization).insertOne({ _id: orgId, name: 'Personal', userId: String(userId), personal: true });
     await raw(Session).insertOne({
       _id: new mongoose.Types.ObjectId(),
@@ -134,7 +170,7 @@ async function seedAccount() {
     });
   };
   await insertRows();
-  return { id: String(userId), insertRows };
+  return { id: String(userId), insertRows, mediaKey };
 }
 /** The restore overwrites the erased account's rows with their pre-erasure state. */
 const restoreAccount = async (id: string, insertRows: () => Promise<void>) => {
@@ -151,7 +187,7 @@ const rowCounts = async () => ({
 
 describe('reapplyErasure after a simulated restore', () => {
   it.each(['self', 'admin'] as const)('re-erases a %s-erased account and sends nothing', async initiatedBy => {
-    const { id, insertRows } = await seedAccount();
+    const { id, insertRows, mediaKey } = await seedAccount();
     const bystander = await seedAccount();
     await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
     const record = await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean();
@@ -177,6 +213,10 @@ describe('reapplyErasure after a simulated restore', () => {
     expect(result.ownedOrganizationIds).toEqual([]);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
     expect(await FeedbackNoteModel.countDocuments()).toBe(1);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: id })).toBe(0);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: bystander.id })).toBe(1);
+    expect((await OrganizationGeneratedObject.findOne({ key: mediaKey }).lean())?.userId).toBe('deleted-account');
+    expect((await OrganizationGeneratedObject.findOne({ key: bystander.mediaKey }).lean())?.userId).toBe(bystander.id);
     expect((await raw(Connection).findOne({ connectionId: 'erased-connection' }))?.endedAt).toBeInstanceOf(Date);
     expect((await raw(Connection).findOne({ connectionId: 'bystander-connection' }))?.endedAt).toBeUndefined();
     expect((await raw(QuerySubscription).findOne({ queryId: 'restored-query' }))?.subscribers).toEqual([

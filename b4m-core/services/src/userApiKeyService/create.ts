@@ -15,6 +15,8 @@ import {
   isBuiltInApiKeyScope,
   isWellFormedApiKeyScope,
   IUserApiKeyRepository,
+  OrgApiKeyGrant,
+  OrgApiKeyGrantsSchema,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -95,7 +97,7 @@ const createUserApiKeySchema = z.object({
   // rather than gated by a scope.
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
   // Org-owned key (IUserApiKey.orgOwned): held by the org's service account, never a member.
-  orgOwned: z.object({ createdByUserId: z.string().min(1) }).optional(),
+  orgOwned: z.object({ createdByUserId: z.string().min(1), grants: OrgApiKeyGrantsSchema.optional() }).optional(),
 });
 
 type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -181,7 +183,7 @@ export interface CreateUserApiKeyResult {
   branding?: IEmbedBranding;
   spendCap?: number;
   preauthorizedLakeIds?: string[];
-  orgOwned?: { createdByUserId: string };
+  orgOwned?: { createdByUserId: string; grants?: OrgApiKeyGrant[] };
   createdAt: Date;
 }
 
@@ -276,7 +278,7 @@ const mintUserApiKey = async (
   // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
   // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
   // request bypassing the admin UI). Must match assertEmbedCredential in
-  // apps/client/server/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
+  // packages/server-utils/src/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
   if (isEmbedKey && (params.billingOwnerType !== CreditHolderType.Organization || !params.organizationId)) {
     throw new BadRequestError(
       'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'

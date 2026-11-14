@@ -30,7 +30,7 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getCompleteRequestEntitlements: mocks.completeEntitlements,
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
-import { adminBypassLakeIds } from './index';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 
 const request = (isAdmin = true) => ({ user: { id: 'admin', isAdmin, tags: [] } }) as unknown as EntitlementRequest;
 const ownedLake = {

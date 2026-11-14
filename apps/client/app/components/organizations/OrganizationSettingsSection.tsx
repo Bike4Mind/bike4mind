@@ -1,23 +1,21 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
-import {
-  useDeleteOrganization,
-  useTransferOrganizationOwnership,
-  useUpdateOrganization,
-} from '@client/app/hooks/data/organizations';
+import { IOrganizationDocument, orgAclRowConfersMembership, Permission, WithId } from '@bike4mind/common';
+import { useTransferOrganizationOwnership, useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
-import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import DeleteOrganizationDialog from './DeleteOrganizationDialog';
+import OrganizationGeneralSection from './OrganizationGeneralSection';
+import { OrganizationSharingSettings } from './OrganizationSharingSettings';
+import { canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
-const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
-  const deleteOrganization = useDeleteOrganization();
+const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
   const updateOrganization = useUpdateOrganization();
-  const setConfirmationModal = useConfirmationModal.setState;
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const navigate = useNavigate();
   const { currentUser } = useUser();
 
@@ -32,6 +30,15 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
   // Settings tab is open to them); a personal org has no successor.
   const canTransferOwnership = canDeleteOrg && !organization.personal;
+  const canEditProfile =
+    !!currentUser &&
+    (currentUser.isAdmin === true ||
+      currentUser.id === organization.userId ||
+      organization.users.some(
+        row =>
+          row.userId === currentUser.id &&
+          row.permissions.some(permission => permission === Permission.update || permission === Permission.share)
+      ));
   const [transferOpen, setTransferOpen] = useState(false);
   const transferOwnership = useTransferOrganizationOwnership();
   const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
@@ -76,6 +83,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   };
 
   const handleSaveSystemPrompt = async () => {
+    if (!canEditProfile || updateOrganization.isPending) return;
     await updateOrganization.mutateAsync({
       orgId: organization.id,
       data: { systemPrompt },
@@ -83,32 +91,33 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     setHasChanges(false);
   };
 
-  const handleDelete = () => {
-    setConfirmationModal({
-      open: true,
-      type: 'danger',
-      title: 'Delete Team',
-      description: 'Are you sure you want to delete this team? This action cannot be undone.',
-      okLabel: 'Delete',
-      onOk: async () => {
-        await deleteOrganization.mutateAsync(organization.id);
-        navigate({ to: '/organizations' });
-      },
-    });
+  const handleOpenBilling = () => {
+    setDeleteOpen(false);
+    navigate({ to: '/organizations/$id', params: { id: organization.id }, search: { tab: 'billing' }, replace: true });
+  };
+
+  // Replace, so Back does not return to the deleted team's page.
+  const handleDeleted = () => {
+    setDeleteOpen(false);
+    navigate({ to: '/organizations', replace: true });
   };
 
   return (
     <Stack spacing={3} className="organization-settings-container">
+      <OrganizationGeneralSection organization={organization} canEditProfile={canEditProfile} />
+      <OrganizationSharingSettings organization={organization} />
+
       {/* Team System Prompt */}
       <Card variant="outlined">
         <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
           Team System Prompt
         </Typography>
         <Stack spacing={2} sx={{ p: 2 }}>
-          <FormControl>
+          <FormControl disabled={!canEditProfile || updateOrganization.isPending}>
             <FormLabel>Team-wide AI Context</FormLabel>
             <Textarea
               value={systemPrompt}
+              disabled={!canEditProfile || updateOrganization.isPending}
               onChange={e => handleSystemPromptChange(e.target.value)}
               placeholder="Enter custom context that will be included in all AI conversations for team members. For example: 'Our company specializes in lunar space elevators, not Earth-based ones. Always focus on lunar applications when discussing space elevator technology.'"
               minRows={4}
@@ -137,7 +146,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               color="primary"
               onClick={handleSaveSystemPrompt}
               loading={updateOrganization.isPending}
-              disabled={!hasChanges}
+              disabled={!canEditProfile || !hasChanges || updateOrganization.isPending}
               data-testid="organization-settings-system-prompt-save-btn"
             >
               Save System Prompt
@@ -183,8 +192,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
               <Button
                 color="danger"
                 variant="outlined"
-                onClick={handleDelete}
-                loading={deleteOrganization.isPending}
+                onClick={() => setDeleteOpen(true)}
                 className="organization-settings-delete-button"
                 data-testid="organization-settings-delete-btn"
               >
@@ -193,6 +201,16 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
             </Box>
           </Stack>
         </Card>
+      )}
+      {canDeleteOrg && (
+        <DeleteOrganizationDialog
+          open={deleteOpen}
+          organization={organization}
+          canOpenBilling={canViewOrgBilling(currentUser, organization)}
+          onClose={() => setDeleteOpen(false)}
+          onOpenBilling={handleOpenBilling}
+          onDeleted={handleDeleted}
+        />
       )}
       {canTransferOwnership && (
         <TransferOwnershipModal

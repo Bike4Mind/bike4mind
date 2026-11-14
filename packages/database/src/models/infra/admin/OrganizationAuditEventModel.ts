@@ -8,11 +8,17 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'invite.created',
   'invite.revoked',
   'policy.updated',
+  'retention.deleted',
+  'retention.media_detached',
   'billing.updated',
   'api_key.created',
   'api_key.revoked',
   'connector.connected',
   'connector.disconnected',
+  'library.published',
+  'library.pinned',
+  'library.unpinned',
+  'library.removed',
 ] as const;
 
 export type OrganizationAuditAction = (typeof ORGANIZATION_AUDIT_ACTIONS)[number];

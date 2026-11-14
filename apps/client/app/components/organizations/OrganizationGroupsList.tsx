@@ -1,6 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import {
   Autocomplete,
+  Button,
   Card,
   Chip,
   ChipDelete,
@@ -15,18 +16,27 @@ import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import { getGroupType, IOrganizationDocument, isKnownGroupType, IUserDocument, WithId } from '@bike4mind/common';
+import {
+  GROUP_TYPE_CATALOG,
+  getGroupType,
+  IOrganizationDocument,
+  isKnownGroupType,
+  IUserDocument,
+  WithId,
+} from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import {
   assignGroupMember,
+  createStandardGroup,
   fetchOrganizationGroups,
   GroupWithMembers,
   renameOrganizationGroup,
   unassignGroupMember,
 } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
+import { GroupProjectSharing } from './GroupProjectSharing';
 
 interface OrganizationGroupsListProps {
   organization: WithId<IOrganizationDocument>;
@@ -48,7 +58,7 @@ interface OrganizationGroupsListProps {
  */
 export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   organization,
-  emptyStateMessage = 'No group types have been granted to this team yet. Contact your Bike4Mind administrator to enable them.',
+  emptyStateMessage = 'Create a standard group to organize members and share projects. Special group types require platform staff approval.',
 }) => {
   const queryClient = useQueryClient();
   const orgId = organization.id;
@@ -86,11 +96,45 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   // response and only the groups query needs invalidating.
   const invalidateGroups = () => queryClient.invalidateQueries({ queryKey: ['organizations', orgId, 'groups'] });
 
+  // `previousName` is set on a user rename so its toast can offer Undo; the undo itself omits it,
+  // so undoing never offers a redo.
   const renameMutation = useMutation({
-    mutationFn: ({ groupId, name }: { groupId: string; name: string }) => renameOrganizationGroup(orgId, groupId, name),
+    mutationFn: ({
+      groupId,
+      name,
+      expectedName,
+    }: {
+      groupId: string;
+      name: string;
+      previousName?: string;
+      expectedName?: string;
+    }) =>
+      expectedName === undefined
+        ? renameOrganizationGroup(orgId, groupId, name)
+        : renameOrganizationGroup(orgId, groupId, name, { expectedName }),
+    onSuccess: (group, { groupId, previousName }) => {
+      const name = group.name;
+      invalidateGroups();
+      if (previousName === undefined) {
+        toast.success(`Group name restored to "${name}"`);
+        return;
+      }
+      toast.success(`Group renamed to "${name}"`, {
+        action: {
+          label: 'Undo',
+          onClick: () => renameMutation.mutate({ groupId, name: previousName, expectedName: group.name }),
+        },
+      });
+    },
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (type: string) => createStandardGroup(orgId, type),
     onSuccess: () => {
       invalidateGroups();
-      toast.success('Group renamed');
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast.success('Group created');
     },
     onError: error => toast.error(getErrorMessage(error)),
   });
@@ -105,11 +149,17 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   });
 
   const unassignMutation = useMutation({
-    mutationFn: ({ groupId, userId }: { groupId: string; userId: string }) =>
+    mutationFn: ({ groupId, userId }: { groupId: string; userId: string; label: string; groupName: string }) =>
       unassignGroupMember(orgId, groupId, userId),
-    onSuccess: () => {
+    onSuccess: (_data, { groupId, userId, label, groupName }) => {
       invalidateGroups();
-      toast.success('Member removed from group');
+      // Undo re-assigns, which the server only accepts for a current member row (the same rule as
+      // assignableMembers), so a stale id removed from a group gets no Undo it would refuse.
+      const canUndo = assignableMembers.some(member => member.id === userId);
+      toast.success(
+        `Removed ${label} from ${groupName}`,
+        canUndo ? { action: { label: 'Undo', onClick: () => assignMutation.mutate({ groupId, userId }) } } : undefined
+      );
     },
     onError: error => toast.error(getErrorMessage(error)),
   });
@@ -131,6 +181,17 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
       <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
         Groups
       </Typography>
+      {GROUP_TYPE_CATALOG.filter(type => type.selfServe && !groups.some(group => group.type === type.key)).map(type => (
+        <Button
+          key={type.key}
+          variant="soft"
+          loading={createMutation.isPending}
+          data-testid={`org-groups-create-${type.key}`}
+          onClick={() => createMutation.mutate(type.key)}
+        >
+          Create {type.label.toLowerCase()} group
+        </Button>
+      ))}
       {groupsQuery.isPending ? (
         <Typography level="body-sm" color="neutral" data-testid="org-groups-loading">
           Loading groups...
@@ -157,9 +218,11 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
             membersById={membersById}
             members={assignableMembers}
             owner={isKnownGroupType(group.type) && allowedGroupTypes.includes(group.type) ? owner : undefined}
-            onRename={name => renameMutation.mutate({ groupId: group.id, name })}
+            onRename={name => renameMutation.mutate({ groupId: group.id, name, previousName: group.name })}
             onAssign={userId => assignMutation.mutate({ groupId: group.id, userId })}
-            onUnassign={userId => unassignMutation.mutate({ groupId: group.id, userId })}
+            onUnassign={(userId, label) =>
+              unassignMutation.mutate({ groupId: group.id, userId, label, groupName: group.name })
+            }
             isMutating={renameMutation.isPending || assignMutation.isPending || unassignMutation.isPending}
           />
         ))
@@ -177,7 +240,7 @@ const GroupCard: FC<{
   owner: IUserDocument | undefined;
   onRename: (name: string) => void;
   onAssign: (userId: string) => void;
-  onUnassign: (userId: string) => void;
+  onUnassign: (userId: string, label: string) => void;
   isMutating: boolean;
 }> = ({ group, membersById, members, owner, onRename, onAssign, onUnassign, isMutating }) => {
   const [editing, setEditing] = useState(false);
@@ -305,7 +368,7 @@ const GroupCard: FC<{
                       variant="plain"
                       color="danger"
                       aria-label={`Remove ${label} from ${group.name}`}
-                      onClick={() => onUnassign(userId)}
+                      onClick={() => onUnassign(userId, label)}
                       data-testid={`org-group-unassign-${group.type}-${userId}`}
                     >
                       <CloseIcon fontSize="small" />
@@ -331,6 +394,7 @@ const GroupCard: FC<{
             data-testid={`org-group-assign-input-${group.type}`}
           />
         </FormControl>
+        <GroupProjectSharing organizationId={group.organizationId} groupId={group.id} />
       </Stack>
     </Card>
   );

@@ -1,11 +1,16 @@
 import { randomBytes } from 'node:crypto';
-import { IOrganization, IUserDocument, isOrgServiceAccountOf, orgServiceAccountEmail } from '@bike4mind/common';
+import {
+  IOrganization,
+  IUserDocument,
+  IUserRepository,
+  isOrgServiceAccountOf,
+  orgServiceAccountEmail,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 interface OrgServiceAccountAdapters {
   db: {
     users: {
-      findByEmail: (email: string) => Promise<IUserDocument | null>;
       findOrCreateByEmail: (email: string, defaults: Partial<IUserDocument>) => Promise<IUserDocument>;
     };
     organizations: {
@@ -53,8 +58,10 @@ export const getOrCreateOrgServiceAccount = async (
 /** The organization's service account, or null when it has never been created. */
 export const findOrgServiceAccount = async (
   organizationId: string,
-  adapters: { db: { users: Pick<OrgServiceAccountAdapters['db']['users'], 'findByEmail'> } }
+  adapters: { db: { users: Pick<IUserRepository, 'findOne'> } }
 ): Promise<IUserDocument | null> => {
-  const user = await adapters.db.users.findByEmail(orgServiceAccountEmail(organizationId));
+  // Generated service addresses are exact identifiers, not human email searches. Avoid collation,
+  // which is unnecessary here and unsupported by the deployed DocumentDB engine.
+  const user = await adapters.db.users.findOne({ email: orgServiceAccountEmail(organizationId) });
   return isOrgServiceAccountOf(user, organizationId) ? user : null;
 };

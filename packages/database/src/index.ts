@@ -22,6 +22,7 @@ export * from '@bike4mind/db-core';
 export { connectDB, whenCatalogSeeded } from './priceCatalogBootstrap';
 export * from './modelListRevision';
 export * from './utils/ability';
+export * from './utils/organizationSharingPolicy';
 // Propagate db-core's default export (BaseRepository constructor) through the root barrel.
 // export * does not re-export defaults; this explicit line is required.
 export { default } from '@bike4mind/db-core';
@@ -31,3 +32,5 @@ export { mongoose };
 export * from './utils/feedbackNotes';
 
 export * from './utils/feedbackAi';
+
+export * from './utils/organizationRetention';

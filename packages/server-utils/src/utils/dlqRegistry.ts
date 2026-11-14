@@ -301,6 +301,18 @@ const DLQ_REGISTRY = [
     describe: entityAt('Export job', 'exportJobId'),
   },
   {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    description: 'Runs the account purge for a user an admin scheduled for data subject erasure.',
+    replay: 'safe',
+    replayNote:
+      'The purge is leased and idempotent, so a replay finishes an interrupted erasure; a user already deleted is skipped.',
+    owner: 'Accounts',
+    describe: entityAt('User', 'userId'),
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
@@ -689,6 +701,17 @@ const DLQ_REGISTRY = [
     description: 'Retains failed account deletion sweep invocations for inspection.',
     replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
     owner: 'Accounts',
+    describe: noEntity,
+  },
+  {
+    label: 'organization-retention',
+    displayName: 'Organization Retention',
+    application: 'Organization',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed organization retention sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Organizations',
     describe: noEntity,
   },
   {

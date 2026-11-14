@@ -380,7 +380,7 @@ export const ModelPricingCatalog: React.FC = () => {
         error={!repriceTarget && !revertTarget && !historyModel ? (error ?? undefined) : undefined}
         onRetry={() => void fetchRows()}
         pagination={false}
-        minWidth="64rem"
+        minWidth="68.5rem"
         maxHeight="calc(100vh - 240px)"
         empty={
           filter ? (
@@ -435,6 +435,8 @@ export const ModelPricingCatalog: React.FC = () => {
             ),
           },
         ]}
+        // Reprice, History and Revert: three icon buttons.
+        actionsWidth="8rem"
         rowActions={row => (
           <>
             <IconButton

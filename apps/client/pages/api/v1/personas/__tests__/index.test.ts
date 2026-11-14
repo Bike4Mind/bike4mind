@@ -56,7 +56,7 @@ vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>()),
   isProduction: () => h.production,
 }));
-vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/hardDeleteUser', () => ({ hardDeleteUser: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.recordAdminAction }));
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: { updateOne: h.guard },
@@ -185,10 +185,10 @@ describe('POST /api/v1/personas', () => {
         created: true,
         login_code: CODE,
         login_code_expires_at: '2026-11-10T12:05:00.000Z',
-        login_path: `/api/personas/redeem?code=${CODE}`,
+        login_path: `/personas/redeem#code=${CODE}`,
         persona: { id: PERSONA_ID, username: expect.stringMatching(/^persona-alpha-\d+$/) },
       });
-      expect(body.login_path.startsWith('/api/personas/redeem?code=')).toBe(true);
+      expect(body.login_path.startsWith('/personas/redeem#code=')).toBe(true);
       const wire = JSON.stringify(body);
       expect(wire).not.toMatch(/accessToken|refreshToken/);
       expect(h.issuePersonaLoginCode).toHaveBeenCalledWith(PERSONA_ID, expect.any(Date));

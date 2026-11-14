@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: vi.fn(),
   assertOwnerCanAfford: vi.fn(),
 }));

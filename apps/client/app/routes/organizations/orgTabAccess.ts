@@ -1,11 +1,17 @@
 // Tab identity and visibility rules for the organization detail route.
 
-import { isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin, type AdministrableOrg } from '@bike4mind/common';
+import {
+  canAdministerOrganization,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  type AdministrableOrg,
+} from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
 import { orgAclRowConfersMembership } from '@bike4mind/common';
 
 export enum OrganizationTabs {
   Overview = 'overview',
+  Library = 'library',
   Members = 'members',
   Groups = 'groups',
   Usage = 'usage',
@@ -15,6 +21,7 @@ export enum OrganizationTabs {
   GitHub = 'github',
   Webhooks = 'webhooks',
   Connectors = 'connectors',
+  Domains = 'domains',
   ApiKeys = 'api-keys',
   Settings = 'settings',
   Audit = 'audit',
@@ -51,11 +58,13 @@ const ownerTierGate = (
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
 /**
- * Who may see the Usage tab - the org's credit spend (`usage/index.ts`) and its ledger
- * (`admin/transactions.ts`, `admin/session-usage.ts`), all `verifyOrgOwner`. Owner or platform
- * admin; managers are refused.
+ * Usage and ledger reads use verifyOrgAccess: owner, current manager or platform admin.
+ * Billing actions retain their separate owner-only gate.
  */
-export const canViewOrgUsage = ownerTierGate;
+export const canViewOrgUsage = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
 /**
  * Who may see the Integrations, GitHub API and Webhooks tabs - Slack wiring
@@ -101,6 +110,16 @@ export const canManageOrgConnectors = (
   organization: AdministrableOrg | null | undefined
 ): boolean => !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization);
 
+/**
+ * Who may see the Domains tab: the same checks `loadOrgForDomainAdmin` runs for the
+ * `organizations/[id]/domains/*` routes (owner, current manager or platform admin; never a personal org).
+ */
+export const canManageOrgDomains = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: (AdministrableOrg & { personal?: boolean }) | null | undefined
+): boolean =>
+  !!currentUser && !!organization && !organization.personal && canAdministerOrganization(currentUser, organization);
+
 export interface OrgTabAccess {
   canManageOrg: boolean;
   canViewUsage: boolean;
@@ -109,6 +128,7 @@ export interface OrgTabAccess {
   canManageGroups: boolean;
   canViewBilling: boolean;
   canManageConnectors: boolean;
+  canManageDomains: boolean;
   canViewAudit?: boolean;
 }
 
@@ -130,6 +150,7 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
   if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
+  if (!access.canManageDomains && selected === OrganizationTabs.Domains) return OrganizationTabs.Overview;
   // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
   if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.

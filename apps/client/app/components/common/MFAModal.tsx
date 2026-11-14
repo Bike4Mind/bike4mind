@@ -39,7 +39,33 @@ interface MFAModalProps {
    */
   onSignOut?: () => void;
   signOutLoading?: boolean;
+  /** Offer enrolling a passkey instead of an authenticator app. Setup only. */
+  onPasskeyEnroll?: () => void;
+  /**
+   * Backup codes issued with a just-enrolled passkey. When set, the modal shows only these and a
+   * Continue button (onPasskeyEnrollDone), since the passkey already turned MFA on.
+   */
+  passkeyBackupCodes?: string[];
+  onPasskeyEnrollDone?: () => void;
 }
+
+const BackupCodeList: React.FC<{ codes: string[] }> = ({ codes }) => (
+  <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', wordBreak: 'break-all' }}>
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+      {[0, 1].map(column => (
+        <Box key={column} sx={{ flex: 1, minWidth: '120px' }}>
+          {codes
+            .filter((_, i) => i % 2 === column)
+            .map(code => (
+              <Typography key={code} fontFamily="monospace">
+                {code}
+              </Typography>
+            ))}
+        </Box>
+      ))}
+    </Box>
+  </Sheet>
+);
 
 const MFAModal: React.FC<MFAModalProps> = ({
   open,
@@ -62,6 +88,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
   passkeyLoading = false,
   onSignOut,
   signOutLoading = false,
+  onPasskeyEnroll,
+  passkeyBackupCodes,
+  onPasskeyEnrollDone,
 }) => {
   const [code, setCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(false);
@@ -74,6 +103,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
   const showPasskey = !!onPasskeyVerify && showVerify && !isSetupMode && passkeysSupported();
   const showSignOut = !!onSignOut && isSetupMode;
   const showCloseIcon = !isEnforced && !showSignOut;
+  const showPasskeyEnroll = !!onPasskeyEnroll && showVerify && isSetupMode && passkeysSupported();
+  const passkeyEnrolled = isSetupMode && !!passkeyBackupCodes;
+  const shownBackupCodes = passkeyEnrolled ? passkeyBackupCodes : backupCodes;
   const busy = loading || passkeyLoading || signOutLoading;
 
   // Clear code input when modal is opened
@@ -95,9 +127,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
   };
 
   const handleCopyBackupCodes = async () => {
-    if (backupCodes && backupCodes.length > 0) {
+    if (shownBackupCodes && shownBackupCodes.length > 0) {
       try {
-        await navigator.clipboard.writeText(backupCodes.join('\n'));
+        await navigator.clipboard.writeText(shownBackupCodes.join('\n'));
         toast.success('Backup codes copied to clipboard');
       } catch {
         toast.error('Could not copy backup codes. Use Download instead.');
@@ -128,8 +160,8 @@ const MFAModal: React.FC<MFAModalProps> = ({
   };
 
   const handleDownloadBackupCodes = () => {
-    if (backupCodes && backupCodes.length > 0) {
-      const blob = new Blob([backupCodes.join('\n')], { type: 'text/plain' });
+    if (shownBackupCodes && shownBackupCodes.length > 0) {
+      const blob = new Blob([shownBackupCodes.join('\n')], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -197,147 +229,169 @@ const MFAModal: React.FC<MFAModalProps> = ({
           <Typography id={titleId} className="mfa-modal-title" level="h4">
             {title || 'Multi-Factor Authentication'}
           </Typography>
-          {description && <Typography>{description}</Typography>}
-          {qrCodeUrl && (
-            <Box sx={{ textAlign: 'center' }}>
-              <Image src={qrCodeUrl} alt="Scan this QR code with your authenticator app" width={180} height={180} />
-              <Typography level="body-sm" sx={{ mt: 1 }}>
-                Scan this QR code with your authenticator app
-              </Typography>
-            </Box>
-          )}
-          {manualEntryKey && (
-            <Box>
-              <Typography level="body-sm">Manual Entry Key:</Typography>
-              <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', wordBreak: 'break-all' }}>
-                {manualEntryKey}
-              </Sheet>
-            </Box>
-          )}
-          {backupCodes && backupCodes.length > 0 && (
-            <Box>
-              <Typography level="body-sm">Backup Codes:</Typography>
-              <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-                <Button size="sm" variant="outlined" onClick={handleCopyBackupCodes}>
-                  Copy All
-                </Button>
-                <Button size="sm" variant="outlined" onClick={handleDownloadBackupCodes}>
-                  Download
-                </Button>
-              </Stack>
-              <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', wordBreak: 'break-all' }}>
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                  <Box sx={{ flex: 1, minWidth: '120px' }}>
-                    {backupCodes
-                      .filter((_, i) => i % 2 === 0)
-                      .map(code => (
-                        <Typography key={code} fontFamily="monospace">
-                          {code}
-                        </Typography>
-                      ))}
-                  </Box>
-                  <Box sx={{ flex: 1, minWidth: '120px' }}>
-                    {backupCodes
-                      .filter((_, i) => i % 2 === 1)
-                      .map(code => (
-                        <Typography key={code} fontFamily="monospace">
-                          {code}
-                        </Typography>
-                      ))}
-                  </Box>
-                </Box>
-              </Sheet>
-              <Typography level="body-xs" sx={{ mt: 1 }}>
-                Save these codes in a safe place. Each code can be used once if you lose access to your authenticator
-                app.
-              </Typography>
-            </Box>
-          )}
-          {showVerify && (
+          {passkeyEnrolled ? (
             <>
-              {showPasskey && (
+              <Typography data-testid="mfa-modal-passkey-enrolled">
+                Your passkey is set up and two-step verification is on.
+              </Typography>
+              <Box>
+                <Typography level="body-sm">Backup Codes:</Typography>
+                <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+                  <Button size="sm" variant="outlined" onClick={handleCopyBackupCodes}>
+                    Copy All
+                  </Button>
+                  <Button size="sm" variant="outlined" onClick={handleDownloadBackupCodes}>
+                    Download
+                  </Button>
+                </Stack>
+                <BackupCodeList codes={passkeyBackupCodes} />
+                <Typography level="body-xs" sx={{ mt: 1 }}>
+                  Save these codes in a safe place. Each code can be used once if you lose access to your passkey.
+                </Typography>
+              </Box>
+              <Button data-testid="mfa-modal-passkey-continue-btn" onClick={onPasskeyEnrollDone} fullWidth>
+                I&apos;ve saved my codes, continue
+              </Button>
+            </>
+          ) : (
+            <>
+              {description && <Typography>{description}</Typography>}
+              {showPasskeyEnroll && (
                 <>
                   <Button
-                    data-testid="mfa-modal-passkey-btn"
+                    data-testid="mfa-modal-passkey-enroll-btn"
                     startDecorator={<FingerprintIcon />}
-                    onClick={() => onPasskeyVerify?.(showRememberDevice && rememberDevice)}
+                    onClick={onPasskeyEnroll}
                     loading={passkeyLoading}
                     disabled={busy}
                     fullWidth
                   >
-                    Use a passkey
+                    Use a passkey instead
                   </Button>
-                  <Divider>or enter a code</Divider>
+                  <Divider>or use an authenticator app</Divider>
                 </>
               )}
-              <Input
-                className="mfa-modal-code-input"
-                data-testid="mfa-modal-code-input"
-                value={code}
-                onChange={handleCodeChange}
-                placeholder={
-                  qrCodeUrl
-                    ? 'Enter 6-digit code from your authenticator app'
-                    : 'Enter 6-digit code or 10-character backup code'
-                }
-                sx={{ mb: 1 }}
-                disabled={busy}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !busy) {
-                    // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
-                    const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
-                    if (isValidLength) {
-                      handleVerify();
-                    }
-                  }
-                }}
-                onPaste={handlePaste}
-              />
-              <Box aria-live="polite">
-                {pasteHint && (
-                  <Typography data-testid="mfa-modal-paste-hint" level="body-sm" sx={{ mb: 1 }}>
-                    {pasteHint}
-                  </Typography>
-                )}
-              </Box>
-              {error && (
-                <Typography color="danger" sx={{ mb: 1 }}>
-                  {error}
-                </Typography>
-              )}
-              {showRememberDevice && (
-                <Box>
-                  <Checkbox
-                    className="mfa-modal-remember-device"
-                    data-testid="mfa-modal-remember-device-checkbox"
-                    label={`Remember this device for ${rememberDeviceDays} days`}
-                    checked={rememberDevice}
-                    disabled={busy}
-                    onChange={event => setRememberDevice(event.target.checked)}
-                  />
-                  <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                    Skips this code on future sign-ins from this browser. You will still be emailed a one-time code each
-                    time. Only do this on a device you control.
+              {qrCodeUrl && (
+                <Box sx={{ textAlign: 'center' }}>
+                  <Image src={qrCodeUrl} alt="Scan this QR code with your authenticator app" width={180} height={180} />
+                  <Typography level="body-sm" sx={{ mt: 1 }}>
+                    Scan this QR code with your authenticator app
                   </Typography>
                 </Box>
               )}
-              <Button
-                className="mfa-modal-verify-button"
-                data-testid="mfa-modal-verify-btn"
-                onClick={handleVerify}
-                color="primary"
-                variant="solid"
-                loading={loading}
-                disabled={(() => {
-                  // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
-                  const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
-                  return !isValidLength || busy;
-                })()}
-                fullWidth
-                sx={{ mt: 2 }}
-              >
-                {isSetupMode ? 'Verify & Enable MFA' : 'Verify'}
-              </Button>
+              {manualEntryKey && (
+                <Box>
+                  <Typography level="body-sm">Manual Entry Key:</Typography>
+                  <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', wordBreak: 'break-all' }}>
+                    {manualEntryKey}
+                  </Sheet>
+                </Box>
+              )}
+              {backupCodes && backupCodes.length > 0 && (
+                <Box>
+                  <Typography level="body-sm">Backup Codes:</Typography>
+                  <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+                    <Button size="sm" variant="outlined" onClick={handleCopyBackupCodes}>
+                      Copy All
+                    </Button>
+                    <Button size="sm" variant="outlined" onClick={handleDownloadBackupCodes}>
+                      Download
+                    </Button>
+                  </Stack>
+                  <BackupCodeList codes={backupCodes} />
+                  <Typography level="body-xs" sx={{ mt: 1 }}>
+                    Save these codes in a safe place. Each code can be used once if you lose access to your
+                    authenticator app.
+                  </Typography>
+                </Box>
+              )}
+              {showVerify && (
+                <>
+                  {showPasskey && (
+                    <>
+                      <Button
+                        data-testid="mfa-modal-passkey-btn"
+                        startDecorator={<FingerprintIcon />}
+                        onClick={() => onPasskeyVerify?.(showRememberDevice && rememberDevice)}
+                        loading={passkeyLoading}
+                        disabled={busy}
+                        fullWidth
+                      >
+                        Use a passkey
+                      </Button>
+                      <Divider>or enter a code</Divider>
+                    </>
+                  )}
+                  <Input
+                    className="mfa-modal-code-input"
+                    data-testid="mfa-modal-code-input"
+                    value={code}
+                    onChange={handleCodeChange}
+                    placeholder={
+                      qrCodeUrl
+                        ? 'Enter 6-digit code from your authenticator app'
+                        : 'Enter 6-digit code or 10-character backup code'
+                    }
+                    sx={{ mb: 1 }}
+                    disabled={busy}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !busy) {
+                        // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
+                        const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
+                        if (isValidLength) {
+                          handleVerify();
+                        }
+                      }
+                    }}
+                    onPaste={handlePaste}
+                  />
+                  <Box aria-live="polite">
+                    {pasteHint && (
+                      <Typography data-testid="mfa-modal-paste-hint" level="body-sm" sx={{ mb: 1 }}>
+                        {pasteHint}
+                      </Typography>
+                    )}
+                  </Box>
+                  {error && (
+                    <Typography color="danger" sx={{ mb: 1 }}>
+                      {error}
+                    </Typography>
+                  )}
+                  {showRememberDevice && (
+                    <Box>
+                      <Checkbox
+                        className="mfa-modal-remember-device"
+                        data-testid="mfa-modal-remember-device-checkbox"
+                        label={`Remember this device for ${rememberDeviceDays} days`}
+                        checked={rememberDevice}
+                        disabled={busy}
+                        onChange={event => setRememberDevice(event.target.checked)}
+                      />
+                      <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                        Skips this code on future sign-ins from this browser. You will still be emailed a one-time code
+                        each time. Only do this on a device you control.
+                      </Typography>
+                    </Box>
+                  )}
+                  <Button
+                    className="mfa-modal-verify-button"
+                    data-testid="mfa-modal-verify-btn"
+                    onClick={handleVerify}
+                    color="primary"
+                    variant="solid"
+                    loading={loading}
+                    disabled={(() => {
+                      // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
+                      const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
+                      return !isValidLength || busy;
+                    })()}
+                    fullWidth
+                    sx={{ mt: 2 }}
+                  >
+                    {isSetupMode ? 'Verify & Enable MFA' : 'Verify'}
+                  </Button>
+                </>
+              )}
             </>
           )}
           {showSignOut && (

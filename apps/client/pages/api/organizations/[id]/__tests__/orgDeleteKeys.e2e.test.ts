@@ -14,7 +14,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
-import { Organization, User } from '@bike4mind/database';
+import { Organization, User, OrgDomainClaim, orgDomainClaimRepository } from '@bike4mind/database';
 import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userApiKeyService } from '@bike4mind/services';
@@ -107,37 +107,50 @@ async function seedOrgWithKey() {
 }
 
 describe('DELETE /api/organizations/[id] with org-owned API keys', () => {
-  it("revokes the org's keys, retires its service account, and leaves a member's personal key alone", async () => {
-    const { owner, member, orgId, created } = await seedOrgWithKey();
-    const personal = await userApiKeyService.createUserApiKey(
-      member.id,
-      { name: 'Personal', scopes: [ApiKeyScope.AI_CHAT], metadata: { createdFrom: 'dashboard' } },
-      {
-        db: { userApiKeys: userApiKeyRepository, agents: { findById: async () => null } },
-        trust: { status: 'trusted' },
-      }
-    );
-    expect((await validate(created.key)).isValid).toBe(true);
-    const serviceAccountId = (await userApiKeyRepository.findById(created.apiKey.id))!.userId;
+  it.each(['lower', 'upper'] as const)(
+    'revokes org keys through %s-case IDs and leaves personal keys live',
+    async casing => {
+      const { owner, member, orgId, created } = await seedOrgWithKey();
+      const personal = await userApiKeyService.createUserApiKey(
+        member.id,
+        { name: 'Personal', scopes: [ApiKeyScope.AI_CHAT], metadata: { createdFrom: 'dashboard' } },
+        {
+          db: { userApiKeys: userApiKeyRepository, agents: { findById: async () => null } },
+          trust: { status: 'trusted' },
+        }
+      );
+      expect((await validate(created.key)).isValid).toBe(true);
+      const serviceAccountId = (await userApiKeyRepository.findById(created.apiKey.id))!.userId;
 
-    const deleted = await call<{ id: string }>(orgHandler, 'DELETE', owner.id, { id: orgId });
-    expect(deleted.statusCode).toBe(200);
+      const requestedId = casing === 'upper' ? orgId.toUpperCase() : orgId;
+      const lookup = vi.spyOn(userRepository, 'findByEmail').mockRejectedValue(new Error('Unsupported collation'));
+      const deleted = await (async () => {
+        try {
+          const result = await call<{ id: string }>(orgHandler, 'DELETE', owner.id, { id: requestedId });
+          expect(lookup).not.toHaveBeenCalled();
+          return result;
+        } finally {
+          lookup.mockRestore();
+        }
+      })();
+      expect(deleted.statusCode).toBe(200);
 
-    // A disabled key is never found by prefix, so apiKeyAuth answers 'Invalid API key', not a billing error.
-    expect(await validate(created.key)).toEqual({ isValid: false, reason: 'not_found' });
-    expect(await userApiKeyRepository.findById(created.apiKey.id)).toMatchObject({
-      status: ApiKeyStatus.DISABLED,
-      revokedBy: owner.id,
-      revokedReason: 'organization_deleted',
-      revokedAt: expect.any(Date),
-    });
-    const serviceAccount = await userRepository.findById(String(serviceAccountId));
-    expect(serviceAccount?.serviceAccountRetiredAt).toBeInstanceOf(Date);
-    expect(serviceAccount?.isBanned).toBeFalsy();
-    expect(endKeyRealtimeConnections).toHaveBeenCalledWith(created.apiKey.id, logger);
+      // A disabled key is never found by prefix, so apiKeyAuth answers 'Invalid API key', not a billing error.
+      expect(await validate(created.key)).toEqual({ isValid: false, reason: 'not_found' });
+      expect(await userApiKeyRepository.findById(created.apiKey.id)).toMatchObject({
+        status: ApiKeyStatus.DISABLED,
+        revokedBy: owner.id,
+        revokedReason: 'organization_deleted',
+        revokedAt: expect.any(Date),
+      });
+      const serviceAccount = await userRepository.findById(String(serviceAccountId));
+      expect(serviceAccount?.serviceAccountRetiredAt).toBeInstanceOf(Date);
+      expect(serviceAccount?.isBanned).toBeFalsy();
+      expect(endKeyRealtimeConnections).toHaveBeenCalledWith(created.apiKey.id, logger);
 
-    expect((await validate(personal.key)).isValid).toBe(true);
-  });
+      expect((await validate(personal.key)).isValid).toBe(true);
+    }
+  );
 
   it('refuses to mint into the retired service account if the org is restored', async () => {
     const { owner, orgId } = await seedOrgWithKey();
@@ -159,6 +172,41 @@ describe('DELETE /api/organizations/[id] with org-owned API keys', () => {
     expect((await validate(created.key)).isValid).toBe(true);
     const serviceAccountId = (await userApiKeyRepository.findById(created.apiKey.id))!.userId;
     expect((await userRepository.findById(String(serviceAccountId)))?.serviceAccountRetiredAt).toBeUndefined();
+  });
+
+  it('rolls key retirement and the org back when domain-claim cleanup fails, then retries', async () => {
+    const { owner, orgId, created } = await seedOrgWithKey();
+    const serviceAccountId = (await userApiKeyRepository.findById(created.apiKey.id))!.userId;
+    await OrgDomainClaim.create({
+      organizationId: orgId,
+      domain: 'rollback.example.test',
+      status: 'pending',
+      verificationToken: 'local-test',
+      policy: 'off',
+      createdBy: owner.id,
+    });
+    const deleteClaims = orgDomainClaimRepository.deleteByOrganization.bind(orgDomainClaimRepository);
+    const failure = vi.spyOn(orgDomainClaimRepository, 'deleteByOrganization').mockImplementationOnce(async id => {
+      await deleteClaims(id);
+      throw new Error('claim cleanup interrupted');
+    });
+    try {
+      await expect(call(orgHandler, 'DELETE', owner.id, { id: orgId.toUpperCase() })).rejects.toThrow(
+        'claim cleanup interrupted'
+      );
+      expect((await validate(created.key)).isValid).toBe(true);
+      expect((await userRepository.findById(String(serviceAccountId)))?.serviceAccountRetiredAt).toBeUndefined();
+      expect(await Organization.exists({ _id: orgId })).not.toBeNull();
+      expect(await OrgDomainClaim.countDocuments({ organizationId: orgId })).toBe(1);
+      expect(endKeyRealtimeConnections).not.toHaveBeenCalled();
+    } finally {
+      failure.mockRestore();
+    }
+    await call(orgHandler, 'DELETE', owner.id, { id: orgId.toUpperCase() });
+    expect((await validate(created.key)).isValid).toBe(false);
+    expect((await userRepository.findById(String(serviceAccountId)))?.serviceAccountRetiredAt).toBeInstanceOf(Date);
+    expect(await OrgDomainClaim.countDocuments({ organizationId: orgId })).toBe(0);
+    expect(endKeyRealtimeConnections).toHaveBeenCalledWith(created.apiKey.id, logger);
   });
 
   it('deletes an org that never created a key', async () => {

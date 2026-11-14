@@ -15,6 +15,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 const mockFindFile = vi.fn();
 const mockFindSession = vi.fn();
+const mockFindOrganization = vi.fn();
+const mockFindRecipient = vi.fn();
+const mockDownload = vi.fn().mockResolvedValue(Buffer.from('x'));
 const counters = new Map<string, { count: number; expiresAt: Date }>();
 const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlMs: number) => {
   const now = Date.now();
@@ -26,13 +29,15 @@ const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlM
   return { success: true, count: live.count, expiresAt: live.expiresAt };
 });
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: (...args: unknown[]) => mockFindOrganization(...args) },
+  userRepository: { findOne: (...args: unknown[]) => mockFindRecipient(...args) },
   cacheRepository: { tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a) },
   sessionRepository: { findById: (...a: unknown[]) => mockFindSession(...a) },
   fabFileRepository: { findById: (...a: unknown[]) => mockFindFile(...a) },
 }));
 vi.mock('@bike4mind/services', () => ({ notebookCurationService: {} }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getFilesStorage: () => ({ download: vi.fn().mockResolvedValue(Buffer.from('x')) }),
+  getFilesStorage: () => ({ download: mockDownload }),
 }));
 const mockSend = vi.fn();
 vi.mock('@server/utils/mailer/emailAttachments', () => ({
@@ -56,6 +61,17 @@ describe('email send', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     counters.clear();
+    mockFindOrganization.mockResolvedValue({
+      userId: 'owner',
+      users: [],
+      sharingPolicy: {
+        allowPublicLinks: false,
+        allowExternalSharing: false,
+        allowedDomains: ['partner.example'],
+      },
+    });
+    mockFindRecipient.mockResolvedValue(null);
+    mockDownload.mockResolvedValue(Buffer.from('x'));
     mockFindFile.mockResolvedValue({
       userId: 'u1',
       fileName: 'a.txt',
@@ -64,6 +80,98 @@ describe('email send', () => {
       moderationStatus: 'clean',
     });
     mockSend.mockResolvedValue({ method: 'smtp', filesUploaded: 0 });
+  });
+
+  it.each(['files', 'notebooks'] as const)('rejects outside %s recipients before any download or send', async type => {
+    mockFindFile.mockResolvedValue({ userId: 'u1', fileName: 'a.md', filePath: 'p', organizationId: 'restricted' });
+    mockFindSession.mockResolvedValue({ userId: 'u1', curatedNotebookFileId: 'c1', organizationId: 'restricted' });
+    const body =
+      type === 'files'
+        ? { type, fileIds: ['f1'], recipients: ['outside@example.com'] }
+        : { type, sessionIds: ['s1'], recipients: ['outside@example.com'], format: 'markdown' };
+    const response = await run(body);
+    expect(response._getStatusCode()).toBe(403);
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+  it('preflights every file and recipient before sending a mixed batch', async () => {
+    mockFindFile.mockImplementation(async (id: string) => ({
+      userId: 'u1',
+      fileName: 'a.txt',
+      filePath: 'p',
+      ...(id === 'restricted' ? { organizationId: 'org' } : {}),
+    }));
+    mockFindRecipient
+      .mockResolvedValueOnce({ id: 'member', email: 'member@example.com', emailVerified: true })
+      .mockResolvedValueOnce(null);
+    mockFindOrganization.mockResolvedValue({
+      userId: 'member',
+      users: [],
+      sharingPolicy: {
+        allowPublicLinks: false,
+        allowExternalSharing: false,
+        allowedDomains: [],
+      },
+    });
+    const response = await run({
+      type: 'files',
+      fileIds: ['personal', 'restricted'],
+      recipients: ['member@example.com', 'outside@example.com'],
+    });
+    expect(response._getStatusCode()).toBe(403);
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['member', 'member@example.com', false, true],
+    ['verified domain', 'person@partner.example', true, true],
+    ['direct approved address', 'person@partner.example', false, true],
+    ['subdomain', 'person@sub.partner.example', true, false],
+    ['suffix', 'person@evilpartner.example', true, false],
+  ] as const)('applies existing recipient policy to %s email', async (kind, email, verified, allowed) => {
+    mockFindFile.mockResolvedValue({
+      userId: 'u1',
+      fileName: 'a.txt',
+      filePath: 'p',
+      moderationStatus: 'clean',
+      organizationId: 'org',
+    });
+    mockFindRecipient.mockResolvedValue({ id: 'recipient', email, emailVerified: verified });
+    mockFindOrganization.mockResolvedValue({
+      userId: kind === 'member' ? 'recipient' : 'owner',
+      users: [],
+      sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: ['partner.example'] },
+    });
+    const response = await run({ type: 'files', fileIds: ['f1'], recipients: [email] });
+    expect(response._getStatusCode()).toBe(allowed ? 200 : 403);
+    expect(mockDownload).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(mockSend).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  });
+  it('allows delivery to an approved-domain address without requiring an account', async () => {
+    mockFindFile.mockResolvedValue({
+      userId: 'u1',
+      fileName: 'a.txt',
+      filePath: 'p',
+      moderationStatus: 'clean',
+      organizationId: 'org',
+    });
+    mockFindRecipient.mockResolvedValue(null);
+    const response = await run({ type: 'files', fileIds: ['f1'], recipients: ['new@partner.example'] });
+    expect(response._getStatusCode()).toBe(200);
+    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ to: 'new@partner.example' }), 'u1', 'Pat');
+  });
+  it('checks curated export binding even when its notebook is legacy unbound', async () => {
+    mockFindSession.mockResolvedValue({ userId: 'u1', curatedNotebookFileId: 'c1' });
+    mockFindFile.mockResolvedValue({ userId: 'u1', fileName: 'a.md', filePath: 'p', organizationId: 'restricted' });
+    const response = await run({
+      type: 'notebooks',
+      sessionIds: ['s1'],
+      recipients: ['outside@example.com'],
+      format: 'markdown',
+    });
+    expect(response._getStatusCode()).toBe(403);
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('escapes html-special characters in file names', async () => {

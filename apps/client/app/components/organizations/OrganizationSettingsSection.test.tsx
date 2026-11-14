@@ -8,6 +8,7 @@ import OrganizationSettingsSection from './OrganizationSettingsSection';
 
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
+const updateProfile = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
@@ -15,8 +16,7 @@ const members = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateOrganization: () => ({ mutateAsync: updateProfile, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
 
@@ -24,8 +24,16 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
 
-vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmationModal: { setState: vi.fn() },
+// Each has its own spec; here they only need to show what the section hands them.
+vi.mock('./OrganizationGeneralSection', () => ({ default: () => null }));
+vi.mock('./DeleteOrganizationDialog', () => ({
+  default: (props: { open: boolean; canOpenBilling: boolean; onDeleted: () => void; onOpenBilling: () => void }) =>
+    props.open ? (
+      <div data-testid="delete-dialog-stub" data-can-open-billing={String(props.canOpenBilling)}>
+        <button data-testid="delete-dialog-stub-deleted" onClick={props.onDeleted} />
+        <button data-testid="delete-dialog-stub-billing" onClick={props.onOpenBilling} />
+      </div>
+    ) : null,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -57,6 +65,20 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
  * a member who can reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
+  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+    updateProfile.mockClear();
+    renderAs({ id: 'manager', isAdmin: false }, {
+      ...org,
+      adminUserIds: ['manager'],
+      users: [{ userId: 'manager', permissions: ['read'] }],
+    } as IOrganizationDocument);
+    expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
+    expect(screen.getByTestId('organization-settings-system-prompt-save-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('organization-settings-system-prompt-save-btn'));
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
   it('shows Delete Team to the billing owner', () => {
     renderAs({ id: OWNER_ID, isAdmin: false });
 
@@ -174,5 +196,38 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     await waitFor(() => expect(transfer).toHaveBeenCalled());
     expect(navigate).not.toHaveBeenCalled();
     expect(screen.getByTestId('transfer-ownership-modal')).toBeTruthy();
+  });
+});
+
+describe('OrganizationSettingsSection - Delete flow', () => {
+  beforeEach(() => navigate.mockClear());
+
+  it('opens the delete dialog instead of a generic confirmation', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('true');
+  });
+
+  it('does not offer Billing to a platform admin, whom the Billing tab refuses', () => {
+    renderAs({ id: 'admin9', isAdmin: true });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('false');
+  });
+
+  it('replaces the deleted team page with the teams list', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-deleted'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', replace: true });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+  });
+
+  it('closes the dialog and opens the Billing tab when asked', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-billing'));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: 'billing' } }));
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
   });
 });

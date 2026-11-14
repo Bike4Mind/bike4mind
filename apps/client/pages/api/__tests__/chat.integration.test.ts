@@ -91,7 +91,7 @@ const {
   fakeCustomMcpHost: { listConnections: () => [] },
 }));
 
-vi.mock('@server/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -148,7 +148,7 @@ const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
   mockOptionsFindUser: vi.fn(),
   mockProcessOptions: vi.fn(),
 }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
@@ -180,8 +180,8 @@ vi.mock('@bike4mind/services', async orig => {
 
 const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
 
-vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
-  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
   createCompletionMeter: vi.fn(),
 }));
 
@@ -452,7 +452,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     };
     createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
 
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     expect(createCompletionMeter).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),

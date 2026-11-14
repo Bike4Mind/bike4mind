@@ -50,6 +50,7 @@ describe('a shell command that reaches a WSL distro no root is in', () => {
     const prompt = await shellApproval('bash_execute', { command: `ls '${DEBIAN}'` }, context);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.detail).toContain(`Reaches ${DEBIAN}, in a WSL distro this project has no folder in.`);
     expect(prompt.always?.directories).toEqual([]);
     expect(prompt.always?.ungranted).toEqual([DEBIAN]);
@@ -71,6 +72,7 @@ describe('a shell command that reaches a WSL distro no root is in', () => {
     const prompt = await shellApproval('bash_execute', { command: 'ls', cwd: DEBIAN }, context);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always?.directories).toEqual([]);
     expect(prompt.always?.ungranted).toEqual([DEBIAN]);
   });
@@ -119,8 +121,11 @@ describe('a shell command the scan could not read', () => {
     const prompt = await shellApproval('bash_execute', call.input, wslContext);
 
     expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always?.ungranted).toEqual([UNREAD_WSL_COMMAND]);
     expect(prompt.detail).toContain('Could not read this command');
+    expect(prompt.unchecked).toBe(true);
+    expect(prompt.reasons).toEqual([expect.stringContaining('may reach a WSL distro')]);
 
     const parsed = parseRule(`Bash(${call.input.command})`, { native: true });
     if (!parsed.ok) throw new Error(parsed.reason);
@@ -136,13 +141,16 @@ describe('a shell command the scan could not read', () => {
     scanned.unreadable = false;
   });
 
-  it('in a Windows-drive project that names no distro, stays rememberable as before', async () => {
+  it('in a Windows-drive project that names no distro, stays rememberable and runs in auto and full mode', async () => {
     scanned.unreadable = true;
 
     const prompt = await shellApproval('bash_execute', { command: 'cat ~/x' }, context);
 
-    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(prompt.always).toBeUndefined();
+    expect(prompt.unchecked).toBe(true);
+    expect(prompt.reasons).toEqual(['Could not read this command, so where it acts cannot be checked.']);
     scanned.unreadable = false;
   });
 });

@@ -21,7 +21,7 @@ const txState = vi.hoisted(() => ({ committed: false }));
 
 const assertDataLakeShareScope = vi.hoisted(() => vi.fn());
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
   assertDataLakeShareScope,
   DATA_LAKE_SHARE_SCOPES: ['datalake:share'],
 }));

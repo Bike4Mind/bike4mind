@@ -60,6 +60,7 @@ const endKeyRealtimeConnections = vi.hoisted(() =>
 vi.mock('@server/utils/adminApiKeyActions', () => ({ endKeyRealtimeConnections }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const deleteDomainClaims = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const clearOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const findInvites = vi.hoisted(() => vi.fn().mockResolvedValue([{ id: 'inv1' }]));
 const closeInvite = vi.hoisted(() => vi.fn().mockResolvedValue(null));
@@ -79,6 +80,7 @@ const lakeConfigChangeEventRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
+  orgDomainClaimRepository: { deleteByOrganization: deleteDomainClaims },
   integrationRequestRepository: { clearOrganization },
   inviteRepository: { find: findInvites, closeInvite },
   withTransaction,
@@ -99,7 +101,7 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
-vi.mock('@server/auth/turnAuth', () => ({}));
+vi.mock('@bike4mind/server-utils/auth/turnAuth', () => ({}));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));
@@ -110,6 +112,7 @@ describe('DELETE /api/organizations/[id]', () => {
   beforeEach(() => {
     deleteOrganization.mockClear();
     updateMany.mockClear();
+    deleteDomainClaims.mockClear();
     clearOrganization.mockClear();
     findInvites.mockClear();
     closeInvite.mockClear();
@@ -124,7 +127,7 @@ describe('DELETE /api/organizations/[id]', () => {
   const warn = vi.fn();
 
   const call = () => {
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' } });
     (req as any).user = { id: 'admin1', isAdmin: true };
     (req as any).logger = { warn };
     return mockRefs.deleteHandler!(req, res);
@@ -144,7 +147,7 @@ describe('DELETE /api/organizations/[id]', () => {
 
     expect(deleteOrganization).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'admin1' }),
-      { id: 'org1' },
+      { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
       expect.objectContaining({
         db: expect.objectContaining({
           organizations: organizationRepository,
@@ -180,7 +183,7 @@ describe('DELETE /api/organizations/[id]', () => {
 
   describe('API-key scope', () => {
     const callWithKey = (scopes: string[]) => {
-      const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+      const { req, res } = createMocks({ method: 'DELETE', query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' } });
       (req as any).user = { id: 'admin1', isAdmin: true };
       (req as any).logger = { warn };
       (req as any).apiKeyInfo = { keyId: 'key1', scopes };
@@ -211,42 +214,48 @@ describe('DELETE /api/organizations/[id]', () => {
   it('clears the dangling partner-rule reference and invalidates the cache after deleting', async () => {
     await call();
 
-    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'org1' }, { organizationId: null });
+    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, { organizationId: null });
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the org's domain claims after deleting", async () => {
+    await call();
+
+    expect(deleteDomainClaims).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
   it("drops the org from its members' integration requests after deleting", async () => {
     await call();
 
-    expect(clearOrganization).toHaveBeenCalledWith('org1');
+    expect(clearOrganization).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
   it('still answers the committed delete, and logs a warning, when clearing the integration requests fails', async () => {
     clearOrganization.mockRejectedValueOnce(new Error('mongo down'));
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' } });
     (req as any).user = { id: 'admin1', isAdmin: true };
     (req as any).logger = { warn };
 
     await mockRefs.deleteHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ id: 'org1' });
+    expect(res._getJSONData()).toEqual({ id: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toMatch(/org1.*mongo down/);
+    expect(warn.mock.calls[0][0]).toMatch(/aaaaaaaaaaaaaaaaaaaaaaaa.*mongo down/);
     // The step before it ran, and the failure did not undo it.
-    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'org1' }, { organizationId: null });
+    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, { organizationId: null });
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
   it("closes the deleted org's pending invites, and a failure there only logs a warning", async () => {
     await call();
-    expect(findInvites).toHaveBeenCalledWith({ type: 'Organization', documentId: 'org1' });
+    expect(findInvites).toHaveBeenCalledWith({ type: 'Organization', documentId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
     expect(closeInvite).toHaveBeenCalledWith('inv1');
 
     findInvites.mockRejectedValueOnce(new Error('invites down'));
     await call();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toMatch(/org1.*invites down/);
+    expect(warn.mock.calls[0][0]).toMatch(/aaaaaaaaaaaaaaaaaaaaaaaa.*invites down/);
   });
 
   it('does not warn when the integration requests clear cleanly', async () => {
@@ -260,6 +269,7 @@ describe('DELETE /api/organizations/[id]', () => {
     await expect(call()).rejects.toThrow('blocked');
     expect(updateMany).not.toHaveBeenCalled();
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+    expect(deleteDomainClaims).not.toHaveBeenCalled();
     expect(clearOrganization).not.toHaveBeenCalled();
   });
 
@@ -269,8 +279,8 @@ describe('DELETE /api/organizations/[id]', () => {
     // The route's canDeleteOrganization closure is passed to the service, not invoked directly
     // here (deleteOrganization is mocked) - invoke it manually to prove the closure is wired.
     const passedAdapters = deleteOrganization.mock.calls[0][2];
-    await passedAdapters.validation.canDeleteOrganization({ id: 'org1' });
+    await passedAdapters.validation.canDeleteOrganization({ id: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
 
-    expect(findActiveSubscriptionsByOwner).toHaveBeenCalledWith('organization', 'org1');
+    expect(findActiveSubscriptionsByOwner).toHaveBeenCalledWith('organization', 'aaaaaaaaaaaaaaaaaaaaaaaa');
   });
 });

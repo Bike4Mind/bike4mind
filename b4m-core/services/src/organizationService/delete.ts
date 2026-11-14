@@ -44,7 +44,7 @@ interface DeleteAdapters extends LapseDepartedMemberLakeAccessAdapters {
     groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
     users: Pick<
       IUserRepository,
-      'removeGroupsFromAllUsers' | 'clearOrganizationPointer' | 'findByEmail' | 'retireOrgServiceAccount'
+      'removeGroupsFromAllUsers' | 'clearOrganizationPointer' | 'findOne' | 'retireOrgServiceAccount'
     >;
     userApiKeys: Pick<IUserApiKeyRepository, 'revokeLiveByUserId'>;
   };
@@ -77,10 +77,9 @@ export async function deleteOrganization(
 ): Promise<DeleteOrganizationResult> {
   // Validate parameters
   const validatedParams = secureParameters(params, deleteSchema);
-  const { id } = validatedParams;
-
-  // Get organization first to validate
-  const organization = await get(user, { id }, adapters);
+  // Resolve the authorized record first; persisted references use its canonical ID, not path spelling.
+  const organization = await get(user, { id: validatedParams.id }, adapters);
+  const id = organization.id;
 
   // Deleting an organization is owner-scoped. `get` admits readers and appointed managers, so it is
   // not by itself a sufficient gate on an org-wide destructive operation. This is narrower than

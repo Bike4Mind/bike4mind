@@ -220,10 +220,13 @@ export type NameLabel = { lane: 0 | 1; maxWidth: number; shown: boolean };
 
 type LaidOut = { point: SlotPoint; lane: 0 | 1 };
 
-/** Widest a label at `point` on `lane` can be without meeting any of `others`, all centred under their points. */
+/**
+ * Widest a label at `point` on `lane` can be without meeting any of `others` or running past the
+ * scene's side walls (the scene clips it), all centred under their points.
+ */
 function labelCap(point: SlotPoint, lane: 0 | 1, others: Iterable<LaidOut>): number {
   const top = point.y + lane * LABEL_SPAN;
-  let cap = NAME_LABEL_MAX_WIDTH;
+  let cap = Math.min(NAME_LABEL_MAX_WIDTH, 2 * (Math.min(point.x, 100 - point.x) - LABEL_GUTTER));
   for (const other of others) {
     if (Math.abs(other.point.y + other.lane * LABEL_SPAN - top) >= LABEL_SPAN) continue;
     cap = Math.min(cap, Math.abs(other.point.x - point.x) - LABEL_GUTTER);
@@ -255,4 +258,29 @@ export function nameLabelLayout(points: ReadonlyMap<string, SlotPoint>): Map<str
     layout.set(id, { lane: own.lane, maxWidth, shown: maxWidth >= NAME_LABEL_MIN_WIDTH });
   }
   return layout;
+}
+
+export type WaitingSeat = { id: string; zone: TavernZone; point: SlotPoint };
+
+/**
+ * Agents waiting in one zone share a single "needs you" bubble. Seats are closer together than
+ * the bubble is wide at most stage sizes (bar seats 6% of the scene apart, the bubble 5% to 28%,
+ * since its text has a pixel floor), so one bubble each would pile up. Returns the agent each
+ * zone's bubble sits over, the one nearest the group's middle (leftmost on a tie), and how many
+ * agents it speaks for.
+ */
+export function needsYouBubbles(waiting: Iterable<WaitingSeat>): Map<string, number> {
+  const byZone = new Map<TavernZone, WaitingSeat[]>();
+  for (const seat of waiting) byZone.set(seat.zone, [...(byZone.get(seat.zone) ?? []), seat]);
+  const carriers = new Map<string, number>();
+  for (const group of byZone.values()) {
+    const total = group.reduce((sum, seat) => sum + seat.point.x, 0);
+    // Scaled by the group size so the middle stays exact for whole-number seats.
+    const offset = (seat: WaitingSeat) => Math.abs(group.length * seat.point.x - total);
+    const carrier = group.reduce((best, seat) =>
+      offset(seat) < offset(best) || (offset(seat) === offset(best) && seat.point.x < best.point.x) ? seat : best
+    );
+    carriers.set(carrier.id, group.length);
+  }
+  return carriers;
 }

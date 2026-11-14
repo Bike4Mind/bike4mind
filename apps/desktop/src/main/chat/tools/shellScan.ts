@@ -83,6 +83,8 @@ export interface ShellCommand {
   opaque?: string;
   /** This part has something the scan cannot follow; never set when the whole script is unread (`ShellScan.unreadScript`). */
   unread?: true;
+  /** This part is unread solely because an earlier readable Git command changed refs. */
+  refsMovedOnly?: true;
   /** Why this part can send data off this computer, and the repository it writes when its words pin one. */
   outbound?: { reason: string; target: RepositoryWrite | null };
   /** `.env` files this part names as an argument. */
@@ -362,6 +364,14 @@ const BRANCHES = new Set([
 const REPEATS = new Set(['while_statement', 'for_statement', 'c_style_for_statement', 'function_definition']);
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
+
+/** Devices an operand may name without reaching a folder outside the project (`cat /dev/null`, `head /dev/urandom`). */
+const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
+  ...HARMLESS_REDIRECT_TARGETS,
+  '/dev/zero',
+  '/dev/random',
+  '/dev/urandom',
+]);
 
 /** A path through a process's own links (`/proc/self/cwd`, `/dev/fd/3`), which lead wherever that process is. */
 const PROCESS_LINK =
@@ -6220,7 +6230,7 @@ async function ownPlaces(
 
 /**
  * Every simple command a shell script would run, and every directory outside the project it
- * names. Null when the script does not parse, which the caller treats as a reason to ask.
+ * names. Null when the script does not parse; the caller decides by what the text names.
  *
  * `cd`, `pushd` and `popd` move the directory later commands resolve against, except inside a
  * subshell, a `$( )` or a pipeline, where the shell discards the move. An argument built from a
@@ -7204,6 +7214,7 @@ export async function scanShell(
             continue;
           }
           paths.add(await realpathNearest(lexical));
+          if (reader !== 'windows' && HARMLESS_DEVICES.has(lexical)) continue;
           if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
           directories.add(isDirectory ? lexical : dirname(lexical));
@@ -8078,6 +8089,7 @@ export async function scanShell(
       for (const place of cloned) createdLinks.add(guardForm(place));
       // The window includes any substitution in its words: output the scan cannot read decides this part too.
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      if (inPlace.refsMovedOnly && unreadOperands === unreadBefore + 1 && !entry.opaque) entry.refsMovedOnly = true;
       if (unlisted !== null) Object.assign(entry, { coverable: false, words: original, gitUnlisted: unlisted });
       return entry;
     };
@@ -8761,6 +8773,7 @@ export async function scanShell(
       for (const entry of commands) {
         entry.coverable = false;
         delete entry.unread;
+        delete entry.refsMovedOnly;
       }
     }
     if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;
