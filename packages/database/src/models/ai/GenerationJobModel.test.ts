@@ -410,4 +410,50 @@ describe('GenerationJobRepository', () => {
     expect(found?.id).toBe(job.id);
     expect(await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'nope')).toBeNull();
   });
+
+  describe('findOutstandingHoldsForUser', () => {
+    const hold = (reservedCredits: number, ownerType = CreditHolderType.User, ownerId = 'u1') => ({
+      ownerId,
+      ownerType,
+      userId: 'u1',
+      organizationId: ownerType === CreditHolderType.Organization ? ownerId : null,
+      reservedCredits,
+      balanceAfterHold: 1000,
+    });
+    const backdate = (id: string, createdAt: Date) =>
+      GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { createdAt } });
+
+    it("returns the user's own-credit job holds that have neither settled nor been released", async () => {
+      const queued = await generationJobRepository.createJob(newJob({ creditHold: hold(40) }));
+      await generationJobRepository.createJob(newJob({ state: 'running', creditHold: hold(25) }));
+      const since = new Date(Date.now() - 60_000);
+      const outstanding = await generationJobRepository.findOutstandingHoldsForUser('u1', since);
+      expect(outstanding.map(sample => sample.credits).sort()).toEqual([25, 40]);
+      const createdAt = (await generationJobRepository.findById(queued.id))?.createdAt;
+      expect(outstanding.find(sample => sample.credits === 40)?.at).toEqual(createdAt);
+    });
+
+    it("leaves out settled, released, unheld, org-billed, older and other users' jobs", async () => {
+      const settled = await generationJobRepository.createJob(newJob({ state: 'succeeded', creditHold: hold(1) }));
+      await generationJobRepository.recordSettlement(settled.id, 1);
+      const released = await generationJobRepository.createJob(newJob({ state: 'failed', creditHold: hold(2) }));
+      await generationJobRepository.markTerminalHandled(released.id, new Date());
+      await generationJobRepository.createJob(newJob({ creditHold: null }));
+      await generationJobRepository.createJob(
+        newJob({
+          ownerType: CreditHolderType.Organization,
+          ownerId: 'org1',
+          creditHold: hold(3, CreditHolderType.Organization, 'org1'),
+        })
+      );
+      await generationJobRepository.createJob(
+        newJob({ ownerId: 'u2', requestedBy: 'u2', creditHold: hold(4, CreditHolderType.User, 'u2') })
+      );
+      const old = await generationJobRepository.createJob(newJob({ creditHold: hold(5) }));
+      const since = new Date(Date.now() - 60_000);
+      await backdate(old.id, new Date(since.getTime() - 60_000));
+
+      expect(await generationJobRepository.findOutstandingHoldsForUser('u1', since)).toEqual([]);
+    });
+  });
 });

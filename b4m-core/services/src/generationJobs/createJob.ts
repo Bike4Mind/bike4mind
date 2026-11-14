@@ -13,6 +13,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, type CreditHold, type CreditHoldAdapters } from '../creditService/creditHold';
+import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
 import type { GenerationJobEngine } from './engine';
 
 /**
@@ -113,6 +114,35 @@ export async function holdJobCredits(
     }
     throw error;
   }
+}
+
+/**
+ * Checks a whole batch against the new-account spend cap before any of its holds. Each hold checks only its own
+ * amount, and holds made earlier in the same batch are not on a job yet, so without this a batch could take a
+ * young account past its cap one job at a time. The refusal matches holdJobCredits'.
+ */
+export async function checkBatchSpendCap(
+  params: {
+    enforceCredits: boolean;
+    user: { id: string; organizationId: string | null };
+    totalCredits: number;
+  },
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
+): Promise<InsufficientCredits | null> {
+  if (!params.enforceCredits || params.totalCredits <= 0) return null;
+  const user = await deps.credits.users.findById(params.user.id);
+  // holdCredits refuses a missing user on the first hold; nothing to cap here.
+  if (!user) return null;
+  const message = await checkNewAccountSpendCap(
+    {
+      user,
+      requestedCredits: params.totalCredits,
+      billedToOrganization: params.user.organizationId !== null,
+      logger: deps.logger,
+    },
+    deps.credits.newAccountSpendCap
+  );
+  return message ? { ok: false, status: 402, code: 'insufficient_credits', message } : null;
 }
 
 /**

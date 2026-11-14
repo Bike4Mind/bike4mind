@@ -13,6 +13,7 @@ import {
 import { releaseCreditHold, type CreditHold } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
+  checkBatchSpendCap,
   findIdempotentReplay,
   holdJobCredits,
   persistAndEnqueueJob,
@@ -174,6 +175,13 @@ async function holdBatch(
   params: HoldParams,
   deps: CreateImageJobsDeps
 ): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
+  if (count > 1) {
+    const capped = await checkBatchSpendCap(
+      { enforceCredits: params.enforceCredits, user: params.user, totalCredits: count * params.requiredCredits },
+      deps
+    );
+    if (capped) return capped;
+  }
   const holds: (CreditHold | null)[] = [];
   for (let index = 0; index < count; index++) {
     let held: Awaited<ReturnType<typeof holdJobCredits>>;

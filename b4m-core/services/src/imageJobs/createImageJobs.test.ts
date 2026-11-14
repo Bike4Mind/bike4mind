@@ -25,6 +25,9 @@ vi.mock('../creditService/creditHold', () => ({
 }));
 import { holdCredits, releaseCreditHold } from '../creditService/creditHold';
 
+vi.mock('../creditService/newAccountSpendCap', () => ({ checkNewAccountSpendCap: vi.fn(async () => null) }));
+import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
+
 const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHold => ({
   ownerId: params.userId,
   ownerType: CreditHolderType.User,
@@ -34,8 +37,12 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
   balanceAfterHold: 1000,
 });
 
-// creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+// creditHold and the spend cap are module-mocked: only the user lookup a batch's cap check makes is real.
+const capUser = { id: 'u1', createdAt: new Date('2026-10-12T00:00:00Z'), isAdmin: false };
+const testCredits = {
+  users: { findById: vi.fn(async () => capUser) },
+  newAccountSpendCap: {},
+} as unknown as CreditHoldAdapters;
 
 const openAiProvider: ImageProvider = {
   mode: 'sync',
@@ -61,7 +68,7 @@ const makeDeps = (overrides: Partial<CreateImageJobsDeps> = {}) => {
     checkStorageFor: vi.fn(async () => undefined),
     saveToFiles: vi.fn(),
     saveToGeneratedBucket: vi.fn(),
-    credits: unusedCredits,
+    credits: testCredits,
     enqueue: vi.fn(async () => undefined),
     recordUsage: vi.fn(async () => undefined),
     now: () => new Date('2026-10-13T00:00:00Z'),
@@ -271,6 +278,38 @@ describe('createImageJobs', () => {
       expect(vi.mocked(releaseCreditHold).mock.calls[0][0]).toBe(firstHold);
       expect(repository.jobs.size).toBe(0);
       expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('refuses a batch whose total would take a new account over its spend cap, before any hold', async () => {
+      vi.mocked(checkNewAccountSpendCap).mockResolvedValueOnce('New accounts can spend up to 100 credits per day');
+      const { deps, repository } = makeDeps();
+      expect(await run(deps, validRequest, { count: 3 })).toEqual({
+        ok: false,
+        status: 402,
+        code: 'insufficient_credits',
+        message: 'New accounts can spend up to 100 credits per day',
+      });
+      const [params] = vi.mocked(checkNewAccountSpendCap).mock.calls[0];
+      expect(params).toMatchObject({ user: capUser, billedToOrganization: false });
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+      expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('checks the whole batch total against the spend cap and holds every job when it fits', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 3 });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      const perJob = vi.mocked(holdCredits).mock.calls[0][0].requiredCredits;
+      expect(vi.mocked(checkNewAccountSpendCap).mock.calls[0][0].requestedCredits).toBe(3 * perJob);
+      expect(holdCredits).toHaveBeenCalledTimes(3);
+    });
+
+    it('leaves a single job to its hold, which checks the spend cap itself', async () => {
+      const { deps } = makeDeps();
+      await run(deps, validRequest);
+      expect(checkNewAccountSpendCap).not.toHaveBeenCalled();
+      expect(holdCredits).toHaveBeenCalledTimes(1);
     });
 
     it('skips holds when credits are not enforced', async () => {
