@@ -26,10 +26,17 @@ export class SessionActivity {
   /** Sessions with a relayed message waiting on their user, who is the one holding it up. */
   private readonly held = new Set<string>();
 
+  /**
+   * Workers whose task waits on a decision only the user can make. The one state here that
+   * outlives a restart: ChatService re-marks it from the stored task (see listTaskDecisions).
+   */
+  private readonly deciding = new Set<string>();
+
   constructor(private readonly onChange: (event: ChatSessionStatusEvent) => void) {}
 
   statusOf(sessionId: string): ChatSessionStatus {
-    if ((this.awaiting.get(sessionId) ?? 0) > 0 || this.held.has(sessionId)) return 'needs-action';
+    if ((this.awaiting.get(sessionId) ?? 0) > 0 || this.held.has(sessionId) || this.deciding.has(sessionId))
+      return 'needs-action';
     return this.replying.has(sessionId) || this.preparing.has(sessionId) ? 'processing' : 'done';
   }
 
@@ -40,7 +47,13 @@ export class SessionActivity {
    * per busy conversation rather than one per conversation that has ever existed.
    */
   snapshot(): ChatSessionStatusEvent[] {
-    const ids = new Set([...this.replying, ...this.preparing.keys(), ...this.awaiting.keys(), ...this.held]);
+    const ids = new Set([
+      ...this.replying,
+      ...this.preparing.keys(),
+      ...this.awaiting.keys(),
+      ...this.held,
+      ...this.deciding,
+    ]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
@@ -91,6 +104,10 @@ export class SessionActivity {
     this.transition(sessionId, () => (waiting ? this.held.add(sessionId) : this.held.delete(sessionId)));
   }
 
+  decisionChanged(sessionId: string, pending: boolean): void {
+    this.transition(sessionId, () => (pending ? this.deciding.add(sessionId) : this.deciding.delete(sessionId)));
+  }
+
   /**
    * Drop a deleted conversation. Silent on purpose: the row whose status it would announce is
    * already gone from the sidebar by the time this runs.
@@ -100,6 +117,7 @@ export class SessionActivity {
     this.preparing.delete(sessionId);
     this.awaiting.delete(sessionId);
     this.held.delete(sessionId);
+    this.deciding.delete(sessionId);
   }
 
   /** The setup step of a session still being prepared, with no reply streaming yet; else undefined. */
