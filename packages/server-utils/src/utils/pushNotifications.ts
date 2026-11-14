@@ -94,3 +94,11 @@ export async function hasLiveConnection(
 export function truncateForPush(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 3).trimEnd()}...`;
 }
+
+const GENERATION_PUSH_BODY_MAX_CHARS = 160;
+
+/** The body of a generation_ready push: the prompt, whitespace collapsed and truncated, else the fallback text. */
+export function generationPushBody(prompt: string | undefined, fallback: string): string {
+  const collapsed = prompt?.replace(/\s+/g, ' ').trim();
+  return collapsed ? truncateForPush(collapsed, GENERATION_PUSH_BODY_MAX_CHARS) : fallback;
+}

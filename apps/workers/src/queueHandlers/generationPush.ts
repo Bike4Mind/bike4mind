@@ -4,7 +4,7 @@ import {
   type ConnectionLookup,
   hasLiveConnection,
   isPushDeliveryConfigured,
-  truncateForPush,
+  generationPushBody,
 } from '@bike4mind/server-utils/utils/pushNotifications';
 
 /**
@@ -46,12 +46,11 @@ export async function publishGenerationJobReadyPush(
     if (!job || job.state !== 'succeeded' || job.delivery || job.kind === 'image') return;
 
     const sessionId = job.kind === 'music' ? job.payload.sessionId : undefined;
-    const prompt = job.payload.request.prompt?.replace(/\s+/g, ' ').trim();
     await deps.publish({
       userId: job.requestedBy,
       category: 'generation_ready',
       title: JOB_TITLES[job.kind],
-      body: prompt ? truncateForPush(prompt, 160) : `Your ${job.kind} is ready.`,
+      body: generationPushBody(job.payload.request.prompt, `Your ${job.kind} is ready.`),
       deepLink: sessionId ? deps.sessionDeepLink(sessionId) : deps.appRootDeepLink(),
       collapseId: `generation:${job.id}`,
       ...(job.questId && { questId: job.questId }),

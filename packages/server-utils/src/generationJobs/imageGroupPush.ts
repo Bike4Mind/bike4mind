@@ -4,8 +4,8 @@ import type { GroupCompletion, GroupCompletionSubscriber } from '@bike4mind/serv
 import {
   type ConnectionLookup,
   hasLiveConnection,
+  generationPushBody,
   isPushDeliveryConfigured,
-  truncateForPush,
 } from '../utils/pushNotifications';
 
 export type ImageGroupPushDeps = {
@@ -16,8 +16,6 @@ export type ImageGroupPushDeps = {
   logger: Pick<Logger, 'warn'>;
 };
 
-const PUSH_BODY_MAX_CHARS = 160;
-
 // Takes the user cancelled are left out of the count: they were not asked for any more.
 const titleOf = ({ readyCount, members, cancelledCount }: GroupCompletion): string => {
   const wanted = members.length - cancelledCount;
@@ -26,11 +24,8 @@ const titleOf = ({ readyCount, members, cancelledCount }: GroupCompletion): stri
   return `${readyCount} of ${wanted} images ready`;
 };
 
-const bodyOf = ({ anchor, readyCount }: GroupCompletion): string => {
-  const prompt = anchor.payload.request.prompt?.replace(/\s+/g, ' ').trim();
-  if (prompt) return truncateForPush(prompt, PUSH_BODY_MAX_CHARS);
-  return readyCount > 1 ? 'Your images are ready.' : 'Your image is ready.';
-};
+const bodyOf = ({ anchor, readyCount }: GroupCompletion): string =>
+  generationPushBody(anchor.payload.request.prompt, readyCount > 1 ? 'Your images are ready.' : 'Your image is ready.');
 
 /**
  * One `generation_ready` push per finished image batch ("make N" pushes once, not N times), from the group completion
