@@ -11,6 +11,7 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { z } from 'zod';
+import { orgMemberHasPermission } from '@bike4mind/common';
 
 const stripePortalSchema = z.object({
   callbackUrl: z.string().url(),
@@ -39,9 +40,8 @@ const handler = baseApi()
       const organization = await organizationRepository.findById(ownerId);
       if (!organization) throw new BadRequestError('Organization not found');
 
-      // TODO: Check for user's permission to access organization billing portal.
-      // For now, only the organization owner can access the billing portal.
-      if (organization.userId !== authUser.id)
+      // Platform admins are deliberately not admitted: the portal acts on the team's own Stripe customer.
+      if (!orgMemberHasPermission(organization, authUser.id, 'manageBilling'))
         throw new BadRequestError('User is not authorized to access this organization');
 
       // Block free/admin-granted orgs from auto-creating a Stripe customer here.

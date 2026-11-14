@@ -2,10 +2,10 @@ import {
   canAdministerOrganization,
   canRevokeOrgMember,
   canManageMemberCreditBudgets,
+  hasOrgPermission,
   InviteType,
   IOrganizationDocument,
   isOrgMember,
-  isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
   ORG_INVITE_ROLES,
   OrgInviteRole,
@@ -142,10 +142,12 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
-  // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
+  // Invites (create + cancel) gate on isOrgMember, then manageMembers, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =
-    !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+    !!currentUser &&
+    isOrgMember(currentUser, organization) &&
+    hasOrgPermission(currentUser, organization, 'manageMembers');
   // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
   // also depends on the target; this coarse flag only decides whether the seats card and the
   // roster's selection column show.

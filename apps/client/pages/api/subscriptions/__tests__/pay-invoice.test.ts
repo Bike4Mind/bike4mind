@@ -164,6 +164,50 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     expect(mockPay).not.toHaveBeenCalled();
   });
 
+  it('pays an org invoice for a billing manager against the org customer', async () => {
+    mockFindByStripeId.mockResolvedValue(userRow({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      userId: 'owner_9',
+      billingManagerUserIds: ['user_1'],
+      users: [{ userId: 'user_1' }],
+      stripeCustomerId: 'cus_org',
+    });
+    mockRetrieve.mockResolvedValue(liveSubscription({ customer: 'cus_org' }));
+
+    const res = await run();
+
+    expect(mockPay).toHaveBeenCalledWith('in_1');
+    expect(res._getJSONData()).toEqual({ status: 'paid' });
+  });
+
+  it('refuses a team manager like a plain member (manageBilling excludes managers)', async () => {
+    mockFindByStripeId.mockResolvedValue(userRow({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      userId: 'owner_9',
+      adminUserIds: ['user_1'],
+      users: [{ userId: 'user_1' }],
+      stripeCustomerId: 'cus_org',
+    });
+
+    await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });
+    expect(mockRetrieve).not.toHaveBeenCalled();
+    expect(mockPay).not.toHaveBeenCalled();
+  });
+
+  it('refuses a platform admin who is not the org owner', async () => {
+    mockFindByStripeId.mockResolvedValue(userRow({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mockOrgFindById.mockResolvedValue({ id: 'org_1', userId: 'owner_9', stripeCustomerId: 'cus_org' });
+
+    await expect(run({ id: 'user_1', stripeCustomerId: 'cus_1', isAdmin: true })).rejects.toMatchObject({
+      constructor: BadRequestError,
+      message: 'Subscription not found',
+    });
+    expect(mockRetrieve).not.toHaveBeenCalled();
+    expect(mockPay).not.toHaveBeenCalled();
+  });
+
   it('refuses when the Stripe subscription belongs to a different customer', async () => {
     mockRetrieve.mockResolvedValue(liveSubscription({ customer: { id: 'cus_other' } }));
 

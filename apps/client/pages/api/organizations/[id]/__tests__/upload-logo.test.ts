@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 /**
- * POST /api/organizations/[id]/upload-logo. The real `verifyOrgAccess` runs here (only the repository
+ * POST /api/organizations/[id]/upload-logo. The real `verifyOrgPermission` runs here (only the repository
  * under it is mocked), so the role bar itself is pinned: an upload deletes the current logo for the
  * whole org, so only the owner, the manager or a platform admin may start one, and everyone else gets
  * the same non-enumerating 404 before anything is read or deleted.

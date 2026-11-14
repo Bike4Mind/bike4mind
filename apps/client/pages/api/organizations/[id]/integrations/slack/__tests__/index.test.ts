@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-// Deliberately NOT mocking verifyOrgOwner. The one behaviour this route's gate swap changes -
+// Deliberately NOT mocking verifyOrgPermission. The one behaviour this route's gate swap changes -
 // a malformed id answering 400 where the deleted inline helper answered 404 - lives inside the
 // shared helper, so mocking it would assert the mock rather than the delta. Stubbing the
 // repository instead exercises route + helper together, which also pins the document contract
@@ -65,6 +65,7 @@ import '../index';
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const STRANGER = '650000000000000000000333';
+const MANAGER = '650000000000000000000444';
 
 const org = { id: ORG, userId: OWNER };
 const workspace = {
@@ -91,6 +92,8 @@ function makeReq(user: { id: string; isAdmin: boolean }, orgId: string = ORG) {
 const owner = { id: OWNER, isAdmin: false };
 const stranger = { id: STRANGER, isAdmin: false };
 const admin = { id: STRANGER, isAdmin: true };
+const manager = { id: MANAGER, isAdmin: false };
+const orgWithManager = { ...org, adminUserIds: [MANAGER], users: [{ userId: MANAGER }] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,6 +132,19 @@ describe('GET /api/organizations/[id]/integrations/slack', () => {
     });
 
     // The gate must precede the lookup, or a non-owner learns whether the org has Slack wired up.
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager);
+
+    await expect(routeHandlers.GET(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+      message: 'Organization not found',
+    });
+
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
   });
 
@@ -210,6 +226,20 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
   // renamed gate call on this arm alone is invisible to tsc.
   it('404s a non-owner and deletes nothing', async () => {
     const { req, res } = makeReq(stranger);
+
+    await expect(routeHandlers.DELETE(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+    });
+
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+    expect(mockWorkspaceDelete).not.toHaveBeenCalled();
+    expect(mockClearApiPosting).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager);
 
     await expect(routeHandlers.DELETE(req, res)).rejects.toMatchObject({
       constructor: NotFoundError,

@@ -1,4 +1,4 @@
-import { isOrgOwnerOrCurrentAdmin, orgAclRowConfersMembership, toSafeOrganization } from '@bike4mind/common';
+import { hasOrgPermission, orgAclRowConfersMembership, toSafeOrganization } from '@bike4mind/common';
 import { Organization, organizationRepository } from '@bike4mind/database/infra';
 import { User } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -15,7 +15,7 @@ async function getManagedOrganization(id: unknown, user: IUserDocument) {
   if (typeof id !== 'string' || !/^[a-f\d]{24}$/i.test(id)) throw new BadRequestError('Invalid organization id');
   const organization = await organizationRepository.findById(id);
   if (!organization) throw new NotFoundError('Organization not found');
-  if (!isOrgOwnerOrCurrentAdmin(user, organization)) throw new ForbiddenError('Organization admin required');
+  if (!hasOrgPermission(user, organization, 'managePolicies')) throw new ForbiddenError('Organization admin required');
   if (organization.personal) throw new BadRequestError('MFA policy is only available for teams');
   return organization;
 }

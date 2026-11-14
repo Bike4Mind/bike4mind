@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { Resolver } from 'dns/promises';
 import {
   BadRequestError,
-  canAdministerOrganization,
+  hasOrgPermission,
   ConflictError,
   ForbiddenError,
   DISALLOWED_SIGNUP_RULE_DOMAINS,
@@ -189,7 +189,7 @@ export async function loadOrgForDomainAdmin(
 ): Promise<IOrganizationDocument> {
   const organization = await organizationRepository.findById(organizationId);
   if (!organization) throw new NotFoundError('Organization not found');
-  if (!canAdministerOrganization(actor, organization)) {
+  if (!hasOrgPermission(actor, organization, 'manageMembers')) {
     throw new ForbiddenError('Only an organization owner or manager can manage domains');
   }
   if (organization.personal) throw new BadRequestError('Personal organizations cannot claim domains');

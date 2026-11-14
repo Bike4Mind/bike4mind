@@ -87,8 +87,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
-    // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
+    // holds a users[] row, which the authority checks require (hasOrgPermission, orgRoles.ts).
     adminUserIds: { type: [String], default: [] },
+    // Billing managers (orgRoles.ts). Same users[]-row requirement; adminUserIds wins on overlap.
+    billingManagerUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
     // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
@@ -248,6 +250,8 @@ OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCu
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
+// Keeps the account-erasure `$or` (purgeAccountContent) index-unioned now that it has a billing-manager arm.
+OrganizationSchema.index({ billingManagerUserIds: 1 });
 OrganizationSchema.index(
   { personal: 1, retentionLastSweptAt: 1, _id: 1 },
   { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
@@ -625,7 +629,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Atomically drop a member from `users`, `userDetails` and `adminUserIds` in one pipeline update, so a concurrent add or credit `$inc` on
+   * Atomically drop a member from `users`, `userDetails` and both role lists in one pipeline update, so a concurrent add or credit `$inc` on
    * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
    * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
    * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
@@ -644,6 +648,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           users: without('users', '$$this.userId'),
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
+          billingManagerUserIds: without('billingManagerUserIds', '$$this'),
         },
       },
     ]);

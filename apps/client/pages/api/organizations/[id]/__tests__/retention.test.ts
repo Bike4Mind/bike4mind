@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgAccess: h.access,
+  verifyOrgPermission: h.access,
   verifyOrgMemberOrManager: h.member,
 }));
 vi.mock('@bike4mind/server-utils/organizations/retentionPolicy', () => ({

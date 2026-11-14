@@ -49,6 +49,7 @@ type PurgeRecord = {
   users?: { userId?: string; sessionId?: string }[];
   sessionIds?: string[];
   adminUserIds?: string[];
+  billingManagerUserIds?: string[];
   userDetails?: { id: string }[];
   listingIds?: string[];
   tags?: { name: string }[];
@@ -605,8 +606,15 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   }
   await assertLease();
   await collectionFor('Organization').updateMany(
-    { $or: [{ 'users.userId': userId }, { adminUserIds: userId }, { 'userDetails.id': userId }] },
-    { $pull: { users: { userId }, adminUserIds: userId, userDetails: { id: userId } } }
+    {
+      $or: [
+        { 'users.userId': userId },
+        { adminUserIds: userId },
+        { billingManagerUserIds: userId },
+        { 'userDetails.id': userId },
+      ],
+    },
+    { $pull: { users: { userId }, adminUserIds: userId, billingManagerUserIds: userId, userDetails: { id: userId } } }
   );
   await collectionFor('DataLakeAccessGrant').deleteMany({ principalType: 'user', principalId: userId });
   await embedConversationRepository.deleteAllForUser(userId);

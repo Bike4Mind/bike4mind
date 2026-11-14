@@ -21,7 +21,7 @@ import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { IOrgWebhookConfigRequest, IOrgWebhookConfigResponse } from '@bike4mind/common';
@@ -52,7 +52,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (existingConfig) {
@@ -117,7 +117,7 @@ const handler = baseApi()
       const user = req.user!;
       const revealSecret = req.query.revealSecret === 'true';
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {
@@ -169,7 +169,7 @@ const handler = baseApi()
         const orgId = req.query.id!;
         const user = req.user!;
 
-        await verifyOrgOwner(user, orgId);
+        await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
         const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
         if (!existingConfig) {
@@ -248,7 +248,7 @@ const handler = baseApi()
         const orgId = req.query.id!;
         const user = req.user!;
 
-        await verifyOrgOwner(user, orgId);
+        await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
         const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
         if (!webhookConfig) {

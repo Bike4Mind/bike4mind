@@ -1,6 +1,12 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument, orgAclRowConfersMembership, Permission, WithId } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  isOrgOwnerOrPlatformAdmin,
+  orgAclRowConfersMembership,
+  Permission,
+  WithId,
+} from '@bike4mind/common';
 import { useTransferOrganizationOwnership, useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -32,8 +38,7 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
   const canTransferOwnership = canDeleteOrg && !organization.personal;
   const canEditProfile =
     !!currentUser &&
-    (currentUser.isAdmin === true ||
-      currentUser.id === organization.userId ||
+    (isOrgOwnerOrPlatformAdmin(currentUser, organization) ||
       organization.users.some(
         row =>
           row.userId === currentUser.id &&

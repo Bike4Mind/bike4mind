@@ -2,7 +2,7 @@ import {
   IOrganizationDocument,
   Permission,
   WithId,
-  isOrgOwnerOrCurrentAdmin,
+  hasOrgPermission,
   isOrgOwnerOrPlatformAdmin,
 } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
@@ -67,8 +67,10 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import {
+  canManageOrgApiKeys,
   canManageOrgConnectors,
   canManageOrgDomains,
+  canManageOrgGroups,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -117,11 +119,12 @@ const OrganizationPage: FC = () => {
     return (
       userPermissions.includes(Permission.share) ||
       userPermissions.includes(Permission.update) ||
-      (!!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization))
+      (!!currentUser && !!organization && hasOrgPermission(currentUser, organization, 'managePolicies'))
     );
   }, [userPermissions, currentUser, organization]);
 
-  // Usage and Analysis admit current managers; integrations stay owner-only (orgTabAccess.ts).
+  // Every tab below asks the org permission its routes check (orgTabAccess.ts); none follows the
+  // sharing ACL that drives canManageOrg.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
   const canViewAudit = canViewOrgAudit(currentUser, organization);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
@@ -130,21 +133,15 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
-  // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
-  // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
-  // every write would 403. Personal orgs never have groups.
-  const canManageGroups = useMemo(() => {
-    if (!currentUser || !organization || organization.personal) return false;
-    return isOrgOwnerOrCurrentAdmin(currentUser, organization);
-  }, [currentUser, organization]);
+  const canManageGroups = useMemo(() => canManageOrgGroups(currentUser, organization), [currentUser, organization]);
 
-  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
-  // why a platform admin is not admitted here either.
+  // See canViewOrgBilling for why a platform admin is not admitted here.
   const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
   const canManageConnectors = useMemo(
     () => canManageOrgConnectors(currentUser, organization),
     [currentUser, organization]
   );
+  const canManageApiKeys = useMemo(() => canManageOrgApiKeys(currentUser, organization), [currentUser, organization]);
 
   const canManageDomains = useMemo(() => canManageOrgDomains(currentUser, organization), [currentUser, organization]);
 
@@ -170,6 +167,7 @@ const OrganizationPage: FC = () => {
     canManageGroups,
     canViewBilling,
     canManageConnectors,
+    canManageApiKeys,
     canManageDomains,
   });
 
@@ -337,7 +335,7 @@ const OrganizationPage: FC = () => {
                 {t('organization.tabs.connectors')}
               </Tab>
             )}
-            {canManageConnectors && (
+            {canManageApiKeys && (
               <Tab value={OrganizationTabs.ApiKeys} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <KeyOutlinedIcon sx={{ fontSize: 16 }} />
                 API Keys
@@ -389,7 +387,7 @@ const OrganizationPage: FC = () => {
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
-                  canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
+                  canManage={!!currentUser && hasOrgPermission(currentUser, organization, 'manageContent')}
                 />
               </TabPanel>
             )}
@@ -466,7 +464,7 @@ const OrganizationPage: FC = () => {
                 <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
-            {canManageConnectors && (
+            {canManageApiKeys && (
               <TabPanel value={OrganizationTabs.ApiKeys}>
                 <Typography level="title-lg" startDecorator={<KeyOutlinedIcon />} sx={{ mb: 3 }}>
                   API Keys
@@ -509,8 +507,8 @@ const OrganizationHeader: FC<{
     if (!currentUser || !organization) return false;
     // Grant admin permissions if user is a system admin
     if (currentUser.isAdmin) return true;
-    // Grant full permissions if user is the owner
-    if (isOrgOwnerOrCurrentAdmin(currentUser, organization)) return true;
+    // The owner and anyone who sets team policy (sharing policy lives in Settings).
+    if (hasOrgPermission(currentUser, organization, 'managePolicies')) return true;
     const memberDetails = organization.users.find(u => u.userId === currentUser.id);
     return memberDetails?.permissions?.some(p => p === Permission.share || p === Permission.update) ?? false;
   }, [currentUser, organization]);

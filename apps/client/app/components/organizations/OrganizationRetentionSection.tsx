@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Card, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  canAdministerOrganization,
+  hasOrgPermission,
   MAX_RETENTION_DAYS,
   foreverRetention,
   retentionKinds,
@@ -34,7 +34,8 @@ export default function OrganizationRetentionSection({ organization }: { organiz
   }, [data?.version, organization.id]);
   const policy = data?.policy ?? organization.retentionPolicy ?? foreverRetention;
   const next = draft ?? policy;
-  const canEdit = !!currentUser && canAdministerOrganization(currentUser, organization) && !organization.personal;
+  const canEdit =
+    !!currentUser && hasOrgPermission(currentUser, organization, 'managePolicies') && !organization.personal;
   const shortening = shortensRetention(policy, next);
   const save = async () => {
     setBusy(true);

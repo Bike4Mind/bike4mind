@@ -4,7 +4,7 @@ import { NotFoundError } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
-  verifyOrgOwner: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   incrementCounterConditional: vi.fn(),
   findConfig: vi.fn(),
   findDeliveries: vi.fn(),
@@ -34,8 +34,8 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   SendMessageCommand: class {},
 }));
 vi.mock('sst', () => ({ Resource: {} }));
-// Only `verifyOrgOwner` is exported, so a route reverted to another org gate would fail loudly here.
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
+// Only `verifyOrgPermission` is exported, so a route reverted to another org gate would fail loudly here.
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 
 await import('../replay-dlq');
 
@@ -46,7 +46,7 @@ describe('POST /api/organizations/[id]/webhooks/github/replay-dlq', () => {
   });
 
   it('refuses a non-owner before reading deliveries or sending to the queue', async () => {
-    h.verifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
     const req = {
       query: { id: 'org-1' },
       user: { id: 'manager-1' },
@@ -57,7 +57,7 @@ describe('POST /api/organizations/[id]/webhooks/github/replay-dlq', () => {
 
     await expect(h.handler!(req, res)).rejects.toThrow(NotFoundError);
 
-    expect(h.verifyOrgOwner).toHaveBeenCalledWith(req.user, 'org-1');
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org-1', 'manageIntegrations');
     expect(h.findConfig).not.toHaveBeenCalled();
     expect(h.findDeliveries).not.toHaveBeenCalled();
     expect(h.sqsSend).not.toHaveBeenCalled();

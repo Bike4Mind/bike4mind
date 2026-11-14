@@ -1,7 +1,7 @@
 // GET/POST /api/organizations/:id/api-keys
 // The org's org-owned API keys: held by its service account, billed to the org, and unaffected by any
 // member leaving (server/organizations/orgApiKeys.ts). Owner, current manager or platform admin
-// (verifyOrgAccess). POST returns the key's secret once.
+// (manageKeys). POST returns the key's secret once.
 
 import {
   CreditHolderType,
@@ -27,7 +27,7 @@ import {
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const CreateOrgApiKeyBodySchema = z.object({
@@ -50,7 +50,7 @@ const orgIdOf = (query: { id?: string }): string => (typeof query.id === 'string
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, IOrgApiKeyView[], unknown, { id?: string; includeDisabled?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req.query));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req.query), 'manageKeys');
       const serviceAccount = await findServiceAccount(org.id);
       if (!serviceAccount) return res.json([]);
 
@@ -67,7 +67,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .post(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const user = req.user!;
-      const org = await verifyOrgAccess(user, orgIdOf(req.query));
+      const org = await verifyOrgPermission(user, orgIdOf(req.query), 'manageKeys');
       const body = parseOrBadRequest(CreateOrgApiKeyBodySchema, req.body);
       await assertOrgApiKeyScopesOffered(org.id, body.scopes);
       const grants = await normalizeOrgApiKeyGrants(org.id, body.grants);

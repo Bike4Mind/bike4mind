@@ -31,6 +31,7 @@ describe('OrganizationModel.removeMember', () => {
       users: [member('leaver'), member('stayer')],
       userDetails: [details('leaver'), details('stayer')],
       adminUserIds: ['leaver', 'stayer'],
+      billingManagerUserIds: ['leaver', 'stayer'],
     });
 
     await organizationRepository.removeMember(created.id, 'leaver');
@@ -39,12 +40,16 @@ describe('OrganizationModel.removeMember', () => {
     expect(after!.users.map(u => u.userId)).toEqual(['stayer']);
     expect(after!.userDetails!.map(d => d.id)).toEqual(['stayer']);
     expect(after!.adminUserIds).toEqual(['stayer']);
+    expect(after!.billingManagerUserIds).toEqual(['stayer']);
   });
 
   it('succeeds on an org whose lists are stored as null', async () => {
     const created = await Organization.create({ name: 'Org', userId: 'owner', users: [member('leaver')] });
     // Raw write: the schema defaults would otherwise replace null with [].
-    await Organization.collection.updateOne({ _id: created._id }, { $set: { userDetails: null, adminUserIds: null } });
+    await Organization.collection.updateOne(
+      { _id: created._id },
+      { $set: { userDetails: null, adminUserIds: null, billingManagerUserIds: null } }
+    );
 
     await organizationRepository.removeMember(created.id, 'leaver');
 
@@ -52,5 +57,6 @@ describe('OrganizationModel.removeMember', () => {
     expect(raw!.users).toEqual([]);
     expect(raw!.userDetails).toEqual([]);
     expect(raw!.adminUserIds).toEqual([]);
+    expect(raw!.billingManagerUserIds).toEqual([]);
   });
 });

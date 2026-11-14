@@ -1,6 +1,6 @@
 // PATCH  /api/organizations/:id/domains/:claimId - set { policy }
 // DELETE /api/organizations/:id/domains/:claimId - remove the claim
-// Owner, manager or platform admin (canAdministerOrganization). Claims resolve only within :id.
+// Org `manageMembers` permission, or platform admin. Claims resolve only within :id.
 
 import { updateOrgDomainPolicySchema, orgDomainPathIdSchema } from '@bike4mind/common';
 import { orgDomainClaimRepository } from '@bike4mind/database';

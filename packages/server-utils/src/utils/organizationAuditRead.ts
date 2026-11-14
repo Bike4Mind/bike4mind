@@ -1,21 +1,8 @@
 import { z } from 'zod';
-import { orgAclRowConfersMembership, type AdministrableOrg } from '@bike4mind/common';
 import { ORGANIZATION_AUDIT_ACTIONS, type OrganizationAuditEvent } from '@bike4mind/database/infra';
 
-export function canReadOrganizationAudit(
-  user: { id: string } | null | undefined,
-  org:
-    | (Omit<AdministrableOrg, 'users'> & { users?: { userId: string; permissions?: readonly string[] | null }[] })
-    | null
-    | undefined
-): boolean {
-  if (!user || !org) return false;
-  return (
-    org.userId === user.id ||
-    ((org.adminUserIds ?? []).includes(user.id) &&
-      (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row)))
-  );
-}
+// Shared with the client's Audit tab gate (orgTabAccess.ts) so the two cannot drift.
+export { canReadOrganizationAudit } from '@bike4mind/common';
 
 const day = z.iso.date();
 export const organizationAuditQuerySchema = z

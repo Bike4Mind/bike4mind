@@ -14,7 +14,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { BadRequestError } from '@bike4mind/utils';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import {
   getSystemSlackAppCredentials,
   generateOrgSlackConnectStateToken,
@@ -30,7 +30,7 @@ const handler = baseApi().post(
     // Owner-only, matching the sibling index.ts arms: connecting a workspace wires Slack to the
     // whole tenant. Behaviour is identical to the inline check this replaces apart from a
     // malformed id now answering 400 rather than 404.
-    const organization = await verifyOrgOwner(user, orgId);
+    const organization = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     // Everything below keys off the CANONICAL id from the gated document, never the raw query
     // string - the same defect this PR closed in subscriptions/subscribe.ts. `isValidObjectId`

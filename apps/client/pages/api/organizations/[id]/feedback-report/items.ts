@@ -13,7 +13,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { clampedIntParam } from '@server/utils/dateParam';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveReportWindow } from '@server/utils/orgFeedbackWindow';
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -50,7 +50,7 @@ const handler = baseApi()
     // caller may not administer alike - do not "improve" the non-member branch into a
     // ForbiddenError, or the route becomes an org-id oracle.
     const organizationId = String(req.query.id ?? '');
-    await verifyOrgAccess(req.user, organizationId);
+    await verifyOrgPermission(req.user, organizationId, 'manageContent');
 
     // Re-read rather than trusting anything the client sent: the author of every row returned must
     // still be in the org's member union, which is also what the counts were scoped on.

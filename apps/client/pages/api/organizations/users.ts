@@ -5,7 +5,7 @@ import { convertIds, Organization, User, UserActivityCounter, convertPipelineFor
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { mongoose } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import qs from 'qs';
 import { Pagination } from '@bike4mind/utils';
 
@@ -32,10 +32,10 @@ const handler = baseApi().get(
 
       // This report names individual members and their login/export/download counts, so it is an
       // owner/manager view, not a members' one - any plain member could previously read their
-      // colleagues' activity. verifyOrgAccess answers NotFoundError identically for a missing org
+      // colleagues' activity. verifyOrgPermission answers NotFoundError identically for a missing org
       // and one the caller may not administer, and admits platform admins (who also supply orgId
       // above). It re-reads the org, so fetch the projected copy only once past the gate.
-      await verifyOrgAccess(req.user, orgId.toString());
+      await verifyOrgPermission(req.user, orgId.toString(), 'manageMembers');
 
       const organization = await Organization.findById(orgId).select('users -_id');
       if (!organization) throw new NotFoundError('Organization not found');
@@ -325,7 +325,7 @@ const handler = baseApi().get(
       // monitoring on every unauthorized read, and answering 500 while the serialized body still
       // carried statusCode 404. Unexpected failures still collapse to a 500 as before.
       //
-      // Duck-typed rather than `instanceof HTTPError`: verifyOrgAccess throws the copy re-exported
+      // Duck-typed rather than `instanceof HTTPError`: verifyOrgPermission throws the copy re-exported
       // through @bike4mind/utils, and the two package dists need not share one class identity at
       // runtime (resolveBillingOrgId matches these by name for the same reason). An instanceof
       // check could pass in a test that constructs the error locally and still fall through to the

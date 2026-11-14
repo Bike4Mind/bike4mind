@@ -16,7 +16,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@bike4mind/server-utils/services/githubService';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'org-github-repositories' } });
@@ -33,7 +33,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const service = await GitHubService.forOrganization(orgId, logger);
     if (!service) {

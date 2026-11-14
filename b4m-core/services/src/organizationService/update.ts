@@ -1,10 +1,10 @@
 import {
+  ForbiddenError,
+  hasOrgPermission,
   IOrganizationRepository,
   IUserDocument,
   MAX_STORAGE_LIMIT_MB,
   OrganizationSharingPolicySchema,
-  isOrgOwnerOrCurrentAdmin,
-  ForbiddenError,
 } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
@@ -34,7 +34,7 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
-  // A policy-only request is gated by isOrgOwnerOrCurrentAdmin below; any other field in the body keeps
+  // A policy-only request is gated by `managePolicies` below; any other field in the body keeps
   // the findUpdateAccessById scope, so attaching sharingPolicy cannot widen who edits the profile.
   const isPolicyOnly =
     rest.sharingPolicy !== undefined &&
@@ -59,12 +59,9 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
       : organization
   ) as NonNullable<typeof organization>;
 
-  if (rest.sharingPolicy !== undefined && !isOrgOwnerOrCurrentAdmin(user, plain)) {
+  if (rest.sharingPolicy !== undefined && !hasOrgPermission(user, plain, 'managePolicies')) {
     throw new ForbiddenError('Only organization owners and managers can change sharing policy.');
   }
-
-  const isManager = (plain.adminUserIds ?? []).includes(user.id);
-  const isOwner = plain.userId === user.id;
 
   // Persist ONLY the caller-editable fields this request changed, never a spread of
   // the read snapshot. A whole-document write reverted concurrent credit, seat and
@@ -72,8 +69,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Only allow billing contact changes for owners and admins, not managers.
-  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+  if (rest.billingContact !== undefined && hasOrgPermission(user, plain, 'manageBilling')) {
     update.billingContact = rest.billingContact;
   }
   // Managers can update systemPrompt intentionally - they customize org-wide AI

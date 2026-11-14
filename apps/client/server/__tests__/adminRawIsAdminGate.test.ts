@@ -56,7 +56,7 @@ const RAW_GATE_ALLOWLIST = new Map<string, string>([
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
 // though its own source never names isAdmin. Add any new helper that wraps isAdmin here.
-const RAW_GATE_HELPER = /\bverifyOrgOwner\s*\(/;
+const RAW_GATE_HELPER = /\bverifyOrgPermission\s*\(/;
 const RAW_GATE =
   /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(|\{[^}]*\bisAdmin\b[^}]*\}\s*=\s*(?:req\.)?user\b/;
 const ADMIN_API_CALL = /\badminApi\s*(?:<[^>]*>)?\s*\(/;
@@ -95,7 +95,7 @@ describe('usesRawIsAdminGate', () => {
     expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
   });
 
-  it.each([['verifyOrgOwner(', 'await verifyOrgOwner(req.user, organizationId);']])(
+  it.each([['verifyOrgPermission(', 'await verifyOrgPermission(req.user, organizationId);']])(
     'flags a route gated through the raw-flag helper %s',
     (_label, code) => {
       expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
@@ -113,7 +113,7 @@ describe('usesRawIsAdminGate', () => {
     ['requireAdminPermission(', "requireAdminPermission(req, 'support:read');"],
     ['hasAdminPermission(', "const admin = hasAdminPermission(req.user, 'support:read');"],
   ])('does not flag a route whose admin branch checks %s', (_label, check) => {
-    const code = `baseApi().get(async (req) => { ${check} await verifyOrgOwner(req.user, orgId); });`;
+    const code = `baseApi().get(async (req) => { ${check} await verifyOrgPermission(req.user, orgId); });`;
     expect(usesRawIsAdminGate(code)).toBe(false);
   });
 
@@ -184,7 +184,7 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
   it('keeps the organization ledger permission-aware for its mixed audience', () => {
     const source = readFileSync(path.join(ROUTES_DIR, 'transactions.ts'), 'utf8');
     expect(source).toMatch(
-      /verifyOrg(?:Owner|Access)\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId\s*\)/
+      /verifyOrgPermission\(\s*\{\s*id:\s*req\.user\.id,\s*isAdmin:\s*hasAdminPermission\(req\.user,\s*'support:read'\)\s*\},\s*organizationId,\s*'viewUsage'\s*\)/
     );
     expect(usesRawIsAdminGate(source)).toBe(false);
   });
