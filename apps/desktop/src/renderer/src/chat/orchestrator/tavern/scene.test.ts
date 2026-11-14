@@ -9,12 +9,14 @@ import {
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
   OVERFLOW_POINTS,
+  QUEST_BOARD,
   TAVERN_SLOTS,
   assignCharacters,
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
   needsYouBubbles,
+  pinNotes,
   placeAgents,
   poseFor,
   zoneFor,
@@ -76,6 +78,34 @@ describe('tavern layout data', () => {
     empty.slots.hearth = [];
     expect(tavernLayoutSchema.safeParse(empty).success).toBe(false);
     expect(tavernLayoutSchema.safeParse(layoutJson).success).toBe(true);
+  });
+
+  it('hangs the quest board inside the scene, above every seat and clear of the Innkeeper', () => {
+    const { left, top, width, height } = QUEST_BOARD;
+    expect(left + width).toBeLessThanOrEqual(100);
+    expect(top + height).toBeLessThanOrEqual(100);
+    // A sprite's box is 15% of the scene tall above its feet; none may reach up over the board.
+    const spriteTop = (point: SlotPoint) => point.y - 15;
+    const seats = [...Object.values(TAVERN_SLOTS).flat(), ...Object.values(OVERFLOW_POINTS), DOOR_POINT];
+    expect(seats.every(point => spriteTop(point) >= top + height)).toBe(true);
+    const innkeeperClear = INNKEEPER_POINT.x - 7.5 >= left + width || INNKEEPER_POINT.x + 7.5 <= left;
+    expect(innkeeperClear).toBe(true);
+  });
+
+  it('rejects a quest board that holds fewer than two notes', () => {
+    const tiny = structuredClone(layoutJson);
+    tiny.questBoard.notes = 1;
+    expect(tavernLayoutSchema.safeParse(tiny).success).toBe(false);
+  });
+});
+
+describe('pinNotes', () => {
+  it('pins everything when it fits', () => {
+    expect(pinNotes([1, 2, 3], 3)).toEqual({ pinned: [1, 2, 3], hidden: [] });
+  });
+
+  it('gives the last place to the "+N" note once the board is over full', () => {
+    expect(pinNotes([1, 2, 3, 4, 5], 3)).toEqual({ pinned: [1, 2], hidden: [3, 4, 5] });
   });
 });
 

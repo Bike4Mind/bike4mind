@@ -16,6 +16,14 @@ export const tavernLayoutSchema = z.object({
   slots: zones(seats),
   overflow: zones(point),
   door: point,
+  /** The quest board hung on the back wall: its box, and how many notes fit pinned on it. */
+  questBoard: z.object({
+    left: percent,
+    top: percent,
+    width: percent,
+    height: percent,
+    notes: z.number().int().min(2),
+  }),
   innkeeper: point,
   barCounter: z.object({ left: percent, right: percent, top: percent, front: percent }),
   lights: z.array(

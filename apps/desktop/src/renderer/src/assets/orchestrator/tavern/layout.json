@@ -37,6 +37,7 @@
     "benches": { "x": 45, "y": 76 }
   },
   "door": { "x": 4, "y": 46 },
+  "questBoard": { "left": 9.5, "top": 1.5, "width": 12, "height": 20, "notes": 3 },
   "innkeeper": { "x": 62, "y": 30.5 },
   "barCounter": { "left": 45, "right": 77, "top": 26.3, "front": 38 },
   "lights": [

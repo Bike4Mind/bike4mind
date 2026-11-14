@@ -19,6 +19,9 @@ import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import { OverflowStack, type StackedAgent } from './OverflowStack';
+import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
+import { QuestBoard } from './QuestBoard';
+import { useQuestNotes } from './quests';
 import {
   DOOR_POINT,
   INNKEEPER_POINT,
@@ -261,11 +264,6 @@ function ContactShadow({ hidden = false }: { hidden?: boolean }) {
     />
   );
 }
-
-// Wood: a lit top edge and a dark bottom one, notched corners in the pixel-art way (no radius).
-const PLAQUE_WOOD = 'linear-gradient(#6b4523, #4a2e14)';
-const PLAQUE_EDGE =
-  'inset 0 1px 0 rgba(255, 214, 150, 0.35), 0 -1px 0 #1f1208, 0 1px 0 #1f1208, -1px 0 0 #1f1208, 1px 0 0 #1f1208, 0 2px 0 rgba(0, 0, 0, 0.45)';
 
 function NameLabelPlate({
   testId,
@@ -639,6 +637,7 @@ export function TavernView({
     stacks.set(placement.zone, stack);
   }
   const paused = useScenePause(pause);
+  const quests = useQuestNotes(agents);
   const announcement = useAgentAnnouncements(agents, shortName);
   const summaryId = useId();
   const summary = describeAgentStates(
@@ -773,6 +772,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
+        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} />
         <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite
