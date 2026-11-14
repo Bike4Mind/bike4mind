@@ -193,6 +193,13 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
 
   const savedEvents = config?.subscribedEvents ?? [];
   const draftEvents = editedEvents ?? savedEvents;
+  // Keep saved custom events visible even when staged for removal, so they can be toggled back.
+  const knownEvents = new Set(GITHUB_EVENTS.map(event => event.value));
+  const customEvents = [...new Set([...savedEvents, ...draftEvents])].filter(event => !knownEvents.has(event));
+  const editableEvents = [
+    ...GITHUB_EVENTS,
+    ...customEvents.map(value => ({ value, label: value, description: 'Configured GitHub event' })),
+  ];
   const eventChangeCount =
     draftEvents.filter(e => !savedEvents.includes(e)).length + savedEvents.filter(e => !draftEvents.includes(e)).length;
 
@@ -397,7 +404,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
             Subscribed Events
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {GITHUB_EVENTS.map(event => {
+            {editableEvents.map(event => {
               const selected = draftEvents.includes(event.value);
               return (
                 <Chip
@@ -417,7 +424,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
           <FormHelperText sx={{ mt: 1 }}>
             {draftEvents.length === 0
               ? 'All events enabled. Click events to subscribe to specific ones.'
-              : `${draftEvents.length} of ${GITHUB_EVENTS.length} event(s) selected. Click events to toggle.`}
+              : `${draftEvents.length} of ${editableEvents.length} event(s) selected. Click events to toggle.`}
           </FormHelperText>
         </Box>
 

@@ -6,7 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { IOrganizationDocument } from '@bike4mind/common';
 import OrgWebhookConfig from './OrgWebhookConfig';
 
-const { testMutateAsync, updateMutateAsync, idleMutation, updatePending } = vi.hoisted(() => ({
+const { testMutateAsync, updateMutateAsync, idleMutation, updatePending, savedEvents } = vi.hoisted(() => ({
+  savedEvents: { current: [] as string[] },
   updatePending: { current: false },
   testMutateAsync: vi.fn(),
   updateMutateAsync: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock('@client/app/hooks/data/useOrgWebhooks', () => ({
       enabled: true,
       webhookUrl: 'https://app.example.com/api/webhooks/github/org-1',
       secretMasked: '****',
-      subscribedEvents: [],
+      subscribedEvents: savedEvents.current,
     },
     isLoading: false,
     isError: false,
@@ -49,6 +50,10 @@ const renderConfig = () =>
   render(<OrgWebhookConfig organization={{ id: 'org-1' } as IOrganizationDocument} />, { wrapper: TestWrapper });
 
 const testButton = () => screen.getByTestId('test-webhook') as HTMLButtonElement;
+
+beforeEach(() => {
+  savedEvents.current = [];
+});
 
 describe('OrgWebhookConfig test ping', () => {
   beforeEach(() => {
@@ -81,6 +86,72 @@ const pickEvent = (event: string) =>
 describe('OrgWebhookConfig subscribed events', () => {
   beforeEach(() => {
     updateMutateAsync.mockReset().mockResolvedValue({});
+  });
+
+  it('shows, removes and restores saved custom events without silently changing the payload', async () => {
+    savedEvents.current = ['push', 'check_run'];
+    renderConfig();
+    const custom = () => screen.getByTestId('webhook-event-chip-check_run');
+    expect(custom()).toHaveTextContent('check_run');
+    expect(screen.getByText('2 of 9 event(s) selected. Click events to toggle.')).toBeInTheDocument();
+    expect(custom()).toHaveClass('MuiChip-variantSolid');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    pickEvent('check_run');
+    expect(custom()).toHaveClass('MuiChip-variantOutlined');
+    expect(updateMutateAsync).not.toHaveBeenCalled();
+    pickEvent('check_run');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    pickEvent('check_run');
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    expect(custom()).toHaveClass('MuiChip-variantSolid');
+    pickEvent('check_run');
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() =>
+      expect(updateMutateAsync).toHaveBeenCalledWith({
+        orgId: 'org-1',
+        data: { subscribedEvents: ['push'] },
+      })
+    );
+  });
+
+  it('preserves a saved custom event when changing an unrelated known event', async () => {
+    savedEvents.current = ['push', 'check_run'];
+    renderConfig();
+    pickEvent('issues');
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() =>
+      expect(updateMutateAsync).toHaveBeenCalledWith({
+        orgId: 'org-1',
+        data: { subscribedEvents: ['push', 'check_run', 'issues'] },
+      })
+    );
+  });
+
+  it('retains a failed custom-event draft until Discard, without treating it as saved', async () => {
+    savedEvents.current = ['push', 'check_run'];
+    updateMutateAsync.mockRejectedValueOnce(new Error('Save failed'));
+    renderConfig();
+    pickEvent('check_run');
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(screen.getByTestId('admin-save-discard-btn')).not.toBeDisabled());
+    expect(updateMutateAsync).toHaveBeenCalledWith({ orgId: 'org-1', data: { subscribedEvents: ['push'] } });
+    expect(screen.getByTestId('admin-save-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('webhook-event-chip-check_run')).toHaveClass('MuiChip-variantOutlined');
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    expect(screen.getByTestId('webhook-event-chip-check_run')).toHaveClass('MuiChip-variantSolid');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+  });
+
+  it('retains the empty-as-all safety guard when the last custom event is removed', () => {
+    savedEvents.current = ['check_run'];
+    renderConfig();
+    pickEvent('check_run');
+    expect(screen.getByTestId('webhook-event-chip-check_run')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
+    expect(screen.getByText('Select at least one event.')).toBeInTheDocument();
+    expect(updateMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
   it('stages event picks behind the save bar and saves them together', async () => {

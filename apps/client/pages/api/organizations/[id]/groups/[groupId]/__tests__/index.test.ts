@@ -1,3 +1,5 @@
+import { ConflictError } from '@bike4mind/common';
+import { z } from 'zod';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -65,6 +67,29 @@ describe('PATCH /api/organizations/[id]/groups/[groupId]', () => {
     for (const key of ['_id', '__v', 'notInSchema']) {
       expect(group).not.toHaveProperty(key);
     }
+  });
+
+  it('forwards the exact expected name for Undo', async () => {
+    renameGroup.mockResolvedValue({ id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1' });
+    await call({ name: 'Sales', expectedName: ' Revenue ' }).promise;
+    expect(renameGroup).toHaveBeenCalledWith(
+      { id: 'owner1' },
+      { organizationId: 'org1', groupId: 'g1', name: 'Sales', expectedName: ' Revenue ' },
+      expect.anything()
+    );
+  });
+
+  it.each([null, 123, '', 'x'.repeat(121)])(
+    'rejects invalid expectedName %j before the service',
+    async expectedName => {
+      await expect(call({ name: 'Sales', expectedName }).promise).rejects.toBeInstanceOf(z.ZodError);
+      expect(renameGroup).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves the service conflict for the central 409 error handler', async () => {
+    renameGroup.mockRejectedValue(new ConflictError('The group name changed'));
+    await expect(call({ name: 'Sales', expectedName: 'Revenue' }).promise).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('404s when the group vanished between the existence check and the update', async () => {

@@ -6,12 +6,15 @@ import OrganizationLibrarySection from '@client/app/components/organizations/Org
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAvatar from '@client/app/components/organizations/OrganizationAvatar';
+import OrganizationRetentionSection from '@client/app/components/organizations/OrganizationRetentionSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
@@ -30,7 +33,6 @@ import {
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
-  Avatar,
   Alert,
   Box,
   Button,
@@ -55,11 +57,13 @@ import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlin
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
 import {
   canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
   canManageOrgSettings,
   canViewOrgAnalysis,
@@ -121,6 +125,12 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
   {
     key: 'admin',
     tabs: [
+      {
+        tab: OrganizationTabs.Domains,
+        icon: <LanguageOutlinedIcon />,
+        visible: a => a.canManageDomains,
+        testId: 'org-tab-domains',
+      },
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
       // Same gate as Connectors: owner, current manager or platform admin.
       { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
@@ -200,6 +210,7 @@ const OrganizationPage: FC = () => {
         isOrgOwnerOrCurrentAdmin(currentUser, organization),
       canViewBilling: canViewOrgBilling(currentUser, organization),
       canManageConnectors: canManageOrgConnectors(currentUser, organization),
+      canManageDomains: canManageOrgDomains(currentUser, organization),
       canViewAudit: canViewOrgAudit(currentUser, organization),
     }),
     [currentUser, organization]
@@ -397,6 +408,7 @@ const OrganizationPage: FC = () => {
                 />
               )}
               <OrganizationOverviewSection organization={organization} />
+              <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
             {selectedTab === OrganizationTabs.Library && (
               <TabPanel value={OrganizationTabs.Library}>
@@ -457,6 +469,12 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Billing}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
+            {access.canManageDomains && (
+              <TabPanel value={OrganizationTabs.Domains}>
+                {header(OrganizationTabs.Domains)}
+                <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {access.canManageConnectors && (
@@ -522,7 +540,6 @@ const OrganizationHeader: FC<{
 }> = ({ organization, canManageOrg, onSettingsClick }) => {
   const { t } = useTranslation();
   const { name, description } = organization;
-  const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
@@ -532,9 +549,7 @@ const OrganizationHeader: FC<{
   return (
     <Card variant="outlined" sx={{ mx: 3, p: 3 }}>
       <Stack direction="row" spacing={3} alignItems="center">
-        <Avatar size="lg" sx={{ '--Avatar-size': '64px' }}>
-          {initial}
-        </Avatar>
+        <OrganizationAvatar organization={organization} size="lg" sx={{ '--Avatar-size': '64px' }} />
         <Stack spacing={1} flex={1}>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
             <Typography level="h3">{name}</Typography>

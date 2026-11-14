@@ -10,15 +10,12 @@ const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 const updateOrg = vi.hoisted(() => vi.fn());
-const deleteOrg = vi.hoisted(() => vi.fn());
-const confirmationModal = vi.hoisted(() => ({ setState: vi.fn() }));
 const members = vi.hoisted(() => ({
   list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
   loaded: true,
 }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useDeleteOrganization: () => ({ mutateAsync: deleteOrg, isPending: false }),
   useUpdateOrganization: () => ({ mutateAsync: updateOrg, isPending: false }),
   useTransferOrganizationOwnership: () => ({ mutateAsync: transfer, isPending: false }),
 }));
@@ -27,8 +24,15 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
 
-vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmationModal: confirmationModal,
+vi.mock('./OrganizationGeneralSection', () => ({ default: () => null }));
+vi.mock('./DeleteOrganizationDialog', () => ({
+  default: (props: { open: boolean; canOpenBilling: boolean; onDeleted: () => void; onOpenBilling: () => void }) =>
+    props.open ? (
+      <div data-testid="delete-dialog-stub" data-can-open-billing={String(props.canOpenBilling)}>
+        <button data-testid="delete-dialog-stub-deleted" onClick={props.onDeleted} />
+        <button data-testid="delete-dialog-stub-billing" onClick={props.onOpenBilling} />
+      </div>
+    ) : null,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -229,8 +233,6 @@ describe('OrganizationSettingsSection - system prompt save bar', () => {
 describe('OrganizationSettingsSection - delete', () => {
   it('leaves past the unsaved-prompt guard once the team is deleted', async () => {
     navigate.mockReset();
-    deleteOrg.mockReset().mockResolvedValue(undefined);
-    confirmationModal.setState.mockReset();
     renderAs({ id: OWNER_ID, isAdmin: false });
     fireEvent.change(screen.getByTestId('organization-settings-system-prompt-input'), {
       target: { value: 'An edit that was never saved.' },
@@ -238,10 +240,41 @@ describe('OrganizationSettingsSection - delete', () => {
     expect(screen.getByTestId('admin-save-bar')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
-    const { onOk } = confirmationModal.setState.mock.calls[0][0] as { onOk(): Promise<void> };
-    await onOk();
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-deleted'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', replace: true, ignoreBlocker: true });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+  });
+});
 
-    expect(deleteOrg).toHaveBeenCalledWith('org1');
-    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', ignoreBlocker: true });
+describe('OrganizationSettingsSection - Delete flow', () => {
+  beforeEach(() => navigate.mockClear());
+
+  it('opens the delete dialog instead of a generic confirmation', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('true');
+  });
+
+  it('does not offer Billing to a platform admin, whom the Billing tab refuses', () => {
+    renderAs({ id: 'admin9', isAdmin: true });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    expect(screen.getByTestId('delete-dialog-stub').getAttribute('data-can-open-billing')).toBe('false');
+  });
+
+  it('replaces the deleted team page with the teams list', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-deleted'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/organizations', replace: true, ignoreBlocker: true });
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
+  });
+
+  it('closes the dialog and opens the Billing tab when asked', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+    fireEvent.click(screen.getByTestId('organization-settings-delete-btn'));
+    fireEvent.click(screen.getByTestId('delete-dialog-stub-billing'));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { tab: 'billing' } }));
+    expect(screen.queryByTestId('delete-dialog-stub')).toBeNull();
   });
 });

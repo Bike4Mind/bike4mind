@@ -9,6 +9,7 @@ import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -29,7 +30,7 @@ const handler = baseApi()
 
     return res.json({
       ...result,
-      data: toSafeOrganizations(result.data, { userId: user.id, isAdmin: user.isAdmin }),
+      data: await attachOrganizationLogos(toSafeOrganizations(result.data, { userId: user.id, isAdmin: user.isAdmin })),
     });
   })
   .post(async (req, res) => {

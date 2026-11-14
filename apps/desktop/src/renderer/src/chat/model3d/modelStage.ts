@@ -372,6 +372,8 @@ export class ModelStage {
   private readonly key = new THREE.DirectionalLight(0xffffff, 3);
   private readonly floor: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial>;
   private grid: THREE.GridHelper | null = null;
+  /** Scene objects the floor never mirrors, such as an overlay drawn over the model. */
+  readonly unreflected = new Set<THREE.Object3D>();
   private readonly reflection: Reflector;
   readonly bounds = new THREE.Box3();
 
@@ -399,7 +401,7 @@ export class ModelStage {
     this.floor.receiveShadow = true;
     this.floor.name = 'floor';
     this.group.add(this.floor);
-    this.reflection = glossyFloor(() => [this.floor, ...(this.grid ? [this.grid] : [])]);
+    this.reflection = glossyFloor(() => [this.floor, ...(this.grid ? [this.grid] : []), ...this.unreflected]);
     this.group.add(this.reflection);
     this.group.name = 'stage';
     scene.add(this.group);

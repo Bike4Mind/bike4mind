@@ -1,5 +1,6 @@
 import { SaveBar, UnsavedChangesGuard } from '@client/app/components/admin/shared';
-import type { FC } from 'react';
+import { type FC, useId, useLayoutEffect } from 'react';
+import { useHelpSuggestionSuppression } from '@client/app/hooks/useHelpSuggestionSuppression';
 
 /** Key-by-key, so the same params in a different order do not read as leaving. */
 const sameSearch = (a: object, b: object): boolean => {
@@ -21,16 +22,26 @@ const OrgFormSaveBar: FC<{
   blockedReason?: string;
   onSave(): void;
   onDiscard(): void;
-}> = ({ count, pending, blockedReason, onSave, onDiscard }) => (
-  <>
-    <SaveBar count={count} pending={pending} blockedReason={blockedReason} onSave={onSave} onDiscard={onDiscard} />
-    <UnsavedChangesGuard
-      dirty={count > 0}
-      pending={pending}
-      // Switching tab or Integrations section unmounts the form too, so any URL change is leaving.
-      isLeaving={(current, next) => current.pathname !== next.pathname || !sameSearch(current.search, next.search)}
-    />
-  </>
-);
+}> = ({ count, pending, blockedReason, onSave, onDiscard }) => {
+  const token = useId();
+  const dirty = count > 0;
+  useLayoutEffect(() => {
+    if (!dirty) return;
+    const { acquire, release } = useHelpSuggestionSuppression.getState();
+    acquire(token);
+    return () => release(token);
+  }, [dirty, token]);
+  return (
+    <>
+      <SaveBar count={count} pending={pending} blockedReason={blockedReason} onSave={onSave} onDiscard={onDiscard} />
+      <UnsavedChangesGuard
+        dirty={count > 0}
+        pending={pending}
+        // Switching tab or Integrations section unmounts the form too, so any URL change is leaving.
+        isLeaving={(current, next) => current.pathname !== next.pathname || !sameSearch(current.search, next.search)}
+      />
+    </>
+  );
+};
 
 export default OrgFormSaveBar;

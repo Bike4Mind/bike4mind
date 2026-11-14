@@ -399,8 +399,10 @@ test.describe('Teams', () => {
     try {
       await asManager.teamsPage.gotoTeam(mainTeamId);
       const tabs = await asManager.teamsPage.visibleTabs();
-      expect(tabs).toEqual(expect.arrayContaining(['Overview', 'Members', 'Analysis', 'Integrations']));
-      for (const ownerOnly of ['Billing', 'Usage']) {
+      expect(tabs).toEqual(
+        expect.arrayContaining(['Overview', 'Members', 'Library', 'Usage', 'Analysis', 'Integrations'])
+      );
+      for (const ownerOnly of ['Billing']) {
         expect(tabs).not.toContain(ownerOnly);
       }
       // Integrations stands for a manager on its Connectors section alone; the owner-only

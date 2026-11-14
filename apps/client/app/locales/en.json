@@ -145,6 +145,7 @@
       "button": "Preview Team administration"
     },
     "tabs": {
+      "domains": "Domains",
       "overview": "Overview",
       "members": "Members",
       "library": "Library",
@@ -164,6 +165,7 @@
       "admin": "Admin"
     },
     "descriptions": {
+      "domains": "Manage the email domains associated with your team.",
       "overview": "Plan, credits and seat usage for this team.",
       "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
       "library": "Shared definitions the team owns. They stay available when their author leaves.",

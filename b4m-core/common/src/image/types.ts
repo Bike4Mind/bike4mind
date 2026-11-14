@@ -1,4 +1,5 @@
 import type { ImageOutputFormat, OpenAIImageQuality, OpenAIImageStyle } from '../schemas/openai';
+import type { ImageModels } from '../models';
 import type { ImageSizing } from '../utils/imageCapabilities';
 
 // `edit` starts from an edit_source image (optionally masked); `generate` starts from the prompt.
@@ -10,8 +11,26 @@ export type ImageMode = (typeof IMAGE_MODES)[number];
 export const IMAGE_INPUT_ROLES = ['edit_source', 'mask', 'reference'] as const;
 export type ImageInputRole = (typeof IMAGE_INPUT_ROLES)[number];
 
-export const IMAGE_PROVIDER_IDS = ['openai', 'bfl', 'xai', 'gemini'] as const;
+// `test` and `local` serve only the image job path: their models are not ImageModels members (see ImageJobModelId).
+export const IMAGE_PROVIDER_IDS = ['openai', 'bfl', 'xai', 'gemini', 'test', 'local'] as const;
 export type ImageProviderId = (typeof IMAGE_PROVIDER_IDS)[number];
+
+// The free, deterministic model the test provider renders; registered only outside production.
+export const TEST_IMAGE_MODEL = 'test-image';
+export type TestImageModel = typeof TEST_IMAGE_MODEL;
+
+// A self-hosted Stable Diffusion checkpoint, discovered at runtime from the local backend, so never a static id.
+export const LOCAL_IMAGE_MODEL_PREFIX = 'local-image/';
+export type LocalImageModelId = `local-image/${string}`;
+
+/**
+ * Every model an image job can name: the chat-shared ImageModels plus the job-only ids. The job-only ids stay out of
+ * ImageModels so chat model pickers, which list that enum, never offer them.
+ */
+export type ImageJobModelId = ImageModels | TestImageModel | LocalImageModelId;
+
+export const isLocalImageModelId = (model: string): model is LocalImageModelId =>
+  model.startsWith(LOCAL_IMAGE_MODEL_PREFIX);
 
 // Ratios are `W:H` strings. A range is inclusive, from the tallest to the widest ratio accepted.
 export type AspectRatioCapability =
@@ -33,6 +52,8 @@ export type ImageModeCapabilities = {
   aspectRatios: AspectRatioCapability | null;
   // Empty when no output format is sent and the provider default comes back.
   outputFormats: readonly ImageOutputFormat[];
+  // Bounding-box regions an edit can target (FLUX 3's prompt-inline layout); absent when the mode takes none.
+  editRegions?: { max: number };
 };
 
 /**

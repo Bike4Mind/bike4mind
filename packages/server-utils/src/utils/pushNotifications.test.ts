@@ -14,6 +14,7 @@ import {
   publishPushNotification,
   sessionDeepLink,
   truncateForPush,
+  generationPushBody,
   type WatchedConnectionRow,
 } from './pushNotifications';
 
@@ -137,5 +138,19 @@ describe('hasLiveConnection', () => {
     };
     await expect(hasLiveConnection('user-1', rows, logger, now)).resolves.toBe(false);
     expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('generationPushBody', () => {
+  it('collapses whitespace in the prompt', () => {
+    expect(generationPushBody('  a   red\nbike ', 'fallback')).toBe('a red bike');
+  });
+
+  it('truncates a long prompt to 160 characters', () => {
+    expect(generationPushBody('x'.repeat(200), 'fallback')).toBe(`${'x'.repeat(157)}...`);
+  });
+
+  it.each([undefined, '', '   '])('falls back for the prompt %j', prompt => {
+    expect(generationPushBody(prompt, 'fallback')).toBe('fallback');
   });
 });

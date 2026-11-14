@@ -8,7 +8,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
@@ -410,7 +410,7 @@ describe('shell approval in a project with a large node_modules', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
+      auto: runsCheckedInAuto(prompt) && (prompt.always?.directories ?? []).length === 0,
       full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
@@ -965,8 +965,20 @@ describe('shell approval in a project with a large node_modules', () => {
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
     ...SENDING_GIT.map(sending => `git ${sending}`),
-  ])('asks in auto mode for %s, which sends data out', async command => {
-    expect((await judge(command)).auto).toBe(false);
+  ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
+    const prompt = await shellApproval(
+      'bash_execute',
+      { command, cwd: proj },
+      {
+        roots: [proj],
+        workingDirectory: proj,
+        signal: new AbortController().signal,
+        protectedPaths: [userData],
+        uncoverablePaths: permissionRoots,
+      }
+    );
+    expect(prompt.contained).toBeUndefined();
+    expect(prompt.detail).toContain('Can send data off this computer');
   });
 
   it.each([
@@ -1611,11 +1623,10 @@ describe('shell approval in a project with a large node_modules', () => {
   );
 
   it.each(["true && bash -c 'echo x'", "true && sh -c 'echo x; ls'"])(
-    'runs %s && git st (in proj/yrepo) in full mode, as the shell string only reads, and asks in auto only for the shell',
+    'runs %s && git st (in proj/yrepo) unasked, as the shell string only reads',
     async first => {
-      const alone = await judge(first, 'yrepo');
-      expect(alone).toMatchObject({ auto: false, full: true });
-      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+      expect(await judge(first, 'yrepo')).toMatchObject({ auto: true, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: true, full: true });
     }
   );
 
@@ -1833,11 +1844,10 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   it.each(['git push -u origin HEAD', 'git remote add up https://example.invalid/r'])(
-    'runs %s && git st (in proj/yrepo) in full mode, and asks in auto only as the first command alone does',
+    'runs %s && git st (in proj/yrepo) unasked, as the first command alone does',
     async first => {
-      const alone = await judge(first, 'yrepo');
-      expect(alone).toMatchObject({ auto: false, full: true });
-      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+      expect(await judge(first, 'yrepo')).toMatchObject({ auto: true, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: true, full: true });
     }
   );
 
@@ -2115,7 +2125,14 @@ describe('shell approval in a project with a large node_modules', () => {
   it('reads a git alias for push as the push it expands to', async () => {
     const push = await judge('git push origin main', 'qrepo');
     expect(await judge('git p origin main', 'qrepo')).toMatchObject({ auto: push.auto, full: push.full });
-    expect(await judge('git p https://example.invalid/r main', 'qrepo')).toMatchObject({ auto: false, full: true });
+    const cwd = join(proj, 'qrepo');
+    const elsewhere = await shellApproval(
+      'bash_execute',
+      { command: 'git p https://example.invalid/r main', cwd },
+      { roots: [proj], workingDirectory: cwd, signal: new AbortController().signal, protectedPaths: [userData] }
+    );
+    expect(elsewhere.contained).toBeUndefined();
+    expect(elsewhere.detail).toContain('Can send data off this computer');
   });
 
   it.each([
