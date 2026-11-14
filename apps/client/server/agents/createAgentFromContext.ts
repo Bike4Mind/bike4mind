@@ -164,14 +164,18 @@ async function generateAgentFromContext(
   }
 
   if (!modelInfo) {
-    throw new Error('No available LLM model found for agent generation. Please configure your API keys in Settings.');
+    throw new BadRequestError(
+      'No available LLM model found for agent generation. Please configure your API keys in Settings.'
+    );
   }
 
   logger.info(`Using model ${modelInfo.id} for agent generation`);
 
   const llmBackend = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: userId });
   if (!llmBackend) {
-    throw new Error('Failed to initialize LLM backend for agent generation. Please check your API key configuration.');
+    throw new BadRequestError(
+      'Failed to initialize LLM backend for agent generation. Please check your API key configuration.'
+    );
   }
   // The platform picks the model (admin setting or catalog fallback), so picker access rules do not apply.
   const llm = meterCompletionBackend(
