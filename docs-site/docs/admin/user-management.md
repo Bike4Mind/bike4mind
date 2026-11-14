@@ -55,7 +55,7 @@ Use **Watch campaign** for follow-up. If your review supports stopping additiona
 
 ## Search
 
-The search box at the top of the Users tab finds users by name, username, email, or user ID. Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
+The search box at the top of the Users tab finds users by name, username, email, user ID, or LLM provider identifier (see [Tracing an LLM provider safety notice to an account](#tracing-an-llm-provider-safety-notice-to-an-account)). Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
 
 ## Views
 
@@ -376,6 +376,16 @@ The export includes all matching users, not just the current page, up to 15,000 
 2. Click the **User Level** button to cycle through levels (DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser).
 3. Alternatively, add specific permission tags for fine-grained access control.
 4. Click **Update** to save changes.
+
+### Tracing an LLM provider safety notice to an account
+
+Requests to Anthropic and OpenAI carry an opaque per-user identifier: a 64-character hex SHA-256 of the user ID, sent as Anthropic `metadata.user_id` and OpenAI `safety_identifier`. When a provider sends a safety notice that quotes this identifier:
+
+1. Press Cmd/Ctrl+K on the admin page to open **Admin commands**. Full admins only.
+2. Paste the 64-character identifier. The matching account is listed with its masked email and account status: `active`, `throttled`, `suspend_pending` (the suspension threshold was reached and is waiting for an admin to confirm), `suspended`, `banned` or `deleted`.
+3. Select it to open the user profile, where you see the full email and can act on the account.
+
+Each lookup in **Admin commands** is recorded in the admin audit log without the identifier itself. You can also paste the identifier into the Users tab search. No result means the identifier does not belong to a user on this deployment.
 
 ### Handling Support Requests
 

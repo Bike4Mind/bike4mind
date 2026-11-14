@@ -17,7 +17,7 @@ const handler = adminApi({
     res.setHeader('Cache-Control', 'no-store');
     const { q } = parseOrBadRequest(AdminSearchQuerySchema, req.query);
     const kind = classifyAdminQuery(q);
-    if (kind === 'ip' || kind === 'keyPrefix') {
+    if (kind === 'ip' || kind === 'keyPrefix' || kind === 'providerEndUserId') {
       await recordAdminActionFromRequest(req, {
         action: 'admin.search.performed',
         target: { kind: 'system', id: 'admin-search', displayName: 'Admin search' },
