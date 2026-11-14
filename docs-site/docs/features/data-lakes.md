@@ -102,8 +102,9 @@ sites** or **Tags to propose**, does not add a row.
 Yes. Set **Source** to **Feed** on a research configuration and enter the address of an RSS or Atom
 feed. The **Topic** field then holds the question each feed item is judged against. Each run
 considers only items it has not seen before. Passing items go to the review queue like any other
-result. Changing the feed address, the topic, the model, the relevance threshold or any site list
-checks the feed's current items once more under the new settings. A feed that publishes more items
+result. Changing the topic, the model, the relevance threshold or any site list
+re-checks the newest items under the new settings and keeps the items still waiting.
+Changing the feed address starts fresh from the newest items. A feed that publishes more items
 than **Feed items per run** allows falls behind. The run card shows how many items are waiting.
 
 **Can research add sources to a lake without my approval?**

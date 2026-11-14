@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ResearchFeedFingerprintLevers } from './researchFeedFingerprint';
-import { researchFeedFingerprint, researchFeedStatus, withResearchFeedStatus } from './researchFeedFingerprint';
+import {
+  researchFeedFingerprint,
+  researchFeedStatus,
+  researchFeedUrlKey,
+  withResearchFeedStatus,
+} from './researchFeedFingerprint';
 
 const base: ResearchFeedFingerprintLevers = {
   feedUrl: 'https://example.com/feed.xml',
@@ -43,6 +48,14 @@ describe('researchFeedFingerprint', () => {
   });
 });
 
+describe('researchFeedUrlKey', () => {
+  it('depends on the address alone', () => {
+    expect(researchFeedUrlKey(base.feedUrl)).toBe(researchFeedUrlKey(base.feedUrl));
+    expect(researchFeedUrlKey(base.feedUrl)).not.toBe(researchFeedUrlKey('https://example.com/other.xml'));
+    expect(researchFeedUrlKey(base.feedUrl)).not.toContain('example');
+  });
+});
+
 describe('researchFeedStatus', () => {
   const cursor = (fingerprint: string) => ({
     fingerprint,
@@ -52,21 +65,21 @@ describe('researchFeedStatus', () => {
   });
 
   it('is null with no cursor', () => {
-    expect(researchFeedStatus({ ...base, feedCursor: null })).toBeNull();
-    expect(researchFeedStatus(base)).toBeNull();
+    expect(researchFeedStatus({ feedCursor: null }, base)).toBeNull();
+    expect(researchFeedStatus({}, base)).toBeNull();
   });
 
   it('is current when the cursor was written under the config levers, and not after a lever changes', () => {
     const written = cursor(researchFeedFingerprint(base));
-    expect(researchFeedStatus({ ...base, feedCursor: written })).toEqual({
+    expect(researchFeedStatus({ feedCursor: written }, base)).toEqual({
       newestPublishedAt: written.newestPublishedAt,
       current: true,
     });
-    expect(researchFeedStatus({ ...base, query: 'other topic', feedCursor: written })?.current).toBe(false);
+    expect(researchFeedStatus({ feedCursor: written }, { ...base, query: 'other topic' })?.current).toBe(false);
   });
 
   it('withResearchFeedStatus swaps the cursor for its status and keeps the rest', () => {
-    const out = withResearchFeedStatus({ ...base, id: 'c1', feedCursor: cursor(researchFeedFingerprint(base)) });
+    const out = withResearchFeedStatus({ ...base, id: 'c1', feedCursor: cursor(researchFeedFingerprint(base)) }, base);
     expect(out).not.toHaveProperty('feedCursor');
     expect(out).toMatchObject({ id: 'c1', query: 'topic', feedStatus: { current: true } });
   });

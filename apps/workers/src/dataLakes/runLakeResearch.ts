@@ -94,9 +94,36 @@ export async function readFeedFromUrl(url: string, logger: Logger) {
         : 'The feed could not be downloaded. Check the address and that the site is reachable.'
     );
   }
-  const items = dataLakeResearchService.parseFeed(downloaded.data.toString('utf-8'), downloaded.finalUrl);
+  let items: ReturnType<typeof dataLakeResearchService.parseFeed>;
+  try {
+    items = dataLakeResearchService.parseFeed(
+      decodeFeedBody(downloaded.data, downloaded.contentType),
+      downloaded.finalUrl
+    );
+  } catch (error) {
+    logger.info('[lakeResearch] could not parse feed', { error: error instanceof Error ? error.message : error });
+    items = null;
+  }
   if (!items) throw new dataLakeResearchService.FeedUnavailableError('This address is not an RSS or Atom feed');
   return items;
+}
+
+/** Charset from the Content-Type header, else the XML declaration, else UTF-8. An unknown label falls back to UTF-8. */
+export function decodeFeedBody(data: Buffer, contentType?: string | null): string {
+  const fromHeader = /charset\s*=\s*["']?([\w.:-]+)/i.exec(contentType ?? '')?.[1];
+  // The declaration is ASCII-compatible in every charset a feed uses, so latin1 reads it safely.
+  const fromDeclaration = /^\s*<\?xml[^>]*\sencoding\s*=\s*["']([\w.:-]+)["']/i.exec(
+    data.subarray(0, 256).toString('latin1')
+  )?.[1];
+  for (const label of [fromHeader, fromDeclaration]) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label).decode(data);
+    } catch {
+      // Unknown label: try the next source.
+    }
+  }
+  return new TextDecoder('utf-8').decode(data);
 }
 
 /** Provider errors can carry a whole request echo; the run card needs the gist, not the payload. */
@@ -296,12 +323,15 @@ export async function runLakeResearch(
     Promise.all([recordOutcome(outcome), recordSpend(amountMicroUsd)]);
 
   // Best-effort: the run is already settled, and a lost cursor only means some items are judged again.
-  // Skipped when the config's levers changed mid-run: the new cursor would be ignored on the next read
-  // anyway, and must not clobber one a newer run wrote.
+  // Skipped when the config's settings changed mid-run, since the cursor no longer matches them. Two
+  // overlapping runs under the same settings are last-writer-wins.
   const writeFeedCursor = async (configId: string, lakeId: string, feedUrl: string, cursor: ResearchFeedCursor) => {
     try {
       const current = await dataLakeResearchConfigRepository.findByIdInLake(configId, lakeId);
-      if (!current || researchFeedFingerprint(current) !== cursor.fingerprint) {
+      if (
+        !current ||
+        researchFeedFingerprint(dataLakeResearchService.feedFingerprintLevers(current)) !== cursor.fingerprint
+      ) {
         logger.info('[lakeResearch] feed cursor not written: the config changed during the run', { runId });
         return;
       }
@@ -546,7 +576,8 @@ export async function runLakeResearch(
       feedBacklog: result.feedBacklog,
       error: judgeFailure,
     });
-    if (outcome === 'completed' && result.feedCursor && claimed.levers.feedUrl) {
+    // On a failed judge step the executor returns a retries-only cursor; every other failure returns none.
+    if (result.feedCursor && claimed.levers.feedUrl) {
       await writeFeedCursor(claimed.configId, lake.id, claimed.levers.feedUrl, result.feedCursor);
     }
     await recordRunEffects(outcome, result.spentMicroUsd);

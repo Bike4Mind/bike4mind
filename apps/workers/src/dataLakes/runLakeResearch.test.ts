@@ -65,6 +65,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
       RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
       // Real: the live source rules are what these tests exercise.
       normalizeResearchLevers: real.normalizeResearchLevers,
+      feedFingerprintLevers: real.feedFingerprintLevers,
       matchSource: real.matchSource,
       FeedUnavailableError: real.FeedUnavailableError,
       parseFeed: real.parseFeed,
@@ -1211,6 +1212,17 @@ describe('runLakeResearch', () => {
         await expectFailedWith(/not an RSS or Atom feed/);
       });
 
+      it('maps a parser that throws', async () => {
+        const { dataLakeResearchService } = await import('@bike4mind/services');
+        vi.spyOn(dataLakeResearchService, 'parseFeed').mockImplementationOnce(() => {
+          throw new Error('Unexpected close tag at internal.host');
+        });
+        h.ssrfSafeDownload.mockResolvedValue(download(RSS));
+        await runLakeResearch('run-1', logger);
+        const feedError = await expectFailedWith(/not an RSS or Atom feed/);
+        expect(feedError?.message).not.toMatch(/internal\.host/);
+      });
+
       it('settles the run failed with the executor reason, spends nothing and writes no cursor', async () => {
         const { FeedUnavailableError } = (await import('@bike4mind/services')).dataLakeResearchService;
         h.executeResearchRun.mockRejectedValue(new FeedUnavailableError('This feed is larger than 10 MB'));
@@ -1236,6 +1248,82 @@ describe('runLakeResearch', () => {
         h.executeResearchRun.mockRejectedValue(new Error('boom'));
 
         await expect(runLakeResearch('run-1', logger)).rejects.toThrow('boom');
+      });
+    });
+
+    describe('decoding the feed body', () => {
+      const latin1Feed = (declaration: string) =>
+        Buffer.concat([
+          Buffer.from(`${declaration}<rss version="2.0"><channel><item><title>Caf`, 'latin1'),
+          Buffer.from([0xe9]),
+          Buffer.from('</title><link>https://example.com/a</link></item></channel></rss>', 'latin1'),
+        ]);
+      const titleOf = async (body: Buffer, contentType: string) => {
+        h.ssrfSafeDownload.mockResolvedValue({ data: body, contentType, finalUrl: FEED_URL });
+        await runLakeResearch('run-1', logger);
+        return ((await readFeedPort()(FEED_URL)) as { title: string }[])[0].title;
+      };
+
+      it('uses the charset from the Content-Type header', async () => {
+        expect(await titleOf(latin1Feed('<?xml version="1.0"?>'), 'text/xml; charset=windows-1252')).toBe('Caf\u00e9');
+      });
+
+      it('uses the encoding from the XML declaration when the header names none', async () => {
+        expect(await titleOf(latin1Feed('<?xml version="1.0" encoding="windows-1252"?>'), 'application/rss+xml')).toBe(
+          'Caf\u00e9'
+        );
+      });
+
+      it('falls back to UTF-8 on an unknown label', async () => {
+        const body = Buffer.from(
+          '<?xml version="1.0" encoding="no-such-charset"?><rss version="2.0"><channel><item><title>Caf\u00e9</title><link>https://example.com/a</link></item></channel></rss>'
+        );
+        expect(await titleOf(body, 'text/xml; charset=also-unknown')).toBe('Caf\u00e9');
+      });
+    });
+
+    describe('consecutive runs while the judge is down', () => {
+      const pubDate = (day: number) => `Mon, 0${day} Nov 2026 00:00:00 GMT`;
+      const RSS5 = `<?xml version="1.0"?><rss version="2.0"><channel>${[1, 2, 3, 4, 5]
+        .map(
+          n => `<item><title>I${n}</title><link>https://example.com/i${n}</link><pubDate>${pubDate(n)}</pubDate></item>`
+        )
+        .join('')}</channel></rss>`;
+
+      it('offers fresh items first on the second run and persists the attempts', async () => {
+        const real = (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
+          .dataLakeResearchService;
+        const run = feedLevers({ maxResults: 2 });
+        h.claimForExecution.mockResolvedValue(claimedRun({ levers: run }));
+        h.ssrfSafeDownload.mockResolvedValue(download(RSS5));
+        h.executeResearchRun.mockImplementation(real.executeResearchRun);
+        h.judge.mockResolvedValue({ outcome: 'failed', error: 'down', costMicroUsd: 0 });
+        let stored: ResearchFeedCursor | null = { ...cursorFor(run), newestPublishedAt: null, seenKeys: [] };
+        h.recordFeedCursor.mockImplementation(async (_id: string, _url: string, cursor: ResearchFeedCursor) => {
+          stored = cursor;
+          return true;
+        });
+        h.findConfig.mockImplementation(async () => liveConfig({ ...run, feedCursor: stored }));
+        const judgedTitles = () => h.judge.mock.calls.map(([args]) => (args as { title: string }).title);
+
+        await runLakeResearch('run-1', logger);
+        expect(judgedTitles()).toEqual(['I1', 'I2']);
+        expect(stored!.retries).toEqual([
+          { key: 'https://example.com/i1', attempts: 1 },
+          { key: 'https://example.com/i2', attempts: 1 },
+        ]);
+        expect(stored!.seenKeys).toEqual([]);
+
+        h.judge.mockClear();
+        await runLakeResearch('run-2', logger);
+        expect(judgedTitles()).toEqual(['I3', 'I4']);
+        expect(stored!.retries.map(retry => retry.key)).toEqual([
+          'https://example.com/i1',
+          'https://example.com/i2',
+          'https://example.com/i3',
+          'https://example.com/i4',
+        ]);
+        expect(h.settleRun).toHaveBeenLastCalledWith('run-2', expect.objectContaining({ status: 'failed' }));
       });
     });
 
@@ -1269,13 +1357,58 @@ describe('runLakeResearch', () => {
         expect(h.settleRun.mock.invocationCallOrder[0]).toBeLessThan(h.recordFeedCursor.mock.invocationCallOrder[0]);
       });
 
-      it('does not write it on a failed run', async () => {
-        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true });
+      it('writes the retries-only cursor when the judge step failed', async () => {
+        const retriesOnly = { ...cursorFor(feedLevers()), retries: [{ key: 'example.com/a', attempts: 1 }] };
+        completedWith(retriesOnly, { judgeStepFailed: true });
 
         await runLakeResearch('run-1', logger);
 
         expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+        expect(h.recordFeedCursor).toHaveBeenCalledWith('config-1', FEED_URL, retriesOnly);
+      });
+
+      it('writes nothing when the judge step failed with no cursor returned', async () => {
+        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true, feedCursor: undefined });
+
+        await runLakeResearch('run-1', logger);
+
         expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the judge step failed and the settings changed mid-run', async () => {
+        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true });
+        h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), minRelevance: 0.9, feedCursor: null }));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('still writes when the stored config holds un-normalized spellings of the same levers', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(
+          liveConfig({
+            ...feedLevers(),
+            query: '  coastal erosion  ',
+            trustedDomains: [],
+            blockedDomains: ['B.example.com', 'a.example.com', 'a.example.com'],
+            feedCursor: null,
+          })
+        );
+        h.claimForExecution.mockResolvedValue(
+          claimedRun({ levers: feedLevers({ blockedDomains: ['a.example.com', 'b.example.com'] }) })
+        );
+        h.executeResearchRun.mockResolvedValue({
+          totals: emptyResearchRunTotals(),
+          spentMicroUsd: 0,
+          stopReason: 'exhausted',
+          judgeStepFailed: false,
+          feedCursor: cursorFor(feedLevers({ blockedDomains: ['a.example.com', 'b.example.com'] })),
+        });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).toHaveBeenCalled();
       });
 
       it.each([

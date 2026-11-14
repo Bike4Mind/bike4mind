@@ -51,7 +51,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
     ]);
     return respond(res, researchConfigListResponseSchema, {
-      data: configs.map(withResearchFeedStatus),
+      data: configs.map(c => withResearchFeedStatus(c, dataLakeResearchService.feedFingerprintLevers(c))),
       pendingProposals: pendingByLake[lake.id] ?? 0,
     });
   })
@@ -75,7 +75,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return created;
     });
-    return respond(res, researchConfigEnvelopeResponseSchema, { data: withResearchFeedStatus(config) }, 201);
+    return respond(
+      res,
+      researchConfigEnvelopeResponseSchema,
+      { data: withResearchFeedStatus(config, dataLakeResearchService.feedFingerprintLevers(config)) },
+      201
+    );
   });
 
 export const config = {

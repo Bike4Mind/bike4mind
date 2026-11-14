@@ -1,4 +1,4 @@
-import type { ResearchRunLevers, ResearchUnlistedSources } from '@bike4mind/common';
+import type { ResearchFeedFingerprintLevers, ResearchRunLevers, ResearchUnlistedSources } from '@bike4mind/common';
 import {
   boundedStringList,
   deriveLegacyAllowedDomains,
@@ -131,4 +131,16 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // those at the queue door, and duplicating the rule is how the two copies drift.
     proposedTags: boundedStringList(input.proposedTags, RESEARCH_DOMAIN_LIST_MAX),
   };
+}
+
+/**
+ * The levers a run snapshotted from this stored config would carry, for fingerprinting. Falls back to
+ * the stored fields when they cannot be normalized, so a status read never throws on a broken config.
+ */
+export function feedFingerprintLevers(config: ResearchLeversDraft): ResearchFeedFingerprintLevers {
+  try {
+    return normalizeResearchLevers(config);
+  } catch {
+    return config as ResearchFeedFingerprintLevers;
+  }
 }

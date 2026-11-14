@@ -8,6 +8,7 @@ import type {
 import {
   emptyResearchRunTotals,
   researchFeedFingerprint,
+  researchFeedUrlKey,
   RESEARCH_FEED_MAX_RETRIES,
   RESEARCH_FEED_SEEN_KEYS_MAX,
   RESEARCH_RUN_PRODUCER,
@@ -19,7 +20,7 @@ import { canonicalSourceKey } from '../dataLakeService/canonicalSourceKey';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { FeedItem } from './parseFeed';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
-import { selectFeedCandidates } from './selectFeedCandidates';
+import { feedCursorMode, selectFeedCandidates } from './selectFeedCandidates';
 import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
 
 /**
@@ -135,7 +136,10 @@ export interface ResearchRunResult {
   judgeStepFailed: boolean;
   /** The first failed judgment's message, when any judgment failed. */
   judgeError?: string;
-  /** Feed runs only: what the next run needs to resume. The caller decides whether to store it. */
+  /**
+   * Feed runs only: what the next run needs to resume. The caller decides whether to store it. When
+   * the judge step failed, only `retries` differs from the stored cursor; absent if none was active.
+   */
   feedCursor?: ResearchFeedCursor;
   /** Feed runs only: eligible items left for a later run. Outside `totals`: a waiting item is not an outcome. */
   feedBacklog?: number;
@@ -207,9 +211,16 @@ export async function executeResearchRun(
     if (state === 'settled') settledKeys.push(key);
   };
 
-  const buildFeedCursor = (candidates: ResearchCandidate[]): ResearchFeedCursor => {
+  const buildFeedCursor = (
+    candidates: ResearchCandidate[],
+    judgeStepFailed: boolean
+  ): ResearchFeedCursor | undefined => {
     const fingerprint = researchFeedFingerprint(levers);
-    const base = storedFeedCursor?.fingerprint === fingerprint ? storedFeedCursor : null;
+    const mode = feedCursorMode(storedFeedCursor, levers);
+    // A judge outage must not settle anything, so only an active cursor can take its retry counts.
+    if (judgeStepFailed && mode !== 'active') return undefined;
+    // Same feed under other settings: the old retries, seen keys and floor carry over.
+    const base = mode === 'fresh' ? null : storedFeedCursor!;
     const oldAttempts = new Map((base?.retries ?? []).map(retry => [retry.key, retry.attempts]));
 
     const nextRetries: ResearchFeedCursor['retries'] = [];
@@ -221,7 +232,8 @@ export async function executeResearchRun(
       let state: FeedItemState | 'unreached' | 'given_up' = feedStates.get(key) ?? 'unreached';
       if (state === 'transient') {
         const attempts = (oldAttempts.get(key) ?? 0) + 1;
-        if (attempts >= RESEARCH_FEED_MAX_RETRIES) {
+        // Giving up is a completed run's call: a failed judge says nothing about the item.
+        if (attempts >= RESEARCH_FEED_MAX_RETRIES && !judgeStepFailed) {
           givenUp.push(key);
           state = 'given_up';
         } else {
@@ -230,6 +242,13 @@ export async function executeResearchRun(
       }
       if (candidate.publishedAt) dated.push({ at: candidate.publishedAt.getTime(), state });
     }
+
+    // Old retries survive only while the item is still in the feed and this run did not touch it.
+    const keptRetries = (base?.retries ?? []).filter(
+      retry => feedKeysInFeed.has(retry.key) && !feedStates.has(retry.key)
+    );
+    const retries = [...keptRetries, ...nextRetries];
+    if (judgeStepFailed) return { ...base!, retries };
 
     // The floor never passes an item that still needs a run; a given-up item no longer does.
     const blockedAt = Math.min(
@@ -241,29 +260,34 @@ export async function executeResearchRun(
       if (item.state === 'settled' && item.at < blockedAt && (newest === null || item.at > newest)) newest = item.at;
     }
 
-    // Old retries survive only while the item is still in the feed and this run did not touch it.
-    const keptRetries = (base?.retries ?? []).filter(
-      retry => feedKeysInFeed.has(retry.key) && !feedStates.has(retry.key)
-    );
+    // Retaken items leave the old list: they are settled again below or are waiting in retries.
+    const retaken = new Set(candidates.map(candidate => canonicalSourceKey(candidate.url)));
+    const carried =
+      (mode === 'same_feed' ? (base?.seenKeys ?? []).filter(key => !retaken.has(key)) : base?.seenKeys) ?? [];
     return {
       fingerprint,
+      feedUrlKey: researchFeedUrlKey(levers.feedUrl),
       newestPublishedAt: newest === null ? null : new Date(newest),
-      seenKeys: [...(base?.seenKeys ?? []), ...feedSkipped, ...settledKeys, ...givenUp].slice(
+      seenKeys: [...new Set([...carried, ...feedSkipped, ...settledKeys, ...givenUp])].slice(
         -RESEARCH_FEED_SEEN_KEYS_MAX
       ),
-      retries: [...keptRetries, ...nextRetries],
+      retries,
     };
   };
 
   let candidates: ResearchCandidate[] = [];
-  const settle = (stopReason: ResearchRunStopReason): ResearchRunResult => ({
-    totals,
-    spentMicroUsd,
-    stopReason,
-    judgeStepFailed: totals.judgeFailed > 0 && scored === 0,
-    judgeError,
-    ...(isFeed ? { feedCursor: buildFeedCursor(candidates), feedBacklog } : {}),
-  });
+  const settle = (stopReason: ResearchRunStopReason): ResearchRunResult => {
+    const judgeStepFailed = totals.judgeFailed > 0 && scored === 0;
+    const feedCursor = isFeed ? buildFeedCursor(candidates, judgeStepFailed) : undefined;
+    return {
+      totals,
+      spentMicroUsd,
+      stopReason,
+      judgeStepFailed,
+      judgeError,
+      ...(isFeed ? { ...(feedCursor ? { feedCursor } : {}), feedBacklog } : {}),
+    };
+  };
 
   const autoAdmitRule: AutoAdmitRule = { isTrusted: url => trustedEntryForUrl(url, levers) };
 

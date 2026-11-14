@@ -1,6 +1,7 @@
 import type { ResearchFeedCursor, ResearchFeedFingerprintLevers, ResearchRunLevers } from '@bike4mind/common';
 import {
   researchFeedFingerprint,
+  researchFeedUrlKey,
   RESEARCH_FEED_DATE_GRACE_DAYS,
   RESEARCH_FEED_FUTURE_SKEW_MS,
   RESEARCH_FEED_SEEN_KEYS_MAX,
@@ -30,12 +31,30 @@ interface Keyed {
   at: number | null;
 }
 
+export type FeedCursorMode = 'active' | 'same_feed' | 'fresh';
+
+/**
+ * How a stored cursor applies to the current levers: `active` on a fingerprint match, `same_feed`
+ * when only levers other than the address changed, `fresh` when there is no usable cursor.
+ */
+export function feedCursorMode(
+  cursor: ResearchFeedCursor | null | undefined,
+  levers: FeedSelectionLevers
+): FeedCursorMode {
+  if (!cursor) return 'fresh';
+  if (cursor.fingerprint === researchFeedFingerprint(levers)) return 'active';
+  return cursor.feedUrlKey !== undefined && cursor.feedUrlKey === researchFeedUrlKey(levers.feedUrl)
+    ? 'same_feed'
+    : 'fresh';
+}
+
 /**
  * Picks which feed items this run judges. Pure.
  *
- * A cursor is honoured only when its fingerprint matches the current levers. Keys decide what is
- * new; the date check is a backstop that applies only once the key list has hit its cap and may
- * have lost entries.
+ * A cursor is fully honoured only when its fingerprint matches the current levers. When just the
+ * settings changed, the newest items are re-checked and only the old cursor's seen items left over
+ * are skipped, so unseen backlog stays eligible. Keys decide what is new; the date check is a
+ * backstop that applies only once the key list has hit its cap and may have lost entries.
  */
 export function selectFeedCandidates(
   items: readonly ResearchCandidate[],
@@ -43,7 +62,8 @@ export function selectFeedCandidates(
   levers: FeedSelectionLevers,
   now: Date
 ): FeedSelection {
-  const active = cursor && cursor.fingerprint === researchFeedFingerprint(levers) ? cursor : null;
+  const mode = feedCursorMode(cursor, levers);
+  const active = mode === 'active' ? cursor! : null;
   const seen = new Set(active?.seenKeys ?? []);
   const nowMs = now.getTime();
   const ceilingMs = nowMs + RESEARCH_FEED_FUTURE_SKEW_MS;
@@ -76,7 +96,13 @@ export function selectFeedCandidates(
   ];
 
   if (active) {
-    const ordered = oldestFirst(eligible);
+    const attempts = new Map(active.retries.map(retry => [retry.key, retry.attempts]));
+    const retried = (entry: Keyed) => (attempts.get(entry.key) ?? 0) > 0;
+    // A poison item keeps its attempts but must not hold the front of the queue.
+    const ordered = [
+      ...oldestFirst(eligible.filter(entry => !retried(entry))),
+      ...oldestFirst(eligible.filter(retried)),
+    ];
     const taken = ordered.slice(0, levers.maxResults);
     return {
       candidates: taken.map(entry => entry.candidate),
@@ -91,6 +117,15 @@ export function selectFeedCandidates(
   ];
   const taken = newestFirst.slice(0, levers.maxResults);
   const rest = newestFirst.slice(levers.maxResults);
+  if (mode === 'same_feed') {
+    const previouslySeen = new Set(cursor!.seenKeys);
+    const skipped = oldestFirst(rest.filter(entry => previouslySeen.has(entry.key)));
+    return {
+      candidates: oldestFirst(taken).map(entry => entry.candidate),
+      skipped: skipped.map(entry => entry.key),
+      backlog: rest.length - skipped.length,
+    };
+  }
   return {
     candidates: oldestFirst(taken).map(entry => entry.candidate),
     skipped: oldestFirst(rest).map(entry => entry.key),

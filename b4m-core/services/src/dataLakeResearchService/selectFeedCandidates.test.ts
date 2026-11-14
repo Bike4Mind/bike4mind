@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 import {
   researchFeedFingerprint,
+  researchFeedUrlKey,
   RESEARCH_FEED_DATE_GRACE_DAYS,
   RESEARCH_FEED_FUTURE_SKEW_MS,
   RESEARCH_FEED_SEEN_KEYS_MAX,
@@ -188,5 +189,73 @@ describe('selectFeedCandidates - consecutive runs', () => {
   it('collapses duplicate urls inside one feed', () => {
     const result = selectFeedCandidates([item('a', daysAgo(2)), item('a', daysAgo(1))], null, levers(), NOW);
     expect(ids(result.candidates)).toEqual(['a']);
+  });
+});
+
+describe('selectFeedCandidates - retried items', () => {
+  it('offers fresh items before items that already failed, oldest first within each group', () => {
+    const l = levers({ maxResults: 3 });
+    const cursor: ResearchFeedCursor = {
+      fingerprint: researchFeedFingerprint(l),
+      newestPublishedAt: null,
+      seenKeys: [],
+      retries: [
+        { key: key('p1'), attempts: 2 },
+        { key: key('p2'), attempts: 1 },
+      ],
+    };
+    const feed = [
+      item('p1', daysAgo(9)),
+      item('p2', daysAgo(8)),
+      item('f2', daysAgo(2)),
+      item('f1', daysAgo(3)),
+      item('f3', daysAgo(1)),
+    ];
+    const run = selectFeedCandidates(feed, cursor, l, NOW);
+    expect(ids(run.candidates)).toEqual(['f1', 'f2', 'f3']);
+    expect(run.backlog).toBe(2);
+    expect(ids(selectFeedCandidates(feed.slice(0, 4), cursor, l, NOW).candidates)).toEqual(['f1', 'f2', 'p1']);
+  });
+});
+
+describe('selectFeedCandidates - settings changed on the same feed', () => {
+  const sameFeedCursor = (before: FeedSelectionLevers, seen: string[]): ResearchFeedCursor => ({
+    fingerprint: researchFeedFingerprint(before),
+    feedUrlKey: researchFeedUrlKey(before.feedUrl),
+    newestPublishedAt: null,
+    seenKeys: seen.map(key),
+    retries: [],
+  });
+  const feed = [
+    item('s1', daysAgo(40)),
+    item('s2', daysAgo(39)),
+    item('s3', daysAgo(38)),
+    ...Array.from({ length: 30 }, (_unused, i) => item(`w${i}`, daysAgo(30 - i))),
+  ];
+
+  it('takes the newest items, skips only previously seen ones it leaves, and keeps unseen backlog eligible', () => {
+    const before = levers({ maxResults: 2 });
+    const after = levers({ maxResults: 2, minRelevance: 0.9 });
+    const cursor = sameFeedCursor(before, ['s1', 's2', 's3']);
+
+    const run = selectFeedCandidates(feed, cursor, after, NOW);
+    expect(ids(run.candidates)).toEqual(['w28', 'w29']);
+    expect(run.skipped).toEqual([key('s1'), key('s2'), key('s3')]);
+    expect(run.backlog).toBe(28);
+  });
+
+  it('treats a cursor without an address key, or for another address, as fresh', () => {
+    const before = levers({ maxResults: 2 });
+    const after = levers({ maxResults: 2, feedUrl: 'https://example.org/other.xml' });
+    const keyless = { ...sameFeedCursor(before, ['s1']), feedUrlKey: undefined };
+    for (const [l, cursor] of [
+      [after, sameFeedCursor(before, ['s1'])],
+      [levers({ maxResults: 2, minRelevance: 0.9 }), keyless],
+    ] as const) {
+      const run = selectFeedCandidates(feed, cursor, l, NOW);
+      expect(ids(run.candidates)).toEqual(['w28', 'w29']);
+      expect(run.skipped).toHaveLength(31);
+      expect(run.backlog).toBe(0);
+    }
   });
 });

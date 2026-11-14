@@ -45,7 +45,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return result;
     });
-    return respond(res, researchConfigEnvelopeResponseSchema, { data: withResearchFeedStatus(updated) });
+    return respond(res, researchConfigEnvelopeResponseSchema, {
+      data: withResearchFeedStatus(updated, dataLakeResearchService.feedFingerprintLevers(updated)),
+    });
   })
   .delete(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };

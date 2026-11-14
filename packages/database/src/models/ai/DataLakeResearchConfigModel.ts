@@ -43,6 +43,7 @@ const ResearchScheduleOutcomeSchema = new Schema(
 const ResearchFeedCursorSchema = new Schema(
   {
     fingerprint: { type: String, required: true },
+    feedUrlKey: { type: String },
     newestPublishedAt: { type: Date, default: null },
     seenKeys: { type: [String], default: [] },
     retries: {

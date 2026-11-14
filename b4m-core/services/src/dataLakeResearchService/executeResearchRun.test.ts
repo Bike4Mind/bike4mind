@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { LegacyResearchRunLevers, ResearchFeedCursor } from '@bike4mind/common';
 import {
   researchFeedFingerprint,
+  researchFeedUrlKey,
   RESEARCH_FEED_FUTURE_SKEW_MS,
   RESEARCH_FEED_MAX_RETRIES,
   RESEARCH_FEED_SEEN_KEYS_MAX,
@@ -687,12 +688,12 @@ describe('executeResearchRun - feed source', () => {
 
     it('gives an item up after the max retries and records it as seen', async () => {
       const l = feedLevers();
-      const items = [dated(1, 3), dated(2, 5)];
       let cursor: ResearchFeedCursor | null = null;
       const seenAfter: boolean[] = [];
       let lastFloor: Date | null = null;
       for (let run = 1; run <= RESEARCH_FEED_MAX_RETRIES; run += 1) {
-        const { ports } = feedPorts(items);
+        // A new item each run keeps the judge scoring something, so the run completes.
+        const { ports } = feedPorts([dated(1, 3), dated(2, 5), dated(10 + run, 6)]);
         ports.judge = vi.fn(failJudge([hit(1).url]));
         const result: ResearchRunResult = await executeResearchRun(l, `run-${run}`, ports, cursor);
         cursor = result.feedCursor!;
@@ -797,6 +798,133 @@ describe('executeResearchRun - feed source', () => {
       const result = await executeResearchRun(l, 'run-1', ports);
       expect(result.stopReason).toBe('judge_unavailable');
       expect(result.judgeStepFailed).toBe(true);
+    });
+  });
+
+  describe('a failed judge step', () => {
+    const outage = (ports: ResearchRunPorts) => {
+      ports.judge = vi.fn(async () => ({ outcome: 'failed' as const, error: 'down', costMicroUsd: 0 }));
+    };
+
+    it('returns only the retry counts of the items it tried, leaving the rest of the stored cursor alone', async () => {
+      const l = feedLevers();
+      const stored = cursorFor(l, {
+        newestPublishedAt: daysAgo(9),
+        seenKeys: [keyOf(9)],
+        retries: [{ key: keyOf(4), attempts: 1 }],
+      });
+      const { ports } = feedPorts([dated(1, 7), dated(2, 6), dated(3, 5), dated(4, 4), dated(9, 9)]);
+      outage(ports);
+      const result = await executeResearchRun(l, 'run-1', ports, stored);
+      expect(result.judgeStepFailed).toBe(true);
+      expect(result.feedCursor).toEqual({
+        ...stored,
+        retries: [
+          { key: keyOf(4), attempts: 1 },
+          { key: keyOf(1), attempts: 1 },
+          { key: keyOf(2), attempts: 1 },
+          { key: keyOf(3), attempts: 1 },
+        ],
+      });
+    });
+
+    it('returns no cursor when there was no active stored cursor', async () => {
+      const l = feedLevers();
+      for (const stored of [null, cursorFor(feedLevers({ minRelevance: 0.9 }))]) {
+        const { ports } = feedPorts([dated(1, 3)]);
+        outage(ports);
+        const result = await executeResearchRun(l, 'run-1', ports, stored);
+        expect(result.judgeStepFailed).toBe(true);
+        expect(result.feedCursor).toBeUndefined();
+      }
+    });
+
+    it('gives nothing up across a total outage of any length', async () => {
+      const l = feedLevers({ maxResults: 3 });
+      const items = [dated(1, 7), dated(2, 6), dated(3, 5), dated(4, 4)];
+      let cursor: ResearchFeedCursor | null = cursorFor(l);
+      for (let run = 1; run <= RESEARCH_FEED_MAX_RETRIES * 3; run += 1) {
+        const { ports } = feedPorts(items);
+        outage(ports);
+        cursor = (await executeResearchRun(l, `run-${run}`, ports, cursor)).feedCursor!;
+        expect(cursor.seenKeys).toEqual([]);
+      }
+      expect(Math.max(...cursor.retries.map(retry => retry.attempts))).toBeGreaterThan(RESEARCH_FEED_MAX_RETRIES);
+    });
+
+    it('gives an item up only when it fails again in a completed run', async () => {
+      const l = feedLevers();
+      const stored = cursorFor(l, { retries: [{ key: keyOf(1), attempts: RESEARCH_FEED_MAX_RETRIES + 5 }] });
+      const kept = feedPorts([dated(1, 3), dated(2, 2)]);
+      const afterSettled = await executeResearchRun(l, 'run-1', kept.ports, stored);
+      expect(afterSettled.feedCursor!.seenKeys).toContain(keyOf(1));
+
+      const failing = feedPorts([dated(1, 3), dated(2, 2)]);
+      failing.ports.judge = vi.fn(failJudge([hit(1).url]));
+      const result = await executeResearchRun(l, 'run-2', failing.ports, stored);
+      expect(result.judgeStepFailed).toBe(false);
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(2), keyOf(1)]);
+      expect(result.feedCursor!.retries).toEqual([]);
+    });
+  });
+
+  describe('settings changed on the same feed', () => {
+    const waiting = Array.from({ length: 30 }, (_unused, i) => dated(100 + i, 40 - i));
+    const known = [dated(1, 50), dated(2, 49)];
+
+    it('keeps 30 waiting items eligible across later runs, and re-checks the newest under the new settings', async () => {
+      const before = feedLevers({ maxResults: 2 });
+      const after = feedLevers({ maxResults: 2, minRelevance: 0.9 });
+      const stored = cursorFor(before, { feedUrlKey: researchFeedUrlKey(FEED_URL), seenKeys: [keyOf(1), keyOf(2)] });
+      const items = [...known, ...waiting];
+
+      const offered: string[][] = [];
+      let cursor: ResearchFeedCursor | null = stored;
+      for (let run = 1; run <= 3; run += 1) {
+        const { ports, calls } = feedPorts(items);
+        const result: ResearchRunResult = await executeResearchRun(after, `run-${run}`, ports, cursor);
+        offered.push(calls.judged);
+        cursor = result.feedCursor!;
+        expect(cursor.fingerprint).toBe(researchFeedFingerprint(upgradeLegacyResearchLevers(after)));
+      }
+      // Run 1 re-checks the newest two; the next runs walk the waiting items oldest first.
+      expect(offered[0]).toEqual([hit(128).url, hit(129).url]);
+      expect(offered[1]).toEqual([hit(100).url, hit(101).url]);
+      expect(offered[2]).toEqual([hit(102).url, hit(103).url]);
+    });
+
+    it('carries retries forward and does not mark a retaken item seen while it waits to retry', async () => {
+      const before = feedLevers({ maxResults: 2 });
+      const after = feedLevers({ maxResults: 2, minRelevance: 0.9 });
+      const stored = cursorFor(before, {
+        feedUrlKey: researchFeedUrlKey(FEED_URL),
+        seenKeys: [keyOf(1), keyOf(2)],
+        retries: [{ key: keyOf(2), attempts: 1 }],
+      });
+      const { ports } = feedPorts(known);
+      ports.judge = vi.fn(failJudge([hit(2).url]));
+      const result = await executeResearchRun(after, 'run-1', ports, stored);
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1)]);
+      expect(result.feedCursor!.retries).toEqual([{ key: keyOf(2), attempts: 2 }]);
+    });
+
+    it('starts fresh when the feed address changes or the old cursor has no address key', async () => {
+      const before = feedLevers({ maxResults: 2 });
+      const items = [...known, ...waiting];
+      const otherFeed = feedLevers({ maxResults: 2, feedUrl: 'https://feeds.example.org/other.xml' });
+      for (const [l, stored] of [
+        [otherFeed, cursorFor(before, { feedUrlKey: researchFeedUrlKey(FEED_URL), seenKeys: [keyOf(1)] })],
+        [
+          feedLevers({ maxResults: 2, minRelevance: 0.9 }),
+          cursorFor(before, { seenKeys: [keyOf(1)], retries: [{ key: keyOf(2), attempts: 1 }] }),
+        ],
+      ] as const) {
+        const { ports } = feedPorts(items);
+        const result = await executeResearchRun(l, 'run-1', ports, stored);
+        expect(result.feedBacklog).toBe(0);
+        expect(result.feedCursor!.retries).toEqual([]);
+        expect(result.feedCursor!.seenKeys).toHaveLength(32);
+      }
     });
   });
 });

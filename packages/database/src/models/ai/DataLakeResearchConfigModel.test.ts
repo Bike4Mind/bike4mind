@@ -346,6 +346,14 @@ describe('DataLakeResearchConfigRepository', () => {
       });
     });
 
+    it('round-trips the feed address key', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+
+      await repo.recordFeedCursor(id, FEED, cursor({ feedUrlKey: 'url-key-1' }));
+
+      expect((await repo.findByIdInLake(id, LAKE))?.feedCursor?.feedUrlKey).toBe('url-key-1');
+    });
+
     it('drops a cursor from a run of a feed the config has since left', async () => {
       const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
       await repo.updateConfig(id, LAKE, { feedUrl: 'https://example.com/other.xml' });

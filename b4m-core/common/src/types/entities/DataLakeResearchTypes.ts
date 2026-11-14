@@ -320,8 +320,10 @@ export type LegacyResearchRunLevers = Omit<
  * run settles, never a lever and never edited through the API.
  */
 export interface ResearchFeedCursor {
-  /** `researchFeedFingerprint` of the levers the cursor was written under; a mismatch ignores the cursor. */
+  /** `researchFeedFingerprint` of the levers the cursor was written under; a mismatch re-checks the newest items. */
   fingerprint: string;
+  /** `researchFeedUrlKey` of the feed address. Absent on older cursors, which then start fresh on a mismatch. */
+  feedUrlKey?: string;
   /** Floor for the date backstop. Never passes an item that still needs a run. */
   newestPublishedAt: Date | null;
   /** Canonical source keys already dealt with, in processing order (oldest first). */

@@ -28,8 +28,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
   dataLakeResearchService: {
+    feedFingerprintLevers: (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService
+      .feedFingerprintLevers,
     listResearchConfigs: h.listResearchConfigs,
     createResearchConfig: h.createResearchConfig,
     updateResearchConfig: h.updateResearchConfig,
@@ -252,6 +254,19 @@ describe('/api/data-lakes/[id]/research/configs', () => {
       expect(list.json).toHaveBeenCalledWith({ data: [expected(true)], pendingProposals: 7 });
       expect(created.json).toHaveBeenCalledWith({ data: expected(true) });
       expect(updated.json).toHaveBeenCalledWith({ data: expected(true) });
+    });
+
+    it('fingerprints the normalized levers, so an untrimmed query or unsorted domain list still matches', async () => {
+      const written = { ...feedLevers, trustedDomains: ['a.com', 'b.com'] };
+      const stored = {
+        ...withCursor(researchFeedFingerprint(written as never)),
+        query: '  topic ',
+        trustedDomains: ['B.com', 'a.com'],
+      };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json.mock.calls[0][0].data[0].feedStatus).toEqual({ newestPublishedAt: new Date(NEWEST), current: true });
     });
 
     it('reports a cursor written under other levers as not current', async () => {

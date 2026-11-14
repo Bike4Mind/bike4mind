@@ -28,7 +28,8 @@ const sortedUnique = (values: readonly string[] | undefined): string[] => [...ne
 
 /**
  * A stable hash of the levers that decide which feed items a run judges and how. A cursor written
- * under a different fingerprint is ignored, so changing any of them re-judges the feed once.
+ * under a different fingerprint is not trusted as-is: if the feed address is unchanged the newest
+ * items are re-checked and items still waiting are kept, otherwise the feed starts fresh.
  * Site lists are order-insensitive.
  */
 export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): string => {
@@ -47,26 +48,35 @@ export const researchFeedFingerprint = (levers: ResearchFeedFingerprintLevers): 
   return cyrb53(canonical, 0) + cyrb53(canonical, 1);
 };
 
-/** The config response's view of its cursor: when it last advanced and whether it still applies. Null with no cursor. */
+/** Hash of the feed address alone, so a cursor can tell "same feed, other levers changed" from "another feed". */
+export const researchFeedUrlKey = (feedUrl: string | null | undefined): string => {
+  const canonical = feedUrl ?? '';
+  return cyrb53(canonical, 0) + cyrb53(canonical, 1);
+};
+
+/**
+ * The config response's view of its cursor: when it last advanced and whether it still applies. Null with no cursor.
+ * `levers` must be the normalized levers a run would snapshot, not the raw stored fields.
+ */
 export const researchFeedStatus = (
-  config: ResearchFeedFingerprintLevers & { feedCursor?: ResearchFeedCursor | null }
+  config: { feedCursor?: ResearchFeedCursor | null },
+  levers: ResearchFeedFingerprintLevers
 ): ResearchFeedStatus | null => {
   const cursor = config.feedCursor;
   if (!cursor) return null;
   return {
     newestPublishedAt: cursor.newestPublishedAt ?? null,
-    current: cursor.fingerprint === researchFeedFingerprint(config),
+    current: cursor.fingerprint === researchFeedFingerprint(levers),
   };
 };
 
 /** A config as the API returns it: the cursor itself stays on the server, its status goes out in its place. */
-export const withResearchFeedStatus = <
-  T extends ResearchFeedFingerprintLevers & { feedCursor?: ResearchFeedCursor | null },
->(
-  config: T
+export const withResearchFeedStatus = <T extends { feedCursor?: ResearchFeedCursor | null }>(
+  config: T,
+  levers: ResearchFeedFingerprintLevers
 ): Omit<T, 'feedCursor'> & { feedStatus: ResearchFeedStatus | null } => {
   const { feedCursor: _cursor, ...rest } = config;
-  return { ...rest, feedStatus: researchFeedStatus(config) };
+  return { ...rest, feedStatus: researchFeedStatus(config, levers) };
 };
 
 /** `origin + path` of a feed address, never its query string or credentials. */
