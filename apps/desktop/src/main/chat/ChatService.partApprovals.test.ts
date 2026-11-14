@@ -235,11 +235,18 @@ describe('ChatService approvals decided per part', () => {
 
   it('runs a read of a folder outside the shared ones in auto mode without a card', async () => {
     const id = await session('auto');
-    await runCommand(id, `git status && ls "${outside}"; cd "${outside}" && git status`);
+    await runCommand(id, `git status && ls "${outside}"; cd "${outside}" && ls`);
 
     const ran = await settled();
     expect(ran.status).toBe('done');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('still asks about git run in a folder outside the shared ones, which may run a program the repository names', async () => {
+    const id = await session('auto');
+    await runCommand(id, `cd "${outside}" && git status`);
+
+    await awaitCall('bash_execute', 'awaiting-approval');
   });
 
   it('still asks about a folder outside the shared ones that a command may write in', async () => {

@@ -5895,10 +5895,11 @@ export function readOnlyGit(raw: readonly string[]): boolean {
   return false;
 }
 
-function onlyReads(raw: readonly string[]): boolean {
+/** `git` is false to leave the git reports out: git may run a program the repository names, so its folder is not only read. */
+function onlyReads(raw: readonly string[], git = true): boolean {
   const command = unquote(raw[0] ?? '') === 'timeout' ? timeoutCommand(raw.slice(1)) : raw;
   if (!command || command.length === 0) return false;
-  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || readOnlyGit(command);
+  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || (git && readOnlyGit(command));
 }
 
 /** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
@@ -7973,7 +7974,7 @@ export async function scanShell(
         !onlyReads(tokens)
       ) {
         readOnly = false;
-      } else if (part) {
+      } else if (part && onlyReads(tokens, false)) {
         part.reads = true;
       }
       for (const arg of rest) {

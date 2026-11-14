@@ -666,7 +666,8 @@ export async function shellApproval(
         };
       }),
       directories: [...new Set([...directories, ...outside])],
-      writtenDirectories: [...new Set([...directories, ...writtenOutside])],
+      // Data sent off this computer may come from any folder, so every one counts as reached.
+      writtenDirectories: [...new Set([...directories, ...(scan.outbound.length > 0 ? outside : writtenOutside)])],
       paths: scan.paths ?? [],
       ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
       ...(scan.dotlessGlobFolders ? { dotlessGlobFolders: scan.dotlessGlobFolders } : {}),
