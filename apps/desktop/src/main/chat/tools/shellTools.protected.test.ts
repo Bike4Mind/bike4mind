@@ -212,19 +212,23 @@ describe('shell commands that reach a protected location', () => {
       );
     });
 
-    it.each([
-      "grep -r '' ~/.claude",
-      'rg . ~/.claude',
-      'ls -R ~/.claude',
-      'cat ~/.claude/*',
-      'du -a ~/.claude',
-      'tree ~/.claude',
-      "grep -r '' ~/.config",
-    ])('asks in auto mode before %s, a read of a protected folder', async command => {
-      const verdict = await judge(command, 'H');
-      expect(verdict.auto).toBe(false);
-      expect(verdict.allowed).toBe(false);
-    });
+    it.each(["grep -r '' ~/.claude", 'rg . ~/.claude', 'cat ~/.claude/*', "grep -r '' ~/.config"])(
+      'asks in auto mode before %s, which reads the files of a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(false);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
+
+    it.each(['ls -R ~/.claude', 'du -a ~/.claude', 'tree ~/.claude'])(
+      'runs %s in auto mode, which lists only the names in a protected folder',
+      async command => {
+        const verdict = await judge(command, 'H');
+        expect(verdict.auto).toBe(true);
+        expect(verdict.allowed).toBe(false);
+      }
+    );
   });
 
   describe('an operand the scan cannot read', () => {
