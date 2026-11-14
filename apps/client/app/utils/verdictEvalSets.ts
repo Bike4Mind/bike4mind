@@ -136,7 +136,7 @@ export const evalSetCalibrationSchema = z.object({
   model: z.string(),
   /** Labelled held-out flagged examples: the population `n` is drawn from. */
   flaggedLabelled: countSchema,
-  /** Of those, the ones this model assessed with a judgment and a p(abuse). */
+  /** Of those, the ones this model answered (any result but unknown) with a p(abuse). */
   n: countSchema,
   /** Mean squared error of p(abuse) against the label; null when n is 0. */
   brier: unitSchema.nullable(),

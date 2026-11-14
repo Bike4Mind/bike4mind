@@ -333,16 +333,53 @@ describe('VerdictEvalSetsPanel', () => {
     it("shows each assessment model's calibration, and says when a model has too few assessed examples", () => {
       const latest = runOf(0.8);
       latest.report.calibration = [
-        ...latest.report.calibration,
+        { ...latest.report.calibration[0], n: 40 },
         { model: 'm2', flaggedLabelled: 4, n: 0, brier: null, buckets: [] },
       ];
       withRuns(latest);
       open();
       const table = screen.getByTestId('eval-sets-calibration-table');
-      expect(within(table).getByText('3 of 4')).toBeTruthy();
+      expect(within(table).getByText('40 of 4')).toBeTruthy();
       expect(within(table).getByText('0.120')).toBeTruthy();
       expect(within(table).getByText('90% vs 100% (2)')).toBeTruthy();
       expect(within(table).getByText('Not enough assessed examples (0 of 4)')).toBeTruthy();
+    });
+
+    it('labels the buckets with which side of each boundary they include', () => {
+      open();
+      const table = screen.getByTestId('eval-sets-calibration-table');
+      for (const label of ['[0, 20)%', '[20, 40)%', '[40, 60)%', '[60, 80)%', '[80, 100]%']) {
+        expect(within(table).getByText(label)).toBeTruthy();
+      }
+    });
+
+    it('keeps the buckets but withholds the Brier score below the minimum reviewed', () => {
+      open();
+      const table = screen.getByTestId('eval-sets-calibration-table');
+      expect(within(table).getByText('90% vs 100% (2)')).toBeTruthy();
+      expect(within(table).queryByText('0.120')).toBeNull();
+      expect(screen.getByTestId('eval-sets-calibration-too-few-m1').textContent).toBe(
+        'm1: Too few examples for a Brier score (3 of 30)'
+      );
+    });
+
+    it('says a run without calibration may predate it when it has assessment scores', () => {
+      const latest = runOf(0.8);
+      latest.report.scores = [{ ...score(0.8), grader: 'assessment', variant: 'm1' }];
+      latest.report.calibration = [];
+      withRuns(latest);
+      open();
+      expect(
+        screen.getByText('No assessment calibration in this run (runs before calibration was added have none).')
+      ).toBeTruthy();
+    });
+
+    it('keeps the plain empty message when the run has no assessment scores', () => {
+      const latest = runOf(0.8);
+      latest.report.calibration = [];
+      withRuns(latest);
+      open();
+      expect(screen.getByText('No assessment calibration in this run.')).toBeTruthy();
     });
 
     it('shows the risk-review share and its caveat only when the run has risk-review labels', () => {
@@ -380,7 +417,7 @@ describe('VerdictEvalSetsPanel', () => {
       const text = rows.slice(1).map(row => row.textContent ?? '');
       expect(text[0]).toContain('Detectors, any');
       expect(text[0]).toContain('+2');
-      expect(text[0]).toContain('+10 pts');
+      expect(text[0]).toContain('0 pts');
       expect(text[1]).toContain('AI assessment, m1 (new in this run)');
     });
 

@@ -186,8 +186,12 @@ function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetS
   ];
 }
 
-const bucketLabel = (index: number) =>
-  `${Math.round((index / EVAL_SET_CALIBRATION_BUCKETS) * 100)}-${Math.round(((index + 1) / EVAL_SET_CALIBRATION_BUCKETS) * 100)}%`;
+/** Half-open ranges, closed on the last bucket: p(abuse) 1 falls in the top one. */
+const bucketLabel = (index: number) => {
+  const lower = Math.round((index / EVAL_SET_CALIBRATION_BUCKETS) * 100);
+  const upper = Math.round(((index + 1) / EVAL_SET_CALIBRATION_BUCKETS) * 100);
+  return `[${lower}, ${upper}${index === EVAL_SET_CALIBRATION_BUCKETS - 1 ? ']' : ')'}%`;
+};
 
 const calibrationColumns: readonly DataColumn<EvalSetCalibration>[] = [
   { id: 'model', label: 'Model', render: row => row.model },
@@ -200,7 +204,13 @@ const calibrationColumns: readonly DataColumn<EvalSetCalibration>[] = [
         : `${count(row.n)} of ${count(row.flaggedLabelled)}`,
     wrap: true,
   },
-  { id: 'brier', label: 'Brier score', render: row => brierText(row.brier), numeric: true, width: '6rem' },
+  {
+    id: 'brier',
+    label: 'Brier score',
+    render: row => (row.n < EVAL_SET_MIN_REVIEWED ? '-' : brierText(row.brier)),
+    numeric: true,
+    width: '6rem',
+  },
   ...Array.from({ length: EVAL_SET_CALIBRATION_BUCKETS }, (_, index): DataColumn<EvalSetCalibration> => ({
     id: `bucket-${index}`,
     label: bucketLabel(index),
@@ -223,7 +233,6 @@ const COMPARISON_COUNT_FIELDS: readonly { field: EvalSetScoreComparisonField; la
   { field: 'abstained', label: 'Abstained' },
 ];
 const COMPARISON_RATE_FIELDS: readonly { field: EvalSetScoreComparisonField; label: string }[] = [
-  { field: 'precision', label: 'Precision' },
   { field: 'precisionLowerBound', label: '95% lower bound' },
 ];
 
@@ -276,27 +285,47 @@ const LabelSources: React.FC<{ labelSources: Record<string, number> }> = ({ labe
   );
 };
 
-const Calibration: React.FC<{ calibration: readonly EvalSetCalibration[]; onRetry: () => void }> = ({
-  calibration,
-  onRetry,
-}) => (
-  <Stack gap={1}>
-    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-calibration-note">
-      AI assessment calibration: the model&apos;s p(abuse) against the labels of held-out flagged examples. Each bucket
-      shows mean predicted vs observed abuse rate (examples). Unflagged examples have no assessment.
-    </Typography>
-    <DataTable
-      rows={calibration}
-      columns={calibrationColumns}
-      label="AI assessment calibration"
-      getRowId={row => row.model}
-      testId="eval-sets-calibration-table"
-      onRetry={onRetry}
-      minWidth="64rem"
-      empty={<Typography level="body-sm">No assessment calibration in this run.</Typography>}
-    />
-  </Stack>
-);
+const Calibration: React.FC<{
+  calibration: readonly EvalSetCalibration[];
+  hasAssessmentScores: boolean;
+  onRetry: () => void;
+}> = ({ calibration, hasAssessmentScores, onRetry }) => {
+  const tooFew = calibration.filter(row => row.n > 0 && row.n < EVAL_SET_MIN_REVIEWED);
+  return (
+    <Stack gap={1}>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-calibration-note">
+        AI assessment calibration: the model&apos;s p(abuse) against the labels of held-out flagged examples. Each
+        bucket shows mean predicted vs observed abuse rate (examples). Unflagged examples have no assessment.
+      </Typography>
+      <DataTable
+        rows={calibration}
+        columns={calibrationColumns}
+        label="AI assessment calibration"
+        getRowId={row => row.model}
+        testId="eval-sets-calibration-table"
+        onRetry={onRetry}
+        minWidth="64rem"
+        empty={
+          <Typography level="body-sm">
+            {hasAssessmentScores
+              ? 'No assessment calibration in this run (runs before calibration was added have none).'
+              : 'No assessment calibration in this run.'}
+          </Typography>
+        }
+      />
+      {tooFew.map(row => (
+        <Typography
+          key={row.model}
+          level="body-xs"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid={`eval-sets-calibration-too-few-${row.model}`}
+        >
+          {row.model}: Too few examples for a Brier score ({count(row.n)} of {count(EVAL_SET_MIN_REVIEWED)})
+        </Typography>
+      ))}
+    </Stack>
+  );
+};
 
 const RunComparison: React.FC<{ run: EvalSetRunReport; previous: EvalSetRun; onRetry: () => void }> = ({
   run,
@@ -535,7 +564,11 @@ const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null; onRetr
         empty={<Typography level="body-sm">No held-out cohorts.</Typography>}
       />
       <LabelSources labelSources={report.labelSources} />
-      <Calibration calibration={report.calibration} onRetry={onRetry} />
+      <Calibration
+        calibration={report.calibration}
+        hasAssessmentScores={report.scores.some(score => score.grader === 'assessment')}
+        onRetry={onRetry}
+      />
       {previous && <RunComparison run={report} previous={previous} onRetry={onRetry} />}
     </Stack>
   );
