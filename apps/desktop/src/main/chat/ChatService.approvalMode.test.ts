@@ -326,10 +326,11 @@ describe('ChatService approval modes', () => {
   });
 
   /**
-   * Full access retains the opaque-command floor. Readable Git workflows may run despite
-   * a prior reference change; an unlisted Git option alone is separate from an unread command.
+   * Full access and approve for me run what the scan cannot follow or parse, as opencode's auto mode does.
+   * Both still stop for a protected settings write the scan sees or the command's own words name; approve for me
+   * also stops for a .env read, a folder outside the project, sending data out and a third repeat.
    */
-  describe('what full access still asks about', () => {
+  describe('what full access and approve for me still ask about', () => {
     const git = (cwd: string, ...args: string[]): void => {
       execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
         cwd,
@@ -350,15 +351,24 @@ describe('ChatService approval modes', () => {
       git(root, 'add', 'notes.txt');
       git(root, 'commit', '-qm', 'notes');
       git(origin, 'clone', '-q', '--bare', root, '.');
+      git(origin, 'branch', 'x', 'main');
       git(root, 'remote', 'add', 'origin', origin);
+      await mkdir(join(root, 'sub'), { recursive: true });
       git(root, 'fetch', '-q', 'origin');
     });
 
     const routine = [
       'git fetch origin main && git merge --ff-only origin/main',
+      'git fetch origin x && git merge --ff-only origin/x',
       'git fetch origin main && git rebase origin/main',
       'git fetch origin main && git reset --hard origin/main',
+      'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2',
       'git show --format= HEAD',
+      'git show --format= --remerge-diff HEAD',
+      'git status --frobnicate',
+      'git status && rm -f "$OPAQUE_TARGET"',
+      'cd sub && ls ; wc -l ../notes.txt',
+      'if then fi ((',
     ];
 
     it.each(routine)('runs %s in full access', async command => {
@@ -370,41 +380,52 @@ describe('ChatService approval modes', () => {
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
-    it.each(routine.filter(command => command !== 'git show --format= HEAD'))(
-      'asks before %s in approve for me',
-      async command => {
-        await startTurn('auto');
-        streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
-        streams[0].write(frame('[DONE]'));
-
-        await awaitStatus('awaiting-approval');
-        expect(calls('done')).toHaveLength(0);
-      }
-    );
-
-    it('runs a literal empty git format option in approve for me', async () => {
+    it.each(routine)('runs %s in approve for me', async command => {
       await startTurn('auto');
-      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git show --format= HEAD', cwd: root }));
+      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[0].write(frame('[DONE]'));
+
       await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
       expect(calls('awaiting-approval')).toHaveLength(0);
     });
 
     it.each([
-      'cp notes.txt "$(printf .cl%sude a)"/settings.json',
-      'git status && rm "$OPAQUE_TARGET"',
-      'echo "unterminated',
-      'git status --frobnicate',
-      'git opaque-approval-test',
-      'git fetch origin main && git reset --hard "$OPAQUE_REF"',
-      'git fetch origin main && git reset --hard origin/main > "$OPAQUE_OUTPUT"',
-      'GIT_WORK_TREE="$OPAQUE_ROOT" git fetch origin main && git reset --hard origin/main',
-    ])('asks before the opaque command %s in full access', async command => {
-      await startTurn('full');
+      ['a .env read', 'cat .env', 'usually holds secrets'],
+      ['a folder outside the granted ones', 'cd /etc && ls', '/etc'],
+      ['a visible write to .claude/settings.json', 'cp notes.txt .claude/settings.json', 'Desktop protects'],
+      ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'cannot follow'],
+      ['a script it cannot parse that names .env', 'cat .env; if then fi ((', '.env'],
+    ])('asks in approve for me before %s', async (_, command, reason) => {
+      await writeFile(join(root, '.env'), 'SECRET=1\n', 'utf8');
+      await startTurn('auto');
       streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[0].write(frame('[DONE]'));
-      await awaitStatus('awaiting-approval');
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.approvalDetail).toContain(reason);
       expect(calls('done')).toHaveLength(0);
+    });
+
+    it.each(['D=.claude; cp notes.txt "$D/settings.json"', 'cp notes.txt .claude/settings.json; if then fi (('])(
+      'asks in full access before the settings write %s, which it cannot follow',
+      async command => {
+        await startTurn('full');
+        streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+        streams[0].write(frame('[DONE]'));
+        await awaitStatus('awaiting-approval');
+        expect(calls('done')).toHaveLength(0);
+      }
+    );
+
+    it('asks in approve for me about a command it cannot check made a third time in a row', async () => {
+      await startTurn('auto');
+      for (const id of ['c1', 'c2', 'c3']) {
+        streams[0].write(toolTurn(id, 'bash_execute', { command: 'git status --frobnicate', cwd: root }));
+      }
+      streams[0].write(frame('[DONE]'));
+
+      const asked = await awaitStatus('awaiting-approval');
+      expect(asked.id).toBe('c3');
     });
 
     it('retains remote-clone destination evidence after a Git reference change', async () => {
