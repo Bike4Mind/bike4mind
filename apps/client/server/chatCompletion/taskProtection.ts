@@ -95,6 +95,9 @@ export function createTaskProtection({
   let armedAt = 0;
   let busySince = 0;
   let lastCallFailed = false;
+  // Kinds already logged in the current failure streak, so a later fatal or stopping failure
+  // still surfaces after an earlier transient warn.
+  const loggedKinds = new Set<FailureKind>();
   // Set once the agent reports the task is stopping; no later call can succeed.
   let taskStopping = false;
   let pump: Promise<void> | null = null;
@@ -139,8 +142,9 @@ export function createTaskProtection({
   const reportFailure = (target: boolean, err: unknown) => {
     const kind = err instanceof ProtectionCallError ? err.kind : 'fatal';
     if (kind === 'stopping') taskStopping = true;
-    // Logged once per failure streak so a missing IAM grant doesn't log on every quest.
-    if (lastCallFailed) return;
+    // Logged once per kind per failure streak so a missing IAM grant doesn't log on every quest.
+    if (loggedKinds.has(kind)) return;
+    loggedKinds.add(kind);
     const metadata = { enabled: target, error: err instanceof Error ? err.message : String(err) };
     if (kind === 'stopping') {
       logger.warn(
@@ -167,6 +171,7 @@ export function createTaskProtection({
         if (target) armedAt = Date.now();
         if (lastCallFailed) logger.info('Task scale-in protection calls recovered', { enabled: target });
         lastCallFailed = false;
+        loggedKinds.clear();
       } catch (err) {
         appliedKnown = false;
         const transient = err instanceof ProtectionCallError && err.kind === 'transient';

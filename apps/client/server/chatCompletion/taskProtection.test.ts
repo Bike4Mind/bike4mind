@@ -5,6 +5,7 @@ import {
   PROTECTION_EXPIRES_IN_MINUTES,
   PROTECTION_REFRESH_MS,
   REFRESH_TOLERANCE_MS,
+  TRANSIENT_RETRY_DELAY_MS,
 } from './taskProtection';
 
 const AGENT_URI = 'http://169.254.170.2/api/task-id';
@@ -270,7 +271,7 @@ describe('createTaskProtection', () => {
     expect(fetchFn).toHaveBeenCalledTimes(3);
   });
 
-  it('recovers after a timed-out (aborted) agent call and a non-2xx error', async () => {
+  it('logs a fatal error from the retry after a timeout, then recovers on the next update', async () => {
     const fetchFn = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -285,7 +286,10 @@ describe('createTaskProtection', () => {
 
     protection.update(1);
     await protection.idle();
-    expect(logger.error.mock.calls[0][1]).toMatchObject({ enabled: true });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0][1]).toMatchObject({ enabled: true, error: 'AccessDeniedException' });
 
     protection.update(2);
     await protection.idle();
@@ -309,7 +313,6 @@ describe('createTaskProtection', () => {
     await protection.idle();
     protection.update(0);
     await protection.idle();
-    vi.advanceTimersByTime(1_000);
     protection.update(1);
     await protection.idle();
 
@@ -339,6 +342,15 @@ describe('createTaskProtection', () => {
 
   it.each([
     ['a 5xx', () => new Response('{}', { status: 503 })],
+    ['a 429', () => new Response('{}', { status: 429 })],
+    [
+      'a ServerException error',
+      () => new Response(JSON.stringify({ error: { Code: 'ServerException' } }), { status: 400 }),
+    ],
+    [
+      'a throttling failure body',
+      () => new Response(JSON.stringify({ failure: { Reason: 'ThrottlingException' } }), { status: 200 }),
+    ],
     ['throttling', () => new Response(JSON.stringify({ error: { Code: 'ThrottlingException' } }), { status: 400 })],
   ])('retries %s response once', async (_label, transientResponse) => {
     const fetchFn = vi
@@ -411,6 +423,7 @@ describe('createTaskProtection', () => {
     expect(logger.error).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls[0][1]).toMatchObject({ enabled: true, error: 'TASK_STOPPING_OR_STOPPED' });
+    expect(vi.getTimerCount()).toBe(0);
 
     protection.update(0);
     protection.update(1);
@@ -418,5 +431,127 @@ describe('createTaskProtection', () => {
     await protection.idle();
 
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('still logs a fatal failure at error after a transient failure already logged at warn', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementationOnce(
+        async () => new Response(JSON.stringify({ error: { Code: 'AccessDeniedException' } }), { status: 400 })
+      )
+      .mockImplementation(async () => okResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+
+    protection.update(2);
+    await protection.idle();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0][1]).toMatchObject({ error: 'AccessDeniedException' });
+
+    // Same kind again in the same streak stays quiet.
+    protection.update(3);
+    await protection.idle();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a stopping notice that arrives on the retry attempt', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementation(async () => stoppingResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({ error: 'TASK_STOPPING_OR_STOPPED' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('logs a stopping notice that arrives during an existing failure streak', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => failureResponse())
+      .mockImplementation(async () => stoppingResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+
+    protection.update(2);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({ error: 'TASK_STOPPING_OR_STOPPED' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('treats a stopping code on a non-2xx response as stopping', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ error: { Code: 'TASK_STOPPING_OR_STOPPED' } }), { status: 400 })
+      );
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  describe('retry delay', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    });
+
+    it('waits the default delay before the retry', async () => {
+      const fetchFn = vi
+        .fn()
+        .mockImplementationOnce(async () => timeout())
+        .mockImplementation(async () => okResponse());
+      const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+
+      protection.update(1);
+      await vi.advanceTimersByTimeAsync(TRANSIENT_RETRY_DELAY_MS - 1);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await protection.idle();
+      expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE]);
+    });
+
+    it('sends the latest desired state after the wait when it flipped meanwhile', async () => {
+      const fetchFn = vi
+        .fn()
+        .mockImplementationOnce(async () => timeout())
+        .mockImplementation(async () => okResponse());
+      const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+
+      protection.update(1);
+      await vi.advanceTimersByTimeAsync(TRANSIENT_RETRY_DELAY_MS / 2);
+      protection.update(0);
+      await vi.advanceTimersByTimeAsync(TRANSIENT_RETRY_DELAY_MS);
+      await protection.idle();
+
+      expect(sentBodies(fetchFn)).toEqual([ENABLE, DISABLE]);
+    });
   });
 });
