@@ -30,7 +30,8 @@ import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendC
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
+import { GenerationJobEngine, emitStudioJobCompletion } from '@bike4mind/services/generationJobs';
+import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
@@ -506,6 +507,23 @@ const notify = async (job: IGenerationJobDocument): Promise<void> => {
   }
 };
 
+// Fans out through EventBridge so every surface (web toast today, native notifications later) shares one event.
+const announceStudioCompletion = async (job: IGenerationJobDocument): Promise<void> => {
+  await emitStudioJobCompletion(job, {
+    repository: generationJobRepository,
+    publish: async event => {
+      try {
+        await StudioEvents.JobCompleted.publish(event);
+      } catch (error) {
+        // The group is already claimed, so this notification is lost; the log is the only trace of it.
+        logger.error('studio job completion publish failed', { jobId: job.id, groupId: event.groupId, error });
+        throw error;
+      }
+    },
+    now: () => new Date(),
+  });
+};
+
 let videoJobDeps: VideoJobDeps | undefined;
 export const getVideoJobDeps = (): VideoJobDeps => {
   videoJobDeps ??= {
@@ -612,6 +630,7 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
     ],
     enqueue: enqueueGenerationJob,
     notify,
+    onTerminalHandled: announceStudioCompletion,
     now: () => new Date(),
     logger,
     leaseMs: LEASE_MS,

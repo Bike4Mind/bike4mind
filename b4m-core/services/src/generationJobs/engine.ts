@@ -339,6 +339,7 @@ export class GenerationJobEngine {
     await this.deps.repository.markTerminalHandled(job.id, this.deps.now());
     const released = lease ? await this.deps.repository.commit(job.id, {}, lease) : null;
     await this.safeNotify(released ?? job);
+    await this.safeOnTerminalHandled(released ?? job);
     return 'terminal';
   }
 
@@ -382,6 +383,15 @@ export class GenerationJobEngine {
         jobId: job.id,
         error,
       });
+    }
+  }
+
+  private async safeOnTerminalHandled(job: IGenerationJobDocument) {
+    if (!this.deps.onTerminalHandled) return;
+    try {
+      await this.deps.onTerminalHandled(job);
+    } catch (error) {
+      this.deps.logger.warn('generation job onTerminalHandled failed', { jobId: job.id, error });
     }
   }
 
