@@ -104,6 +104,11 @@ export const infraHolders = {
       { path: 'targetId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG, where: { action: 'member.removed' } },
     ],
   },
+  // Platform-level admin roles; the only personal reference is the admin who created the role.
+  AdminRole: {
+    kind: 'holder',
+    references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
+  },
   // Append-only: the model rejects every update, so the entry cannot be anonymized in place. Free-text `summary`,
   // `changes` and `details` are not scanned for the person.
   AdminAuditLog: {

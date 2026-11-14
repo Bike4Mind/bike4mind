@@ -108,7 +108,7 @@ describe('bulk delegate targets', () => {
     );
     expect(h.findUsers).toHaveBeenCalledExactlyOnceWith(
       { _id: { $in: ['user-1', 'user-2'] } },
-      { isAdmin: 1, adminPermissions: 1 }
+      { isAdmin: 1, adminPermissions: 1, adminRoleIds: 1 }
     );
   });
   it('does not read targets for an empty request or full admin', async () => {

@@ -6,6 +6,7 @@ import {
   IUserDocument,
   IUserRepository,
   escapeSlackLine,
+  type ResolveAdminRoles,
 } from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -29,16 +30,19 @@ interface AdminDeleteUserAdapters {
   mailer: {
     sendDeleteUserEmail: (sendTo: string[], user: IUserDocument, admin: IUserDocument) => Promise<void>;
   };
+  /** Resolves the acting admin's role permissions on the re-read below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 }
 
 export const adminDeleteUser = async (
   adminId: string,
   parameters: AdminDeleteUserParameters,
-  { db, notify, mailer }: AdminDeleteUserAdapters
+  { db, notify, mailer, resolveAdminRoles }: AdminDeleteUserAdapters
 ) => {
   const { id } = secureParameters(parameters, adminDeleteUserSchema);
 
-  const admin = await db.users.findById(adminId);
+  const stored = await db.users.findById(adminId);
+  const admin = stored && resolveAdminRoles ? await resolveAdminRoles(stored) : stored;
   if (!admin || !hasAdminPermission(admin, 'users:delete'))
     throw new UnauthorizedError('You are not authorized to delete users');
 

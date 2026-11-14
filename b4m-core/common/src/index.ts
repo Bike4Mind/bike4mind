@@ -232,6 +232,7 @@ export * from './storageOwner';
 export * from './storageBreakdown';
 export * from './organizationStorage';
 export * from './adminPermissions';
+export * from './adminRoles';
 
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
 
