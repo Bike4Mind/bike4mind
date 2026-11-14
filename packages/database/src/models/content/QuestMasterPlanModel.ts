@@ -180,6 +180,10 @@ export const QuestMasterPlanSchema: Schema<IQuestMasterPlanDocument> = new Schem
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
+    // The collection is dropped by migration 20260921253850; without these, model init on every
+    // cold start would recreate it with its indexes. Remove together with this model.
+    autoCreate: false,
+    autoIndex: false,
   }
 );
 
