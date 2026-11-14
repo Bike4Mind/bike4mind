@@ -7,7 +7,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
-import { wslLocation, wslUncPath } from '../../wsl/wslPath';
+import { withWslEnv, wslLocation, wslUncPath } from '../../wsl/wslPath';
+import type { ConfigEntry } from './gitTable';
 import { isWithin, resolveOperand } from './paths';
 import { findOnPath, resolveUserPath, WINDOWS_ROOTED } from './userPath';
 import { own } from '@shared/ownKeys';
@@ -701,12 +702,22 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
  * the empty tree with no lazy fetch, so no filter, textconv or fetch the repository configures runs. Its exit code
  * and output; null when it could not run, timed out or overran.
  */
-async function gitRun(directory: string, args: readonly string[]): Promise<GitResult | null> {
-  const launch = await gitLaunch(directory, args);
+async function gitRun(
+  directory: string,
+  args: readonly string[],
+  environment?: GitEnvironment
+): Promise<GitResult | null> {
+  const launch = await gitLaunch(directory, args, environment);
   return launch && gitExec(launch);
 }
 
-type GitResult = { code: number; stdout: string };
+/** Changes to a query's env: `set` variables, and whether it keeps the GIT_CONFIG_{NOSYSTEM,GLOBAL,SYSTEM} files of this process. */
+interface GitEnvironment {
+  set?: Readonly<Record<string, string>>;
+  keepConfigFiles?: boolean;
+}
+
+type GitResult = { code: number; stdout: string; stderr?: string };
 
 interface GitLaunch {
   file: string;
@@ -717,16 +728,29 @@ interface GitLaunch {
 }
 
 /** How gitRun runs `git args` in `directory`; null when there is no git to run. */
-async function gitLaunch(directory: string, args: readonly string[]): Promise<GitLaunch | null> {
+async function gitLaunch(
+  directory: string,
+  args: readonly string[],
+  environment?: GitEnvironment
+): Promise<GitLaunch | null> {
   const inherited = await gitCommandEnv(directory);
   const env: NodeJS.ProcessEnv = Object.fromEntries(
-    Object.entries(inherited ?? process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))
+    Object.entries(inherited ?? process.env).filter(
+      ([name]) =>
+        !name.toUpperCase().startsWith('GIT_') ||
+        (environment?.keepConfigFiles === true && /^GIT_CONFIG_(NOSYSTEM|GLOBAL|SYSTEM)$/i.test(name))
+    )
   );
+  for (const name of Object.keys(environment?.set ?? {})) {
+    for (const held of Object.keys(env)) if (held.toUpperCase() === name.toUpperCase()) delete env[held];
+  }
+  Object.assign(env, environment?.set);
   // GIT_ALLOW_PROTOCOL=none also stops a lazy fetch on git older than GIT_NO_LAZY_FETCH (2.39.4 and 2.45.1).
   const settings = { GIT_ATTR_SOURCE: EMPTY_TREE, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none' };
   Object.assign(env, settings);
   // Through wsl.exe only the variables WSLENV names reach Linux git.
-  if (inherited) env.WSLENV = [env.WSLENV, ...Object.keys(settings)].filter(Boolean).join(':');
+  if (inherited)
+    env.WSLENV = withWslEnv(env, [...Object.keys(settings), ...Object.keys(environment?.set ?? {})]).WSLENV;
   const nullDevice = wslLocation(directory) || process.platform !== 'win32' ? '/dev/null' : 'NUL';
   const command = await gitCommand(
     directory,
@@ -759,10 +783,15 @@ async function gitLaunch(directory: string, args: readonly string[]): Promise<Gi
 
 function gitExec({ file, args, cwd, env, timeout }: GitLaunch): Promise<GitResult | null> {
   return new Promise(done => {
-    execFile(file, args, { cwd, env, timeout, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) => {
-      if (!error) done({ code: 0, stdout });
-      else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
-    });
+    execFile(
+      file,
+      args,
+      { cwd, env, timeout, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (!error) done({ code: 0, stdout, stderr });
+        else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout, stderr } : null);
+      }
+    );
   });
 }
 
@@ -1179,6 +1208,183 @@ export async function gitConfigFile(path: string): Promise<{ key: string; value:
         ? { key: entry, value: null }
         : { key: entry.slice(0, newline), value: entry.slice(newline + 1) };
     });
+}
+
+const SIGNING_BOOLEANS =
+  '^(commit\\.gpgsign|tag\\.gpgsign|tag\\.forcesignannotated|merge\\.verifysignatures|log\\.showsignature)$';
+
+/** How a git call that may sign or verify runs, as its words and the script describe it. */
+export interface GitSigningCall {
+  /** The `--git-dir` and `--work-tree` values, as written. */
+  gitDir: string | null;
+  workTree: string | null;
+  /** The call's `-c` and `--config-env` words, in order. */
+  settings: readonly string[];
+  /** The script's own HOME, XDG_CONFIG_HOME and GIT_CONFIG_{NOSYSTEM,GLOBAL,SYSTEM}. */
+  env: Readonly<Record<string, string>>;
+}
+
+/**
+ * The signing and verifying settings git run in `directory` as `call` describes reads, as it resolves includes,
+ * precedence and the call's own settings; null when git fails, times out or prints what is not read.
+ */
+export async function gitSigningConfig(directory: string, call: GitSigningCall): Promise<ConfigEntry[] | null> {
+  const query = await signingQuery(directory, call);
+  if (query === null) return null;
+  const { globals, environment } = query;
+  const [booleans, push] = await Promise.all([
+    gitRun(directory, [...globals, 'config', '--get-regexp', '--type=bool', SIGNING_BOOLEANS], environment),
+    gitRun(directory, [...globals, 'config', '--get-regexp', '^push\\.gpgsign$'], environment),
+  ]);
+  const flags = entries(booleans, /^(\S+) (true|false)$/);
+  // push.gpgSign is also `if-asked`, so any value but a false spelling counts.
+  const pushed = entries(push, /^(push\.gpgsign)(?: (.*))?$/);
+  return flags === null || pushed === null ? null : [...flags, ...pushed];
+}
+
+/** The `format.pretty` and `pretty.<alias>` settings git run in `directory` as `call` describes reads; null as for gitSigningConfig. */
+export async function gitPrettyConfig(directory: string, call: GitSigningCall): Promise<ConfigEntry[] | null> {
+  const query = await signingQuery(directory, call);
+  if (query === null) return null;
+  const result = await gitRun(
+    directory,
+    [...query.globals, 'config', '-z', '--get-regexp', '^(format\\.pretty|pretty\\..+)$'],
+    query.environment
+  );
+  if (isNoMatch(result)) return [];
+  if (result?.code !== 0) return null;
+  // `-z` prints `key\nvalue\0` per entry, and the key alone for one set with no value.
+  return result.stdout
+    .split('\0')
+    .filter(Boolean)
+    .map(entry => {
+      const newline = entry.indexOf('\n');
+      return newline === -1
+        ? { key: entry, value: null }
+        : { key: entry.slice(0, newline), value: entry.slice(newline + 1) };
+    });
+}
+
+/** Whether the config git run in `directory` as `call` describes reads names an includeIf on a branch; null when git could not say. */
+export async function gitOnBranchIncludes(directory: string, call: GitSigningCall): Promise<'none' | 'some' | null> {
+  const query = await signingQuery(directory, call);
+  if (query === null) return null;
+  const result = await gitRun(
+    directory,
+    [...query.globals, 'config', '--name-only', '--get-regexp', '^includeif\\.onbranch:'],
+    query.environment
+  );
+  if (isNoMatch(result)) return 'none';
+  return result?.code === 0 ? 'some' : null;
+}
+
+/**
+ * Where to ask what git reads in a repository made at `directory` (or the nearest folder above it that exists) by
+ * `git init` or `git clone`: a folder outside every repository, and `call` for it, as long as no includeIf,
+ * init.templateDir or template config file could give the new repository config of its own. Null when git cannot say.
+ */
+export async function gitFreshLocation(
+  directory: string,
+  call: GitSigningCall
+): Promise<{ folder: string; call: GitSigningCall } | null> {
+  if (sep !== '/' || process.platform === 'win32' || wslLocation(directory) !== null) return null;
+  if (call.gitDir !== null || call.workTree !== null) return null;
+  if (process.env.GIT_TEMPLATE_DIR !== undefined || process.env.GIT_EXEC_PATH !== undefined) return null;
+  let near = resolve(directory);
+  for (;;) {
+    const info = await stat(near).catch(() => null);
+    if (info?.isDirectory()) break;
+    if (info !== null || dirname(near) === near) return null;
+    near = dirname(near);
+  }
+  let folder = await realpath(near).catch(() => null);
+  // A folder holding a .git is a repository whatever the ceiling, so go up to one that holds none.
+  while (folder !== null) {
+    const dotGit = await lstat(join(folder, '.git')).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' ? false : null)
+    );
+    if (dotGit === null) return null;
+    if (!dotGit) break;
+    folder = dirname(folder) === folder ? null : dirname(folder);
+  }
+  if (folder === null) return null;
+  const fresh: GitSigningCall = {
+    gitDir: null,
+    workTree: null,
+    settings: call.settings,
+    env: { ...call.env, GIT_CEILING_DIRECTORIES: dirname(folder) },
+  };
+  const query = await signingQuery(folder, fresh);
+  if (query === null) return null;
+  const [named, exec] = await Promise.all([
+    gitRun(
+      folder,
+      [...query.globals, 'config', '--name-only', '--get-regexp', '^(includeif\\..*|init\\.templatedir)$'],
+      query.environment
+    ),
+    gitRun(folder, ['--exec-path']),
+  ]);
+  if (!isNoMatch(named) || exec?.code !== 0) return null;
+  const executables = exec.stdout.trim();
+  if (!isAbsolute(executables)) return null;
+  // The default template folder sits beside the executables folder, under share/git-core/templates.
+  const templates = resolve(executables, '..', '..', 'share', 'git-core', 'templates');
+  const holds = await stat(templates).then(
+    info =>
+      info.isDirectory()
+        ? lstat(join(templates, 'config')).then(
+            () => true,
+            (error: NodeJS.ErrnoException) => (error.code === 'ENOENT' ? false : null)
+          )
+        : null,
+    () => null
+  );
+  return holds === false ? { folder, call: fresh } : null;
+}
+
+/** How a signing query runs in `directory`; null when it is not a folder that exists, where git would read no repository. */
+async function signingQuery(
+  directory: string,
+  call: GitSigningCall
+): Promise<{ globals: string[]; environment: GitEnvironment } | null> {
+  const found = await stat(directory).then(
+    info => info.isDirectory(),
+    () => false
+  );
+  if (!found) return null;
+  // git config succeeds outside a repository, so a --git-dir or --work-tree not made yet is checked here.
+  for (const given of [call.gitDir, call.workTree]) {
+    if (
+      given !== null &&
+      !(await stat(resolve(directory, given)).then(
+        () => true,
+        () => false
+      ))
+    )
+      return null;
+  }
+  const globals = [
+    ...(call.gitDir !== null ? [`--git-dir=${call.gitDir}`] : []),
+    ...(call.workTree !== null ? [`--work-tree=${call.workTree}`] : []),
+    ...call.settings,
+  ];
+  return { globals, environment: { set: call.env, keepConfigFiles: true } };
+}
+
+/** git exits 1, printing nothing, when no key matches; a warning on stderr means a file it could not read. */
+const isNoMatch = (result: GitResult | null): boolean => result?.code === 1 && result.stdout === '' && !result.stderr;
+
+function entries(result: GitResult | null, pattern: RegExp): ConfigEntry[] | null {
+  if (isNoMatch(result)) return [];
+  if (result?.code !== 0) return null;
+  const read: ConfigEntry[] = [];
+  for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
+    const match = pattern.exec(line);
+    if (!match) return null;
+    read.push({ key: match[1] as string, value: match[2] ?? null });
+  }
+  return read;
 }
 
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */

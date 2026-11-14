@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,6 +118,54 @@ describe('ChatService permission rules', () => {
     streams[before].write(frame('[DONE]'));
     return created.id;
   }
+
+  const SIGNING_CASES = [
+    ['git status; git commit -m test', '[commit]\ngpgsign = true\n', 'commit.gpgsign'],
+    [
+      "git status; git log --format='%+G?'",
+      '[log]\nshowSignature = false\n[gpg]\nprogram = /unreachable/test-only-verifier\n',
+      'may verify signatures',
+    ],
+    ['git stash list', '[log]\nshowSignature = true\n', 'log.showsignature'],
+    [
+      'git log --pretty=SIG.foo',
+      '[pretty "SIG"]\nfoo = format:%G?\n[pretty "sig"]\nfoo = format:%h\n',
+      'may print signatures',
+    ],
+  ] as const;
+
+  /** A repository whose config is `config`, a broad Git rule, and `command` sent in `mode`. */
+  async function runSigning(mode: 'auto' | 'full', command: string, config: string, allow = ['Bash(git:*)']) {
+    execFileSync('git', ['init', '-q', root]);
+    await writeFile(join(root, '.git/config'), '[core]\nrepositoryformatversion = 0\n' + config);
+    rules = ruleSet({ allow });
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+    await run(mode, 'bash_execute', { command, cwd: root });
+    return execute;
+  }
+
+  it.each(SIGNING_CASES)(
+    'holds %s before execution in auto under config that signs or verifies, over a broad Git rule',
+    async (command, config, named) => {
+      const execute = await runSigning('auto', command, config);
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain(named);
+      expect(execute).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(SIGNING_CASES)('runs %s in full under config that signs or verifies', async (command, config) => {
+    const execute = await runSigning('full', command, config);
+    await awaitCall('bash_execute', 'done');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a signing command an exact Bash rule names in auto', async () => {
+    const command = 'git commit -m test';
+    const execute = await runSigning('auto', command, '[commit]\ngpgsign = true\n', [`Bash(${command})`]);
+    await awaitCall('bash_execute', 'done');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
 
   it.each(['ask', 'auto', 'full'] as const)('refuses tool execution when rules fail to load in %s', async mode => {
     rulesFailure = new Error('permission file unreadable');

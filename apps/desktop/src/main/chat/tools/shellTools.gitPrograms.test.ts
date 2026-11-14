@@ -2,8 +2,10 @@ import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -11,12 +13,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
 import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
+import { isAbsoluteGitPath } from './shellScan';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -24,6 +27,30 @@ vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
+
+const queried = vi.hoisted(() => ({ envs: [] as Record<string, string>[] }));
+
+vi.mock('./shellWrites', async importOriginal => {
+  const actual = await importOriginal<typeof import('./shellWrites')>();
+  return {
+    ...actual,
+    gitSigningConfig: (...args: Parameters<typeof actual.gitSigningConfig>) => {
+      queried.envs.push(args[1].env as Record<string, string>);
+      return actual.gitSigningConfig(...args);
+    },
+  };
+});
+
+const inWsl = vi.hoisted(() => ({ on: false }));
+
+vi.mock('../../wsl/wslPath', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../wsl/wslPath')>();
+  return {
+    ...actual,
+    wslLocation: (...args: Parameters<typeof actual.wslLocation>) =>
+      inWsl.on ? { host: 'wsl.localhost' as const, distro: 'Debian', linuxPath: args[0] } : actual.wslLocation(...args),
+  };
+});
 
 // Each row's cells: a rule `Bash(<program>:*)` covers it, then auto mode, auto mode with a session, full mode (r runs, a asks).
 const ROWS: [string, string, string][] = [
@@ -445,7 +472,7 @@ const ROWS: [string, string, string][] = [
   ['HOME=hm git status', '', 'aaaa'],
   ['HOME=hm2 git status', '', 'arrr'],
   ['XDG_CONFIG_HOME=xdg git log -1', '', 'aaaa'],
-  ['XDG_CONFIG_HOME=xdg2 git log -1', '', 'arrr'],
+  ['XDG_CONFIG_HOME=xdg2 git log -1', '', 'aaaa'],
   ['export HOME=hm; git status', '', 'aaaa'],
   ['git status; export HOME=hm', '', 'arrr'],
   ['echo x > hm4/.gitconfig && HOME=hm4 git status', '', 'aaaa'],
@@ -914,6 +941,1577 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       } finally {
         rmSync(globalConfig(), { force: true });
       }
+    });
+  });
+
+  describe('with signing or verifying config', () => {
+    type Place = 'system' | 'global' | 'xdg' | 'repo' | 'worktree' | 'other' | 'inc';
+    const placed: Record<Place, () => string> = {
+      inc: () => join(dirname(proj), 'sign.inc'),
+      system: () => join(base, 'system-gitconfig'),
+      global: () => join(dirname(proj), '.gitconfig'),
+      xdg: () => join(dirname(proj), '.config', 'git', 'config'),
+      repo: () => join(proj, '.git', 'config'),
+      worktree: () => join(proj, '.git', 'config.worktree'),
+      other: () => join(proj, 'signrepo', '.git', 'config'),
+    };
+
+    beforeAll(() => {
+      mkdirSync(join(proj, 'signrepo'), { recursive: true });
+      execFileSync('git', ['-C', join(proj, 'signrepo'), 'init', '-q', '-b', 'main']);
+    });
+
+    afterAll(() => {
+      rmSync(join(proj, 'signrepo'), { recursive: true, force: true });
+    });
+
+    /** `run` with each config text appended to its file, and `env` set; every file restored after. */
+    const withConfigs = async <T>(
+      configs: Partial<Record<Place, string>>,
+      env: Record<string, string>,
+      run: () => Promise<T>
+    ): Promise<T> => {
+      const saved = new Map<string, string | null>();
+      for (const [place, text] of Object.entries(configs)) {
+        const path = placed[place as Place]();
+        const before = existsSync(path) ? readFileSync(path, 'utf8') : null;
+        saved.set(path, before);
+        file(path, `${before ?? ''}${text}`);
+      }
+      if (configs.system !== undefined && env.GIT_CONFIG_SYSTEM === undefined) {
+        env = { ...env, GIT_CONFIG_SYSTEM: placed.system() };
+      }
+      for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+      try {
+        return await run();
+      } finally {
+        for (const name of Object.keys(env)) vi.stubEnv(name, undefined);
+        for (const [path, before] of saved) {
+          if (before === null) rmSync(path, { force: true });
+          else file(path, before);
+        }
+      }
+    };
+
+    /** The cells of `command` under `withConfigs`. */
+    const configured = (
+      configs: Partial<Record<Place, string>>,
+      command: string,
+      env: Record<string, string> = {}
+    ): Promise<string> => withConfigs(configs, env, () => cells(command, ''));
+
+    it.each([
+      ['git stash list', '[log]\nshowSignature = true\n'],
+      ["git log --format='%+G?'", '[log]\nshowSignature = false\n[gpg]\nprogram = /test-only-verifier\n'],
+      ["git for-each-ref --format='%(*signature:grade)'", ''],
+      ['git log --pretty=SIG.foo', '[pretty "SIG"]\nfoo = format:%G?\n[pretty "sig"]\nfoo = format:%h\n'],
+      ['git log --pretty=alias', '[pretty]\nalias = other\nother = format:%-GS\n'],
+    ])('asks once in approve for me, whole, and runs in full for %s', async (command, config) => {
+      await withConfigs({ repo: config }, {}, async () => {
+        const context = { roots: [proj], workingDirectory: proj, signal: new AbortController().signal };
+        const prompt = await shellApproval('bash_execute', { command, cwd: proj }, context);
+        expect(prompt.askInAuto).toBe(true);
+        expect(prompt.askInFull).toBeUndefined();
+        expect(prompt.byPart).not.toBe(true);
+        expect(prompt.allowOnce).toBe(true);
+        const subject = await resolveSubject(
+          permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
+        );
+        expect(rules.evaluate(subject).decision).not.toBe('allow');
+      });
+    });
+
+    it.each([
+      'git log --pretty=oneline',
+      'git log --format=%h',
+      'git log --pretty=%G? --format=%h',
+      "git log --format='%%G?'",
+      "git log --format='%%%%G?'",
+      "git log --format='%x25G?'",
+      "git for-each-ref --format='%%(*signature:grade)'",
+      "git for-each-ref --format='%(contents:signature)'",
+      'git stash list',
+    ])('keeps an explicit literal or built-in safe format available: %s', async command => {
+      await withConfigs(
+        { repo: '[log]\nshowSignature = false\n[format]\npretty = %G?\n[pretty]\noneline = format:%G?\n' },
+        {},
+        async () => {
+          const prompt = await shellApproval(
+            'bash_execute',
+            { command, cwd: proj },
+            { roots: [proj], workingDirectory: proj, signal: new AbortController().signal }
+          );
+          expect(prompt.askInFull).not.toBe(true);
+          expect(prompt.allowOnce).not.toBe(true);
+        }
+      );
+    });
+
+    const SIGN = '[commit]\n\tgpgsign = true\n';
+    const UNSIGN = '[commit]\n\tgpgsign = false\n';
+    // The cells the command has with no signing config anywhere.
+    const SAME = 'same';
+    const cellsOf = async (expected: string, command: string): Promise<string> =>
+      expected === SAME ? configured({}, command) : expected;
+
+    it.each([
+      ['git commit -m x', 'rrrr'],
+      ['git log --oneline -5', 'rrrr'],
+      ['git tag v9', 'rrrr'],
+      ['git merge other', 'rrrr'],
+    ])('decides %s with no signing config as %s', async (command, expected) => {
+      expect(await configured({}, command)).toBe(expected);
+    });
+
+    it.each([
+      ['system', { system: SIGN }],
+      ['global', { global: SIGN }],
+      ['xdg', { xdg: SIGN }],
+      ['repo', { repo: SIGN }],
+      ['worktree with the extension on', { repo: '[extensions]\n\tworktreeConfig = true\n', worktree: SIGN }],
+    ] as [string, Partial<Record<Place, string>>][])(
+      'asks for git commit with commit.gpgsign set in the %s config',
+      async (_name, configs) => {
+        expect(await configured(configs, 'git commit -m x')).toBe('aaaa');
+        expect(await configured(configs, 'git status')).toBe('rrrr');
+      }
+    );
+
+    it.each([
+      ['worktree without the extension', { worktree: SIGN }],
+      ['system with GIT_CONFIG_NOSYSTEM', { system: SIGN }, { GIT_CONFIG_NOSYSTEM: '1' }],
+      ['global, turned off in the repo', { global: SIGN, repo: UNSIGN }],
+      ['xdg, turned off in the global', { xdg: SIGN, global: UNSIGN }],
+      ['system, turned off in the xdg', { system: SIGN, xdg: UNSIGN }],
+      ['repo, turned off in the worktree', { repo: `${SIGN}[extensions]\n\tworktreeConfig\n`, worktree: UNSIGN }],
+      ['a subsection', { repo: '[commit "x"]\n\tgpgsign = true\n' }],
+      ['another key', { repo: '[commit]\n\tgpgsignx = true\n' }],
+      ['a repository the call does not use', { other: SIGN }],
+    ] as [string, Partial<Record<Place, string>>, Record<string, string>?][])(
+      'runs git commit with commit.gpgsign set in the %s',
+      async (_name, configs, env) => {
+        expect(await configured(configs, 'git commit -m x', env)).toBe('rrrr');
+      }
+    );
+
+    it.each([
+      ['global, turned on in the repo', { global: UNSIGN, repo: SIGN }],
+      ['global, over the xdg', { xdg: UNSIGN, global: SIGN }],
+    ] as [string, Partial<Record<Place, string>>][])(
+      'asks for git commit with commit.gpgsign set in the %s',
+      async (_name, configs) => {
+        expect(await configured(configs, 'git commit -m x')).toBe('aaaa');
+      }
+    );
+
+    it.each(['true', 'TRUE', 'yes', 'On', '1', '"true"', 'tr\\"ue'])(
+      'asks for git commit with commit.gpgsign = %s',
+      async value => {
+        expect(await configured({ repo: `[commit]\n\tgpgsign = ${value}\n` }, 'git commit -m x')).toBe('aaaa');
+      }
+    );
+
+    it.each(['false', 'FALSE', 'no', 'Off', '0', '""', ''])('runs git commit with commit.gpgsign = %j', async value => {
+      expect(await configured({ repo: `[commit]\n\tgpgsign = ${value}\n` }, 'git commit -m x')).toBe('rrrr');
+    });
+
+    it.each([
+      ['a bare key', '[commit]\n\tgpgsign\n'],
+      ['any letter case', '[COMMIT]\n\tGpgSign = yes\n'],
+      ['a trailing comment', '[commit]\n\tgpgsign = true # signed\n'],
+      ['a continued line', '[commit]\n\tgpgsign = tr\\\nue\n'],
+    ])('asks for git commit with commit.gpgsign set by %s', async (_name, text) => {
+      expect(await configured({ global: text }, 'git commit -m x')).toBe('aaaa');
+    });
+
+    it.each([
+      ['git commit --no-gpg-sign -m x', SAME],
+      ['git -c commit.gpgsign=false commit -m x', SAME],
+      ['git -c commit.gpgsign=no -c commit.gpgsign=off commit -m x', SAME],
+      ['git -c commit.gpgsign= commit -m x', SAME],
+      ['git -c commit.gpgsign=false -c commit.gpgsign=true commit -m x', 'aaaa'],
+      ['git merge other', 'aaaa'],
+      ['git merge --no-gpg-sign other', SAME],
+      ['git merge --abort', SAME],
+      ['git rebase main', 'aaaa'],
+      ['git rebase --no-gpg-sign main', SAME],
+      ['git rebase --abort', SAME],
+      ['git cherry-pick other', 'aaaa'],
+      ['git revert --no-edit HEAD', 'aaaa'],
+      ['git pull origin main', 'aaaa'],
+      ['git pull --no-gpg-sign origin main', SAME],
+      ['git commit-tree -m x HEAD^{tree}', SAME],
+      ['git commit-tree -S -m x HEAD^{tree}', 'aaaa'],
+      ['git commit-tree --no-gpg-sign -m x HEAD^{tree}', SAME],
+      ['git -C signrepo commit -m x', SAME],
+      ['git --git-dir=signrepo/.git commit -m x', SAME],
+      ['git status', SAME],
+      ['git log --oneline -5', SAME],
+      ['git stash', SAME],
+    ])('with commit.gpgsign on in the repo, decides %s as %s', async (command, expected) => {
+      expect(await configured({ repo: SIGN }, command)).toBe(await cellsOf(expected, command));
+    });
+
+    it.each([
+      ['git -C signrepo commit -m x', 'aaaa'],
+      ['git -C signrepo log -1', 'rrrr'],
+      ['git --git-dir=signrepo/.git commit -m x', 'aaaa'],
+      ['git --git-dir signrepo/.git commit -m x', 'aaaa'],
+      ['git -C src --git-dir=../signrepo/.git commit -m x', 'aaaa'],
+      ['git commit -m x', 'rrrr'],
+    ])('with commit.gpgsign on in another repository, decides %s as %s', async (command, expected) => {
+      expect(await configured({ other: SIGN }, command)).toBe(expected);
+    });
+
+    it.each([
+      ['[tag]\n\tgpgSign = true\n', 'git tag v9', 'aaaa'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -m x v9', 'aaaa'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag', 'rrrr'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -l', 'rrrr'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -d v9', 'rrrr'],
+      ['[tag]\n\tgpgSign = true\n', 'git -c tag.gpgsign=false tag v9', SAME],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -m x v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --message=x v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -F msg v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --no-annotate -m x v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -a -m x v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -a v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --annotate -m x v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --trailer a:b v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --trailer=a:b v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -e v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --edit v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -a --trailer a:b v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --annotate --trailer=a:b v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -a --no-annotate --trailer a:b v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --trailer a:b --no-annotate v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --cleanup=strip v9', 'rrrr'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag --create-reflog v9', 'rrrr'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -a --trailer a:b v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag -s -m x v9', 'aaaa'],
+      ['[tag]\n\tforceSignAnnotated = true\n', 'git tag v9', 'rrrr'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -a v9', 'aaaa'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -a -m x v9', 'aaaa'],
+      ['[tag]\n\tgpgSign = true\n', 'git tag -s v9', 'aaaa'],
+      ['[push]\n\tgpgSign = true\n', 'git push origin main', 'aaaa'],
+      ['[push]\n\tgpgSign = if-asked\n', 'git push origin main', 'aaaa'],
+      ['[push]\n\tgpgSign = false\n', 'git push origin main', SAME],
+      ['[push]\n\tgpgSign = if-asked\n', 'git push --no-signed origin main', SAME],
+      ['[log]\n\tshowSignature = true\n', 'git log --oneline -5', 'aaaa'],
+      ['[log]\n\tshowSignature = true\n', 'git show HEAD', 'aaaa'],
+      ['[log]\n\tshowSignature = true\n', 'git reflog', 'aaaa'],
+      ['[log]\n\tshowSignature = true\n', 'git range-diff HEAD~1 HEAD HEAD', 'aaaa'],
+      ['[log]\n\tshowSignature = true\n', 'git status', 'rrrr'],
+      ['[log]\n\tshowSignature = true\n', 'git diff', 'rrrr'],
+      ['[log]\n\tshowSignature = true\n', 'git commit -m x', 'rrrr'],
+      ['[log]\n\tshowSignature = false\n', 'git log --oneline -5', 'rrrr'],
+      ['[merge]\n\tverifySignatures = true\n', 'git merge other', 'aaaa'],
+      ['[merge]\n\tverifySignatures = true\n', 'git merge --no-verify-signatures other', SAME],
+      ['[merge]\n\tverifySignatures = true\n', 'git pull origin main', 'aaaa'],
+    ])('with %j in the global config, decides %s as %s', async (text, command, expected) => {
+      expect(await configured({ global: text }, command)).toBe(await cellsOf(expected, command));
+    });
+
+    it('asks for git log with log.showSignature set in the xdg config', async () => {
+      expect(await configured({ xdg: '[log]\n\tshowSignature = true\n' }, 'git log -1')).toBe('aaaa');
+    });
+
+    const INCLUDE = (): string => `[include]\n\tpath = ${placed.inc()}\n`;
+    const INCLUDE_IF = (condition: () => string) => (): string =>
+      `[includeIf "${condition()}"]\n\tpath = ${placed.inc()}\n`;
+    const REPO_GITDIR = (): string => `gitdir:${join(proj, '.git')}`;
+
+    it.each([
+      ['an include of a file that turns it on', INCLUDE, SIGN, 'aaaa'],
+      ['an include of a file that turns it off', INCLUDE, UNSIGN, 'rrrr'],
+      ['an include of a file that is not there', () => `[include]\n\tpath = ${placed.inc()}.none\n`, SIGN, 'rrrr'],
+      ['an includeIf gitdir that matches, turning it on', INCLUDE_IF(REPO_GITDIR), SIGN, 'aaaa'],
+      ['an includeIf gitdir that matches, turning it off', INCLUDE_IF(REPO_GITDIR), UNSIGN, 'rrrr'],
+      ['an includeIf gitdir that does not match', INCLUDE_IF(() => 'gitdir:/nowhere/'), SIGN, 'rrrr'],
+      ['an includeIf onbranch that does not match', INCLUDE_IF(() => 'onbranch:nowhere'), SIGN, 'rrrr'],
+    ])('with %s in the global config, decides git commit as %s', async (_name, text, included, expected) => {
+      expect(await configured({ global: text(), inc: included }, 'git commit -m x')).toBe(expected);
+      expect(await configured({ global: text(), inc: included }, 'git diff')).toBe('rrrr');
+    });
+
+    it.each(['xdg', 'repo', 'system'] as Place[])(
+      'asks for git commit with an include of a signing file in the %s config',
+      async place => {
+        expect(await configured({ [place]: INCLUDE(), inc: SIGN }, 'git commit -m x')).toBe('aaaa');
+        expect(await configured({ [place]: INCLUDE(), inc: UNSIGN }, 'git commit -m x')).toBe('rrrr');
+        expect(
+          await configured({ [place]: INCLUDE_IF(() => 'gitdir:/nowhere/')(), inc: SIGN }, 'git commit -m x')
+        ).toBe('rrrr');
+      }
+    );
+
+    it('asks for signing forms only with a parse error in the global config', async () => {
+      expect(await configured({ global: '[commit\n' }, 'git commit -m x')).toBe('aaaa');
+      expect(await configured({ global: '[commit\n' }, 'git log -1')).toBe('aaaa');
+      expect(await configured({ global: '[commit\n' }, 'git diff')).toBe('rrrr');
+    });
+
+    it('asks for a signing form with a value git cannot read as a boolean', async () => {
+      expect(await configured({ global: '[commit]\n\tgpgsign = maybe\n' }, 'git commit -m x')).toBe('aaaa');
+      expect(await configured({ global: '[log]\n\tshowSignature = maybe\n' }, 'git commit -m x')).toBe('aaaa');
+    });
+
+    it.skipIf(process.getuid?.() === 0)('runs git commit with a global config git skips as unreadable', async () => {
+      const global = placed.global();
+      file(global, SIGN, 0o000);
+      try {
+        expect(await cells('git commit -m x', '')).toBe('rrrr');
+      } finally {
+        rmSync(global, { force: true });
+      }
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      'asks for signing forms only with an included file it cannot read',
+      async () => {
+        const included = placed.inc();
+        file(included, SIGN, 0o000);
+        file(placed.global(), INCLUDE());
+        try {
+          expect(await cells('git commit -m x', '')).toBe('aaaa');
+          expect(await cells('git log -1', '')).toBe('aaaa');
+          expect(await cells('git diff', '')).toBe('rrrr');
+        } finally {
+          rmSync(placed.global(), { force: true });
+          rmSync(included, { force: true });
+        }
+      }
+    );
+
+    it('asks for a commit whose included file is a folder', async () => {
+      const included = placed.inc();
+      mkdirSync(included);
+      file(placed.global(), INCLUDE());
+      try {
+        expect(await cells('git commit -m x', '')).toBe('aaaa');
+      } finally {
+        rmSync(placed.global(), { force: true });
+        rmSync(included, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      'git -C newdir commit -m x',
+      'git -C newdir log -1',
+      'git -C ../newdir commit -m x',
+      'git --git-dir=newdir/.git commit -m x',
+    ])('asks for %s whose folder is not made yet, whatever the config', async command => {
+      expect(await configured({}, command)).toBe('aaaa');
+      expect(await configured({ global: SIGN }, command)).toBe('aaaa');
+      expect(await configured({ repo: SIGN, global: UNSIGN }, command)).toBe('aaaa');
+      expect(await configured({ repo: UNSIGN, global: SIGN }, command)).toBe('aaaa');
+    });
+
+    it('still runs a call whose folder is not made yet when it is no signing form', async () => {
+      expect(await configured({ repo: SIGN }, 'git -C newdir status')).toBe('rrrr');
+    });
+
+    /** Whether the last command of `command` asks because the scan does not list its form, and the reason shown. */
+    const promptIn = (command: string): ReturnType<typeof shellApproval> =>
+      shellApproval('bash_execute', { command, cwd: proj }, {
+        roots: [proj],
+        workingDirectory: proj,
+        signal: new AbortController().signal,
+        protectedPaths: [userData],
+        uncoverablePaths: roots,
+      } as ToolContext);
+
+    /**
+     * Whether the last command of `command` asks in auto mode as a form Desktop does not list (`asked`), and whether it
+     * is only named as one (`flagged`), which leaves it to the mode as a command the scan cannot follow.
+     */
+    const lastAsked = async (command: string): Promise<{ asked: boolean; flagged: boolean; detail: string }> => {
+      const prompt = await promptIn(command);
+      const sub =
+        command
+          .split(/;|&&|&|\|/)
+          .at(-1)
+          ?.trim()
+          .split(' ')[1] ?? '';
+      const reason = new RegExp(`does not list as safe[^]*(\\(|, )git ${sub} (after|with)`);
+      const named = reason.test(prompt.detail);
+      return {
+        asked: Boolean(prompt.askInAuto) && named,
+        flagged: !prompt.askInAuto && named && Boolean(prompt.unchecked),
+        detail: prompt.detail,
+      };
+    };
+
+    // Writes that ask whatever the config holds: a key or section that can turn signing on, set or removed, in any file.
+    const AFTER_CONFIG = [
+      'git config commit.gpgsign true',
+      'git config --global tag.gpgSign true',
+      'git config Commit.GpgSign false',
+      'git config --unset commit.gpgsign',
+      'git config --unset-all merge.verifysignatures',
+      'git config unset log.showSignature',
+      'git config set push.gpgsign true',
+      'git config --add include.path x',
+      'git config --replace-all includeIf.gitdir:/a/.path x',
+      'git config format.pretty %G?',
+      'git config pretty.sig %G?',
+      'git config gpg.program x',
+      'git config gpg.ssh.program x',
+      'git config commit.gpgsign $v',
+      'git config -f other.cfg commit.gpgsign true',
+      'git config --file .git/config --unset tag.gpgsign',
+      'git config --remove-section commit',
+      'git config --rename-section x gpg',
+      'git config remove-section includeIf.onbranch:x',
+      'git config rename-section format y',
+    ];
+    // Writes the scan cannot follow, or whose effect hangs on an includeIf it does not evaluate: the signing form after
+    // one is named but left to the mode, as an unlisted git form is.
+    const AFTER_UNREAD_CONFIG = [
+      'git config x y',
+      'git config remote.origin.url x',
+      'git config remote.origin.pushurl x',
+      'git config REMOTE.origin.URL x',
+      'git config --file other.cfg --unset x',
+      'git config --remove-section remote.origin',
+      'git config -e',
+      'git config --edit',
+      'git config $key v',
+      'git config user.name $v',
+      'git config "user.$k" v',
+      'git config --unset',
+    ];
+    // Writes of other keys leave what a signing query reads as it is.
+    const AFTER_PLAIN_CONFIG = [
+      'git config -f other.cfg user.name y',
+      'git config --blob HEAD:cfg user.name y',
+      'git config --remove-section x',
+      'git config --rename-section x y',
+      'git config remove-section x',
+      'git config rename-section x y',
+      'git config user.name x',
+      'git config user.email a@b',
+      'git config --global user.name x',
+      'git config --unset user.name',
+      'git config --unset-all core.hooksPath',
+      'git config unset user.name',
+      'git config set user.email a@b',
+      'git config --add safe.directory /x',
+      'git config --replace-all user.name y',
+      'git config core.autocrlf false',
+      'git config --local color.ui never',
+      'git config user.signingkey ABC',
+    ];
+    const AFTER_REPO = ['git init', 'git init sub', 'git init -q sub', 'git clone origin.git cl'];
+    const AFTER_BRANCH = [
+      'git switch topic',
+      'git switch -c n',
+      'git checkout topic',
+      'git checkout -b n',
+      'git checkout .',
+      'git checkout main -- src/a.ts',
+      'git checkout HEAD~1 -- .',
+      'git branch -m x',
+      'git branch -M x',
+      'git branch -c x',
+      'git branch -C x',
+      'git branch -mf x',
+      'git branch --move x',
+      'git branch --copy x',
+      'git rebase main',
+      'git bisect start',
+      'git stash branch n',
+      'git symbolic-ref HEAD refs/heads/x',
+    ];
+    // A checkout of paths leaves HEAD where it is.
+    const AFTER_PATHS = [
+      'git checkout -- src/a.ts',
+      'git checkout -- .',
+      'git checkout -q -- a.ts',
+      'git checkout -f -- a.ts',
+    ];
+    const AFTER_OTHER = [
+      'git worktree add ../w',
+      'git remote add o https://example.com/r.git',
+      'git remote set-url origin x',
+    ];
+    const AFTER_FOLDER = [
+      'mkdir n && cd n',
+      'mkdir -p n/m && cd n/m',
+      'git clone origin.git cl && cd cl',
+      'git init sub && cd sub',
+    ];
+    const LASTS = ['git commit -m x', 'git log -1', 'git merge other', 'git tag v9', 'git push origin main'];
+
+    /** Whether the last command of `script` asks as a form Desktop does not list, under `withConfigs`. */
+    const askedWith = (configs: Partial<Record<Place, string>>, script: string): Promise<boolean> =>
+      withConfigs(configs, {}, async () => (await lastAsked(script)).asked);
+    /** `lastAsked` of `script` under `withConfigs`. */
+    const foundWith = (
+      configs: Partial<Record<Place, string>>,
+      script: string
+    ): Promise<{ asked: boolean; flagged: boolean }> => withConfigs(configs, {}, () => lastAsked(script));
+    // Each first statement with each last, one test apiece: a script is a scan with git queries of its own.
+    const pairs = (firsts: readonly string[], lasts: readonly string[]): [string, string][] =>
+      firsts.flatMap(first => lasts.map((last): [string, string] => [first, last]));
+
+    it.each(LASTS)('runs %s alone with no signing config', async last => {
+      expect(await lastAsked(last)).toMatchObject({ asked: false, flagged: false });
+    });
+
+    it.each(pairs(AFTER_CONFIG, LASTS))('asks after %s for %s', async (first, last) => {
+      for (const joiner of [';', '&&']) {
+        expect((await lastAsked(`${first} ${joiner} ${last}`)).asked, `${first} ${joiner} ${last}`).toBe(true);
+      }
+    });
+
+    // Approve for me runs an unlisted git form the scan cannot follow (partAsk), so a signing form after a change it
+    // cannot read is named on the card and left to the mode.
+    it.each(pairs([...AFTER_UNREAD_CONFIG, ...AFTER_OTHER], LASTS))(
+      'names %s before %s and leaves it to the mode',
+      async (first, last) => {
+        for (const joiner of [';', '&&']) {
+          const found = await lastAsked(`${first} ${joiner} ${last}`);
+          expect(found, `${first} ${joiner} ${last}`).toMatchObject({ asked: false, flagged: true });
+        }
+      }
+    );
+
+    it.each([...AFTER_UNREAD_CONFIG, ...AFTER_OTHER])(
+      'asks for a commit after %s when the config there now signs',
+      async first => {
+        expect(await askedWith({ global: SIGN }, `${first}; git commit -m x`)).toBe(true);
+      }
+    );
+
+    // A push contacts a remote, which its own checks name whatever precedes it.
+    it.each(
+      pairs(
+        [
+          ...AFTER_PLAIN_CONFIG,
+          ...AFTER_PATHS,
+          ...AFTER_BRANCH,
+          ...AFTER_REPO,
+          'git switch -c feat && git add -A',
+          'git checkout -b x',
+          'git rebase main',
+          'git clone origin.git cl && cd cl',
+        ],
+        LASTS.slice(0, 4)
+      )
+    )('does not name %s before %s, which leaves what it reads as it is', async (first, last) => {
+      for (const joiner of first.includes('cd ') ? ['&&'] : [';', '&&']) {
+        const found = await lastAsked(`${first} ${joiner} ${last}`);
+        expect(found, `${first} ${joiner} ${last}`).toMatchObject({ asked: false, flagged: false });
+      }
+    });
+
+    it.each([
+      'git switch -c feat && git add -A && git commit -m x',
+      'git checkout -b x && git commit -m x',
+      'git init && git add . && git commit -m init',
+      'git checkout -- a.ts && git commit -m x',
+      'git config user.email a@b && git commit -m x',
+      'git rebase main && git commit -m x',
+      'git clone origin.git cl && cd cl && git log -1',
+    ])('runs %s with no signing config', async script => {
+      expect((await lastAsked(script)).asked, script).toBe(false);
+      expect((await configured({}, script))[1], script).toBe('r');
+    });
+
+    it('runs a push after a rebase with no signing config, and asks with push.gpgSign on', async () => {
+      expect((await lastAsked('git rebase main && git push')).asked).toBe(false);
+      expect(await askedWith({ global: '[push]\n\tgpgSign = true\n' }, 'git rebase main && git push')).toBe(true);
+    });
+
+    describe('in the modes a git program the script sets asks in', () => {
+      /** Auto then full mode (a asks, r runs), then u when the scan marks the command unchecked. */
+      const modes = (configs: Partial<Record<Place, string>>, command: string): Promise<string> =>
+        withConfigs(configs, {}, async () => {
+          const prompt = await promptIn(command);
+          return `${prompt.askInAuto ? 'a' : 'r'}${prompt.askInFull ? 'a' : 'r'}${prompt.unchecked ? 'u' : '-'}`;
+        });
+      const SIGN_ALL = `${SIGN}[log]\n\tshowSignature = true\n`;
+
+      it.each(['git config core.fsmonitor x; git status', 'git -c core.fsmonitor=$X status'])(
+        'asks in auto mode and runs in full for the git program in %s',
+        async command => {
+          expect((await modes({}, command)).slice(0, 2)).toBe('ar');
+        }
+      );
+
+      it.each([
+        ['git commit -m x', { global: SIGN }],
+        ['git -C signrepo commit -m x', { other: SIGN }],
+        ['git log -1', { xdg: '[log]\n\tshowSignature = true\n' }],
+        ['git config commit.gpgsign true; git commit -m x', {}],
+        ['git config $key v; git commit -m x', { global: SIGN }],
+        ['git -c commit.gpgsign=true commit -m x', {}],
+        ['git -c commit.gpgsign=$X commit -m x', {}],
+        ['git --config-env commit.gpgsign=NOT_SET_HERE commit -m x', {}],
+        ['git -c gpg.program=$X log -1', {}],
+        ['git commit -S -m x', { global: SIGN }],
+        ['git -c gpg.program=x commit -S -m x', { global: SIGN }],
+        ['git am x.patch', { global: SIGN }],
+        ['git whatchanged -1', { global: SIGN_ALL }],
+        ['git stash list', { global: SIGN_ALL }],
+        ['git stash list --frobnicate', { global: SIGN_ALL }],
+        ['git log --pretty=sig -1', { global: '[pretty]\n\tsig = format:%G?\n' }],
+        ['git commit -m x | cat', { global: SIGN }],
+        ['for i in 1 2; do git commit -m x; git config commit.gpgsign true; done', {}],
+        ['git commit -m x & git config tag.gpgsign true; git tag v9', {}],
+      ] as [string, Partial<Record<Place, string>>][])(
+        'asks in auto mode and runs in full for %s',
+        async (command, configs) => {
+          expect((await modes(configs, command)).slice(0, 2)).toBe('ar');
+        }
+      );
+
+      // A form the table does not list runs unchecked in both modes, as does a signing form with no config that signs.
+      it.each([
+        'git am x.patch',
+        'git whatchanged -1',
+        'git -c user.name=$X commit -m x',
+        'git -C $D commit -m x',
+        'git -c gpg.program=x commit -m x',
+        'git stash list --frobnicate',
+      ])('runs %s unchecked in both modes with no signing config', async command => {
+        expect(await modes({}, command)).toBe('rru');
+      });
+
+      it('names a racing signing change on the form it reaches', async () => {
+        const prompt = await promptIn('for i in 1 2; do git commit -m x; git config commit.gpgsign true; done');
+        expect(prompt.detail).toContain('git commit after a signing config change in the same script');
+      });
+
+      describe('for signing or verifying the command asks for itself', () => {
+        const GPG_FORMS = [
+          'commit -m x',
+          'commit-tree -m x HEAD^{tree}',
+          'merge other',
+          'pull origin main',
+          'rebase main',
+          'cherry-pick other',
+          'revert HEAD',
+          'am x.patch',
+        ];
+        const GPG_SPELLINGS = ['-S', '-SKEY', '--gpg-sign', '--gpg-sign=KEY'];
+        const withOption = (form: string, option: string): string => {
+          const [sub, ...rest] = form.split(' ');
+          return ['git', sub, option, ...rest].join(' ');
+        };
+
+        it.each(GPG_FORMS.flatMap(form => GPG_SPELLINGS.map(option => [form, option])))(
+          'asks in auto mode and runs in full for git %s with %s, unless a later --no-gpg-sign takes it back',
+          async (form, option) => {
+            expect(await modes({}, withOption(form, option))).toBe('aru');
+            expect(await modes({}, withOption(form, `--no-gpg-sign ${option}`))).toBe('aru');
+            expect(await modes({}, withOption(form, `${option} --no-gpg-sign`))).toBe('rru');
+            // The later --no-gpg-sign turns commit.gpgSign off too.
+            expect(await modes({ global: SIGN }, withOption(form, `${option} --no-gpg-sign`))).toBe('rru');
+          }
+        );
+
+        it.each(
+          ['merge other', 'pull origin main'].flatMap(form =>
+            ['--verify-signatures', '--verify-sig'].map(option => [form, option])
+          )
+        )(
+          'asks in auto mode and runs in full for git %s with %s, unless a later --no-verify-signatures takes it back',
+          async (form, option) => {
+            expect(await modes({}, withOption(form, option))).toBe('aru');
+            expect(await modes({}, withOption(form, `--no-verify-signatures ${option}`))).toBe('aru');
+            expect(await modes({}, withOption(form, `${option} --no-verify-signatures`))).toBe('rru');
+          }
+        );
+
+        it.each(['--signed', '--signed=true', '--signed=yes', '--signed=if-asked', '--signed=$V'])(
+          'asks in auto mode and runs in full for git push %s, unless a later --no-signed takes it back',
+          async option => {
+            expect(await modes({}, `git push ${option} origin main`)).toBe('aru');
+            expect(await modes({}, `git push --no-signed ${option} origin main`)).toBe('aru');
+            expect(await modes({}, `git push ${option} --no-signed origin main`)).toBe('rru');
+          }
+        );
+
+        it.each(['--signed=false', '--signed=no'])('runs git push %s unchecked in both modes', async option => {
+          expect(await modes({}, `git push ${option} origin main`)).toBe('rru');
+        });
+
+        it.each([
+          'git tag -s v9',
+          'git tag -as -m x v9',
+          'git tag --sign v9',
+          'git tag -u KEY v9',
+          'git tag -uKEY v9',
+          'git tag --local-user KEY v9',
+          'git tag --local-user=KEY v9',
+          'git tag -v v9',
+          'git tag --verify v9',
+          'git tag --no-sign -s v9',
+          'git tag -u KEY --no-sign v9',
+          'git verify-commit HEAD',
+          'git verify-tag v9',
+        ])('asks in auto mode and runs in full for %s', async command => {
+          expect(await modes({}, command)).toBe('aru');
+        });
+
+        it.each([
+          'git commit -S -m x > out.txt',
+          'git commit -S -m x 2>&1 | tail -2',
+          'GIT_PAGER=cat git log --show-signature -1',
+          'env GIT_PAGER=cat git log --show-signature -1',
+          'command git verify-commit HEAD',
+          'git -C . -c user.name=x tag -s v9',
+          "git log '--format=%h %G?' -1",
+          'git status && git commit --gpg-sign -m x',
+          'git ls-files | xargs git commit -S -m x',
+          'cd . && git merge --verify-signatures other',
+        ])('asks in auto mode and runs in full for %s, wherever the signing form stands', async command => {
+          expect(await modes({}, command)).toBe('aru');
+        });
+
+        it.each([
+          ['sc', 'commit -S', 'git sc -m x', 'aru'],
+          ['lg', 'log --show-signature', 'git lg -1', 'aru'],
+          ['lf', "log '--format=%G?'", 'git lf -1', 'aru'],
+          ['tv', 'tag -v', 'git tv v9', 'aru'],
+          ['un', 'commit -S --no-gpg-sign', 'git un -m x', 'rru'],
+        ])('reads git alias %s = %s as the form it runs: %s', async (name, expansion, command, expected) => {
+          expect(await modes({ repo: `[alias]\n\t${name} = ${expansion}\n` }, command)).toBe(expected);
+        });
+
+        it('runs git tag -s with a later --no-sign unchecked in both modes', async () => {
+          expect(await modes({}, 'git tag -s --no-sign v9')).toBe('rru');
+          expect(await modes({ global: '[tag]\n\tgpgSign = true\n' }, 'git tag -s --no-sign v9')).toBe('rru');
+        });
+
+        it.each(['log -1', 'show HEAD', 'whatchanged -1', 'reflog'])(
+          'asks in auto mode and runs in full for git %s with --show-signature, unless a later --no-show-signature takes it back',
+          async form => {
+            expect(await modes({}, withOption(form, '--show-signature'))).toBe('aru');
+            expect(await modes({}, withOption(form, '--no-show-signature --show-signature'))).toBe('aru');
+            expect(await modes({}, withOption(form, '--show-signature --no-show-signature'))).toBe('rru');
+            const shows = { xdg: '[log]\n\tshowSignature = true\n' };
+            expect(await modes(shows, withOption(form, '--show-signature --no-show-signature'))).toBe('rru');
+          }
+        );
+
+        it.each([
+          "git log '--format=%G?' -1",
+          'git log --pretty=format:%GS -1',
+          'git log --pretty=tformat:%GK -1',
+          'git show --format=%h%GK HEAD',
+          "git for-each-ref '--format=%(signature)'",
+          "git branch --format '%(signature)'",
+          'git log "--format=%G? $FMT" -1',
+        ])('asks in auto mode and runs in full for %s', async command => {
+          expect(await modes({}, command)).toBe('aru');
+        });
+
+        it('reads a pretty alias the command names as format.pretty', async () => {
+          const alias = { global: '[pretty]\n\tsig = format:%h %G?\n\tplain = format:%h\n' };
+          expect(await modes(alias, 'git log --pretty=sig -1')).toBe('aru');
+          expect(await modes(alias, 'git log --format=si -1')).toBe('aru');
+          expect((await modes(alias, 'git log --pretty=plain -1')).slice(0, 2)).toBe('rr');
+          expect((await modes(alias, 'git log --pretty=oneline -1')).slice(0, 2)).toBe('rr');
+          // A name no alias or built-in format starts with stops git, and is read as one that may print signatures.
+          expect((await modes({}, 'git log --pretty=sig -1')).slice(0, 2)).toBe('ar');
+        });
+
+        // A format filled at run time is left to the PATH check of the programs it may start, as on main.
+        it.each([
+          'git log -S foo -1',
+          'git commit -m -S',
+          'git commit -mS',
+          'git log --format=%h -1',
+          'git log --format=$FMT -1',
+          'git diff -S x',
+        ])('does not read -S or a format as signing in %s', async command => {
+          expect(await modes({}, command)).toBe('rr-');
+        });
+
+        it.each(['gpg.program', 'gpg.ssh.program', 'gpg.x509.program', 'gpg.openpgp.program', 'gpg.format'])(
+          'asks for %s given by -c, --config-env or an earlier git config on a form that signs',
+          async key => {
+            const value = key === 'gpg.format' ? 'ssh' : './x.sh';
+            expect(await modes({}, `git -c ${key}=${value} commit -S -m x`)).toBe('aru');
+            expect(await modes({}, `git -c ${key}=${value} tag -s v9`)).toBe('aru');
+            expect(await modes({}, `git --config-env ${key}=GPG_VALUE commit -S -m x`)).toBe('aru');
+            expect(await modes({ global: SIGN }, `git -c ${key}=${value} commit -m x`)).toBe('aru');
+            expect(await modes({ global: SIGN }, `git --config-env ${key}=GPG_VALUE commit -m x`)).toBe('aru');
+            expect((await modes({}, `git config ${key} ${value}; git commit -m x`)).slice(0, 2)).toBe('ar');
+            // With nothing that signs, the setting is only a form the table may not list.
+            expect(await modes({}, `git -c ${key}=${value} commit -m x`)).toBe(key === 'gpg.format' ? 'rr-' : 'rru');
+          }
+        );
+      });
+    });
+
+    it.each([
+      'git config --get x',
+      'git config --get-all x',
+      'git config x',
+      'git config get x',
+      'git config list',
+      'git config --list',
+      'git config -l',
+      'git branch x',
+      'git branch -d x',
+      'git branch -a',
+      'git branch -vv',
+      'git branch --contains HEAD',
+      'git worktree list',
+      'git stash',
+      'git status',
+      'git fetch origin',
+      'mkdir -p src',
+      'cd src',
+      'cd .',
+    ])('does not ask for git commit after %s', async first => {
+      for (const joiner of [';', '&&']) {
+        expect(await lastAsked(`${first} ${joiner} git commit -m x`), first).toMatchObject({
+          asked: false,
+          flagged: false,
+        });
+      }
+    });
+
+    it('does not ask for a signing form that runs before the statement that changes the config', async () => {
+      expect((await lastAsked('git commit -m x; git switch topic')).asked).toBe(false);
+      expect((await lastAsked('git log -1; git config x y; git status')).asked).toBe(false);
+    });
+
+    it('asks for a signing form in a loop, an if or a function body that changes the config after it', async () => {
+      for (const script of [
+        'for i in 1 2; do git commit -m x; git switch topic; done',
+        'while true; do git log -1; git config x y; done',
+        'if true; then git commit -m x; git init sub; fi',
+        'f() { git commit -m x; git checkout topic; }; f',
+        'git commit -m x & git switch topic',
+        'git switch topic | git commit -m x',
+      ]) {
+        expect(await cells(script, ''), script).toMatch(/^.a.a$/);
+      }
+    });
+
+    it('names the earlier change in the reason', async () => {
+      expect((await lastAsked('git config x y; git commit -m x')).detail).toContain(
+        'after a config, repository, branch or folder change in the same script'
+      );
+      expect(
+        (await withConfigs({ global: ONBRANCH }, {}, () => lastAsked('git switch topic; git commit -m x'))).detail
+      ).toContain('after a branch change in the same script with an includeIf onbranch config');
+    });
+
+    const ONBRANCH = '[includeIf "onbranch:topic"]\n\tpath = /dev/null\n';
+    const ONGITDIR = '[includeIf "gitdir:../"]\n\tpath = /dev/null\n';
+
+    it.each([
+      ['[includeIf "onbranch:topic"]\n\tpath = PATH\n', 'git switch topic', 'git commit -m x'],
+      ['[includeIf "onbranch:topic"]\n\tpath = PATH\n', 'git checkout topic', 'git log -1'],
+      ['[includeIf "gitdir:../"]\n\tpath = PATH\n', 'git init sub', 'git commit -m x'],
+    ])('asks after the switch or init that an includeIf in %j depends on', async (text, first, last) => {
+      const global = text.replace('PATH', placed.inc());
+      expect(await configured({ global, inc: SIGN }, last)).toBe('rrrr');
+      expect(await configured({ global, inc: SIGN }, `${first} && ${last}`)).toBe('aaaa');
+    });
+
+    describe('after a branch change', () => {
+      // Which branch an onbranch include then reads is past what the scan follows, so the form is left to the mode.
+      it.each(pairs(AFTER_BRANCH, LASTS))('names %s before %s only with an includeIf onbranch', async (first, last) => {
+        const script = `${first} && ${last}`;
+        const none = { asked: false, flagged: false };
+        expect(await foundWith({}, script), `${script} with none`).toMatchObject(none);
+        expect(await foundWith({ global: ONGITDIR }, script), `${script} with gitdir`).toMatchObject(none);
+        for (const configs of [
+          { global: ONBRANCH },
+          { xdg: ONBRANCH },
+          { repo: ONBRANCH },
+          { system: ONBRANCH },
+          { global: `[include]\n\tpath = ${placed.inc()}\n`, inc: ONBRANCH },
+          {
+            global: '[includeIf "onbranch:never"]\n\tpath = /dev/null\n[includeIf "onbranch:*"]\n\tpath = /dev/null\n',
+          },
+        ] as Partial<Record<Place, string>>[]) {
+          expect(await foundWith(configs, script), `${script} with ${JSON.stringify(configs)}`).toMatchObject({
+            asked: false,
+            flagged: true,
+          });
+        }
+      });
+
+      it('reads the includeIf keys of the call, not the script alone', async () => {
+        const script = 'git switch topic && git -c includeIf.onbranch:x.path=/dev/null commit -m x';
+        expect(await configured({}, script)).toBe('aaaa');
+        expect((await lastAsked('git switch topic && git -c user.name=x commit -m x')).asked).toBe(false);
+      });
+
+      it('asks when the includeIf key cannot be read', async () => {
+        expect(await configured({ global: '[includeIf "onbranch:x"\n' }, 'git switch topic && git commit -m x')).toBe(
+          'aaaa'
+        );
+      });
+
+      it('runs a signing form after a checkout of paths whatever the config', async () => {
+        for (const script of AFTER_PATHS) {
+          expect(await foundWith({ global: ONBRANCH }, `${script} && git commit -m x`), script).toMatchObject({
+            asked: false,
+            flagged: false,
+          });
+        }
+      });
+
+      it('asks for a signing form that a branch change in a loop or background can reach', async () => {
+        for (const script of ['git commit -m x & git switch topic', 'git switch topic | git commit -m x']) {
+          expect(await configured({ global: ONBRANCH }, script), script).toMatch(/^.a.a$/);
+        }
+        // A loop or a background command is asked about whatever the config holds.
+        expect(await configured({}, 'for i in 1 2; do git commit -m x; git switch topic; done')).toBe('aaaa');
+        expect(await configured({}, 'git commit -m x & git switch topic')).toBe('aaaa');
+      });
+    });
+
+    describe('after a repository is made or a folder entered that is not there yet', () => {
+      const PLACES = [...AFTER_REPO, ...AFTER_FOLDER];
+      const TEMPLATE = '[init]\n\ttemplateDir = /dev/null\n';
+
+      // Config a new repository may read past the user config is past what the scan follows: left to the mode.
+      const NEW_REPO_LASTS = ['git commit -m x', 'git log -1', 'git merge other', 'git tag v9'];
+      const scriptOf = (first: string, last: string): string =>
+        first.includes('cd ') ? `${first} && ${last}` : `${first}; ${last}`;
+
+      it.each(pairs(PLACES, NEW_REPO_LASTS))('does not name %s before %s with no other config', async (first, last) => {
+        const script = scriptOf(first, last);
+        const none = { asked: false, flagged: false };
+        expect(await foundWith({}, script), `${script} with none`).toMatchObject(none);
+        // The config of the repository around a new one is not read by it.
+        expect(await foundWith({ repo: ONGITDIR }, script), `${script} with a repo includeIf`).toMatchObject(none);
+      });
+
+      it.each(
+        pairs(PLACES, NEW_REPO_LASTS).flatMap(([first, last]) =>
+          [
+            { global: ONGITDIR },
+            { xdg: ONGITDIR },
+            { global: ONBRANCH },
+            { global: TEMPLATE },
+            { xdg: TEMPLATE },
+            { global: '[includeIf "hasconfig:remote.*.url:*"]\n\tpath = /dev/null\n' },
+          ].map((configs): [string, string, Partial<Record<Place, string>>] => [first, last, configs])
+        )
+      )('names %s before %s when the new repository could read other config: %j', async (first, last, configs) => {
+        expect(await foundWith(configs, scriptOf(first, last))).toMatchObject({ asked: false, flagged: true });
+      });
+
+      it('reads the signing settings of the new repository from the user and system config alone', async () => {
+        const unsigned = { global: SIGN, repo: UNSIGN };
+        expect(await configured(unsigned, 'git commit -m x')).toBe('rrrr');
+        for (const script of [
+          'git init sub && git -C sub commit -m x',
+          'git init sub; git -C sub commit -m x',
+          'git clone signrepo copy && cd copy && git commit -m x',
+          'mkdir n && cd n && git init && git commit -m x',
+          'cd newdir && git commit -m x',
+        ]) {
+          expect(await configured(unsigned, script), script).toMatch(/^.a/);
+        }
+        for (const configs of [{ system: SIGN }, { xdg: SIGN }, { global: SIGN }] as Partial<Record<Place, string>>[]) {
+          expect(await configured({ ...configs, repo: UNSIGN }, 'git init sub && git -C sub commit -m x')).toMatch(
+            /^.a/
+          );
+        }
+        expect(await configured({ repo: SIGN }, 'git init sub && git -C sub commit -m x')).toMatch(/^.a/);
+        expect(await configured({ global: UNSIGN, repo: SIGN }, 'mkdir n && cd n && git commit -m x')).toMatch(/^.a/);
+      });
+
+      it('runs a new repository with the user config as it is when it does not sign', async () => {
+        expect(await configured({}, 'git init sub && git -C sub commit -m x')).toMatch(/^.r/);
+        expect(await configured({ global: UNSIGN, repo: SIGN }, 'git init sub && git -C sub commit -m x')).toMatch(
+          /^.a/
+        );
+        expect(await configured({ global: UNSIGN, repo: SIGN }, 'git init sub && git -C sub log -1')).toMatch(/^.r/);
+        expect(await configured({ global: UNSIGN }, 'git init sub && git -C sub commit -m x')).toMatch(/^.r/);
+      });
+
+      it('asks for a template, a -c, a git dir or an environment that gives the new repository config', async () => {
+        for (const script of [
+          'git init --template=tpl2 sub && git -C sub commit -m x',
+          'git init --template tpl2 sub && git -C sub commit -m x',
+          'git clone --template=tpl2 signrepo copy && git -C copy commit -m x',
+          'git clone -c commit.gpgsign=true signrepo copy && git -C copy commit -m x',
+          'git clone --config commit.gpgsign=true signrepo copy && git -C copy commit -m x',
+          'git clone -qc commit.gpgsign=true signrepo copy && git -C copy commit -m x',
+          'git init --separate-git-dir=sg sub && git -C sub commit -m x',
+          'git -c init.templateDir=tpl2 init sub && git -C sub commit -m x',
+          'git --config-env=init.templateDir=T init sub && git -C sub commit -m x',
+          'GIT_TEMPLATE_DIR=tpl2 git init sub && git -C sub commit -m x',
+          'export GIT_TEMPLATE_DIR=tpl2; git init sub && git -C sub commit -m x',
+          'env GIT_TEMPLATE_DIR=tpl2 git init sub && git -C sub commit -m x',
+          'GIT_DIR=x git init sub && git -C sub commit -m x',
+          'export GIT_EXEC_PATH=x; git init sub && git -C sub commit -m x',
+        ]) {
+          expect(await configured({}, script), script).toMatch(/^.a/);
+        }
+        expect(await configured({}, 'git init -q -b main sub && git -C sub commit -m x')).toMatch(/^.r/);
+      });
+
+      it.each(['GIT_TEMPLATE_DIR', 'GIT_EXEC_PATH'])('asks when this process sets %s', async name => {
+        const script = 'git init sub && git -C sub commit -m x';
+        expect(await configured({}, script)).toMatch(/^.r/);
+        expect(await configured({}, script, { [name]: '/dev/null' })).toMatch(/^.a/);
+      });
+
+      it('asks with a git dir or work tree, which no fresh repository stands for', async () => {
+        expect(await configured({}, 'git init sub && git --git-dir=sub/.git commit -m x')).toMatch(/^.a/);
+        expect(await configured({}, 'git init sub && git -C sub --work-tree=. commit -m x')).toMatch(/^.a/);
+      });
+
+      it('asks for a signing form in a folder made by a statement that may not run first', async () => {
+        for (const script of [
+          'if true; then git init sub; fi; git -C sub commit -m x',
+          'git init sub & git -C sub commit -m x',
+        ]) {
+          expect(await configured({ global: SIGN, repo: UNSIGN }, script), script).toMatch(/^.a/);
+        }
+      });
+    });
+
+    describe('with HOME or XDG_CONFIG_HOME set by the script', () => {
+      beforeAll(() => {
+        for (const name of ['hmsign', 'hmno']) file(join(proj, name, '.gitconfig'), name === 'hmsign' ? SIGN : UNSIGN);
+        file(join(proj, 'xdgsign', 'git', 'config'), SIGN);
+        file(join(proj, 'xdgno', 'git', 'config'), UNSIGN);
+      });
+
+      afterAll(() => {
+        for (const name of ['hmsign', 'hmno', 'xdgsign', 'xdgno'])
+          rmSync(join(proj, name), { recursive: true, force: true });
+      });
+
+      /** The cells of `command` but the first, which a script that sets HOME never has covered by a rule. */
+      const ran = async (...args: Parameters<typeof configured>): Promise<string> =>
+        (await configured(...args)).slice(1);
+
+      it.each([
+        ['HOME', 'hmsign', 'hmno'],
+        ['XDG_CONFIG_HOME', 'xdgsign', 'xdgno'],
+      ])('gives %s to the command that sets it and those after a plain assignment', async (name, signDir, noneDir) => {
+        const sign = join(proj, signDir);
+        const none = join(proj, noneDir);
+        // No signing config in this process: the script's own value decides.
+        expect(await ran({}, `${name}=${sign} git commit -m x`)).toBe('aaa');
+        expect(await ran({}, `${name}=${none} git commit -m x`)).toBe('rrr');
+        expect(await ran({}, `export ${name}=${sign}; git commit -m x`)).toBe('aaa');
+        expect(await ran({}, `${name}=${sign}; git commit -m x`)).toBe('aaa');
+        expect(await ran({}, `${name}=${sign}; export ${name}; git status; git commit -m x`)).toBe('aaa');
+        // With this process signing, a value of the script's that does not sign wins for the command it reaches.
+        // The file the script moves is the one git stops reading; the other still counts.
+        const moved = name === 'HOME' ? 'global' : 'xdg';
+        const kept = name === 'HOME' ? 'xdg' : 'global';
+        expect(await ran({ [moved]: SIGN }, `${name}=${none} git commit -m x`)).toBe('rrr');
+        expect(await ran({ [moved]: SIGN }, `export ${name}=${none}; git commit -m x`)).toBe('rrr');
+        // The moved HOME's own `gpgsign = false` outranks the xdg file; the moved xdg one sits below the global file.
+        expect(await ran({ [kept]: SIGN }, `${name}=${none} git commit -m x`)).toBe(name === 'HOME' ? 'rrr' : 'aaa');
+      });
+
+      it.each([
+        ['HOME', 'hmsign', 'hmno'],
+        ['XDG_CONFIG_HOME', 'xdgsign', 'xdgno'],
+      ])(
+        'does not give %s to a command a prefix assignment on another command did not reach',
+        async (name, signDir, noneDir) => {
+          const sign = join(proj, signDir);
+          const none = join(proj, noneDir);
+          const real = { global: SIGN, xdg: SIGN };
+          for (const [first, joiner] of [
+            [`${name}=VALUE git status`, ';'],
+            [`${name}=VALUE git status`, '&&'],
+            [`${name}=VALUE git log -1`, ';'],
+            [`${name}=VALUE true`, ';'],
+            [`env ${name}=VALUE git status`, ';'],
+            [`${name}=VALUE git status | cat`, ';'],
+          ]) {
+            const script = (value: string): string => `${first.replace('VALUE', value)} ${joiner} git commit -m x`;
+            expect(await ran(real, script(none)), script(none)).toBe('aaa');
+            // The first command may ask for the config it is moved to; the commit must not take it on.
+            expect((await lastAsked(script(sign))).asked, script(sign)).toBe(false);
+          }
+          const moved = name === 'HOME' ? 'global' : 'xdg';
+          const kept = name === 'HOME' ? 'xdg' : 'global';
+          expect(await ran({ [moved]: SIGN }, `env ${name}=${none} git commit -m x`)).toBe('rrr');
+          expect(await ran({ [kept]: SIGN }, `env ${name}=${none} git commit -m x`)).toBe(
+            name === 'HOME' ? 'rrr' : 'aaa'
+          );
+          expect(await ran({}, `env ${name}=${sign} git commit -m x`)).toBe('aaa');
+        }
+      );
+
+      it('asks for a value set in a branch, a loop, a function or by expansion', async () => {
+        for (const script of [
+          'if true; then HOME=hmno; fi; git commit -m x',
+          'for i in 1; do HOME=hmno; done; git commit -m x',
+          'f() { HOME=hmno; }; f; git commit -m x',
+          'f() { git commit -m x; }; HOME=hmno f',
+          'HOME=$PWD/hmno git commit -m x',
+          'HOME=$(echo hmno) git commit -m x',
+          'HOME=hmno; HOME=hmsign; git commit -m x',
+          'HOME=hmno HOME=hmsign git commit -m x',
+          'read HOME; git commit -m x',
+          'HOME+=x git commit -m x',
+        ]) {
+          expect(await ran({ global: UNSIGN }, script), script).toBe('aaa');
+        }
+        expect(await ran({}, 'git commit -m x; HOME=hmsign')).toBe('rrr');
+      });
+    });
+
+    describe('with a relative or unset git config location', () => {
+      const GIT_ENV = ['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'];
+      const here = async (command: string, folder = ''): Promise<string> =>
+        (await withConfigs({}, {}, () => cells(command, folder))).slice(1);
+
+      it('runs a commit with no signing config and an absolute value', async () => {
+        expect(await here('git commit -m x')).toBe('rrr');
+        expect(await here(`HOME=${join(proj, 'hmno')} git commit -m x`)).toBe('rrr');
+        expect(await here(`XDG_CONFIG_HOME=${join(proj, 'xdgno')} git commit -m x`)).toBe('rrr');
+        expect(await here('env -u FOO git commit -m x')).toBe('rrr');
+        expect(await here('unset FOO; git commit -m x')).toBe('rrr');
+      });
+
+      it.each(['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'])(
+        'asks for a signing form with a relative %s from the top and a subfolder',
+        async name => {
+          for (const value of ['rel', './rel', '../rel', 'src/rel']) {
+            for (const command of [
+              `${name}=${value} git commit -m x`,
+              `export ${name}=${value}; git commit -m x`,
+              `${name}=${value}; git log -1`,
+              `env ${name}=${value} git commit -m x`,
+            ]) {
+              expect(await here(command), command).toBe('aaa');
+              expect(await here(command, 'src'), `src: ${command}`).toBe('aaa');
+            }
+          }
+          if (name === 'HOME' || name === 'XDG_CONFIG_HOME') {
+            expect(await here(`${name}=rel git status; git commit -m x`)).toBe('rrr');
+          }
+        }
+      );
+
+      it('asks for a signing form with a relative XDG_CONFIG_HOME in this process', async () => {
+        expect(await withConfigs({}, { XDG_CONFIG_HOME: 'rel' }, () => cells('git commit -m x', ''))).toMatch(/^.a/);
+        expect(await withConfigs({}, { XDG_CONFIG_HOME: 'rel' }, () => cells('git status', ''))).toMatch(/^.r/);
+      });
+
+      it.each(GIT_ENV)('asks for a signing form after %s is unset', async name => {
+        for (const command of [
+          `unset ${name}; git commit -m x`,
+          `unset -v ${name}; git commit -m x`,
+          `unset ${name} FOO; git commit -m x`,
+          `export -n ${name}; git commit -m x`,
+          `export -n ${name}=x; git commit -m x`,
+          `env -u ${name} git commit -m x`,
+          `env -u${name} git commit -m x`,
+          `env --unset=${name} git commit -m x`,
+          `env --unset ${name} git commit -m x`,
+          `env -u FOO -u ${name} git commit -m x`,
+          `unset "${name}"; git commit -m x`,
+          `git commit -m x; unset ${name}; git commit -m y`,
+          `unset ${name}; git log -1`,
+        ]) {
+          expect(await here(command), command).toBe('aaa');
+        }
+        if (name === 'HOME' || name === 'XDG_CONFIG_HOME') expect(await here(`unset ${name}; git status`)).toBe('rrr');
+      });
+
+      it('asks for a signing form after env -i, GIT_CONFIG variables and unset operands it cannot read', async () => {
+        for (const command of [
+          'env -i git commit -m x',
+          'env -i PATH=$PATH git commit -m x',
+          'env --ignore-environment git commit -m x',
+          'env -iu FOO git commit -m x',
+          'env -u GIT_CONFIG_COUNT git commit -m x',
+          'unset GIT_CONFIG_PARAMETERS; git commit -m x',
+          'unset $NAME; git commit -m x',
+          'unset "${NAME}"; git commit -m x',
+          'unset H*; git commit -m x',
+          'export -n $NAME; git commit -m x',
+          'env -u $NAME git commit -m x',
+        ]) {
+          expect(await here(command), command).toBe('aaa');
+        }
+      });
+
+      const drops = (name: string): string[] => [
+        `unset ${name}`,
+        `unset -v ${name}`,
+        `unset -f -v ${name}`,
+        `unset FOO ${name}`,
+        `unset -- ${name}`,
+        `export -n ${name}`,
+        `export -n ${name}=x`,
+        `export -p -n FOO ${name}`,
+        `declare +x ${name}`,
+        `typeset +x ${name}`,
+        `declare -n ${name}=other`,
+        `declare -rn ${name}=other`,
+        `local ${name}`,
+        `local ${name}=x`,
+        `env -u ${name} true`,
+        `env -u${name} true`,
+        `env --unset ${name} true`,
+        `env --unset=${name} true`,
+        `env -iu FOO true`,
+        `env -vu ${name} true`,
+        `env -0u${name} true`,
+        `env -u FOO -u ${name} true`,
+        'env -i true',
+        'env --ignore-environment true',
+        'env - true',
+        'env -v -i true',
+      ];
+
+      it.each(GIT_ENV.slice(0, 4).flatMap(name => drops(name).map(drop => [name, drop])))(
+        'asks for a signing form after a spelling that drops %s: %s',
+        async (_name, drop) => {
+          for (const script of [
+            `${drop}; git commit -m x`,
+            `command ${drop}; git commit -m x`,
+            `sudo ${drop}; git commit -m x`,
+            `nice ${drop}; git commit -m x`,
+            `f() { ${drop}; }; f; git commit -m x`,
+            `if true; then ${drop}; fi; git commit -m x`,
+            `for i in 1; do ${drop}; done; git commit -m x`,
+            `true && ${drop}; git commit -m x`,
+            `( ${drop} ); git commit -m x`,
+            `builtin ${drop}; git commit -m x`,
+          ]) {
+            // env is a program, so builtin does not reach it.
+            if (drop.startsWith('env ') && script.startsWith('builtin ')) continue;
+            expect(await here(script), script).toBe('aaa');
+          }
+        }
+      );
+
+      it('asks after an env that drops the variable behind other wrappers', async () => {
+        for (const script of [
+          'command env -u HOME git commit -m x',
+          'sudo env -i git commit -m x',
+          'nice env --unset=GIT_CONFIG_GLOBAL git commit -m x',
+          'command sudo env -u XDG_CONFIG_HOME git commit -m x',
+          'env env -u HOME git commit -m x',
+          'env FOO=1 env -i git commit -m x',
+          'f() { env -i git commit -m x; }; f',
+          'env -u HOME git log -1',
+          'eval "unset HOME"; git commit -m x',
+          "eval 'env -i true'; git commit -m x",
+          "echo 'unset HOME' | xargs sh -c; git commit -m x",
+        ]) {
+          expect(await here(script), script).toBe('aaa');
+        }
+      });
+
+      it('asks for an operand it cannot read, by an expansion or a glob', async () => {
+        for (const drop of [
+          'unset $NAME',
+          'unset "${NAME}"',
+          'unset H*',
+          'unset GIT_CONFIG_*',
+          'unset $(echo HOME)',
+          'unset `echo HOME`',
+          'export -n $NAME',
+          'declare +x $NAME',
+          'local $NAME',
+          'env -u $NAME true',
+          'env -u H* true',
+          'env --unset=$NAME true',
+          'env --unset $NAME true',
+          'env $OPTS true',
+          'export $FLAG HOME',
+          'declare $FLAG HOME',
+        ]) {
+          for (const script of [`${drop}; git commit -m x`, `f() { ${drop}; }; f; git commit -m x`]) {
+            expect(await here(script), script).toBe('aaa');
+          }
+        }
+      });
+
+      it.each([
+        'git commit -m "fix: do unset HOME handling"',
+        'git commit -m "wip; unset HOME docs"',
+        "git commit -m 'wip; env -i docs'",
+        'git commit -m "x" -m "unset GIT_CONFIG_GLOBAL"',
+        'cat <<EOF\nunset HOME\nenv -i\nEOF\ngit commit -m x',
+        "cat <<'EOF'\nunset HOME\nEOF\ngit commit -m x",
+        'git commit -F - <<EOF\nunset HOME\nEOF',
+        '# unset HOME\ngit commit -m x',
+        'git commit -m x # unset HOME',
+        'echo unset HOME; git commit -m x',
+        'echo "env -i"; git commit -m x',
+        'git commit -m x --author="unset HOME <a@b.c>"',
+        'env git log -1 -i',
+        'env git commit -m x -i',
+        'env -- git log -1 -i',
+        'env FOO=1 git log -1 -i',
+        'env -u FOO git log -1 -i',
+        'env -u FOO git log -1 -u HOME',
+        'command env git log -1 -i',
+        'sudo env FOO=1 git log -1 -u HOME',
+        'env true -i; git commit -m x',
+        'unset FOO; echo HOME; git commit -m x',
+        'export -n FOO; git commit -m x',
+        'declare +x FOO; git commit -m x',
+        'local FOO; git commit -m x',
+      ])('runs a signing form with no signing config for text that only mentions an unset: %j', async script => {
+        expect(await here(script)).toBe('rrr');
+      });
+
+      const DRIVE_OR_UNC = ['C:\\x', 'C:/x', '\\\\srv\\share'];
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+      const shells = {
+        posix: () => undefined,
+        windows: () => Object.defineProperty(process, 'platform', { value: 'win32' }),
+        wsl: () => {
+          Object.defineProperty(process, 'platform', { value: 'win32' });
+          inWsl.on = true;
+        },
+      };
+      afterEach(() => {
+        Object.defineProperty(process, 'platform', platform);
+        inWsl.on = false;
+      });
+
+      it.each(['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'])(
+        'asks for a Windows drive or UNC %s of this process on a POSIX host',
+        async name => {
+          const before = process.env[name];
+          // withConfigs deletes what it stubs, so the suite's own value is put back after each run.
+          const commit = async (env: Record<string, string>): Promise<string> => {
+            try {
+              return await withConfigs({}, env, () => cells('git commit -m x', ''));
+            } finally {
+              vi.stubEnv(name, before);
+            }
+          };
+          for (const value of [...DRIVE_OR_UNC, 'd:\\x', 'rel', 'C:rel', '.\\x', '\\x']) {
+            expect(await commit({ [name]: value }), value).toMatch(/^.a/);
+          }
+          for (const value of ['/x', '//x', '']) expect(await commit({ [name]: value }), value).toMatch(/^.r/);
+        }
+      );
+
+      it('counts a drive or UNC value as absolute only in a native Windows shell', () => {
+        for (const kind of ['posix', 'windows', 'wsl'] as const) {
+          shells[kind]();
+          for (const value of DRIVE_OR_UNC)
+            expect(isAbsoluteGitPath(value, proj), `${kind} ${value}`).toBe(kind === 'windows');
+          for (const value of ['/x', '//x']) expect(isAbsoluteGitPath(value, proj), `${kind} ${value}`).toBe(true);
+          for (const value of ['', 'rel', 'C:rel', '.\\x', '\\x']) {
+            expect(isAbsoluteGitPath(value, proj), `${kind} ${value}`).toBe(false);
+          }
+        }
+      });
+
+      it.each(['HOME', 'XDG_CONFIG_HOME'])(
+        'asks for a drive or UNC form of a script %s on a POSIX host',
+        async name => {
+          for (const value of DRIVE_OR_UNC) {
+            const quoted = value.replace(/\\/g, '\\\\');
+            for (const script of [
+              `${name}="${quoted}" git commit -m x`,
+              `export ${name}="${quoted}"; git commit -m x`,
+            ]) {
+              expect(await here(script), script).toBe('aaa');
+            }
+          }
+          for (const script of [`${name}=/x git commit -m x`, `${name}=//x git commit -m x`]) {
+            expect(await here(script), script).toBe('rrr');
+          }
+          for (const script of [`${name}=C:rel git commit -m x`, `${name}=rel git commit -m x`]) {
+            expect(await here(script), script).toBe('aaa');
+          }
+        }
+      );
+    });
+
+    describe('with a format.pretty or pretty alias', () => {
+      it.each([
+        ['[format]\n\tpretty = zs\n[pretty]\n\tzsig = format:%h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = ZS\n[pretty]\n\tzsig = format:%h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = zs\n[pretty]\n\tZSig = format:%h %G?\n', 'git show HEAD', 'aaaa'],
+        ['[format]\n\tpretty = zs\n[pretty]\n\tzsig = format:%h\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = zs\n[pretty]\n\tyzsig = format:%h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = z\n[pretty]\n\tza = format:%h\n\tzb = format:%G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = a\n[pretty]\n\tabc = bc\n\tbcd = %G?\n', 'git show HEAD', 'aaaa'],
+        ['[format]\n\tpretty = a\n[pretty]\n\tabc = BC\n\tBCD = %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = a\n[pretty]\n\tabc = bc\n\tbcd = format:%h\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = zs\n[pretty]\n\tzsig = format:%h %G?\n', 'git status', 'rrrr'],
+      ])('with %j in the global config, decides %s as %s by alias prefix', async (text, command, expected) => {
+        expect(await configured({ global: text }, command)).toBe(expected);
+      });
+
+      it.each([
+        ['[format]\n\tpretty = %h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = %h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = format:%h %GS\n', 'git show HEAD', 'aaaa'],
+        ['[format]\n\tpretty = %h %G?\n', 'git reflog', 'aaaa'],
+        ['[format]\n\tpretty = %h %G?\n', 'git status', 'rrrr'],
+        ['[format]\n\tpretty = %h %G?\n', 'git commit -m x', 'rrrr'],
+        ['[format]\n\tpretty = oneline\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = %h %s\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = sig\n[pretty]\n\tsig = format:%h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = SIG\n[pretty]\n\tsig = format:%h %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = sig\n[pretty]\n\tsig = format:%h\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = a\n[pretty]\n\ta = b\n\tb = %G?\n', 'git show HEAD', 'aaaa'],
+        ['[pretty]\n\tsig = format:%h %G?\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = oneline\n[pretty]\n\tsig = %G?\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = a\n[pretty]\n\ta = a\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = %G?\n\tpretty = short\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = short\n\tpretty = %G?\n', 'git log -1', 'aaaa'],
+        ['[format]\n\tpretty = %h %\\\nG?\n', 'git log -1', 'aaaa'],
+      ])('with %j in the global config, decides %s as %s', async (text, command, expected) => {
+        expect(await configured({ global: text }, command)).toBe(expected);
+      });
+
+      it('reads format.pretty from the repo config and an include', async () => {
+        expect(await configured({ repo: '[format]\n\tpretty = %G?\n' }, 'git log -1')).toBe('aaaa');
+        expect(
+          await configured(
+            { global: `[include]\n\tpath = ${placed.inc()}\n`, inc: '[format]\n\tpretty = %G?\n' },
+            'git log -1'
+          )
+        ).toBe('aaaa');
+      });
+
+      it('asks for log with a format.pretty git cannot read', async () => {
+        expect(await configured({ global: '[format\n' }, 'git log -1')).toBe('aaaa');
+      });
+    });
+
+    describe('with --config-env', () => {
+      it.each([
+        ['GITSIGN_V=x git --config-env=user.name=GITSIGN_V commit -m x', 'arrr'],
+        ['GITSIGN_V=x git --config-env user.name=GITSIGN_V commit -m x', 'arrr'],
+        ['export GITSIGN_V=x; git --config-env=user.name=GITSIGN_V commit -m x', 'arrr'],
+        ['GITSIGN_V=x; git --config-env=user.name=GITSIGN_V log -1', 'arrr'],
+        ['GITSIGN_V=$(date) git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['GITSIGN_V=$OTHER git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['GITSIGN_V=~/x git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['read GITSIGN_V; git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['GITSIGN_V=x; GITSIGN_V=y; git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['git --config-env=user.name=GITSIGN_V commit -m x; GITSIGN_V=x', 'aaaa'],
+        ['unset GITSIGN_V; git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['git --config-env=user.name=GITSIGN_V commit -m x', 'aaaa'],
+        ['git --config-env=user.name=HOME commit -m x', 'aaaa'],
+        ['git --config-env=user.name commit -m x', 'aaaa'],
+        ['git --config-env=user.name=1BAD commit -m x', 'aaaa'],
+      ])('decides %s as %s with the variable unset in this process', async (command, expected) => {
+        expect(await configured({}, command)).toBe(expected);
+      });
+
+      it('counts a prefix assignment only for its own command', async () => {
+        // No key a --config-env may set changes signing, so the value the signing query is handed shows whose it is.
+        const call = 'git --config-env=user.name=GITSIGN_V commit -m x';
+        const handed = (): (string | undefined)[] => queried.envs.map(env => env.GITSIGN_V);
+        for (const env of [{}, { GITSIGN_V: 'proc' }] as Record<string, string>[]) {
+          for (const command of [
+            `GITSIGN_V=other git status; ${call}`,
+            `GITSIGN_V=other true && ${call}`,
+            `env GITSIGN_V=other git status; ${call}`,
+            `GITSIGN_V=other git status | cat; ${call}`,
+            `f() { ${call}; }; GITSIGN_V=other f`,
+            `f() { ${call}; }; env GITSIGN_V=other f`,
+          ]) {
+            queried.envs.length = 0;
+            expect(await configured({}, command, env), command).toBe('aaaa');
+            expect(handed(), command).not.toContain('other');
+          }
+          for (const command of [`GITSIGN_V=own ${call}`, `env GITSIGN_V=own ${call}`]) {
+            queried.envs.length = 0;
+            expect(await configured({}, command, env), command).toBe('arrr');
+            expect(handed(), command).toContain('own');
+            expect(handed(), command).not.toContain('proc');
+          }
+        }
+      });
+
+      it('reads a variable of this process, a name that starts GIT_ too', async () => {
+        for (const name of ['GITSIGN_V', 'GIT_SIGN_V']) {
+          const command = `git --config-env=user.name=${name} commit -m x`;
+          expect(await configured({}, command, { [name]: 'x' })).toBe('arrr');
+          expect(await configured({ repo: SIGN }, command, { [name]: 'x' })).toBe('aaaa');
+        }
+      });
+
+      it('lets a script assignment win over this process, and asks when it is not placed', async () => {
+        const env = { GITSIGN_V: 'x' };
+        expect(await configured({}, 'GITSIGN_V=y git --config-env=user.name=GITSIGN_V commit -m x', env)).toBe('arrr');
+        expect(await configured({}, 'GITSIGN_V=$(date) git --config-env=user.name=GITSIGN_V commit -m x', env)).toBe(
+          'aaaa'
+        );
+        expect(await configured({}, 'unset GITSIGN_V; git --config-env=user.name=GITSIGN_V commit -m x', env)).toBe(
+          'aaaa'
+        );
+      });
+    });
+
+    it('asks for signing forms only with a global config that is a folder', async () => {
+      const global = placed.global();
+      mkdirSync(global);
+      try {
+        expect(await cells('git commit -m x', '')).toBe('aaaa');
+        expect(await cells('git diff', '')).toBe('rrrr');
+      } finally {
+        rmSync(global, { recursive: true, force: true });
+      }
+    });
+
+    it('reads a global config through a link, and none through a dangling one', async () => {
+      const global = placed.global();
+      const target = join(base, 'linked-gitconfig');
+      symlinkSync(target, global);
+      try {
+        expect(await cells('git commit -m x', '')).toBe('rrrr');
+        file(target, SIGN);
+        expect(await cells('git commit -m x', '')).toBe('aaaa');
+      } finally {
+        rmSync(global, { force: true });
+        rmSync(target, { force: true });
+      }
+    });
+
+    it.each([
+      [{ GIT_CONFIG_GLOBAL: '/dev/null' }, { global: SIGN }, 'rrrr'],
+      [{ GIT_CONFIG_NOSYSTEM: 'false' }, { system: SIGN }, 'aaaa'],
+      [{ GIT_CONFIG_NOSYSTEM: '' }, { system: SIGN }, 'aaaa'],
+      [{ GIT_CONFIG_PARAMETERS: "'user.name=x'" }, {}, 'aaaa'],
+      [{ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'x' }, {}, 'aaaa'],
+    ] as [Record<string, string>, Partial<Record<Place, string>>, string][])(
+      'with %j in this process, decides git commit with %j as %s',
+      async (env, configs, expected) => {
+        expect(await configured(configs, 'git commit -m x', env)).toBe(expected);
+      }
+    );
+
+    it.each([
+      'git commit -S -m x',
+      'git commit --gpg-sign -m x',
+      'git merge -S other',
+      'git merge --verify-signatures other',
+      'git rebase -S main',
+      'git tag -s -m x v9',
+      'git tag -u KEY -m x v9',
+      'git push --signed origin main',
+      'git log --show-signature -1',
+      'git show --show-signature HEAD',
+      'git -c commit.gpgsign=true commit -m x',
+      'git -c log.showSignature=true log -1',
+      'GIT_CONFIG_GLOBAL=x git commit -m x',
+      'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true git commit -m x',
+    ])('asks for %s with no signing config', async command => {
+      expect(await configured({}, command)).toBe('aaaa');
     });
   });
 

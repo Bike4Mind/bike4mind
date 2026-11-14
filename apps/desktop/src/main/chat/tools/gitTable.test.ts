@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { gitListed, type GitWord } from './gitTable';
+import {
+  commandSigning,
+  configKey,
+  configTrue,
+  formatShowsSignatures,
+  formatVerifies,
+  gitListed,
+  prettyNamesAlias,
+  prettyShowsSignatures,
+  settingsOn,
+  unlistedSigning,
+  type GitWord,
+} from './gitTable';
 
 // A word holding `$` is filled from there at run time (`$$` also splits into more words); `*` starts a glob.
 const words = (line: string): GitWord[] =>
@@ -494,5 +506,547 @@ describe('gitListed', () => {
 
   it.each(['commit -h', 'stash pop -h', 'rebase -h', 'config edit -h'])('lists the usage form %s', line => {
     expect(listed(line)).toBe(true);
+  });
+
+  const COMMIT = ['commit.gpgsign'];
+  const MERGE = ['commit.gpgsign', 'merge.verifysignatures'];
+  const LOG = ['log.showsignature'];
+
+  it.each([
+    ['commit -m x', COMMIT],
+    ['commit --amend --no-edit', COMMIT],
+    ['commit --no-gpg-sign -m x', []],
+    ['commit -m x --no-gpg-sign', []],
+    ['commit-tree -m x HEAD^{tree}', []],
+    ['commit-tree --no-gpg-sign -m x HEAD^{tree}', []],
+    ['merge other', MERGE],
+    ['merge --no-gpg-sign other', ['merge.verifysignatures']],
+    ['merge --no-verify-signatures other', COMMIT],
+    ['merge --no-gpg-sign --no-verify-signatures other', []],
+    ['merge --abort', []],
+    ['merge --quit', []],
+    ['merge --continue', MERGE],
+    ['pull origin main', MERGE],
+    ['pull --rebase origin main', MERGE],
+    ['pull --no-gpg-sign --no-verify-signatures origin main', []],
+    ['rebase main', COMMIT],
+    ['rebase --no-gpg-sign main', []],
+    ['rebase --abort', []],
+    ['rebase --quit', []],
+    ['rebase --show-current-patch', []],
+    ['cherry-pick other', COMMIT],
+    ['cherry-pick --abort', []],
+    ['cherry-pick --continue', COMMIT],
+    ['cherry-pick --no-gpg-sign other', []],
+    ['revert HEAD', COMMIT],
+    ['revert --no-gpg-sign HEAD', []],
+    ['revert --quit', []],
+    ['tag v1', ['tag.gpgsign']],
+    ['tag v1 HEAD', ['tag.gpgsign']],
+    ['tag -f v1', ['tag.gpgsign']],
+    ['tag -a v1', ['tag.gpgsign']],
+    ['tag --annotate v1', ['tag.gpgsign']],
+    ['tag -a -m x v1', ['tag.gpgsign']],
+    ['tag -am x v1', ['tag.gpgsign']],
+    ['tag --annotate --message=x v1', ['tag.gpgsign']],
+    ['tag -a -F msg v1', ['tag.gpgsign']],
+    ['tag -m x -a v1', ['tag.gpgsign']],
+    ['tag -a -m x --no-annotate v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --no-annotate -m x v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag -m x v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --message=x v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag -F msg v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --file msg v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --trailer=a:b v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --trailer a:b v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag -a --trailer a:b v1', ['tag.gpgsign']],
+    ['tag --trailer a:b --no-annotate v1', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['tag --cleanup=strip v1', ['tag.gpgsign']],
+    ['tag --create-reflog v1', ['tag.gpgsign']],
+    ['tag', []],
+    ['tag -l', []],
+    ['tag -l v*', []],
+    ['tag --list v1', []],
+    ['tag -d v1', []],
+    ['tag --delete v1', []],
+    ['tag -n v1', []],
+    ['tag --contains HEAD', []],
+    ['tag --points-at HEAD v1', []],
+    ['push', ['push.gpgsign']],
+    ['push origin main', ['push.gpgsign']],
+    ['push --no-signed origin main', []],
+    ['log', LOG],
+    ['log --oneline -5', LOG],
+    ['log --format=%h', LOG],
+    ['show HEAD', LOG],
+    ['show --stat', LOG],
+    ['reflog', LOG],
+    ['reflog show', LOG],
+    ['range-diff a...b', LOG],
+    ['reflog exists HEAD', []],
+    ['status', []],
+    ['diff', []],
+    ['stash', []],
+    ['stash list', LOG],
+    ['shortlog -s', []],
+    ['format-patch -1', []],
+    ['branch -v', []],
+    ['--version', []],
+    ['commit -h', []],
+  ])('names the settings under which git %s signs or verifies', (line, expected) => {
+    const listing = gitListed(words(line));
+    expect(listing.listed && listing.signs).toEqual(expected);
+  });
+
+  it.each([
+    'commit -S -m x',
+    'commit --gpg-sign -m x',
+    'commit --gpg-sign=KEY -m x',
+    'merge -S other',
+    'merge --gpg-sign other',
+    'merge --verify-signatures other',
+    'pull -S origin main',
+    'pull --verify-signatures origin main',
+    'rebase -S main',
+    'rebase --gpg-sign main',
+    'cherry-pick -S other',
+    'revert -S HEAD',
+    'commit-tree -S -m x HEAD^{tree}',
+    'tag -s v1',
+    'tag -e v1',
+    'tag --edit v1',
+    'tag --sign v1',
+    'tag -u KEY v1',
+    'tag --local-user=KEY v1',
+    'tag -v v1',
+    'tag --verify v1',
+    'tag --no-sign v1',
+    'push --signed origin main',
+    'push --signed=if-asked origin main',
+    'log --show-signature',
+    'log --no-show-signature',
+    'show --show-signature',
+    'verify-commit HEAD',
+    'verify-tag v1',
+    'am x.patch',
+    'whatchanged',
+  ])('leaves %s to ask', line => {
+    expect(listed(line)).toBe(false);
+  });
+
+  it.each([
+    ['-c commit.gpgsign=false commit -m x', true],
+    ['-c commit.gpgSign=no commit -m x', true],
+    ['-c commit.gpgsign= commit -m x', true],
+    ['-c commit.gpgsign=true commit -m x', false],
+    ['-c commit.gpgsign commit -m x', false],
+    ['-c tag.gpgsign=off tag v1', true],
+    ['-c tag.gpgsign=1 tag v1', false],
+    ['-c tag.forceSignAnnotated=false tag -m x v1', false],
+    ['-c push.gpgsign=false push', false],
+    ['-c log.showSignature=false log', false],
+    ['-c merge.verifySignatures=false merge other', false],
+    ['-c gpg.program=x commit -m x', false],
+    ['-c gpg.ssh.program=x commit -m x', false],
+    ['--config-env=commit.gpgsign=V commit -m x', false],
+  ])('reads the signing setting in %s as listed: %s', (line, expected) => {
+    expect(listed(line)).toBe(expected);
+  });
+
+  it.each([
+    ['commit -S -m x', 'git commit', ['commit.gpgsign']],
+    ['-c gpg.program=x commit --no-gpg-sign -m x', 'git commit', ['commit.gpgsign']],
+    ['-C sub --config-env commit.gpgsign=V am x.patch', 'git am', ['commit.gpgsign']],
+    ['--git-dir x --namespace n pull -S', 'git pull', ['commit.gpgsign', 'merge.verifysignatures']],
+    ['--attr-source HEAD tag -s v1', 'git tag', ['tag.gpgsign', 'tag.forcesignannotated']],
+    ['push --signed', 'git push', ['push.gpgsign']],
+    ['whatchanged', 'git whatchanged', ['log.showsignature']],
+    ['stash list --frobnicate', 'git stash', ['log.showsignature']],
+    ['verify-commit HEAD', 'git verify-commit', []],
+    ['constructor -x', 'git constructor', []],
+    ['__proto__ -q', 'git __proto__', []],
+  ])('names the subcommand of unlisted git %s and its signing settings', (line, form, signs) => {
+    expect(unlistedSigning(words(line))).toEqual({ form, signs });
+  });
+
+  it.each(['$SUB -m x', '-c x=y', '$$ARGS commit'])('names no subcommand for git %s', line => {
+    expect(unlistedSigning(words(line))).toBeNull();
+    expect(commandSigning(words(line))).toBeNull();
+  });
+});
+
+describe('git signing options', () => {
+  const GPG_FORMS = [
+    'commit -m x',
+    'commit-tree -m x HEAD^{tree}',
+    'merge other',
+    'pull origin main',
+    'rebase main',
+    'cherry-pick other',
+    'revert HEAD',
+    'am x.patch',
+  ];
+  const GPG_SPELLINGS = ['-S', '-SKEY', '--gpg-sign', '--gpg-sign=KEY'];
+  const signing = (line: string): ReturnType<typeof commandSigning> => commandSigning(words(line));
+  const withOption = (form: string, option: string): string => {
+    const [sub, ...rest] = form.split(' ');
+    return [sub, option, ...rest].join(' ');
+  };
+
+  it.each(GPG_FORMS.flatMap(form => GPG_SPELLINGS.map(option => [form, option])))(
+    'signs for git %s with %s unless a later --no-gpg-sign takes it back',
+    (form, option) => {
+      const text = option.startsWith('-S') ? 'with -S' : 'with --gpg-sign';
+      expect(signing(withOption(form, option))).toEqual({ text, off: [] });
+      expect(signing(withOption(form, `--no-gpg-sign ${option}`))).toEqual({ text, off: [] });
+      expect(signing(withOption(form, `${option} --no-gpg-sign`))).toEqual({ off: ['commit.gpgsign'] });
+    }
+  );
+
+  it.each([
+    ['commit -aS -m x', 'with -S'],
+    ['commit -sSKEY -m x', 'with -S'],
+    ['commit --amend --gpg -m x', 'with --gpg-sign'],
+    ['-C sub -c user.name=x commit -S -m x', 'with -S'],
+    ['--git-dir x commit -S', 'with -S'],
+    ['commit -S$KEY -m x', 'with -S'],
+    ['merge --verify-signatures other', 'with --verify-signatures'],
+    ['pull --verify-sig origin main', 'with --verify-signatures'],
+    ['merge --no-verify-signatures --verify-signatures other', 'with --verify-signatures'],
+    ['merge -S --no-verify-signatures other', 'with -S'],
+    ['push --signed origin main', 'with --signed'],
+    ['push --signed=true origin main', 'with --signed'],
+    ['push --signed=yes origin main', 'with --signed'],
+    ['push --signed=if-asked origin main', 'with --signed'],
+    ['push --signed=$V origin main', 'with --signed'],
+    ['push --signed=$$V origin main', 'with --signed'],
+    ['commit -S$$KEY -m x', 'with -S'],
+    ['push --no-signed --signed origin main', 'with --signed'],
+    ['send-pack --signed origin main', 'with --signed'],
+    ['tag -s v1', 'with -s'],
+    ['tag -as -m x v1', 'with -s'],
+    ['tag -sm x v1', 'with -s'],
+    ['tag --sign v1', 'with --sign'],
+    ['tag --no-sign -s v1', 'with -s'],
+    ['tag -u KEY v1', 'with -u'],
+    ['tag -uKEY v1', 'with -u'],
+    ['tag -u KEY --no-sign v1', 'with -u'],
+    ['tag --local-user KEY v1', 'with --local-user'],
+    ['tag --local-user=KEY v1', 'with --local-user'],
+    ['tag -v v1', 'with -v'],
+    ['tag --verify v1', 'with --verify'],
+    ['verify-commit HEAD', 'that verifies signatures'],
+    ['verify-tag v1', 'that verifies signatures'],
+    ['log --show-signature -1', 'with --show-signature'],
+    ['show --no-show-signature --show-signature HEAD', 'with --show-signature'],
+    ['whatchanged --show-signature', 'with --show-signature'],
+    ['reflog --show-signature', 'with --show-signature'],
+    ['stash list --show-signature', 'with --show-signature'],
+  ])('reads git %s as signing or verifying %s', (line, text) => {
+    expect(signing(line)?.text).toBe(text);
+  });
+
+  it.each([
+    'log --format=%G? -1',
+    'log --format=%G$$FMT -1',
+    'log --pretty=format:%GS -1',
+    'log --pretty=tformat:%+GK -1',
+    'show --format=%h%GK HEAD',
+    'whatchanged --format=%G? --frobnicate',
+    'log --format=%h --pretty=%G?',
+    'log --oneline --format=%G?',
+    'shortlog --format=%G?',
+    'rev-list --pretty=%G? HEAD',
+    'stash list --format=%G?',
+    'for-each-ref --format=%(signature)',
+    'for-each-ref --form=%(signature:grade)',
+    'branch --format %(signature)',
+    'tag --format=%(signature:key) -l',
+  ])('reads the output format of git %s as one that verifies signatures', line => {
+    expect(formatVerifies(signing(line)?.format)).toBe(true);
+  });
+
+  it.each([
+    ['log --format=%G? --format=%h', '%h'],
+    ['log --pretty=%G? --oneline', 'oneline'],
+    ['log --format=%G? --pretty', 'medium'],
+    ['log --format=%%G?', '%%G?'],
+    ['for-each-ref --format %(signature) --format=%(refname)', '%(refname)'],
+    ['for-each-ref --format=%%(signature)', '%%(signature)'],
+    ['for-each-ref --format=%(contents:signature)', '%(contents:signature)'],
+  ])('reads the last output format git %s selects, %s, as one that does not verify', (line, selected) => {
+    const found = signing(line);
+    expect(found?.format?.value?.text).toBe(selected);
+    expect(formatVerifies(found?.format)).toBe(false);
+  });
+
+  it.each([
+    ['log -1', 'pretty'],
+    ['reflog', 'pretty'],
+    ['rev-list HEAD', undefined],
+    ['for-each-ref', undefined],
+    ['commit -m %G?', undefined],
+  ])('leaves format.pretty to decide git %s when it selects no format', (line, kind) => {
+    expect(signing(line)?.format).toEqual(kind ? { kind } : undefined);
+  });
+
+  it.each([
+    ['push --signed origin main --no-signed', ['push.gpgsign']],
+    ['push --signed=false origin main', ['push.gpgsign']],
+    ['push --signed=no origin main', ['push.gpgsign']],
+    ['merge --verify-signatures --no-verify-signatures other', ['merge.verifysignatures']],
+    ['tag -s --no-sign v1', ['tag.gpgsign']],
+    ['log --show-signature --no-show-signature', ['log.showsignature']],
+    ['commit -m -S', []],
+    ['commit -mS', []],
+    ['commit -C -S', []],
+    ['commit --message -S', []],
+    ['commit -m x -- -S', []],
+    ['log -S foo', []],
+    ['diff -S foo', []],
+    ['status -s', []],
+    ['commit -s -m x', []],
+    ['commit $ARGS -m x', []],
+    ['log --format=%h -1', []],
+    ['log --pretty=oneline -1', []],
+    ['log --pretty=ONELINE -1', []],
+    ['log --pretty -1', []],
+    ['archive --format=$F HEAD', []],
+    ['log --format=$FMT -1', []],
+    ['log --format=%H$$FMT -1', []],
+    ['log --pretty=$$P -1', []],
+    ['rev-parse --verify HEAD', []],
+  ])('reads git %s as neither signing nor verifying, turning off %j', (line, off) => {
+    const found = signing(line);
+    expect(found?.text).toBeUndefined();
+    expect(found?.off).toEqual(off);
+    expect(formatVerifies(found?.format)).toBe(false);
+  });
+
+  it.each([
+    ['log --pretty=sig -1', 'sig'],
+    ['show --format=sig HEAD', 'sig'],
+    ['log --pretty=one -1', 'one'],
+    ['log --pretty=ONELINE -1', 'ONELINE'],
+    ['rev-list --pretty=SIG.foo HEAD', 'SIG.foo'],
+  ])('leaves git %s to the pretty alias %s', (line, alias) => {
+    expect(signing(line)?.format?.value?.text).toBe(alias);
+    expect(prettyNamesAlias(alias)).toBe(true);
+  });
+
+  it.each(['oneline', 'medium', 'format:%G?', 'tformat:%h', '%h', ''])(
+    'reads --pretty=%s as no pretty alias',
+    value => {
+      expect(prettyNamesAlias(value)).toBe(false);
+    }
+  );
+});
+
+describe('git config values', () => {
+  it.each([
+    ['commit.gpgsign', 'commit.gpgsign'],
+    ['Commit.GpgSign', 'commit.gpgsign'],
+    ['COMMIT.Sub.GPGSIGN', 'commit.Sub.gpgsign'],
+    ['includeIf.gitdir:~/Work/.path', 'includeif.gitdir:~/Work/.path'],
+    ['core', 'core'],
+  ])('compares %s as %s', (key, expected) => {
+    expect(configKey(key)).toBe(expected);
+  });
+
+  it.each([
+    [null, true],
+    ['true', true],
+    ['TRUE', true],
+    ['yes', true],
+    ['Yes', true],
+    ['on', true],
+    ['1', true],
+    ['2', true],
+    ['-1', true],
+    ['if-asked', true],
+    ['maybe', true],
+    ['false', false],
+    ['False', false],
+    ['no', false],
+    ['NO', false],
+    ['off', false],
+    ['0', false],
+    ['00', false],
+    ['+0', false],
+    ['', false],
+  ])('reads %j as %s', (value, expected) => {
+    expect(configTrue(value)).toBe(expected);
+  });
+
+  it.each([
+    [[{ key: 'commit.gpgsign', value: 'true' }], ['commit.gpgsign']],
+    [
+      [
+        { key: 'commit.gpgsign', value: 'true' },
+        { key: 'commit.gpgsign', value: 'false' },
+      ],
+      [],
+    ],
+    [
+      [
+        { key: 'commit.gpgsign', value: 'false' },
+        { key: 'Commit.GpgSign', value: null },
+      ],
+      ['commit.gpgsign'],
+    ],
+    [[{ key: 'commit.Sub.gpgsign', value: 'true' }], []],
+    [[{ key: 'constructor', value: 'true' }], []],
+    [[{ key: '__proto__', value: 'true' }], []],
+    [[{ key: 'tag.gpgsign', value: 'true' }], []],
+  ])('finds commit.gpgsign set true by %j: %j', (entries, expected) => {
+    expect(settingsOn(entries, ['commit.gpgsign'])).toEqual(expected);
+  });
+
+  it.each([
+    [[], false],
+    [[{ key: 'format.pretty', value: 'oneline' }], false],
+    [[{ key: 'format.pretty', value: '%h %G?' }], true],
+    [[{ key: 'format.pretty', value: 'format:%h %GK' }], true],
+    [[{ key: 'format.pretty', value: null }], true],
+    [
+      [
+        { key: 'format.pretty', value: 'fancy' },
+        { key: 'pretty.fancy', value: 'format:%h %G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'fancy' },
+        { key: 'pretty.fancy', value: 'format:%h' },
+      ],
+      false,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'a' },
+        { key: 'pretty.a', value: 'b' },
+        { key: 'pretty.b', value: '%G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'a' },
+        { key: 'pretty.a', value: 'a' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'zs' },
+        { key: 'pretty.zsig', value: 'format:%h %G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'zs' },
+        { key: 'pretty.zsig', value: 'format:%h %G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'zs' },
+        { key: 'pretty.zsig', value: 'format:%h' },
+        { key: 'pretty.yzs', value: '%G?' },
+      ],
+      false,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'z' },
+        { key: 'pretty.za', value: 'format:%h' },
+        { key: 'pretty.zb', value: '%G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'a' },
+        { key: 'pretty.abc', value: 'bc' },
+        { key: 'pretty.bcd', value: '%G?' },
+      ],
+      true,
+    ],
+    [
+      [
+        { key: 'format.pretty', value: 'a' },
+        { key: 'pretty.abc', value: 'bc' },
+        { key: 'pretty.bcd', value: 'format:%h' },
+      ],
+      false,
+    ],
+    [[{ key: 'pretty.unused', value: '%G?' }], false],
+    [
+      [
+        { key: 'format.pretty', value: '%G?' },
+        { key: 'format.pretty', value: 'short' },
+      ],
+      false,
+    ],
+    [[{ key: 'format.pretty', value: 'constructor' }], true],
+    [[{ key: 'format.pretty', value: '__proto__' }], true],
+    [[{ key: 'user.name', value: 'x' }], true],
+  ])('reads the pretty entries %j as printing signatures: %s', (entries, expected) => {
+    expect(prettyShowsSignatures(entries)).toBe(expected);
+  });
+
+  it.each([
+    ['%G?', 'pretty', true],
+    ['%+G?', 'pretty', true],
+    ['%-GS', 'pretty', true],
+    ['% G?', 'pretty', true],
+    ['%Gx', 'pretty', true],
+    ['%%G?', 'pretty', false],
+    ['%%%G?', 'pretty', true],
+    ['%%%%G?', 'pretty', false],
+    ['%x25G?', 'pretty', false],
+    ['%(signature:grade)', 'ref', true],
+    ['%(*signature:grade)', 'ref', true],
+    ['%%(*signature:grade)', 'ref', false],
+    ['%(contents:signature)', 'ref', false],
+  ] as const)('detects verifier input %s (%s)', (format, kind, expected) => {
+    expect(formatShowsSignatures(format, kind)).toBe(expected);
+  });
+
+  it.each([
+    ['log --pretty=%G? --format=%h --oneline', 'oneline'],
+    ['log --format=%h --pretty=%G? --format=%s', '%s'],
+    ['log --pretty=%G? --pretty HEAD', 'medium'],
+    ['log --pretty=', ''],
+    ['log --format=', ''],
+  ])('keeps the last output selector in %s', (command, expected) => {
+    const listing = gitListed(words(command));
+    expect(listing.listed && listing.signatureFormat?.value?.text).toBe(expected);
+  });
+
+  it.each([
+    ['oneline', [{ key: 'pretty.oneline', value: '%G?' }], false],
+    ['s', [{ key: 'pretty.sig', value: '%G?' }], true],
+    ['safe', [{ key: 'pretty.safe', value: 'format:%%G?' }], false],
+    [
+      'sig',
+      [
+        { key: 'pretty.sig', value: 'other' },
+        { key: 'pretty.other', value: '%+G?' },
+      ],
+      true,
+    ],
+    ['oneline', [{ key: 'format.pretty', value: '%G?' }], false],
+    ['format:%h', [{ key: 'format.pretty', value: '%G?' }], false],
+    ['missing', [], true],
+  ] as const)('resolves selected pretty format %s', (selected, entries, expected) => {
+    expect(prettyShowsSignatures(entries, selected)).toBe(expected);
+  });
+
+  it('reads no key absent from the entries, Object.prototype names included', () => {
+    expect(settingsOn([], ['constructor', 'toString', '__proto__', 'hasOwnProperty'])).toEqual([]);
   });
 });

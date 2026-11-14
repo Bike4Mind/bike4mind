@@ -555,6 +555,7 @@ export async function shellApproval(
   // that has read untrusted content asks anyway, as such a part is never contained.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const signingRisk = scan.commands.some(entry => entry.gitSigningRisk);
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -565,6 +566,7 @@ export async function shellApproval(
   // untrusted content it asks; the scan cannot vouch for what such a script does.
   const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
+    signingRisk ||
     envScript ||
     !!gitProgram ||
     scan.gitPathUnplaced === true ||
@@ -644,7 +646,8 @@ export async function shellApproval(
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
     ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
-    ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
+    // An answer given before signing came into play must not carry over to a call that signs.
+    ...(scriptCheckFailed || signingRisk ? { allowOnce: true as const } : {}),
     ...(scan.contained && !runsSessionCode ? { contained: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {
