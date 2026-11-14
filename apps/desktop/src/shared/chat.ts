@@ -175,6 +175,8 @@ export interface ChatToolCall {
   name: string;
   input: Record<string, unknown>;
   status: ChatToolStatus;
+  /** Trusted local skill result; retained so resumed replies preserve its provenance. */
+  ownContent?: true;
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
@@ -1222,8 +1224,8 @@ export type ChatSessionMode = 'chat' | 'code';
  *           command that writes outside the granted folders, a read of a `.env` file, a
  *           command that writes permission settings, or the same call a third time in a row.
  *           Commands the scan cannot follow or parse also ask, including unsupported curl
- *           options and multipart forms. Modeled outbound commands are judged on their own
- *           paths and risks; reading content does not change that policy.
+ *           options and multipart forms. After external content, outbound calls and unproven
+ *           shell commands also ask; explicit user rules still apply.
  *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
  *           irreversible actions and signed-in browser actions still ask. Chosen per conversation,
  *           never inherited by a spawned one, and reset to 'ask' on relaunch.

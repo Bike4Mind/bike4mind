@@ -91,6 +91,8 @@ import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
+import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
@@ -335,6 +337,7 @@ export function ChatShell({
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
   const heldRelays = useHeldRelays(persistedId);
+  const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
   const startSuggestion = spawnSuggestions.start;
   const onStartSuggestion = useCallback(
@@ -704,10 +707,13 @@ export function ChatShell({
    * `conversation.streaming` is what THIS window knows of, from the stream or from main's live
    * copy when the conversation was opened, and it can lag main by one round trip either way.
    * The sidebar's status is main's own answer for every session at once, so it covers that gap. 'needs-action' counts: a turn parked
-   * at the approval gate is still a turn, and the next message still queues behind it.
+   * at the approval gate is still a turn, and the next message still queues behind it. A worker
+   * waiting on a decision is the exception: its turn has ended, so typing there sends at once.
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
-  const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
+  const awaitingDecision = pendingDecisionOf(activeSummary?.workerTask) !== undefined;
+  const turnOpen =
+    conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
 
   const workspaceChanges = useWorkspaceChanges(
@@ -1884,6 +1890,8 @@ export function ChatShell({
             )}
 
             <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+
+            <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
 
             <SpawnSuggestionTray
               suggestions={spawnSuggestions.suggestions}

@@ -661,6 +661,7 @@ export async function shellApproval(
     // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
     ...(scriptAsksInFull ? { askInFull: true as const } : {}),
     ...(unchecked ? { unchecked: true as const } : {}),
+    ...(scan.potentialOutbound !== false ? { outbound: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(byPart ? { byPart: true as const } : {}),
     always: {

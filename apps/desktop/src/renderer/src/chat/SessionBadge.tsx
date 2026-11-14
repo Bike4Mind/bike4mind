@@ -26,9 +26,22 @@ const BADGE_SIZE = 14;
  * live status outranks it: the spinner and the needs-you square say something is happening
  * NOW, which the PR, a standing fact, can wait behind until the turn ends.
  */
-export function SessionBadge({ status, pr }: { status: ChatSessionStatus; pr?: PrSummary | undefined }) {
+export function SessionBadge({
+  status,
+  pr,
+  deciding = false,
+}: {
+  status: ChatSessionStatus;
+  pr?: PrSummary | undefined;
+  /** A worker waiting on a decision only the user can make, which names itself more precisely. */
+  deciding?: boolean;
+}) {
   const showPr = status === 'done' && pr !== undefined;
-  const label = showPr ? `PR #${pr.number} - ${PR_STATE_LABEL[pr.state]}` : STATUS_LABEL[status];
+  const label = showPr
+    ? `PR #${pr.number} - ${PR_STATE_LABEL[pr.state]}`
+    : status === 'needs-action' && deciding
+      ? 'Needs your decision'
+      : STATUS_LABEL[status];
 
   return (
     <Box

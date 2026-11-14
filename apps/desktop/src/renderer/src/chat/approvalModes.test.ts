@@ -49,11 +49,13 @@ describe('approval mode copy', () => {
     expect(notes).toMatch(/unknown option or complex curl form asks in both modes/i);
   });
 
-  it('says approve-for-me runs reads outside your folders and commands that send data out', () => {
+  it('names the post-content outbound check while preserving ordinary outside reads', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/only reads outside your folders runs/i);
     expect(notes).toMatch(/send data off this computer/i);
-    expect(notes).toMatch(/whatever the reply has read/i);
+    expect(notes).toMatch(/after a reply reads web, MCP, browser/i);
+    expect(notes).toMatch(/start work in another conversation/i);
+    expect(notes).toMatch(/explicit user permission rules still apply/i);
   });
 
   it('names the folders file edits can never reach', () => {

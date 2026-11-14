@@ -40,6 +40,7 @@ function reporter(): ToolReporter {
     detail: vi.fn(),
     image: vi.fn(),
     moved: vi.fn(),
+    ownContent: vi.fn(),
   };
 }
 
@@ -101,6 +102,18 @@ describe('the skill tool', () => {
 });
 
 describe('the skill tool and where the skill came from', () => {
+  it.each(['global', 'project'] as const)('marks only a trusted %s skill as own content', async source => {
+    const report = reporter();
+    await skillTool.run({ skill: 'local' }, contextFor([command('local', 'Do the thing.', { source })], [], report));
+    expect(report.ownContent).toHaveBeenCalledTimes(1);
+    vi.mocked(report.ownContent!).mockClear();
+    await skillTool.run(
+      { skill: 'imported' },
+      contextFor([command('imported', 'Do the untrusted thing.', { source, untrusted: true })], [], report)
+    );
+    expect(report.ownContent).not.toHaveBeenCalled();
+  });
+
   it('returns a Skill Market import wrapped as untrusted, never told to follow it as is', async () => {
     const report = reporter();
     const result = await skillTool.run(

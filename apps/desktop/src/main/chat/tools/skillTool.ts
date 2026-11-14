@@ -68,6 +68,9 @@ export const skillTool: ToolDefinition = {
 
     const expanded = await expandSkill(command, args, context.roots, context.workingDirectory);
     if (!expanded.body.trim()) throw new Error(`The skill "${name}" has an empty body, so there is nothing to run.`);
+    if (!command.untrusted && (command.source === 'global' || command.source === 'project'))
+      context.report?.ownContent?.();
+
     // An import's body is already wrapped as untrusted and carries its own framing.
     const header = command.untrusted
       ? `The skill "${name}", from ${command.filePath}, is a Skill Market import written by someone else.`

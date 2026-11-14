@@ -117,6 +117,7 @@ describe('ChatService and skills', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
+          post: vi.fn().mockResolvedValue({ result: 'Public page fixture.' }),
           getAxiosInstance: () => ({ post: calls }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
@@ -214,13 +215,23 @@ describe('ChatService and skills', () => {
     return { asked, id };
   }
 
-  it('runs an outbound call in "Approve for me" after an account skill', async () => {
-    const { asked } = await afterSkill('web-summary', {
+  it.each([
+    ['web-summary', true],
+    ['ship-it', false],
+  ] as const)('uses the provenance of %s before an outbound call in Approve for me', async (name, asks) => {
+    if (!asks) await catalog.setTrusted(project, true);
+    const { asked } = await afterSkill(name, {
       name: 'web_fetch',
       input: { url: 'https://example.com/' },
     });
-
-    expect(asked).toBeUndefined();
+    if (asks) {
+      expect(asked).toMatchObject({ status: 'awaiting-approval', approvalOnceOnly: true });
+    } else {
+      expect(asked).toBeUndefined();
+      expect(events.find(event => event.type === 'tool-end' && event.call.id === 'c2')).toMatchObject({
+        call: { status: 'done' },
+      });
+    }
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

@@ -22,6 +22,32 @@ describe('scanShell', () => {
   };
   const texts = async (command: string) => (await scan(command)).commands.map(entry => entry.text);
 
+  describe('conservative outbound capability', () => {
+    it.each([
+      'customsender file',
+      'cat file | customsender',
+      'node --version',
+      'pnpm test',
+      'git status',
+      'export PATH=.; pwd',
+      'for HOME in .; do pwd; done',
+      'HOME=. pwd',
+    ])('does not infer local-only behavior from missing modeled paths: %s', async command => {
+      expect((await scan(command)).potentialOutbound).toBe(true);
+    });
+    it.each(['pwd', 'cat notes.txt', 'pwd && ls', 'for file in a b; do echo "$file"; done'])(
+      'keeps positively proven local behavior: %s',
+      async command => {
+        expect((await scan(command)).potentialOutbound).toBe(false);
+      }
+    );
+    it('keeps read-only Git separate from a local-only capability proof', async () => {
+      const result = await scan('git status');
+      expect(result.readOnly).toBe(true);
+      expect(result.potentialOutbound).toBe(true);
+    });
+  });
+
   describe('splitting a script into commands', () => {
     it('finds each side of &&, ||, ; and a pipe', async () => {
       expect(await texts('git add . && git commit -m x || echo no; ls | wc -l')).toEqual([

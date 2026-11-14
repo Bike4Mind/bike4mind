@@ -90,7 +90,8 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
       >
         <thead>
           <tr>
-            <th style={{ width: 96 }}>State</th>
+            {/* Wide enough for the longest chip, "Needs your decision" (AgentStateChip). */}
+            <th style={{ width: 152 }}>State</th>
             <SortHeader sortKey="agent" label="Agent" sort={sort} onSort={toggleSort} />
             <th>Now</th>
             <SortHeader sortKey="updated" label="Updated" sort={sort} onSort={toggleSort} />
@@ -115,7 +116,11 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               data-selected={agent.id === selectedId}
             >
               <td>
-                <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
+                <AgentStateChip
+                  state={agent.state}
+                  preparing={agent.preparing !== undefined}
+                  deciding={agent.decision !== undefined}
+                />
               </td>
               <td title={agent.seedPrompt}>
                 <Typography level="body-sm" sx={{ ...clamp, pl: `${(agent.depth - 1) * INDENT_PX}px` }}>

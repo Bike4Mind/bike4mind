@@ -137,6 +137,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
+  /** The result comes from a trusted local skill rather than an imported body. */
+  ownContent?(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -738,6 +740,8 @@ export interface ApprovalPrompt {
   askInFull?: true;
   /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
   unchecked?: true;
+  /** The shell scan cannot positively prove every executed command keeps data local. */
+  outbound?: true;
   /**
    * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
    * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.

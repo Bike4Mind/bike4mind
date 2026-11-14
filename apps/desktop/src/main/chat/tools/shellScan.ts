@@ -109,6 +109,8 @@ export interface ShellScan {
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
+  /** A command may send data unless every executed part is positively proven local. */
+  potentialOutbound: boolean;
   /**
    * Each outbound command's reason, with the repository it writes to when its words pin one (see
    * `repositoryWrite`). Never set for a script that changes the environment, which can redirect git or gh.
@@ -4973,6 +4975,7 @@ function curlModeled(args: readonly string[]): boolean {
   const options = curlOptions(args);
   return (
     options !== null &&
+    !curlUploadGlobs(options) &&
     options.every(({ name, value }) =>
       name === 'url'
         ? curlUrl(value ?? '')
@@ -4981,6 +4984,12 @@ function curlModeled(args: readonly string[]): boolean {
           : name !== 'write-out' || !/%output|^@/.test(value ?? '')
     )
   );
+}
+
+/** Curl expands upload lists/ranges itself even inside a shell-quoted word. */
+function curlUploadGlobs(options: readonly { name: string; value?: string }[]): boolean {
+  if (options.some(({ name }) => name === 'g' || name === 'globoff')) return false;
+  return options.some(({ name, value }) => name === 'upload-file' && /[{[]/.test(wordValue(value ?? '')));
 }
 
 /** Curl parses its own quoting, file lists and attributes inside a form value; those need a decision. */
@@ -5001,7 +5010,11 @@ const shellQuoted = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`
  */
 function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } | null {
   const options = curlOptions(args);
-  if (!options || options.some(({ name, value }) => name === 'form' && !simpleCurlForm(wordValue(value ?? ''))))
+  if (
+    !options ||
+    curlUploadGlobs(options) ||
+    options.some(({ name, value }) => name === 'form' && !simpleCurlForm(wordValue(value ?? '')))
+  )
     return null;
   const values = (...names: string[]): string[] =>
     options.flatMap(({ name, value }) => (names.includes(name) && value !== undefined ? [value] : []));
@@ -6464,6 +6477,7 @@ export async function scanShell(
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
+    let potentialOutbound = false;
     const sends: ShellScan['sends'] = [];
     let setsEnvironment = false;
     const writtenCommands = new Set<number>();
@@ -7954,6 +7968,7 @@ export async function scanShell(
       commands.push(entry);
       const reason =
         [tokens, ...(findRun?.runs ?? [])].map(run => outboundReason(run, readsStdin(node))).find(Boolean) ?? null;
+      if (reason || assigns || arithmetic || !containedCommand(tokens)) potentialOutbound = true;
       if (reason) {
         outbound.add(reason);
         const computed = tokens.some(isDynamic);
@@ -8648,6 +8663,7 @@ export async function scanShell(
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        potentialOutbound = true;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -8662,6 +8678,7 @@ export async function scanShell(
         // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
         // `GIT_DIR` and `http_proxy` all fail it), so that binding does not change the environment.
         if (!/^[a-z][a-z0-9]*$/.test(variable)) {
+          potentialOutbound = true;
           setsEnvironment = true;
         }
         const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
@@ -8838,6 +8855,7 @@ export async function scanShell(
       ungranted: [...ungranted],
       envFiles: [...envFiles],
       outbound: [...outbound],
+      potentialOutbound: potentialOutbound || commands.length === 0,
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
       readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],

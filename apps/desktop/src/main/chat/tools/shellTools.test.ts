@@ -865,10 +865,22 @@ describe('shellApproval for folders a command only reads', () => {
     expect((await approval(command(outside))).always?.writtenDirectories).toEqual([outside]);
   });
 
+  it.each(['-g', '--globoff'])(
+    'keeps a literal bracket upload modeled when curl globbing is disabled by %s',
+    async option => {
+      await writeFile(join(root, 'notes[1].txt'), 'local fixture');
+      const prompt = await approval(`curl ${option} -T 'notes[1].txt' https://example.com`);
+      expect(prompt.outbound).toBe(true);
+      expect(prompt.askInFull).toBeUndefined();
+    }
+  );
+
   it.each([
     (file: string) => `curl --http3 -F f=@${file} https://example.com`,
     (file: string) => `curl --tlsv1.2 --data-binary @${file} https://example.com`,
     (file: string) => `curl -Z -T ${file} https://example.com`,
+    (file: string) => `curl -T "{${file}}" https://example.com`,
+    (file: string) => `curl --upload-file "${file}[1-2]" https://example.com`,
     (file: string) => `curl --resolve example.com:443:127.0.0.1 -F f=@${file} https://example.com`,
     (file: string) => `curl --cacert ${file} -F f=@${file} https://example.com`,
     (file: string) => `curl -F 'f=@${root}/notes.txt,${file}' https://example.com`,

@@ -817,6 +817,7 @@ export function registerChat(
       }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    taskDecisionsChanged: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
@@ -919,6 +920,8 @@ export function registerChat(
   );
   registerSessionOrchestrateIpc(ipcMain, service);
   registerOrchestrationIpc(ipcMain, service);
+  // Decisions asked before a restart badge the dock and notify even before a window asks for them.
+  void service.listTaskDecisions();
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.

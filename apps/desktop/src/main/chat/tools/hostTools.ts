@@ -487,7 +487,7 @@ export const sessionSend: ToolDefinition = {
     const name = (await requireHost(context).describeSession(sessionId, { scope: 'all' })) ?? sessionId;
     return {
       detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
-      // Only 'ask' reaches this card, but the key still has to be exact there: approving one
+      // Ask mode and provenance-sensitive Auto calls reach this card; its key must be exact: approving one
       // message must never cover the next, and the same words to a different conversation are a
       // different act.
       key: `session_send:${sessionId}:${message}`,

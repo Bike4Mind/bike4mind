@@ -29,6 +29,7 @@ vi.mock('./shellScan', async importOriginal => ({
           ungranted: scanned.ungranted,
           envFiles: [],
           outbound: [],
+          potentialOutbound: false,
           sends: [],
           readOnly: false,
           writes: [],

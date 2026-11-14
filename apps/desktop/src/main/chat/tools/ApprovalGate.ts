@@ -23,8 +23,6 @@ interface PendingApproval {
   sessionId: string;
   /** See ApprovalRequestOptions.recheck. */
   recheck?: () => Promise<ChatApprovalAnswer | null>;
-  /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
-  remember: boolean;
   /** See ApprovalRequestOptions.question. */
   question: boolean;
   settle(answer: ChatApprovalAnswer, settledBy: ApprovalSettledBy): void;
@@ -101,7 +99,8 @@ export interface ApprovalRequestOptions {
    * Whether an 'always' answer may be recorded as a standing approval. False on an
    * irreversible tool, where a single click must never cover a later, different call.
    */
-  remember?: boolean;
+  /** A callback rechecks whether consent may be retained when the user actually answers. */
+  remember?: boolean | (() => boolean);
   /**
    * On a card that offers a choice, which of its options may be recorded as standing. An answer
    * naming any other option is honoured for this call and forgotten - that is what stops a
@@ -254,7 +253,7 @@ export class ApprovalGate {
     options: ApprovalRequestOptions = {}
   ): Promise<ApprovalSettlement> {
     const approvalId = randomUUID();
-    const remember = options.remember !== false;
+    const remember = () => (typeof options.remember === 'function' ? options.remember() : options.remember !== false);
 
     return new Promise<ApprovalSettlement>(resolve => {
       let done = false;
@@ -271,7 +270,7 @@ export class ApprovalGate {
         // decision still stands, it just is not remembered. Same for an option the caller did
         // not list as rememberable - see ApprovalRequestOptions.rememberable.
         const keep =
-          remember &&
+          remember() &&
           !options.always?.ungranted?.length &&
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
@@ -294,7 +293,6 @@ export class ApprovalGate {
 
       this.pending.set(approvalId, {
         sessionId,
-        remember,
         question: options.question === true,
         settle,
         ...(options.recheck ? { recheck: options.recheck } : {}),

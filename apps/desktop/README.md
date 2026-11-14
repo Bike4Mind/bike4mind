@@ -1171,8 +1171,17 @@ attributes. Simple modeled uploads still check their source paths; listed Git op
 the narrow exception for understood reference changes. Commands run as the user without an OS
 sandbox, so these checks are not filesystem confinement.
 
-Reading web or other content no longer changes the approval policy for later calls. Credit-spending
-tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
+After a reply reads web, MCP, browser or imported skill content, "Approve for me" asks before
+outbound calls and shell commands whose local-only behavior the scanner cannot prove. This includes custom programs,
+project builds and Git commands that may invoke configured programs. The approval is for that call;
+older chat allowances do not cover it. This also covers messages and automatically started delegated
+tasks, so another conversation cannot silently drop the source provenance. User-present task
+suggestions still only show a card and start nothing. Explicit user permission rules retain precedence. Proven local
+operations such as `pwd` and `cat` keep their normal decisions, and a new clean reply resets this check.
+Interrupted replies retain the provenance of replayed content. Curl upload lists/ranges are opaque
+unless `-g` or `--globoff` disables curl's own globbing.
+
+Credit-spending tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
 limits remain. Protected paths, irreversible actions and signed-in browser actions keep their own checks.
 
 Settings -> Permissions also shows the local capability ledger: active grants for files,
