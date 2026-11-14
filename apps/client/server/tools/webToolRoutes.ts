@@ -78,24 +78,23 @@ export function runWeatherTool(req: Request, body: WeatherToolRequest): Promise<
       throw new Error('OpenWeather API key is not configured.');
     }
 
-    let response: Response;
+    let data: { main?: { temp?: unknown }; name?: unknown; weather?: Array<{ description?: unknown }> };
     try {
-      response = await fetch(
+      const response = await fetch(
         `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${openWeatherKey}&units=${units}`,
         { signal: AbortSignal.timeout(WEATHER_TIMEOUT_MS) }
       );
+      if (!response.ok) {
+        throw new Error(`OpenWeather error: ${response.statusText}`);
+      }
+      data = await response.json();
     } catch (fetchError) {
+      // The timeout covers reading the body too, so a stalled response maps here as well.
       if (fetchError instanceof Error && (fetchError.name === 'TimeoutError' || fetchError.name === 'AbortError')) {
         throw new Error(`Weather API request timed out after ${WEATHER_TIMEOUT_MS / 1000}s`);
       }
       throw fetchError;
     }
-
-    if (!response.ok) {
-      throw new Error(`OpenWeather error: ${response.statusText}`);
-    }
-
-    const data = await response.json();
     const temp = data?.main?.temp;
     const cityName = data?.name;
     const description = data?.weather?.[0]?.description;

@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
+import { toolExecutionLogRepository } from '@bike4mind/database';
 
 const { mockResolveTrust, mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockWebFetch, counters } =
   vi.hoisted(() => ({
@@ -224,6 +225,58 @@ describe('/api/v1/tools/*', () => {
       expect(res._getStatusCode()).toBe(422);
       expect(route.ran()).toBe(0);
     });
+  });
+
+  it.each([
+    ['web-search', () => v1WebSearch, '/api/v1/tools/web-search', { query: 'q', num_results: 0 }],
+    ['web-search', () => v1WebSearch, '/api/v1/tools/web-search', { query: 'q', num_results: 11 }],
+    ['web-search', () => v1WebSearch, '/api/v1/tools/web-search', { query: 'q', num_results: 2.5 }],
+    ['weather', () => v1Weather, '/api/v1/tools/weather', { lat: 91, lon: 0 }],
+    ['weather', () => v1Weather, '/api/v1/tools/weather', { lat: 0, lon: -181 }],
+  ])('422s an out-of-range %s body before the tool runs', async (_name, handler, url, body) => {
+    const res = await call(handler(), url, body);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reports a weather provider timeout as a 500 and audits the failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('timed out', 'TimeoutError');
+      })
+    );
+    const res = await call(v1Weather, '/api/v1/tools/weather', { lat: 1, lon: 2 });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(JSON.stringify(res._getJSONData())).toContain('Weather API request timed out after 10s');
+    expect(toolExecutionLogRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'weather_info',
+        success: false,
+        error: 'Weather API request timed out after 10s',
+      })
+    );
+  });
+
+  it('reports a weather body that stalls past the timeout the same way', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => {
+          throw new DOMException('timed out', 'TimeoutError');
+        },
+      }))
+    );
+    const res = await call(v1Weather, '/api/v1/tools/weather', { lat: 1, lon: 2 });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(toolExecutionLogRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: 'Weather API request timed out after 10s' })
+    );
   });
 
   it('shares one hourly budget with the SPA-internal /api/tools/* routes', async () => {
