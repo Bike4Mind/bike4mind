@@ -20,6 +20,19 @@ export const OVERFLOW_POINTS: Record<TavernZone, SlotPoint> = TAVERN_LAYOUT.over
 
 export const DOOR_POINT: SlotPoint = TAVERN_LAYOUT.door;
 
+/** The quest board's box on the back wall (percent of the scene box) and how many notes it holds. */
+export const QUEST_BOARD = TAVERN_LAYOUT.questBoard;
+
+/**
+ * Splits `items` into the notes pinned on a board with room for `capacity`, and the rest. Like a full
+ * zone's overflow stack, a board that cannot fit everything gives its last place to a "+N" note.
+ */
+export function pinNotes<T>(items: readonly T[], capacity: number): { pinned: T[]; hidden: T[] } {
+  if (items.length <= capacity) return { pinned: [...items], hidden: [] };
+  const room = Math.max(0, capacity - 1);
+  return { pinned: items.slice(0, room), hidden: items.slice(room) };
+}
+
 /**
  * The bar counter as drawn in the backdrop (percent of the scene box): `top` is where its top
  * meets the shelving behind it, `front` where its front panel meets the floor.
