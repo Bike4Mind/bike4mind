@@ -119,7 +119,8 @@ export async function holdJobCredits(
 /**
  * Checks a whole batch against the new-account spend cap before any of its holds. Each hold checks only its own
  * amount, and holds made earlier in the same batch are not on a job yet, so without this a batch could take a
- * young account past its cap one job at a time. The refusal matches holdJobCredits'.
+ * young account past its cap one job at a time. The refusal matches holdJobCredits'. Check-then-act like the rest
+ * of the cap: holds only become visible once their jobs persist, so a concurrent burst can overshoot by up to one batch.
  */
 export async function checkBatchSpendCap(
   params: {
@@ -137,7 +138,8 @@ export async function checkBatchSpendCap(
     {
       user,
       requestedCredits: params.totalCredits,
-      billedToOrganization: params.user.organizationId !== null,
+      // Same predicate as holdCredits, which bills the org whenever organizationId is set.
+      billedToOrganization: Boolean(params.user.organizationId),
       logger: deps.logger,
     },
     deps.credits.newAccountSpendCap

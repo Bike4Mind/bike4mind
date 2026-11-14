@@ -59,6 +59,14 @@ describe('checkBatchSpendCap', () => {
     expect(await checkBatchSpendCap({ enforceCredits: true, user: orgUser, totalCredits: 5000 }, deps)).toBeNull();
   });
 
+  it('caps a batch whose organizationId is an empty string, as holdCredits bills it to the user', async () => {
+    const { deps } = makeDeps(400);
+    const emptyOrg = { id: 'u1', organizationId: '' };
+    expect(await checkBatchSpendCap({ enforceCredits: true, user: emptyOrg, totalCredits: 700 }, deps)).toMatchObject({
+      code: 'insufficient_credits',
+    });
+  });
+
   it('skips the check when credits are not enforced', async () => {
     const { deps } = makeDeps(400);
     expect(await checkBatchSpendCap({ enforceCredits: false, user, totalCredits: 5000 }, deps)).toBeNull();
