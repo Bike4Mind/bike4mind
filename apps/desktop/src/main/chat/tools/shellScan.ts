@@ -425,9 +425,12 @@ function globMayMatchEnvFile(path: string): boolean {
   const name = basename(path);
   if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
   if (/^[?*[]/.test(name)) return false;
+  // A bracket expression matches one character, so it is read as `?`: copied into a RegExp as written, a
+  // range such as `[d-1]` is invalid and would report the name as a possible `.env`.
   // One `.*` per run of stars keeps the backtracking bounded by the short samples.
   const pattern = name
-    .replace(/[.+^${}()|\\]/g, '\\$&')
+    .replace(/\[[!^]?\]?[^\]]*\]/g, '?')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*+/g, '.*')
     .replace(/\?/g, '.');
   try {

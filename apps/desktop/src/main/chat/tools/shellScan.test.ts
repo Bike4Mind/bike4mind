@@ -124,18 +124,27 @@ describe('scanShell', () => {
       ['cat .env:secret', ['.env:secret']],
       ['cat .env::data', ['.env::data']],
       ['cat .ENV', ['.ENV']],
+      ['cat .en[v]', ['.en[v]']],
+      ['cat .en[]v]', ['.en[]v]']],
+      ['cat .en[!x]', ['.en[!x]']],
       ['cat ".env ."', ['.env .']],
       ['cat .env/x/..', ['.env/x/..']],
     ])('flags %s', async (command, envFiles) => {
       expect((await scan(command)).envFiles).toEqual(envFiles);
     });
 
-    it.each(['cat .env.example', 'ls -la', 'cat "$ENV_FILE"', 'echo x > .env', 'cat *', 'ls src/*.ts'])(
-      'does not flag %s',
-      async command => {
-        expect((await scan(command)).envFiles).toEqual([]);
-      }
-    );
+    it.each([
+      'cat .env.example',
+      'ls -la',
+      'cat "$ENV_FILE"',
+      'echo x > .env',
+      'cat *',
+      'ls src/*.ts',
+      'cat lines[menu_open+1:end-1]',
+      "sed -i '' 's/lines\\[menu_open+1:end-2\\]/lines[menu_open+1:end-1]/' migrate.py",
+    ])('does not flag %s', async command => {
+      expect((await scan(command)).envFiles).toEqual([]);
+    });
 
     it('reads a run of stars in a name as one wildcard', async () => {
       const test = vi.spyOn(RegExp.prototype, 'test');
