@@ -5,7 +5,10 @@ const mockGetSettingsMap = vi.fn();
 const mockSettingsValue = vi.fn();
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (user: IUserDocument) => user.isPersona === true,
+    userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => mockGetSettingsMap(...args),
@@ -14,7 +17,8 @@ vi.mock('@bike4mind/utils', () => ({
 
 import { isMfaEnrollmentOwed, readEnforceMfa } from './mfaEnforcement';
 
-const user = (totpEnabled: boolean) => ({ id: 'u1', mfa: { totpEnabled } }) as unknown as IUserDocument;
+const user = (totpEnabled: boolean, extra: Partial<IUserDocument> = {}) =>
+  ({ id: 'u1', mfa: { totpEnabled }, ...extra }) as unknown as IUserDocument;
 
 beforeEach(() => {
   mockGetSettingsMap.mockReset().mockResolvedValue({});
@@ -46,6 +50,18 @@ describe('isMfaEnrollmentOwed', () => {
     expect(await isMfaEnrollmentOwed(user(false), { impersonatedBy: 'admin-1' })).toBe(false);
     // Exempt before the settings read, so an impersonating admin never pays for it.
     expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('is never owed by a test persona, and never reads the setting for one', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false, { isPersona: true }))).toBe(false);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('is still owed by an ordinary user, whether isPersona is false or absent', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false, { isPersona: false }))).toBe(true);
+    expect(await isMfaEnrollmentOwed(user(false))).toBe(true);
   });
 
   it('is not owed while enforcement is off', async () => {
