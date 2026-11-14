@@ -1532,11 +1532,6 @@
       "count": 8
     }
   },
-  "apps/client/pages/api/analytics/__tests__/aggregate.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "apps/client/pages/api/analytics/aggregate.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -1563,11 +1558,6 @@
     }
   },
   "apps/client/pages/api/app-files/__tests__/get-file-url.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
-  "apps/client/pages/api/app-files/__tests__/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
     }
@@ -2692,11 +2682,6 @@
   "apps/client/pages/api/users/[id]/__tests__/projects.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "apps/client/pages/api/users/[id]/__tests__/recalculate-storage.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
     }
   },
   "apps/client/pages/api/users/[id]/__tests__/userInvites.test.ts": {
