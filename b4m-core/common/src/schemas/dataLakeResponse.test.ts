@@ -139,6 +139,31 @@ describe('research response schemas', () => {
     expect(researchConfigEnvelopeResponseSchema.parse({ data: config })).toEqual({ data: keptConfig });
   });
 
+  it('drops the feed cursor and keeps feedStatus on a config', () => {
+    const feedConfig = {
+      ...config,
+      source: 'feed',
+      feedUrl: 'https://example.com/feed.xml',
+      feedCursor: { fingerprint: 'fp', newestPublishedAt: null, seenKeys: ['secret-key'], retries: [] },
+      feedStatus: { newestPublishedAt: null, current: true },
+    };
+
+    expect(researchConfigEnvelopeResponseSchema.parse({ data: feedConfig })).toEqual({
+      data: {
+        ...keptConfig,
+        source: 'feed',
+        feedUrl: 'https://example.com/feed.xml',
+        feedStatus: { newestPublishedAt: null, current: true },
+      },
+    });
+  });
+
+  it('keeps the feed backlog on a run', () => {
+    expect(researchRunEnvelopeResponseSchema.parse({ data: { ...run, feedBacklog: 4 } })).toEqual({
+      data: { ...keptRun, feedBacklog: 4 },
+    });
+  });
+
   it('strips undeclared keys per run in the history shape', () => {
     expect(researchRunListResponseSchema.parse({ data: [run] })).toEqual({ data: [keptRun] });
   });

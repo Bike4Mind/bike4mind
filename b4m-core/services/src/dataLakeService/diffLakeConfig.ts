@@ -12,6 +12,7 @@ import {
   LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_FINGERPRINTED_FIELDS,
   capLakeConfigValue,
+  feedLabel,
   lakeConfigTextFingerprint,
 } from '@bike4mind/common';
 
@@ -258,6 +259,19 @@ export function researchTrustedSitesChange(
     ...(removed.length > 0 ? [`removed ${removed.join(', ')}`] : []),
   ];
   return literalChange('researchConfig', undefined, `trusted sites ${parts.join('; ')}: ${configName}`);
+}
+
+/**
+ * A research config's source changing between web search and a feed, or to a different feed. The
+ * feed is named by origin and path only: the query string of a private feed can carry a token.
+ */
+export function researchSourceChange(
+  configName: string,
+  source: 'search' | 'feed',
+  feedUrl: string | null
+): ILakeConfigLiteralChange {
+  const label = source === 'feed' ? `feed ${feedUrl ? feedLabel(feedUrl) : ''}`.trim() : 'web search';
+  return literalChange('researchConfig', undefined, `source: ${label}: ${configName}`);
 }
 
 /**

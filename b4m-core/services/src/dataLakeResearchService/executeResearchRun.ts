@@ -1,14 +1,26 @@
 import type {
   IDataLakeProposalDocument,
   LegacyResearchRunLevers,
+  ResearchFeedCursor,
   ResearchRunStopReason,
   ResearchRunTotals,
 } from '@bike4mind/common';
-import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER, upgradeLegacyResearchLevers } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  researchFeedFingerprint,
+  researchFeedUrlKey,
+  RESEARCH_FEED_MAX_RETRIES,
+  RESEARCH_FEED_SEEN_KEYS_MAX,
+  RESEARCH_RUN_PRODUCER,
+  upgradeLegacyResearchLevers,
+} from '@bike4mind/common';
 import { isPlaceholderTitle } from '@bike4mind/fab-pipeline';
 import { trustedEntryCoversHost } from '@bike4mind/utils/registrableDomain';
+import { canonicalSourceKey } from '../dataLakeService/canonicalSourceKey';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
+import type { FeedItem } from './parseFeed';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
+import { feedCursorMode, selectFeedCandidates } from './selectFeedCandidates';
 import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
 
 /**
@@ -33,11 +45,25 @@ import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from 
  * That decision is by source tier alone, never by score.
  */
 
-/** One normalized search hit. Structurally the search providers' `WebSearchProviderResult`. */
+/**
+ * One normalized search hit. Structurally the search providers' `WebSearchProviderResult`. Feed
+ * items carry the optional fields; the search path never sets them.
+ */
 export interface ResearchCandidate {
   title: string;
   url: string;
   snippet: string;
+  publishedAt?: Date;
+  authors?: string[];
+  categories?: string[];
+}
+
+/** A feed could not be read. `message` is written for a lake manager and becomes the run's error. */
+export class FeedUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FeedUnavailableError';
+  }
 }
 
 /** What a fetch produced, honoring the queue's extraction contract. See `fetchSource` below. */
@@ -61,6 +87,11 @@ export interface AutoAdmitRule {
 export interface ResearchRunPorts {
   /** Ask the search provider for up to `maxResults` hits, honoring the recency lever. */
   search(query: string, maxResults: number, recencyDays?: number): Promise<ResearchCandidate[]>;
+  /**
+   * Read and parse a feed. Absent on a caller that cannot fetch one, which fails a feed run rather
+   * than falling back to search. Throws `FeedUnavailableError` when the feed cannot be used.
+   */
+  readFeed?(url: string): Promise<FeedItem[]>;
   /**
    * Score one candidate 0..1 and report what the judgment cost. A `failed` outcome drops the
    * candidate, so a broken model proposes nothing rather than everything, but it is counted as
@@ -105,6 +136,13 @@ export interface ResearchRunResult {
   judgeStepFailed: boolean;
   /** The first failed judgment's message, when any judgment failed. */
   judgeError?: string;
+  /**
+   * Feed runs only: what the next run needs to resume. The caller decides whether to store it. When
+   * the judge step failed, only `retries` differs from the stored cursor; absent if none was active.
+   */
+  feedCursor?: ResearchFeedCursor;
+  /** Feed runs only: eligible items left for a later run. Outside `totals`: a waiting item is not an outcome. */
+  feedBacklog?: number;
 }
 
 /**
@@ -116,6 +154,20 @@ const TIME_BUDGET_RESERVE_MS = 90_000;
 
 /** Judge failures, with nothing scored yet, after which the judge is treated as down for the run. */
 const JUDGE_BREAKER_FAILURES = 3;
+
+/**
+ * Every propose-step outcome, each one a final answer for a feed item. Typed against the union so a
+ * new outcome fails the compiler here instead of defaulting to settled.
+ */
+export const SETTLED_PROPOSE_OUTCOMES = {
+  proposed: true,
+  duplicate_pending: true,
+  already_in_lake: true,
+  suppressed_by_tombstone: true,
+  unusable_source: true,
+} as const satisfies Record<ProposalOutcome['outcome'], true>;
+
+type FeedItemState = 'settled' | 'transient';
 
 /**
  * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
@@ -132,7 +184,8 @@ export function trustedEntryForUrl(url: string, rules: Parameters<typeof matchSo
 export async function executeResearchRun(
   storedLevers: LegacyResearchRunLevers,
   runId: string,
-  ports: ResearchRunPorts
+  ports: ResearchRunPorts,
+  storedFeedCursor?: ResearchFeedCursor | null
 ): Promise<ResearchRunResult> {
   // A run snapshot can predate the tiers, so it is upgraded here rather than trusted to be current.
   const levers = upgradeLegacyResearchLevers(storedLevers);
@@ -144,17 +197,118 @@ export async function executeResearchRun(
   const outOfTime = (): boolean =>
     ports.remainingTimeMs !== undefined && ports.remainingTimeMs() <= TIME_BUDGET_RESERVE_MS;
 
-  const settle = (stopReason: ResearchRunStopReason): ResearchRunResult => ({
-    totals,
-    spentMicroUsd,
-    stopReason,
-    judgeStepFailed: totals.judgeFailed > 0 && scored === 0,
-    judgeError,
-  });
+  const isFeed = levers.source === 'feed';
+  const feedStates = new Map<string, FeedItemState>();
+  const settledKeys: string[] = [];
+  let feedKeysInFeed = new Set<string>();
+  let feedSkipped: string[] = [];
+  let feedBacklog = 0;
+  let feedOldestWaitingAt: Date | null = null;
+  const markFeedItem = (candidate: ResearchCandidate, state: FeedItemState): void => {
+    if (!isFeed) return;
+    const key = canonicalSourceKey(candidate.url);
+    if (!key) return;
+    feedStates.set(key, state);
+    if (state === 'settled') settledKeys.push(key);
+  };
+
+  const buildFeedCursor = (
+    candidates: ResearchCandidate[],
+    judgeStepFailed: boolean
+  ): ResearchFeedCursor | undefined => {
+    const fingerprint = researchFeedFingerprint(levers);
+    const mode = feedCursorMode(storedFeedCursor, levers);
+    // A judge outage must not settle anything, so only an active cursor can take its retry counts.
+    if (judgeStepFailed && mode !== 'active') return undefined;
+    // Same feed under other settings: the old retries, seen keys and floor carry over.
+    const base = mode === 'fresh' ? null : storedFeedCursor!;
+    const oldAttempts = new Map((base?.retries ?? []).map(retry => [retry.key, retry.attempts]));
+
+    const nextRetries: ResearchFeedCursor['retries'] = [];
+    const givenUp: string[] = [];
+    const dated: { at: number; state: FeedItemState | 'unreached' | 'given_up' }[] = [];
+    for (const candidate of candidates) {
+      const key = canonicalSourceKey(candidate.url);
+      if (!key) continue;
+      let state: FeedItemState | 'unreached' | 'given_up' = feedStates.get(key) ?? 'unreached';
+      if (state === 'transient') {
+        const attempts = (oldAttempts.get(key) ?? 0) + 1;
+        // Attempts count on every run that takes the item, so an item the judge always fails on
+        // can still reach the limit. Only a completed run gives up.
+        if (attempts >= RESEARCH_FEED_MAX_RETRIES && !judgeStepFailed) {
+          givenUp.push(key);
+          state = 'given_up';
+        } else {
+          nextRetries.push({ key, attempts });
+        }
+      }
+      if (candidate.publishedAt) dated.push({ at: candidate.publishedAt.getTime(), state });
+    }
+
+    // Old retries survive only while the item is still in the feed and this run did not touch it.
+    const keptRetries = (base?.retries ?? []).filter(
+      retry => feedKeysInFeed.has(retry.key) && !feedStates.has(retry.key)
+    );
+    const retries = [...keptRetries, ...nextRetries];
+    if (judgeStepFailed) return { ...base!, retries };
+
+    // The floor never passes an item that still needs a run, taken or left out; a given-up item no longer does.
+    const blockedAt = Math.min(
+      Infinity,
+      feedOldestWaitingAt?.getTime() ?? Infinity,
+      ...dated.filter(item => item.state === 'unreached' || item.state === 'transient').map(item => item.at)
+    );
+    let newest = base?.newestPublishedAt?.getTime() ?? null;
+    for (const item of dated) {
+      if (item.state === 'settled' && item.at < blockedAt && (newest === null || item.at > newest)) newest = item.at;
+    }
+
+    // Retaken items leave the old list: they are settled again below or are waiting in retries.
+    const retaken = new Set(candidates.map(candidate => canonicalSourceKey(candidate.url)));
+    // Keys of items that left the feed are dropped so a long-lived config does not sit at the cap.
+    const carried = (base?.seenKeys ?? []).filter(
+      key => feedKeysInFeed.has(key) && (mode !== 'same_feed' || !retaken.has(key))
+    );
+    return {
+      fingerprint,
+      feedUrlKey: researchFeedUrlKey(levers.feedUrl),
+      newestPublishedAt: newest === null ? null : new Date(newest),
+      seenKeys: [...new Set([...carried, ...feedSkipped, ...settledKeys, ...givenUp])].slice(
+        -RESEARCH_FEED_SEEN_KEYS_MAX
+      ),
+      retries,
+    };
+  };
+
+  let candidates: ResearchCandidate[] = [];
+  const settle = (stopReason: ResearchRunStopReason): ResearchRunResult => {
+    const judgeStepFailed = totals.judgeFailed > 0 && scored === 0;
+    const feedCursor = isFeed ? buildFeedCursor(candidates, judgeStepFailed) : undefined;
+    return {
+      totals,
+      spentMicroUsd,
+      stopReason,
+      judgeStepFailed,
+      judgeError,
+      ...(isFeed ? { ...(feedCursor ? { feedCursor } : {}), feedBacklog } : {}),
+    };
+  };
 
   const autoAdmitRule: AutoAdmitRule = { isTrusted: url => trustedEntryForUrl(url, levers) };
 
-  const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
+  if (isFeed) {
+    if (!levers.feedUrl) throw new FeedUnavailableError('This research config has no feed address');
+    if (!ports.readFeed) throw new FeedUnavailableError('Reading feeds is not available in this deployment');
+    const items = await ports.readFeed(levers.feedUrl);
+    feedKeysInFeed = new Set(items.map(item => canonicalSourceKey(item.url)).filter((key): key is string => !!key));
+    const selection = selectFeedCandidates(items, storedFeedCursor, levers, ports.now());
+    candidates = selection.candidates;
+    feedSkipped = selection.skipped;
+    feedBacklog = selection.backlog;
+    feedOldestWaitingAt = selection.oldestWaitingAt;
+  } else {
+    candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
+  }
   totals.searchHits = candidates.length;
 
   for (const [index, candidate] of candidates.entries()) {
@@ -162,6 +316,7 @@ export async function executeResearchRun(
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
       totals.filteredBySource += 1;
+      markFeedItem(candidate, 'settled');
       continue;
     }
 
@@ -178,6 +333,7 @@ export async function executeResearchRun(
     if (judgement.outcome === 'failed') {
       totals.judgeFailed += 1;
       judgeError ??= judgement.error;
+      markFeedItem(candidate, 'transient');
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
@@ -192,6 +348,7 @@ export async function executeResearchRun(
     scored += 1;
     if (judgement.relevance < levers.minRelevance) {
       totals.belowRelevance += 1;
+      markFeedItem(candidate, 'settled');
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;
     }
@@ -200,6 +357,7 @@ export async function executeResearchRun(
     const fetched = await ports.fetchSource(candidate.url);
     if (!fetched) {
       totals.fetchFailed += 1;
+      markFeedItem(candidate, 'transient');
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;
     }
@@ -220,6 +378,7 @@ export async function executeResearchRun(
         producer: RESEARCH_RUN_PRODUCER,
         runId,
         query: levers.query,
+        ...(isFeed && levers.feedUrl ? { feedUrl: levers.feedUrl } : {}),
         // When the producer RETRIEVED it, which is the fetch that just happened - not when the row
         // is written, and not when the run started.
         retrievedAt: ports.now(),
@@ -261,6 +420,9 @@ export async function executeResearchRun(
         totals.unusableSource += 1;
         break;
     }
+    // An outcome the switch above does not name stays unmarked, so the item is not-reached and
+    // holds the cursor rather than being recorded as dealt with.
+    if (outcome.outcome in SETTLED_PROPOSE_OUTCOMES) markFeedItem(candidate, 'settled');
 
     await ports.onProgress?.(spentMicroUsd, totals);
 
