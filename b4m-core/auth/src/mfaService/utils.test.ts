@@ -144,4 +144,11 @@ describe('userRequiresMFA', () => {
     expect(isMfaEnforcementExempt(persona)).toBe(true);
     expect(userRequiresMFA(persona, true)).toBe(false);
   });
+
+  it('requires a persona that holds any admin access', () => {
+    const fullAdmin = { ...persona, isAdmin: true } as IUserDocument;
+    const delegate = { ...persona, adminPermissions: ['settings:manage'] } as unknown as IUserDocument;
+    expect(userRequiresMFA(fullAdmin, true)).toBe(true);
+    expect(userRequiresMFA(delegate, true)).toBe(true);
+  });
 });

@@ -76,8 +76,8 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const optimisticPass = knownEnrolled && !enrollmentRefused;
 
   useEffect(() => {
-    if (userId && mfaStatus) writeMfaEnrolledHint(userId, !needsEnrollment);
-  }, [userId, mfaStatus, needsEnrollment]);
+    if (userId && mfaStatus) writeMfaEnrolledHint(userId, mfaStatus.enabled);
+  }, [userId, mfaStatus]);
 
   const isImpersonating = useAccessToken(s => s.impersonating);
 

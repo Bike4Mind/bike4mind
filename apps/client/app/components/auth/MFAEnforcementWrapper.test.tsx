@@ -769,10 +769,10 @@ describe('MFAEnforcementWrapper - a user the server exempts from enrollment', ()
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
     expect(mfaSetupCalls()).toBe(0);
-    // Recorded as cleared, so the next reload skips the loader.
+    // The hint tracks the factor only: an exemption must never mark the user enrolled.
     expect(JSON.parse(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY) ?? 'null')).toEqual({
       userId: 'u1',
-      enrolled: true,
+      enrolled: false,
     });
   });
 
