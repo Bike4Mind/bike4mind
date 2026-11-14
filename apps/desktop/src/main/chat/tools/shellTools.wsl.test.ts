@@ -141,13 +141,13 @@ describe('a shell command the scan could not read', () => {
     scanned.unreadable = false;
   });
 
-  it('in a Windows-drive project that names no distro, asks in auto and full mode even without visible distro text', async () => {
+  it('in a Windows-drive project that names no distro, stays rememberable and runs in auto and full mode', async () => {
     scanned.unreadable = true;
 
     const prompt = await shellApproval('bash_execute', { command: 'cat ~/x' }, context);
 
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(prompt.always).toBeUndefined();
     expect(prompt.unchecked).toBe(true);
     expect(prompt.reasons).toEqual(['Could not read this command, so where it acts cannot be checked.']);

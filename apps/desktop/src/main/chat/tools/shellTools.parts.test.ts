@@ -65,15 +65,15 @@ describe('shellApproval per part', () => {
     ]);
   });
 
-  it('holds the whole command when a part has an unread operand', async () => {
+  it('marks only the part whose operand it cannot read, which auto and full mode still run', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
-    expect(prompt.byPart).toBeUndefined();
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.byPart).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(prompt.unchecked).toBe(true);
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
-      expect.objectContaining({ coverable: false, kinds: [] }),
+      expect.objectContaining({ coverable: false, kinds: ['unread'] }),
     ]);
   });
 
@@ -105,10 +105,7 @@ describe('shellApproval per part', () => {
   it('keeps a substitution in program position opaque to the part that runs it', async () => {
     const prompt = await approve('git status && $(which node) -v');
     expect(parts(prompt)[0]).toEqual({ text: 'git status', coverable: true, kinds: [] });
-    expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false, kinds: [] }));
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
-    expect(prompt.byPart).toBeUndefined();
+    expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false, kinds: ['unread'] }));
   });
 
   it.each([
@@ -139,7 +136,7 @@ describe('shellApproval per part', () => {
 
     it('a cd that CDPATH may redirect before a part it cannot read', async () => {
       vi.stubEnv('CDPATH', undefined);
-      whole(await approve('cd src && rm "$TARGET" && git status'));
+      expect((await approve('cd src && rm "$TARGET" && git status')).byPart).toBe(true);
       vi.stubEnv('CDPATH', '/elsewhere');
       whole(await approve('cd src && rm "$TARGET" && git status'));
     });

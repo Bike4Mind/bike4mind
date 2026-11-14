@@ -67,7 +67,7 @@ describe('configured signature verifier approval', () => {
       false,
     ],
     ['git stash list', ['stash', 'list'], true],
-  ] as const)('asks before %s can invoke the configured verifier', async (command, args, showsSignature) => {
+  ] as const)('asks in auto before %s can invoke the configured verifier', async (command, args, showsSignature) => {
     git(['config', 'log.showSignature', String(showsSignature)]);
     git([...args]);
     expect(existsSync(marker)).toBe(true);
@@ -82,7 +82,7 @@ describe('configured signature verifier approval', () => {
       }
     );
     expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInFull).toBeUndefined();
     expect(prompt.byPart).not.toBe(true);
     expect(prompt.allowOnce).toBe(true);
     expect(existsSync(marker)).toBe(false);

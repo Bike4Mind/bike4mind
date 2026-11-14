@@ -272,19 +272,19 @@ describe('bash_execute', () => {
     expect(first?.key).not.toBe(second?.key);
   });
 
-  it('derives what always-allow covers, and asks for a script that does not parse', async () => {
+  it('derives what always-allow covers, and runs a script that does not parse as unchecked', async () => {
     const parsed = await bashExecute.approval?.({ command: 'git commit -m x && ls -la', cwd: root }, context);
     expect(parsed?.always?.commands.map(command => command.pattern)).toEqual(['git commit *', 'ls *']);
     expect(parsed?.askInAuto).toBeUndefined();
     expect(parsed?.unchecked).toBeUndefined();
 
     const broken = await bashExecute.approval?.({ command: 'if then fi ((', cwd: root }, context);
-    expect(broken?.askInAuto).toBe(true);
-    expect(broken?.askInFull).toBe(true);
+    expect(broken?.askInAuto).toBeUndefined();
+    expect(broken?.askInFull).toBeUndefined();
     expect(broken?.unchecked).toBe(true);
 
     const example = await bashExecute.approval?.({ command: 'cat .env.example; if then fi ((', cwd: root }, context);
-    expect(example?.askInAuto).toBe(true);
+    expect(example?.askInAuto).toBeUndefined();
   });
 
   it.each([

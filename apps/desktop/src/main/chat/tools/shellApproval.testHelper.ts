@@ -1,8 +1,9 @@
 import type { ApprovalPrompt } from './types';
 
 /*
- * These table helpers measure scan confidence as well as mode flags. `unchecked` alone is diagnostic;
- * the real approval gate must also be tested to prove that a risky command waits for consent.
+ * Auto and full mode both run a shell command the scan could not check (`unchecked`). The adversarial tables pin
+ * these rather than `askInAuto` or `askInFull`: what they guard is that the scan is never fooled into reading a
+ * command that reaches a protected location, or a folder outside the project, as one it checked.
  */
 
 /** Whether Approve for me runs a shell command as one the scan checked: false when it asks or the scan could not check it. */

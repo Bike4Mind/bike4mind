@@ -203,7 +203,8 @@ describe('ChatService approval record', () => {
     expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'chat-allowance' }, asked: false });
   });
 
-  it.each(['auto', 'full'] as const)('does not reuse an unsigned chat allowance for signing in %s', async mode => {
+  /** Allows `git commit -m test` in this chat while commit.gpgSign is off, turns it on, then sends it again in `mode`. */
+  async function signAfterAllowance(mode: 'auto' | 'full'): Promise<void> {
     execFileSync('git', ['init', '-q', root]);
     const configPath = join(root, '.git/config');
     await writeFile(configPath, '[core]\nrepositoryformatversion = 0\n[commit]\ngpgsign = false\n');
@@ -217,11 +218,22 @@ describe('ChatService approval record', () => {
     await service.setApprovalMode(sessionId, mode);
     await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
     useTool(streams[1], 'c2', command);
+  }
+
+  it('does not reuse an unsigned chat allowance for signing in auto', async () => {
+    await signAfterAllowance('auto');
     const second = await awaitCall('c2', 'awaiting-approval');
     expect(second.approvalDetail).toContain('commit.gpgsign');
     expect(bashExecute.run).toHaveBeenCalledTimes(1);
     approvals.resolve(second.approvalId!, { decision: 'once' });
     await awaitCall('c2', 'done');
+    expect(bashExecute.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs a signing command in full by the mode, not by the unsigned chat allowance', async () => {
+    await signAfterAllowance('full');
+    const second = await awaitCall('c2', 'done');
+    expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'mode' }, asked: false });
     expect(bashExecute.run).toHaveBeenCalledTimes(2);
   });
 

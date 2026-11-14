@@ -13,16 +13,19 @@ import {
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
 import {
+  commandSigning,
+  formatVerifies,
   gitListed,
-  formatShowsSignatures,
   listedSetting,
   plainRemote,
+  prettyNamesAlias,
   prettyShowsSignatures,
   settingsOn,
+  unlistedSigning,
   type ConfigEntry,
   type GitContacts,
-  type GitListing,
   type GitWord,
+  type SignatureFormat,
 } from './gitTable';
 import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
@@ -107,13 +110,14 @@ export interface ShellCommand {
   envFiles?: string[];
   /** Why the git form this part runs is not one gitTable.ts lists, e.g. `git cleen`. */
   gitUnlisted?: string;
-  /** A configured signer or signature format needs fresh consent even in Auto/Full. */
+  /**
+   * The git form this part runs signs or verifies: its own words ask for it, or config the scan read or the script
+   * sets turns it on. Approve for me asks, and only once (shellTools.ts `signingRisk`).
+   */
   gitSigningRisk?: true;
 }
 
 export interface ShellScan {
-  /** A deferred config/history check found a signing risk for the whole script. */
-  gitSigningRisk?: true;
   commands: ShellCommand[];
   /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
   paths?: string[];
@@ -2996,34 +3000,55 @@ function unsetsGitEnvironment(root: Node): boolean {
 }
 
 /**
- * What a statement may change for a later config query: `branch` the branch an includeIf onbranch reads, `place` the
- * repository a folder holds (init, clone, a cd to a folder not there yet), `any` other config.
+ * What a statement may change for a later config query: `signing` a key that can turn signing on, set or removed as
+ * the script spells it; `branch` the branch an includeIf onbranch reads; `place` the repository a folder holds (init,
+ * clone, a cd to a folder not there yet); `any` other config, or config the scan cannot read.
  */
-type HistoryChange = 'any' | 'branch' | 'place';
+type HistoryChange = 'signing' | 'any' | 'branch' | 'place';
+
+/**
+ * Why a git call may sign or verify. `asks` when config the scan read turns signing on, or the script sets a key
+ * that can; config it cannot read leaves the call to the mode, as any unlisted form is.
+ */
+interface SigningFinding {
+  text: string;
+  asks: boolean;
+}
+
+/** Why a git call is not one gitTable lists: `signing` when it signs or verifies (gitSigningRisk). */
+interface GitReason {
+  kind: 'unlisted' | 'signing';
+  reason: string;
+}
 
 /** Config keys whose value can turn signing or verifying on, change what log prints, or move an include. */
-const SIGNING_CONFIG_KEY =
-  /^(commit|tag|merge|log|push|pretty|include|includeif|gpg)\.|^format\.pretty$|^remote\..*\.(url|pushurl)$/i;
+const SIGNING_CONFIG_KEY = /^(commit|tag|merge|log|push|pretty|include|includeif|gpg)\.|^format\.pretty$/i;
+const SIGNING_SECTION = /^(commit|tag|merge|log|push|pretty|include|includeif|gpg|format)(\.|$)/i;
+/** What an includeIf hasconfig:remote condition matches. */
+const REMOTE_URL_KEY = /^remote\..*\.(url|pushurl)$/i;
 
 /** What a `git config` call (words after `config`, unquoted) changes for a later config query; null for a read or an unrelated key. */
 function configChange(rest: readonly string[]): HistoryChange | null {
   const { operands, reads, edits, removes, adds } = gitConfigWords(rest);
   if (reads) return null;
-  if (edits || rest.some(arg => /[$`]/.test(arg) || /^(-f|--file|--blob)(=|$)/.test(arg))) return 'any';
   const [verb = ''] = operands;
-  if (
-    /^(edit|rename-section|remove-section)$/.test(verb) ||
-    rest.some(arg => /^--(rename|remove)-section$/.test(arg))
-  ) {
-    return 'any';
+  if (edits || verb === 'edit') return 'any';
+  const dynamic = (word: string): boolean => /[$`]/.test(word);
+  if (/^(rename|remove)-section$/.test(verb) || rest.some(arg => /^--(rename|remove)-section$/.test(arg))) {
+    const sections = /-section$/.test(verb) ? operands.slice(1) : operands;
+    if (sections.some(section => !dynamic(section) && SIGNING_SECTION.test(section))) return 'signing';
+    return sections.some(section => dynamic(section) || /^remote(\.|$)/i.test(section)) ? 'any' : null;
   }
   if (/^(get|list)$/.test(verb)) return null;
   const verbed = /^(set|unset)$/.test(verb);
   // `git config KEY` reads the key.
   if (!verbed && !removes && !adds && operands.length < 2) return null;
   const key = operands[verbed ? 1 : 0];
-  if (key === undefined || /[\s$`\\"'*?[\]{}()<>|;&~!]/.test(key) || !/^[^.]+(\..+)?\.[^.]+$/.test(key)) return 'any';
-  return SIGNING_CONFIG_KEY.test(key) ? 'any' : null;
+  if (key === undefined || dynamic(key)) return 'any';
+  if (SIGNING_CONFIG_KEY.test(key)) return 'signing';
+  // A word filled at run time may split into options that change which key is written.
+  if (rest.some(dynamic) || REMOTE_URL_KEY.test(key)) return 'any';
+  return /[\s\\"'*?[\]{}()<>|;&~!]/.test(key) || !/^[^.]+(\..+)?\.[^.]+$/.test(key) ? 'any' : null;
 }
 
 /**
@@ -3033,6 +3058,10 @@ function configChange(rest: readonly string[]): HistoryChange | null {
 function historyChange(sub: string, rest: readonly string[]): HistoryChange | null {
   const args = rest.slice(0, rest.includes('--') ? rest.indexOf('--') : rest.length);
   if (sub === 'init' || sub === 'clone') {
+    const settings = rest.flatMap((arg, at) =>
+      /^(-[^-]*c|--config)$/.test(arg) ? [rest[at + 1] ?? ''] : /^--config=/.test(arg) ? [arg.slice(9)] : []
+    );
+    if (settings.some(setting => SIGNING_CONFIG_KEY.test(setting.split('=')[0] as string))) return 'signing';
     // A template, `--config` or `-c` gives the new repository config of its own.
     return rest.some(arg => /^(--template|--config|--separate-git-dir|--git-dir)|^-[^-]*c/.test(arg)) ? 'any' : 'place';
   }
@@ -6749,8 +6778,8 @@ export async function scanShell(
      * Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list or
      * contacts a remote the scan cannot check; the programs a listed form looks up on PATH go through checkPathPrograms.
      */
-    type GitReason = { kind: 'unlisted' | 'signing'; reason: string };
     const ordinaryGitReason = (reason: string): GitReason => ({ kind: 'unlisted', reason });
+    const signingGitReason = (reason: string): GitReason => ({ kind: 'signing', reason });
     const gitUnlistedReason = async (
       node: Node,
       tokens: readonly string[],
@@ -6768,12 +6797,25 @@ export async function scanShell(
       for (const words of gitCalls(args, scope(), fill)) {
         // xargs adds the words it reads after the ones it was given.
         const listing = gitListed(feeds && replace === null ? [...words, OPEN_GIT_WORD] : words);
-        if (!listing.listed) return ordinaryGitReason(listing.reason);
+        const own = commandSigning(words);
+        const signs = (keys: readonly string[]): readonly string[] => keys.filter(key => !own?.off.includes(key));
+        const output = listing.listed ? listing.signatureFormat : own?.format;
+        const explicit =
+          own?.text ?? (formatVerifies(output) ? 'with an output format that may verify signatures' : undefined);
+        if (!listing.listed) {
+          const named = unlistedSigning(words);
+          if (named === null) return ordinaryGitReason(listing.reason);
+          if (explicit !== undefined) return signingGitReason(`${named.form} ${explicit}`);
+          const signing = await signingReason(named.form, signs(named.signs), words, node, output);
+          return signing?.asks ? signingGitReason(`${named.form} ${signing.text}`) : ordinaryGitReason(listing.reason);
+        }
         const folder = gitFolder(words);
         const programs = [...listing.programs, ...(listing.contacts ? ['ssh'] : [])];
         if (programs.length > 0) await checkPathPrograms(node, folder ?? state.cwd, programs);
-        const signing = await signingReason(listing, words, node);
-        if (signing !== null) return { kind: 'signing', reason: `${listing.form} ${signing}` };
+        if (explicit !== undefined) return signingGitReason(`${listing.form} ${explicit}`);
+        // Read before the user config checks, which give a reason that does not ask.
+        const signing = await signingReason(listing.form, signs(listing.signs), words, node, output);
+        if (signing?.asks) return signingGitReason(`${listing.form} ${signing.text}`);
         const moved = movedUserConfig(node, folder);
         if (moved === null) return ordinaryGitReason(`${listing.form} with a user config the scan cannot place`);
         if (moved.length > 0) {
@@ -6781,12 +6823,14 @@ export async function scanShell(
           const reason = await userConfigReason(node, folder as string, moved);
           if (reason !== null) return ordinaryGitReason(`${listing.form} ${reason}`);
         }
+        if (signing !== null) return ordinaryGitReason(`${listing.form} ${signing.text}`);
         if (listing.contacts === undefined) continue;
         if (folder === null || sourced || aliasEnvironment || dropsGitConfig(tokens)) {
           return ordinaryGitReason(`${listing.form} with a remote in config the scan cannot read`);
         }
-        if (!(await configSettled(node, folder)))
+        if (!(await configSettled(node, folder))) {
           return ordinaryGitReason(`${listing.form} after a config change in the same script`);
+        }
         if (!(await remotesPlain(folder, listing.contacts))) {
           return ordinaryGitReason(`${listing.form} with a remote git reaches through a program of its own`);
         }
@@ -6843,14 +6887,16 @@ export async function scanShell(
     // Commands that may change what a later config query reads: a repository made, a branch or worktree switched, a
     // cd into a folder not there yet.
     const historyChanges = new Map<number, Set<HistoryChange>>();
-    let deferredSigningRisk = false;
     const historyChecks: {
       own: number;
       anywhere: boolean;
       alongside: ReadonlySet<number>;
       configs: boolean;
-      reason: (kinds: ReadonlySet<HistoryChange>) => Promise<string | null>;
+      form: string;
+      reason: (kinds: ReadonlySet<HistoryChange>) => Promise<SigningFinding | null>;
     }[] = [];
+    // Each part by the node that runs it, and its text as written, for a racing signing check to mark.
+    const entries = new Map<number, { entry: ShellCommand; original: string }>();
     const onBranchIncludes = new Map<string, Promise<'none' | 'some' | null>>();
     const freshLocations = new Map<string, Promise<{ folder: string; call: GitSigningCall } | null>>();
 
@@ -6931,22 +6977,46 @@ export async function scanShell(
       return folder;
     };
 
+    /** Whether git run with `words` sets a signing key by `-c` or `--config-env` to a value the scan may not read. */
+    const signingSettingOpen = (words: readonly GitWord[]): boolean => {
+      for (let at = 0; at < words.length; at++) {
+        const { text, whole } = words[at] as GitWord;
+        if (!text.startsWith('-')) return false;
+        const joined = text.indexOf('=') !== -1;
+        const name = joined ? text.slice(0, text.indexOf('=')) : text;
+        if (name !== '-c' && name !== '--config-env') {
+          if (GIT_GLOBAL_VALUES.has(name) && !joined) at++;
+          continue;
+        }
+        const value = joined ? { text: text.slice(name.length + 1), whole } : words[++at];
+        if (value === undefined) return false;
+        const equals = value.text.indexOf('=');
+        if (equals === -1 && !value.whole) continue;
+        const key = equals === -1 ? value.text : value.text.slice(0, equals);
+        if (SIGNING_CONFIG_KEY.test(key) && (name === '--config-env' || !value.whole)) return true;
+      }
+      return false;
+    };
+
     /**
-     * Why git run with `words` may sign or verify for `listing`: a setting it reads that way that git, asked in the
-     * folder the call runs in with its own settings and the script's HOME and git config files, reads as true; or
-     * config git cannot read, or an earlier statement may have changed. Null when none.
+     * Why git run with `words` as `form` may sign or verify under one of the settings `signs`: one that git, asked in
+     * the folder the call runs in with its own settings and the script's HOME and git config files, reads as true;
+     * one the script sets; or config git cannot read, or an earlier statement may have changed. Null when none. The
+     * `output` format the call selects is looked up among the pretty.<name> settings, or format.pretty when it names none.
      */
     const signingReason = async (
-      listing: Extract<GitListing, { listed: true }>,
+      form: string,
+      signs: readonly string[],
       words: readonly GitWord[],
-      node: Node
-    ): Promise<string | null> => {
-      const output = listing.signatureFormat;
-      if (listing.signs.length === 0 && output === undefined) return null;
-      if (output?.value && (!output.value.whole || formatShowsSignatures(output.value.text, output.kind))) {
-        return 'with an output format that may verify signatures';
-      }
-      const unread = 'with git config the scan cannot read for signing';
+      node: Node,
+      output?: SignatureFormat
+    ): Promise<SigningFinding | null> => {
+      const selected = output?.value;
+      // A format filled at run time is left to the PATH check of the programs it may start, as for any listed form.
+      const pretty =
+        output?.kind === 'pretty' && (selected === undefined || (selected.whole && prettyNamesAlias(selected.text)));
+      if (signs.length === 0 && !pretty) return null;
+      const unread = { text: 'with git config the scan cannot read for signing', asks: false };
       const place = gitPlace(words);
       const scripted = place && scriptEnvironment(node, place.folder);
       const env = place && scripted && configEnvironment(node, place.call.settings, scripted);
@@ -6965,7 +7035,10 @@ export async function scanShell(
       });
       droppedEnvironment ??= unsetsGitEnvironment(tree.rootNode);
       const unset = droppedEnvironment;
-      if (place === null || scripted === null || env === null || handed || relative || unset) return unread;
+      if (place === null || scripted === null || env === null || handed || relative || unset) {
+        // As auto mode asks for a program key given that way (gitRunsConfiguredProgram).
+        return signingSettingOpen(words) ? { text: 'with a signing setting the scan cannot read', asks: true } : unread;
+      }
       // A call placed by --git-dir, --work-tree or a moved config reads files configSettled does not follow.
       const configs = place.call.gitDir !== null || place.call.workTree !== null || Object.keys(scripted).length > 0;
       const call = { ...place.call, env };
@@ -6986,57 +7059,66 @@ export async function scanShell(
         return formats;
       };
       // log, show and the like also print what format.pretty, or a pretty.<alias> it names, asks for.
-      const reads = async (at: string, how: GitSigningCall, lead: string): Promise<string | null> => {
+      const reads = async (at: string, how: GitSigningCall, lead: string): Promise<SigningFinding | null> => {
         const read = await signingAt(at, how);
         if (read === null) return unread;
-        const on = settingsOn(read, listing.signs);
-        if (on.length > 0) return `${lead}with ${on[0]} set`;
-        if (output?.kind !== 'pretty') return null;
-        const pretty = await prettyAt(at, how);
-        if (pretty === null) return unread;
-        return prettyShowsSignatures(pretty, output.value?.text)
-          ? `${lead}with a format.pretty that may print signatures`
-          : null;
+        const on = settingsOn(read, signs);
+        if (on.length > 0) return { text: `${lead}with ${on[0]} set`, asks: true };
+        if (!pretty) return null;
+        const formats = await prettyAt(at, how);
+        if (formats === null) return unread;
+        if (!prettyShowsSignatures(formats, selected?.text)) return null;
+        const named = selected === undefined ? 'a format.pretty' : `--pretty=${selected.text.slice(0, 40)}`;
+        return { text: `${lead}with ${named} that may print signatures`, asks: true };
       };
-      const changed = 'after a config, repository, branch or folder change in the same script';
+      const changed = { text: 'after a config, repository, branch or folder change in the same script', asks: false };
       // What a statement that may run before this one can change: only what the query below cannot already see.
-      const afterChange = async (kinds: ReadonlySet<HistoryChange>): Promise<string | null> => {
-        if (kinds.has('any')) return changed;
+      const afterChange = async (kinds: ReadonlySet<HistoryChange>): Promise<SigningFinding | null> => {
+        if (kinds.has('signing')) return { text: 'after a signing config change in the same script', asks: true };
+        let found = kinds.has('any') ? changed : null;
         if (kinds.has('branch')) {
           let named = onBranchIncludes.get(key);
           if (named === undefined) onBranchIncludes.set(key, (named = gitOnBranchIncludes(folder, call)));
-          if ((await named) !== 'none')
-            return 'after a branch change in the same script with an includeIf onbranch config';
+          if ((await named) !== 'none') {
+            found ??= {
+              text: 'after a branch change in the same script with an includeIf onbranch config',
+              asks: false,
+            };
+          }
         }
-        if (kinds.has('place')) {
-          if (place.call.gitDir !== null || place.call.workTree !== null) return changed;
-          // A script that names where git finds its templates or programs gives a new repository config of its own.
-          const moves = variableNames(/^GIT_(TEMPLATE_DIR|EXEC_PATH|DIR|WORK_TREE|COMMON_DIR)$/);
-          if (variables.set.some(({ name }) => moves.test(name.replace(/\[[^]*$/, '')))) return changed;
-          let located = freshLocations.get(key);
-          if (located === undefined) freshLocations.set(key, (located = gitFreshLocation(folder, call)));
-          const fresh = await located;
-          if (fresh === null) return changed;
-          return reads(fresh.folder, fresh.call, 'after a repository or folder change in the same script, ');
+        if (!kinds.has('place')) return found;
+        // A script that names where git finds its templates or programs gives a new repository config of its own.
+        const moves = variableNames(/^GIT_(TEMPLATE_DIR|EXEC_PATH|DIR|WORK_TREE|COMMON_DIR)$/);
+        if (
+          place.call.gitDir !== null ||
+          place.call.workTree !== null ||
+          variables.set.some(({ name }) => moves.test(name.replace(/\[[^]*$/, '')))
+        ) {
+          return found ?? changed;
         }
-        return null;
+        let located = freshLocations.get(key);
+        if (located === undefined) freshLocations.set(key, (located = gitFreshLocation(folder, call)));
+        const fresh = await located;
+        const after =
+          fresh && (await reads(fresh.folder, fresh.call, 'after a repository or folder change in the same script, '));
+        return after?.asks ? after : (found ?? (fresh === null ? changed : after));
       };
       historyChecks.push({
         own: node.id,
         anywhere: branching > 0 || backgrounded,
         alongside: alongsideOf(node),
         configs,
+        form,
         reason: afterChange,
       });
-      if (others.size > 0) {
-        const after = await afterChange(others);
-        if (after !== null) return after;
-      }
+      const after = others.size > 0 ? await afterChange(others) : null;
+      if (after?.asks) return after;
       const written = configWrites.some(write => write.id !== node.id && !plainConfigWriters.has(write.id));
-      if (configs ? written : !(await configSettled(node, place.folder, true))) {
-        return 'after a config change in the same script';
-      }
-      return reads(folder, call, '');
+      const unsettled = configs ? written : !(await configSettled(node, place.folder, true));
+      // Config the scan cannot follow leaves the call to the mode, unless what is there now already signs.
+      const now = await reads(folder, call, '');
+      if (now?.asks) return now;
+      return after ?? (unsettled ? { text: 'after a config change in the same script', asks: false } : now);
     };
 
     const remoteSettings = new Map<string, Promise<GitRemoteSettings | null>>();
@@ -8206,8 +8288,11 @@ export async function scanShell(
       const launches = launchedGitCommands(written);
       if (launches.unread) unreadOperands++;
       let unlisted: GitReason | null = null;
+      // A signing reason outranks an earlier one that does not ask.
       const noteUnlisted = (reason: GitReason | null): void => {
-        if (reason && (unlisted === null || reason.kind === 'signing')) unlisted = reason;
+        if (reason && (unlisted === null || (reason.kind === 'signing' && unlisted.kind !== 'signing'))) {
+          unlisted = reason;
+        }
       };
       for (const launched of launches.runs) {
         const launchedExpansion = await gitAliasExpansion(node, launched);
@@ -8473,6 +8558,7 @@ export async function scanShell(
         ...(opaque ? { opaque } : {}),
       };
       commands.push(entry);
+      entries.set(node.id, { entry, original });
       const reason =
         [tokens, ...(findRun?.runs ?? [])].map(run => outboundReason(run, readsStdin(node))).find(Boolean) ?? null;
       if (reason) {
@@ -9337,15 +9423,25 @@ export async function scanShell(
     for (const { own, anywhere, alongside } of laterChecks) {
       if (touchedBy.some(id => !own.has(id) && (anywhere || alongside.has(id)))) unreadOperands++;
     }
-    for (const { own, anywhere, alongside, configs, reason } of historyChecks) {
+    for (const { own, anywhere, alongside, configs, form, reason } of historyChecks) {
       const racing = (id: number): boolean => id !== own && (anywhere || alongside.has(id));
       const kinds = changesOf(racing);
-      if (
-        (kinds.size > 0 && (await reason(kinds)) !== null) ||
+      const finding = kinds.size > 0 ? await reason(kinds) : null;
+      const part = entries.get(own);
+      if (finding?.asks && part !== undefined) {
+        if (!part.entry.gitSigningRisk) {
+          Object.assign(part.entry, {
+            coverable: false,
+            words: part.original,
+            gitUnlisted: `${form} ${finding.text}`,
+            gitSigningRisk: true,
+          });
+        }
+      } else if (
+        finding !== null ||
         (configs && configWrites.some(write => racing(write.id) && !plainConfigWriters.has(write.id)))
       ) {
         unreadOperands++;
-        deferredSigningRisk = true;
       }
     }
     for (const check of aliasChecks) {
@@ -9355,7 +9451,6 @@ export async function scanShell(
         if (check.signing && plainConfigWriters.has(write.id)) continue;
         if (racing(write.id) && (await aliasConfigTouched(write, check))) {
           unreadOperands++;
-          if (check.signing) deferredSigningRisk = true;
           break;
         }
       }
@@ -9372,7 +9467,6 @@ export async function scanShell(
     if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;
     return {
       commands,
-      ...(deferredSigningRisk ? { gitSigningRisk: true as const } : {}),
       paths: [...paths],
       ...(globFolders.size > 0 ? { globFolders: [...globFolders] } : {}),
       ...(dotlessGlobFolders.size > 0 ? { dotlessGlobFolders: [...dotlessGlobFolders] } : {}),
