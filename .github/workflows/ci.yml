@@ -243,6 +243,9 @@ jobs:
       - name: Run self-host chunk pipeline verifier tests
         run: python3 -m unittest discover -s scripts -p 'test_verify_selfhost_chunk_pipeline.py' -v
 
+      - name: Test native OpenAPI drift check
+        run: python3 -m unittest discover -s scripts -p 'test_check_native_openapi_drift.py' -v
+
       - name: Test Playwright install recovery
         run: python3 -m unittest discover -s scripts -p 'test_install_playwright_chromium.py' -v
 
