@@ -333,9 +333,22 @@ describe('ModelPane', () => {
       pressKey('ArrowRight');
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 41 });
       expect(byTestId('model-pane-joint-announcer')?.textContent).toBe('lid 41\u00b0');
+      // The engine feeds the new angles back before the next key.
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 41 }, setJointAngles }));
       pressKey('ArrowDown', true);
-      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 25 });
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 26 });
       expect(handle.orbit).not.toHaveBeenCalled();
+    });
+
+    it('opens a joint whose range runs downwards with Right and Up', () => {
+      const setJointAngles = vi.fn();
+      const joints = [{ ...lidJoint, range: [0, -110] as [number, number] }];
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: -40 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowRight');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: -41 });
+      pressKey('ArrowLeft');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: -39 });
     });
 
     it('holds a nudge at the end of the range', () => {
@@ -363,6 +376,33 @@ describe('ModelPane', () => {
       expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
       act(() => byTestId('drag-lid')?.click());
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55 });
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+    });
+
+    it('keeps the other joints when a drag moves one', () => {
+      const setJointAngles = vi.fn();
+      const flap = { ...lidJoint, name: 'flap', range: [0, 45] as [number, number] };
+      render(
+        engine({
+          ...BUILT,
+          object: hinged(),
+          joints: [lidJoint, flap],
+          jointAngles: { lid: 10, flap: 5 },
+          setJointAngles,
+        })
+      );
+      act(() => byTestId('drag-lid')?.click());
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55, flap: 5 });
+    });
+
+    it('does not start playing on the next jointed model after the joints went away', () => {
+      const joints = [lidJoint];
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: 10 } }));
+      act(() => byTestId('model-pane-joints-play-btn')?.click());
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
+      render(engine({ ...BUILT }));
+      expect(byTestId('model-pane-joints')).toBeNull();
+      render(engine({ ...BUILT, object: hinged(), joints, jointAngles: { lid: 10 } }));
       expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
     });
   });

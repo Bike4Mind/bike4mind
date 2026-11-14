@@ -268,6 +268,10 @@ export function ModelPane({
     [setJointAngles]
   );
   const stopJointsPlaying = useCallback(() => setJointsPlaying(false), []);
+  // The play loop lives in ModelJoints, which unmounts without joints: don't resume on the next jointed model.
+  useEffect(() => {
+    if (joints.length === 0) setJointsPlaying(false);
+  }, [joints.length]);
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
   const [lighting, setLighting] = useState<ModelLighting>('studio');
@@ -426,7 +430,8 @@ export function ModelPane({
     const joint = name === null ? undefined : joints.find(entry => entry.name === name);
     if (!joint) return false;
     const value = softClamp(
-      (jointAngles[joint.name] ?? 0) + direction * nudgeStep(joint.motion, joint.range, big),
+      (jointAngles[joint.name] ?? 0) +
+        direction * Math.sign(joint.range[1] - joint.range[0]) * nudgeStep(joint.motion, joint.range, big),
       joint.range,
       0
     ).value;

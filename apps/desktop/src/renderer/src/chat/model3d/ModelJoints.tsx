@@ -4,6 +4,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useEffect, useRef } from 'react';
 import type { ModelJoint } from '@shared/model3d';
+import { nudgeStep } from './jointDrag';
 
 /** One open-and-close swing, in ms: as long as the GLB's clip takes each way, twice. */
 const SWING_MS = 2000;
@@ -84,7 +85,7 @@ export function ModelJoints({ joints, units, angles, onChange, playing, onPlayin
               min={Math.min(from, to)}
               max={Math.max(from, to)}
               // A slide's range can be a few mm or a fraction of a metre: a hundred steps along it either way.
-              step={motion === 'turn' ? 1 : Math.abs(to - from) / 100}
+              step={nudgeStep(motion, joint.range, false)}
               value={angle}
               onChange={(_event, value) => {
                 if (typeof value !== 'number') return;
