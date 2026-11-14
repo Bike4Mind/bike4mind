@@ -269,7 +269,6 @@ export type EvalSetScoreComparisonField =
   | 'falseNegative'
   | 'trueNegative'
   | 'abstained'
-  | 'precision'
   | 'precisionLowerBound';
 
 export type EvalSetScoreComparison = {
@@ -318,7 +317,6 @@ export function compareEvalSetRuns(run: EvalSetRunReport, previous: EvalSetRunRe
       falseNegative: change('falseNegative'),
       trueNegative: change('trueNegative'),
       abstained: change('abstained'),
-      precision: change('precision'),
       precisionLowerBound: change('precisionLowerBound'),
     };
   };
@@ -329,7 +327,9 @@ export function compareEvalSetRuns(run: EvalSetRunReport, previous: EvalSetRunRe
       .map(score => compareScore(score, undefined, score)),
   ];
 
-  const brierOf = (report: EvalSetRunReport) => new Map(report.calibration.map(entry => [entry.model, entry.brier]));
+  // A Brier score on fewer than EVAL_SET_MIN_REVIEWED examples is noise; the calibration table hides it too.
+  const brierOf = (report: EvalSetRunReport) =>
+    new Map(report.calibration.map(entry => [entry.model, entry.n < EVAL_SET_MIN_REVIEWED ? null : entry.brier]));
   const currentBrier = brierOf(run);
   const previousBrier = brierOf(previous);
   const models = [...new Set([...currentBrier.keys(), ...previousBrier.keys()])].sort();
