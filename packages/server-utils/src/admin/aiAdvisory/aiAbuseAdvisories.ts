@@ -52,6 +52,7 @@ async function unsuspendedUserIds(userIds: string[]): Promise<Set<string>> {
   return new Set(users.map(user => String(user._id)));
 }
 
+// The raw stored entry; the eval-set calibration renormalises instead (apps/client verdictEval/calibration.ts renormalisedAbuseProbability).
 const abuseProbabilityOf = (judgment: LatestJudgment): number | null =>
   judgment.probabilities.find(entry => entry.value === 'abuse')?.probability ?? null;
 

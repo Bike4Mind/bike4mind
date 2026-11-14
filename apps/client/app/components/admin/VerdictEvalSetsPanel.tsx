@@ -24,21 +24,31 @@ import {
   useRunEvalSet,
 } from '@client/app/hooks/data/verdictEvalSets';
 import {
+  EVAL_SET_CALIBRATION_BUCKETS,
   EVAL_SET_HELD_OUT_SHARE_MAX,
   EVAL_SET_HELD_OUT_SHARE_MIN,
   EVAL_SET_MIN_REVIEWED,
   EVAL_SET_UNFLAGGED_SAMPLE_MAX,
   EVAL_SET_UNFLAGGED_SAMPLE_MIN,
+  compareEvalSetRuns,
   countsTowardRecall,
+  evalSetScoreKey,
+  riskReviewShare,
+  type EvalSetCalibration,
   type EvalSetDetail,
   type EvalSetExample,
   type EvalSetRun,
+  type EvalSetRunReport,
   type EvalSetScore,
+  type EvalSetScoreComparison,
+  type EvalSetScoreComparisonField,
   type EvalSetSummary,
 } from '@client/app/utils/verdictEvalSets';
 import {
+  VERDICT_EVAL_LABEL_SOURCES,
   VERDICT_EVAL_WINDOWS,
   type VerdictEvalCohortRow,
+  type VerdictEvalLabelSource,
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
 import {
@@ -53,7 +63,7 @@ import {
   useMissingAdminPermission,
   type DataColumn,
 } from './shared';
-import { COHORT_LABELS, GRADER_LABELS } from './verdictEvalLabels';
+import { COHORT_LABELS, GRADER_LABELS, LABEL_SOURCE_LABELS } from './verdictEvalLabels';
 
 const VERDICT_LABELS: Record<ShadowDetectionVerdict, string> = {
   confirmed_abuse: 'Confirmed abuse',
@@ -71,7 +81,21 @@ const delta = (current: number | null, previous: number | null | undefined) =>
     ? ''
     : ` (${current - previous >= 0 ? '+' : ''}${Math.round((current - previous) * 100)} pts)`;
 
-const scoreKey = (score: EvalSetScore) => `${score.grader}-${score.variant}`;
+/** A signed count change (+2, -1, 0); a dash when either run lacks the value. */
+const signedCount = (change: number | null) =>
+  change === null ? '-' : `${change > 0 ? '+' : ''}${change.toLocaleString()}`;
+/** A signed rate change in percentage points; a dash when either run lacks the value. */
+const signedPoints = (change: number | null) => {
+  if (change === null) return '-';
+  const points = Math.round(change * 100);
+  return `${points > 0 ? '+' : ''}${points} pts`;
+};
+const brierText = (value: number | null) => (value === null ? '-' : value.toFixed(3));
+const signedBrier = (change: number | null) => (change === null ? '-' : `${change > 0 ? '+' : ''}${change.toFixed(3)}`);
+
+const isLabelSource = (source: string): source is VerdictEvalLabelSource =>
+  (VERDICT_EVAL_LABEL_SOURCES as readonly string[]).includes(source);
+const labelSourceName = (source: string) => (isLabelSource(source) ? LABEL_SOURCE_LABELS[source] : source);
 
 const UserLink: React.FC<{ userId: string }> = ({ userId }) => (
   <Link
@@ -134,7 +158,7 @@ const cohortColumns: readonly DataColumn<VerdictEvalCohortRow>[] = [
 
 function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetScore>[] {
   const before = (score: EvalSetScore) =>
-    previous?.report.scores.find(candidate => scoreKey(candidate) === scoreKey(score));
+    previous?.report.scores.find(candidate => evalSetScoreKey(candidate) === evalSetScoreKey(score));
   return [
     { id: 'grader', label: 'Grader', render: score => `${GRADER_LABELS[score.grader]}, ${score.variant}` },
     {
@@ -161,6 +185,179 @@ function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetS
     },
   ];
 }
+
+/** Half-open ranges, closed on the last bucket: p(abuse) 1 falls in the top one. */
+const bucketLabel = (index: number) => {
+  const lower = Math.round((index / EVAL_SET_CALIBRATION_BUCKETS) * 100);
+  const upper = Math.round(((index + 1) / EVAL_SET_CALIBRATION_BUCKETS) * 100);
+  return `[${lower}, ${upper}${index === EVAL_SET_CALIBRATION_BUCKETS - 1 ? ']' : ')'}%`;
+};
+
+const calibrationColumns: readonly DataColumn<EvalSetCalibration>[] = [
+  { id: 'model', label: 'Model', render: row => row.model },
+  {
+    id: 'assessed',
+    label: 'Assessed (of labelled flagged)',
+    render: row =>
+      row.n === 0
+        ? `Not enough assessed examples (0 of ${count(row.flaggedLabelled)})`
+        : `${count(row.n)} of ${count(row.flaggedLabelled)}`,
+    wrap: true,
+  },
+  {
+    id: 'brier',
+    label: 'Brier score',
+    render: row => (row.n < EVAL_SET_MIN_REVIEWED ? '-' : brierText(row.brier)),
+    numeric: true,
+    width: '6rem',
+  },
+  ...Array.from({ length: EVAL_SET_CALIBRATION_BUCKETS }, (_, index): DataColumn<EvalSetCalibration> => ({
+    id: `bucket-${index}`,
+    label: bucketLabel(index),
+    render: row => {
+      const bucket = row.buckets[index];
+      return !bucket || bucket.n === 0
+        ? '-'
+        : `${percent(bucket.meanPredicted)} vs ${percent(bucket.observedAbuseRate)} (${count(bucket.n)})`;
+    },
+    numeric: true,
+    width: '8.5rem',
+  })),
+];
+
+const COMPARISON_COUNT_FIELDS: readonly { field: EvalSetScoreComparisonField; label: string }[] = [
+  { field: 'truePositive', label: 'TP' },
+  { field: 'falsePositive', label: 'FP' },
+  { field: 'falseNegative', label: 'FN' },
+  { field: 'trueNegative', label: 'TN' },
+  { field: 'abstained', label: 'Abstained' },
+];
+const COMPARISON_RATE_FIELDS: readonly { field: EvalSetScoreComparisonField; label: string }[] = [
+  { field: 'precisionLowerBound', label: '95% lower bound' },
+];
+
+const PRESENCE_SUFFIX: Record<EvalSetScoreComparison['presence'], string> = {
+  both: '',
+  added: ' (new in this run)',
+  removed: ' (not in this run)',
+};
+
+const comparisonColumns: readonly DataColumn<EvalSetScoreComparison>[] = [
+  {
+    id: 'grader',
+    label: 'Grader',
+    render: row => `${GRADER_LABELS[row.grader]}, ${row.variant}${PRESENCE_SUFFIX[row.presence]}`,
+    wrap: true,
+  },
+  ...COMPARISON_COUNT_FIELDS.map(({ field, label }): DataColumn<EvalSetScoreComparison> => ({
+    id: field,
+    label,
+    render: row => signedCount(row[field].change),
+    numeric: true,
+    width: '5.5rem',
+  })),
+  ...COMPARISON_RATE_FIELDS.map(({ field, label }): DataColumn<EvalSetScoreComparison> => ({
+    id: field,
+    label,
+    render: row => signedPoints(row[field].change),
+    numeric: true,
+    width: '8rem',
+  })),
+];
+
+const LabelSources: React.FC<{ labelSources: Record<string, number> }> = ({ labelSources }) => {
+  const sources = Object.entries(labelSources).filter(([, total]) => total > 0);
+  if (sources.length === 0) return null;
+  const riskReview = riskReviewShare(labelSources);
+  return (
+    <Stack gap={1} data-testid="eval-sets-label-sources">
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+        Labels by source: {sources.map(([source, total]) => `${labelSourceName(source)} ${count(total)}`).join(', ')}.
+      </Typography>
+      {riskReview && (
+        <Alert color="warning" size="sm" data-testid="eval-sets-risk-review-caveat">
+          {percent(riskReview.share)} of labels ({count(riskReview.count)} of {count(riskReview.total)}) come from risk
+          review, which only covers accounts the signup-risk queue flagged before, so they cannot speak to accounts it
+          never flagged.
+        </Alert>
+      )}
+    </Stack>
+  );
+};
+
+const Calibration: React.FC<{
+  calibration: readonly EvalSetCalibration[];
+  hasAssessmentScores: boolean;
+  onRetry: () => void;
+}> = ({ calibration, hasAssessmentScores, onRetry }) => {
+  const tooFew = calibration.filter(row => row.n > 0 && row.n < EVAL_SET_MIN_REVIEWED);
+  return (
+    <Stack gap={1}>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-calibration-note">
+        AI assessment calibration: the model&apos;s p(abuse) against the labels of held-out flagged examples. Each
+        bucket shows mean predicted vs observed abuse rate (examples). Unflagged examples have no assessment.
+      </Typography>
+      <DataTable
+        rows={calibration}
+        columns={calibrationColumns}
+        label="AI assessment calibration"
+        getRowId={row => row.model}
+        testId="eval-sets-calibration-table"
+        onRetry={onRetry}
+        minWidth="64rem"
+        empty={
+          <Typography level="body-sm">
+            {hasAssessmentScores
+              ? 'No assessment calibration in this run (runs before calibration was added have none).'
+              : 'No assessment calibration in this run.'}
+          </Typography>
+        }
+      />
+      {tooFew.map(row => (
+        <Typography
+          key={row.model}
+          level="body-xs"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid={`eval-sets-calibration-too-few-${row.model}`}
+        >
+          {row.model}: Too few examples for a Brier score ({count(row.n)} of {count(EVAL_SET_MIN_REVIEWED)})
+        </Typography>
+      ))}
+    </Stack>
+  );
+};
+
+const RunComparison: React.FC<{ run: EvalSetRunReport; previous: EvalSetRun; onRetry: () => void }> = ({
+  run,
+  previous,
+  onRetry,
+}) => {
+  const comparison = compareEvalSetRuns(run, previous.report);
+  const summary = [
+    `Labelled examples: ${count(run.labelled)} (${signedCount(comparison.labelled.change)})`,
+    `estimated recall: ${percent(run.recall.estimatedRecall)} (${signedPoints(comparison.estimatedRecall.change)})`,
+    ...comparison.brier.map(
+      ({ model, brier }) => `Brier, ${model}: ${brierText(brier.current)} (${signedBrier(brier.change)})`
+    ),
+  ];
+  return (
+    <Stack gap={1} data-testid="eval-sets-run-comparison">
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-run-comparison-summary">
+        Against the run of {formatUtc(previous.ranAt)}: {summary.join('; ')}.
+      </Typography>
+      <DataTable
+        rows={comparison.scores}
+        columns={comparisonColumns}
+        label="Change from the previous run"
+        getRowId={row => row.key}
+        testId="eval-sets-run-comparison-scores"
+        onRetry={onRetry}
+        minWidth="56rem"
+        empty={<Typography level="body-sm">Neither run has scores.</Typography>}
+      />
+    </Stack>
+  );
+};
 
 type RunRecall = EvalSetRun['report']['recall'];
 
@@ -326,7 +523,7 @@ const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null; onRetr
         rows={report.scores}
         columns={scoreColumns(previous)}
         label="Run scores"
-        getRowId={scoreKey}
+        getRowId={evalSetScoreKey}
         testId="eval-sets-run-scores"
         onRetry={onRetry}
         empty={<Typography level="body-sm">Label some held-out examples, then run again.</Typography>}
@@ -366,6 +563,13 @@ const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null; onRetr
         onRetry={onRetry}
         empty={<Typography level="body-sm">No held-out cohorts.</Typography>}
       />
+      <LabelSources labelSources={report.labelSources} />
+      <Calibration
+        calibration={report.calibration}
+        hasAssessmentScores={report.scores.some(score => score.grader === 'assessment')}
+        onRetry={onRetry}
+      />
+      {previous && <RunComparison run={report} previous={previous} onRetry={onRetry} />}
     </Stack>
   );
 };
