@@ -56,7 +56,6 @@ interface MemberRosterProps {
   /** Per-target gate (`canRevokeOrgMember`), which also depends on who is being removed. */
   canRevokeMember: (userId: string) => boolean;
   canManageCreditBudgets: boolean;
-  canManageManagers: boolean;
 }
 
 const MemberRoster: FC<MemberRosterProps> = ({
@@ -70,7 +69,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
   canRevokeMembers,
   canRevokeMember,
   canManageCreditBudgets,
-  canManageManagers,
 }) => {
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState('');
@@ -238,7 +236,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
         canInviteMembers={canInviteMembers}
         canRevokeMembers={canRevokeMember(member.id)}
         canManageCreditBudgets={canManageCreditBudgets}
-        canManageManagers={canManageManagers}
         selectable={canRevokeMembers}
         selected={selectedIds.has(member.id)}
         onToggleSelect={isRemovable(member) ? () => toggleOne(member.id) : undefined}

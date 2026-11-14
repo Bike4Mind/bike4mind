@@ -15,8 +15,8 @@ import { reassignMemberContent } from './reassignMemberContent';
 import { leave } from './leave';
 import { transferOwnership } from './transferOwnership';
 import type { TransferOwnershipResult } from './transferOwnership';
-import { setOrganizationManager } from './setOrganizationManager';
-import type { OrganizationManagerChange } from './setOrganizationManager';
+import { setOrganizationMemberRole } from './setOrganizationMemberRole';
+import type { OrganizationMemberRoleChange } from './setOrganizationMemberRole';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 import { createStandardGroup } from './createStandardGroup';
@@ -64,7 +64,7 @@ export {
   reassignMemberContent,
   leave,
   transferOwnership,
-  setOrganizationManager,
+  setOrganizationMemberRole,
   clearActiveOrganization,
   setOrganizationGroupTypes,
   createStandardGroup,
@@ -84,7 +84,7 @@ export {
 
 export type { SearchParameters };
 export type { TransferOwnershipResult };
-export type { OrganizationManagerChange };
+export type { OrganizationMemberRoleChange };
 export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
 export type { GetOrganizationStorageUsageAdapters };
 export type { GroupTypeResolutionOverride };

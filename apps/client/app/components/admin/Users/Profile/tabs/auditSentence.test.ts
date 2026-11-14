@@ -83,6 +83,11 @@ describe('describeAuditEntry', () => {
 
   it.each([
     ['member', [{ field: 'role', before: 'manager', after: 'member' }], 'Made a member of Acme'],
+    [
+      'billing manager',
+      [{ field: 'role', before: 'member', after: 'billingManager' }],
+      'Made a billing manager of Acme',
+    ],
     ['an unrecognised role', [{ field: 'role', before: 'member', after: 'owner' }], 'Changed role in Acme'],
     ['a missing role change', undefined, 'Changed role in Acme'],
   ])('words a role change to %s', (_label, changes, expected) => {

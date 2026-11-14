@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
+  AssignableOrgRole,
   IOrganizationDocument,
   WithId,
   FileGeneratePresignedUrlRequestInputType,
@@ -522,33 +523,33 @@ export function useSetMemberCreditOverride() {
   );
 }
 
-/** Make one member a manager, or remove them as one (owner or platform admin only). */
-export function useSetOrganizationManager() {
+/** Set a member's team role (Manager, Billing manager or Member); the server enforces who may assign which. */
+export function useSetOrganizationMemberRole() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({
       organizationId,
       userId,
-      isManager,
+      role,
     }: {
       organizationId: string;
       userId: string;
-      isManager: boolean;
+      role: AssignableOrgRole;
     }) => {
-      const url = `/api/organizations/${organizationId}/members/${userId}/manager`;
-      const response = isManager
-        ? await api.put<WithId<IOrganizationDocument>>(url)
-        : await api.delete<WithId<IOrganizationDocument>>(url);
+      const response = await api.put<WithId<IOrganizationDocument>>(
+        `/api/organizations/${organizationId}/members/${userId}/role`,
+        { role }
+      );
       return response.data;
     },
-    onSuccess: (organization, { isManager }) => {
+    onSuccess: organization => {
       updateAllQueryData(queryClient, 'organizations', 'write', organization);
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      toast.success(isManager ? 'Member is now a manager' : 'Manager removed');
+      toast.success('Role updated');
     },
     onError: (error: unknown) => {
-      toast.error(`Failed to update manager: ${getErrorMessage(error)}`);
+      toast.error(`Failed to update role: ${getErrorMessage(error)}`);
     },
   });
 }

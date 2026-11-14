@@ -7,6 +7,7 @@ type Actor = Parameters<typeof isFullAdmin>[0] & { id: string; impersonatedBy?: 
 type CreditedOrganization = {
   userId?: string | null;
   adminUserIds?: readonly string[] | null;
+  billingManagerUserIds?: readonly string[] | null;
   users?: readonly { userId?: string | null }[] | null;
 };
 
@@ -40,6 +41,7 @@ export async function assertDelegateCanCreditOrganization(
   const memberIds = [
     organization.userId,
     ...(organization.adminUserIds ?? []),
+    ...(organization.billingManagerUserIds ?? []),
     ...(organization.users ?? []).map(member => member.userId),
   ].filter((id): id is string => typeof id === 'string' && id.length > 0);
   if (memberIds.some(id => isSelfOrImpersonator(actor, id))) {

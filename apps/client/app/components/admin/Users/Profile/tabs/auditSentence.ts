@@ -140,6 +140,7 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
     case 'org.member.role_changed': {
       const after = entry.changes?.find(change => change.field === 'role')?.after;
       if (after === 'manager') return `Made a manager of ${org}`;
+      if (after === 'billingManager') return `Made a billing manager of ${org}`;
       if (after === 'member') return `Made a member of ${org}`;
       return `Changed role in ${org}`;
     }

@@ -101,7 +101,7 @@ export const ROSTER_TABLE_QUERY = '@container organization-members-roster (min-w
 
 /** Grid track list shared by the roster header and every row, so their columns cannot drift apart. */
 export function rosterGridColumns(selectable: boolean): string {
-  return `${selectable ? '32px ' : ''}minmax(200px, 2fr) minmax(160px, 2fr) minmax(100px, 1fr) minmax(140px, 1fr) minmax(100px, 1fr) 48px`;
+  return `${selectable ? '32px ' : ''}minmax(200px, 2fr) minmax(160px, 2fr) minmax(100px, 1fr) minmax(140px, 1fr) minmax(100px, 1fr) 120px`;
 }
 
 /** What removal does, per organizationService.revokeAccess; shared by the single and bulk confirmations. */

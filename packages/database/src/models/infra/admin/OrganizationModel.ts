@@ -1,4 +1,5 @@
 import {
+  type AssignableOrgRole,
   getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
@@ -655,44 +656,34 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Pipelines for the same reasons as `removeMember`: a stored `null` breaks `$addToSet`/`$pull`, and ids
-   * compare via `$toString` so a legacy ObjectId entry still matches. One targeted write, so two owners'
-   * concurrent edits of different managers both survive (the full-replace PUT /admins would drop one).
-   * The filter re-checks that the appointee's row confers membership (MEMBER_PERMISSIONS, as
-   * `orgMembershipFilter`), so a row downgraded after the caller's read refuses the appointment.
+   * Give one member one assignable role: drop them from both role lists, then add them to the list the
+   * role is stored in, in a single pipeline update, so the lists stay disjoint and two concurrent edits
+   * of different members both survive. Pipelines for the same reasons as `removeMember`: a stored `null`
+   * breaks `$addToSet`/`$pull`, and ids compare via `$toString` so a legacy ObjectId entry still matches.
+   * For Manager and Billing manager the filter re-checks that the member's row confers membership
+   * (MEMBER_PERMISSIONS, as `orgMembershipFilter`), so a row downgraded after the caller's read refuses
+   * the appointment. Returns false when nothing matched.
    */
-  async addAdmin(organizationId: string, userId: string): Promise<boolean> {
-    const current = { $ifNull: ['$adminUserIds', []] };
-    const filter = { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
+  async setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean> {
+    const listWithRole = (field: 'adminUserIds' | 'billingManagerUserIds', holds: boolean) => {
+      const without = {
+        $filter: { input: { $ifNull: [`$${field}`, []] }, cond: { $ne: [{ $toString: '$$this' }, userId] } },
+      };
+      return holds ? { $concatArrays: [without, [userId]] } : without;
+    };
+    const filter =
+      role === 'member'
+        ? { _id: organizationId }
+        : { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
     const result = await this.organizationModel.updateOne(filter, [
       {
         $set: {
-          adminUserIds: {
-            $cond: [
-              { $in: [userId, { $map: { input: current, in: { $toString: '$$this' } } }] },
-              current,
-              { $concatArrays: [current, [userId]] },
-            ],
-          },
+          adminUserIds: listWithRole('adminUserIds', role === 'manager'),
+          billingManagerUserIds: listWithRole('billingManagerUserIds', role === 'billingManager'),
         },
       },
     ]);
     return result.matchedCount > 0;
-  }
-
-  async removeAdmin(organizationId: string, userId: string): Promise<void> {
-    await this.organizationModel.updateOne({ _id: organizationId }, [
-      {
-        $set: {
-          adminUserIds: {
-            $filter: {
-              input: { $ifNull: ['$adminUserIds', []] },
-              cond: { $ne: [{ $toString: '$$this' }, userId] },
-            },
-          },
-        },
-      },
-    ]);
   }
 
   /**
