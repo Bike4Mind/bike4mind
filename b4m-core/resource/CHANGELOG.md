@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 3.3.0
+
+### Minor Changes
+
+- [#6744](https://github.com/Bike4Mind/bike4mind/pull/6744) [`88ed8d3`](https://github.com/Bike4Mind/bike4mind/commit/88ed8d3beb899bc9c4f3b5118d0f9941b72ce07b) Thanks [@onoya](https://github.com/onoya)! - data subject erasure from the admin user profile
+
 ## 3.2.1
 
 ### Patch Changes

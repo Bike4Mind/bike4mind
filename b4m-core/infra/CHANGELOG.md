@@ -1,5 +1,21 @@
 # @bike4mind/infra
 
+## 6.3.0
+
+### Minor Changes
+
+- [#6683](https://github.com/Bike4Mind/bike4mind/pull/6683) [`1e5c57b`](https://github.com/Bike4Mind/bike4mind/commit/1e5c57ba46d64d45b273682123511c7b9b4b6381) Thanks [@onoya](https://github.com/onoya)! - data subject export from the admin user profile
+
+- [#7493](https://github.com/Bike4Mind/bike4mind/pull/7493) [`26b8b3c`](https://github.com/Bike4Mind/bike4mind/commit/26b8b3c644315d0928ee7e085fc171c62c9c4fd6) Thanks [@vinchi777](https://github.com/vinchi777)! - pull-based notebook mirror feed and b4m mirror command
+
+- [#7563](https://github.com/Bike4Mind/bike4mind/pull/7563) [`a75cbd5`](https://github.com/Bike4Mind/bike4mind/commit/a75cbd5c119f287ef50b3d3096f8ce26df8dbf64) Thanks [@onoya](https://github.com/onoya)! - publish agent credit transfer and create-from-context as v1 contracts
+
+### Patch Changes
+
+- [#7360](https://github.com/Bike4Mind/bike4mind/pull/7360) [`0a0c5ba`](https://github.com/Bike4Mind/bike4mind/commit/0a0c5baeca37c2d82ba24ffc0d472a6172c1b7de) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining shared server files and tutorials into the package
+
+- [#7442](https://github.com/Bike4Mind/bike4mind/pull/7442) [`ead9bc0`](https://github.com/Bike4Mind/bike4mind/commit/ead9bc0af9c2b5062b227dfabf6f8941fca1e445) Thanks [@aflordelis](https://github.com/aflordelis)! - run NotebookImportCompleteFunction from apps/workers
+
 ## 6.2.0
 
 ### Minor Changes

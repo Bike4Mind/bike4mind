@@ -1,5 +1,117 @@
 # @bike4mind/common
 
+## 26.0.0
+
+### Major Changes
+
+- [#7298](https://github.com/Bike4Mind/bike4mind/pull/7298) [`9b2992a`](https://github.com/Bike4Mind/bike4mind/commit/9b2992af33f6cd710722d87be1320dd52ba94353) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - Organization departure adapters now require `userApiKeys.revokeLiveOrgBilledByUserId`. Implement that method on custom `IUserApiKeyRepository` adapters before upgrading.
+
+  `organizationService.revokeAccess` now returns `{ organization, revokedOrgBilledApiKeyIds }`. Callers that previously consumed the returned organization should read `result.organization`; the revoked key IDs are available separately.
+
+  Artifact repository adapters must implement `reassignMemberContent(scope, recipientId)` to transfer organization-scoped ownership and remove the departing member from explicit read, write and delete grants in one atomic write, preserving collaborator grants.
+
+- [#7298](https://github.com/Bike4Mind/bike4mind/pull/7298) [`9b2992a`](https://github.com/Bike4Mind/bike4mind/commit/9b2992af33f6cd710722d87be1320dd52ba94353) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - offer content transfer and revoke API keys when removing a member
+
+### Minor Changes
+
+- [#7320](https://github.com/Bike4Mind/bike4mind/pull/7320) [`75cb199`](https://github.com/Bike4Mind/bike4mind/commit/75cb1992fe5682f9d70f39528c64428189d3e8e3) Thanks [@vinchi777](https://github.com/vinchi777)! - Add feedback AI report ID validation and a compatibility reader for stored AI settings. Preserve other feature controls while treating obsolete feedback chat-model choices as unset.
+
+- [#6683](https://github.com/Bike4Mind/bike4mind/pull/6683) [`1e5c57b`](https://github.com/Bike4Mind/bike4mind/commit/1e5c57ba46d64d45b273682123511c7b9b4b6381) Thanks [@onoya](https://github.com/onoya)! - data subject export from the admin user profile
+
+- [#6744](https://github.com/Bike4Mind/bike4mind/pull/6744) [`88ed8d3`](https://github.com/Bike4Mind/bike4mind/commit/88ed8d3beb899bc9c4f3b5118d0f9941b72ce07b) Thanks [@onoya](https://github.com/onoya)! - data subject erasure from the admin user profile
+
+- [#7063](https://github.com/Bike4Mind/bike4mind/pull/7063) [`ca6d8d0`](https://github.com/Bike4Mind/bike4mind/commit/ca6d8d0fe665a3d081dccf5b343c748ca497f1cd) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - grant package expiry, package form invite codes, bulk release reason
+
+- [#7146](https://github.com/Bike4Mind/bike4mind/pull/7146) [`17bfadb`](https://github.com/Bike4Mind/bike4mind/commit/17bfadb5b4024f0ba61dabd24aee3ed319b5bb4e) Thanks [@erikbethke](https://github.com/erikbethke)! - mint non-admin QA test personas with a personas:mint API key scope
+
+- [#7269](https://github.com/Bike4Mind/bike4mind/pull/7269) [`504857d`](https://github.com/Bike4Mind/bike4mind/commit/504857defaf988ec6876c05b693b6093993ec127) Thanks [@onoya](https://github.com/onoya)! - org-owned API keys that survive member departure
+
+- [#7277](https://github.com/Bike4Mind/bike4mind/pull/7277) [`bd07f47`](https://github.com/Bike4Mind/bike4mind/commit/bd07f47d85df998b9d2f8dcda099afc2448b4f5e) Thanks [@ken-b4m](https://github.com/ken-b4m)! - auto-admit trusted research results
+
+- [#7283](https://github.com/Bike4Mind/bike4mind/pull/7283) [`378743e`](https://github.com/Bike4Mind/bike4mind/commit/378743e6f95a04c816c62028b27c7f92458a8fd6) Thanks [@maconard](https://github.com/maconard)! - add conditional access APIs and safe dashboard saves
+
+- [#7288](https://github.com/Bike4Mind/bike4mind/pull/7288) [`2b729b3`](https://github.com/Bike4Mind/bike4mind/commit/2b729b3585104eb3c5a211d36cd0be11890c41e7) Thanks [@onoya](https://github.com/onoya)! - apply plan storage limit from Stripe price metadata
+
+- [#7319](https://github.com/Bike4Mind/bike4mind/pull/7319) [`6f71a64`](https://github.com/Bike4Mind/bike4mind/commit/6f71a6462538653fce6259492c58c371a08cf26e) Thanks [@vinchi777](https://github.com/vinchi777)! - add audited resolutions and private notes
+
+- [#7320](https://github.com/Bike4Mind/bike4mind/pull/7320) [`75cb199`](https://github.com/Bike4Mind/bike4mind/commit/75cb1992fe5682f9d70f39528c64428189d3e8e3) Thanks [@vinchi777](https://github.com/vinchi777)! - add privacy-safe feedback AI triage
+
+- [#7325](https://github.com/Bike4Mind/bike4mind/pull/7325) [`a9613b6`](https://github.com/Bike4Mind/bike4mind/commit/a9613b6c0c0c0d7984550374471ecf10470682a9) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - invite roles, bulk invite, invite links and resend
+
+- [#7344](https://github.com/Bike4Mind/bike4mind/pull/7344) [`faa17ea`](https://github.com/Bike4Mind/bike4mind/commit/faa17ea77d09a600f3d2b2dc81f08ad394ea9441) Thanks [@vinchi777](https://github.com/vinchi777)! - add federated client quota profiles
+
+- [#7350](https://github.com/Bike4Mind/bike4mind/pull/7350) [`ac62c3a`](https://github.com/Bike4Mind/bike4mind/commit/ac62c3a495d83ea65c7942162dfb8e019db8b8bb) Thanks [@vinchi777](https://github.com/vinchi777)! - add org-scoped audit trail and CSV export
+
+- [#7352](https://github.com/Bike4Mind/bike4mind/pull/7352) [`d949154`](https://github.com/Bike4Mind/bike4mind/commit/d949154d9753023569e50e8bf42be609f1e0e7d1) Thanks [@jarlacut](https://github.com/jarlacut)! - record lake access events on more read routes
+
+- [#7356](https://github.com/Bike4Mind/bike4mind/pull/7356) [`b191684`](https://github.com/Bike4Mind/bike4mind/commit/b1916849f4804d9b017aff34c6efd0e07ecc0c60) Thanks [@vinchi777](https://github.com/vinchi777)! - enforce content sharing policies
+
+- [#7365](https://github.com/Bike4Mind/bike4mind/pull/7365) [`e5134e0`](https://github.com/Bike4Mind/bike4mind/commit/e5134e05a914a27dd28dcf7192a8b88f5e6adc11) Thanks [@onoya](https://github.com/onoya)! - notify the user when a Studio job group finishes
+
+- [#7367](https://github.com/Bike4Mind/bike4mind/pull/7367) [`0438522`](https://github.com/Bike4Mind/bike4mind/commit/04385224a42e75a11dabebe35a8084c00d0e998e) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - verified email domains with auto-join and suggest-join
+
+- [#7393](https://github.com/Bike4Mind/bike4mind/pull/7393) [`ed4292c`](https://github.com/Bike4Mind/bike4mind/commit/ed4292c5f1f14f1d52bc251f4a244f6612e7b14b) Thanks [@onoya](https://github.com/onoya)! - let a passkey be the only MFA factor
+
+- [#7404](https://github.com/Bike4Mind/bike4mind/pull/7404) [`2507db6`](https://github.com/Bike4Mind/bike4mind/commit/2507db6c1e5722ae317db129478ee0b807af1c97) Thanks [@onoya](https://github.com/onoya)! - register the Android OAuth client and serve assetlinks
+
+- [#7407](https://github.com/Bike4Mind/bike4mind/pull/7407) [`0b4658b`](https://github.com/Bike4Mind/bike4mind/commit/0b4658b9c8f751abd1b995c75816771d7e4d9584) Thanks [@onoya](https://github.com/onoya)! - scene preset Look chips for image Create v2
+
+- [#7411](https://github.com/Bike4Mind/bike4mind/pull/7411) [`bfc13fa`](https://github.com/Bike4Mind/bike4mind/commit/bfc13fa58b24832e578f1735075c99d3f6d690c1) Thanks [@onoya](https://github.com/onoya)! - publish model card blurb and provider label on the v1 model lists
+
+- [#7413](https://github.com/Bike4Mind/bike4mind/pull/7413) [`3b22b95`](https://github.com/Bike4Mind/bike4mind/commit/3b22b95f3fa72051640f647a7baee4525b56cbf5) Thanks [@vinchi777](https://github.com/vinchi777)! - require MFA enrollment at login after grace
+
+- [#7418](https://github.com/Bike4Mind/bike4mind/pull/7418) [`ff65b39`](https://github.com/Bike4Mind/bike4mind/commit/ff65b394f774e068fd40926def536aa26f602c07) Thanks [@ken-b4m](https://github.com/ken-b4m)! - made tutorials in core: capture, drafts store and route, visibility
+
+- [#7424](https://github.com/Bike4Mind/bike4mind/pull/7424) [`4d52917`](https://github.com/Bike4Mind/bike4mind/commit/4d52917a880cd8be877e42683dbe7b69d2c4ab78) Thanks [@ken-b4m](https://github.com/ken-b4m)! - drafts card in the admin Tutorials tab, exports stamped with an owner
+
+- [#7426](https://github.com/Bike4Mind/bike4mind/pull/7426) [`784c6e4`](https://github.com/Bike4Mind/bike4mind/commit/784c6e486528323a31ad4c48f7161720834de4ca) Thanks [@onoya](https://github.com/onoya)! - org API keys reach org-shared content and product scopes
+
+- [#7450](https://github.com/Bike4Mind/bike4mind/pull/7450) [`fbe1e51`](https://github.com/Bike4Mind/bike4mind/commit/fbe1e510609ea406e139df2362d98cf14626df00) Thanks [@vinchi777](https://github.com/vinchi777)! - enable standard groups and project sharing
+
+- [#7451](https://github.com/Bike4Mind/bike4mind/pull/7451) [`09eb9eb`](https://github.com/Bike4Mind/bike4mind/commit/09eb9eb259c27a6d972229dd7131afcccfa96583) Thanks [@vinchi777](https://github.com/vinchi777)! - add org-owned shared definition library
+
+- [#7454](https://github.com/Bike4Mind/bike4mind/pull/7454) [`fe1a36c`](https://github.com/Bike4Mind/bike4mind/commit/fe1a36ce963725b5c9a807d705c30ec7fec28c45) Thanks [@onoya](https://github.com/onoya)! - rank models per request and replace the model grid with a compact picker
+
+- [#7457](https://github.com/Bike4Mind/bike4mind/pull/7457) [`7789f9e`](https://github.com/Bike4Mind/bike4mind/commit/7789f9e87e152214827e3acc1976ecef50a0ae52) Thanks [@dea0030](https://github.com/dea0030)! - team settings General section and a safer delete
+
+- [#7472](https://github.com/Bike4Mind/bike4mind/pull/7472) [`5339d2f`](https://github.com/Bike4Mind/bike4mind/commit/5339d2f40da90b029241d48178be96380ad85904) Thanks [@onoya](https://github.com/onoya)! - show legacy status and end date on API keys
+
+- [#7479](https://github.com/Bike4Mind/bike4mind/pull/7479) [`7159763`](https://github.com/Bike4Mind/bike4mind/commit/7159763ebef29dc8fd6987fdbefae6dc0245555c) Thanks [@onoya](https://github.com/onoya)! - add an api-keys:manage scope for the user API key routes
+
+- [#7483](https://github.com/Bike4Mind/bike4mind/pull/7483) [`f2cd564`](https://github.com/Bike4Mind/bike4mind/commit/f2cd564cbd478ae3fa1495045a1502c6f7eb2b2d) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in retention for chats, files and media
+
+- [#7486](https://github.com/Bike4Mind/bike4mind/pull/7486) [`577bbc9`](https://github.com/Bike4Mind/bike4mind/commit/577bbc97e53ffc6a4e3d28006ee2794647a739e8) Thanks [@dea0030](https://github.com/dea0030)! - open the platform settings tabs to settings:manage delegates
+
+- [#7502](https://github.com/Bike4Mind/bike4mind/pull/7502) [`f638043`](https://github.com/Bike4Mind/bike4mind/commit/f638043301e90ac626c8943be99f42ffbc998f64) Thanks [@onoya](https://github.com/onoya)! - bring image jobs up to the video job standard
+
+- [#7551](https://github.com/Bike4Mind/bike4mind/pull/7551) [`9649815`](https://github.com/Bike4Mind/bike4mind/commit/9649815e66a3a6bc7e63ee464a988b0f7911cb57) Thanks [@ken-b4m](https://github.com/ken-b4m)! - admit federated AI-token exchange keys under the paid-only switch
+
+- [#7563](https://github.com/Bike4Mind/bike4mind/pull/7563) [`a75cbd5`](https://github.com/Bike4Mind/bike4mind/commit/a75cbd5c119f287ef50b3d3096f8ce26df8dbf64) Thanks [@onoya](https://github.com/onoya)! - publish agent credit transfer and create-from-context as v1 contracts
+
+- [#7572](https://github.com/Bike4Mind/bike4mind/pull/7572) [`91b3eaa`](https://github.com/Bike4Mind/bike4mind/commit/91b3eaa14469bdd8d0e2f340e8d06fd4ef57df8e) Thanks [@onoya](https://github.com/onoya)! - show account age, funding and activity in spend spike alarms
+
+- [#7578](https://github.com/Bike4Mind/bike4mind/pull/7578) [`de83daa`](https://github.com/Bike4Mind/bike4mind/commit/de83daa13221fbc5c58af5e9093c4cf5fd436489) Thanks [@onoya](https://github.com/onoya)! - approve and deny agent pending actions from native clients
+
+### Patch Changes
+
+- [#7281](https://github.com/Bike4Mind/bike4mind/pull/7281) [`75b38d8`](https://github.com/Bike4Mind/bike4mind/commit/75b38d872011560872cca26cd71f7bd0e5e1882c) Thanks [@ken-b4m](https://github.com/ken-b4m)! - require skills:write for API keys on the skill routes
+
+- [#7360](https://github.com/Bike4Mind/bike4mind/pull/7360) [`0a0c5ba`](https://github.com/Bike4Mind/bike4mind/commit/0a0c5baeca37c2d82ba24ffc0d472a6172c1b7de) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining shared server files and tutorials into the package
+
+- [#7364](https://github.com/Bike4Mind/bike4mind/pull/7364) [`12610be`](https://github.com/Bike4Mind/bike4mind/commit/12610be7e7edebafde6e002a15e08e214994b2f5) Thanks [@onoya](https://github.com/onoya)! - upload raw artifact content and render it on the server
+
+- [#7392](https://github.com/Bike4Mind/bike4mind/pull/7392) [`c01cde3`](https://github.com/Bike4Mind/bike4mind/commit/c01cde3f4b9a59e2eb92efd0e25b771ebf297276) Thanks [@onoya](https://github.com/onoya)! - remove the dead WebSocket completion path
+
+- [#7421](https://github.com/Bike4Mind/bike4mind/pull/7421) [`553d628`](https://github.com/Bike4Mind/bike4mind/commit/553d6284c07f8b60aa19b7aa52c00c07814ab12a) Thanks [@ken-b4m](https://github.com/ken-b4m)! - accurate review labels, report counts and hidden-listing notice
+
+- [#7428](https://github.com/Bike4Mind/bike4mind/pull/7428) [`628f981`](https://github.com/Bike4Mind/bike4mind/commit/628f9819d0130d39b5d71e8d91a59e07ced0244a) Thanks [@ken-b4m](https://github.com/ken-b4m)! - keys minted for connected apps reach only their scoped routes
+
+- [#7496](https://github.com/Bike4Mind/bike4mind/pull/7496) [`9ae3d07`](https://github.com/Bike4Mind/bike4mind/commit/9ae3d071516ed5dc757db872784643fb14ff3b13) Thanks [@onoya](https://github.com/onoya)! - report password-protected PDFs to the user instead of failing the job
+
+- [#7522](https://github.com/Bike4Mind/bike4mind/pull/7522) [`b7d5207`](https://github.com/Bike4Mind/bike4mind/commit/b7d52073ab17d5632274344c7a2dcfd6b68de55f) Thanks [@vinchi777](https://github.com/vinchi777)! - constrain retained repository writers
+
+- [#7544](https://github.com/Bike4Mind/bike4mind/pull/7544) [`2ceaa6e`](https://github.com/Bike4Mind/bike4mind/commit/2ceaa6e667245f3819d501e24acb57873ab92cc4) Thanks [@onoya](https://github.com/onoya)! - carry the redeem code in the request body, not the URL
+
 ## 25.0.0
 
 ### Major Changes
