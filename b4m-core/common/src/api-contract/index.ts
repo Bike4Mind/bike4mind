@@ -121,6 +121,8 @@ export {
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './contracts/agents.contract';
 export {
   getClaudeBundleZipContract,

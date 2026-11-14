@@ -11,6 +11,7 @@ import {
   takesBflInputImageList,
 } from '../utils/modelHelpers';
 import { MODEL_TIERS } from '../generation/modelRanking';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
 import { getImageModelCatalogEntry } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
 
@@ -137,5 +138,30 @@ describe('IMAGE_MODEL_CATALOG standing', () => {
 
   it.each(IMAGE_MODELS)('marks %s preview exactly when its provider id says so', model => {
     expect(getImageModelCatalogEntry(model).preview).toBe(model.endsWith('-preview'));
+  });
+});
+
+describe('FLUX 3 edit regions', () => {
+  it.each(FLUX3_MODELS)('%s takes up to MAX_BFL_EDIT_REGIONS regions when editing, none when generating', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.editRegions).toEqual({ max: MAX_BFL_EDIT_REGIONS });
+    expect(generate?.editRegions).toBeUndefined();
+  });
+});
+
+describe('job-only model catalog entries', () => {
+  it('resolves the test model to the free test provider in both modes', () => {
+    const entry = getImageModelCatalogEntry('test-image');
+    expect(entry.provider).toBe('test');
+    expect(entry.modes.generate?.maxOutputs).toBe(1);
+    expect(entry.modes.edit?.inputs.edit_source).toEqual({ max: 1 });
+  });
+
+  it('resolves every local-image checkpoint to one dimensions-sized, generate-only entry', () => {
+    const entry = getImageModelCatalogEntry('local-image/sdxl');
+    expect(entry.provider).toBe('local');
+    expect(entry.sizing.kind).toBe('dimensions');
+    expect(entry.modes.edit).toBeUndefined();
+    expect(getImageModelCatalogEntry('local-image/other')).toBe(entry);
   });
 });

@@ -45,6 +45,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents',
   },
+  createAgentFromContext: {
+    method: 'POST',
+    path: '/api/v1/agents/from-context',
+  },
   createArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts',
@@ -472,6 +476,10 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  transferAgentCredits: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/transfer-credits',
   },
   unregisterPushToken: {
     method: 'DELETE',

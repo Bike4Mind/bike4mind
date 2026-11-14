@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
-import { ImageModels, type StoredImageRequest } from '@bike4mind/common';
+import {
+  ImageModels,
+  formatBflEditRegionsPrompt,
+  type BflEditRegion,
+  type StoredImageRequest,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeAsyncProviderConformance } from '../../generationProviders/conformance';
 import {
@@ -143,6 +148,23 @@ describe('BflImageProvider.submit: request mapping', () => {
     await provider.submit(request({ model: ImageModels.FLUX_2_PRO, mode: 'edit' }), inputs, context());
     expect(submittedBody()).toMatchObject({ input_image: b64('src'), input_image_2: b64('ref') });
     expect(submittedBody()).not.toHaveProperty('mask');
+  });
+
+  it('lays FLUX 3 edit regions into the prompt and keeps the source in the images array', async () => {
+    const editRegions: BflEditRegion[] = [{ prompt: 'make it blue', bbox: [0.1, 0.2, 0.8, 0.9] }];
+    const inputs: ImageInputs = { images: [image('edit_source', 'src')] };
+    await provider.submit(request({ model: ImageModels.FLUX_3_IMAGE, mode: 'edit', editRegions }), inputs, context());
+    expect(submittedBody()).toMatchObject({
+      prompt: formatBflEditRegionsPrompt('a red bicycle', editRegions),
+      images: [b64('src')],
+    });
+    expect(submittedBody().prompt).not.toBe('a red bicycle');
+  });
+
+  it('sends a FLUX 3 edit without regions as the plain prompt', async () => {
+    const inputs: ImageInputs = { images: [image('edit_source', 'src')] };
+    await provider.submit(request({ model: ImageModels.FLUX_3_IMAGE, mode: 'edit' }), inputs, context());
+    expect(submittedBody()).toMatchObject({ prompt: 'a red bicycle' });
   });
 
   it('passes the step signal to the submit call', async () => {

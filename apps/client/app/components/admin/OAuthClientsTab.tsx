@@ -6,14 +6,11 @@ import {
   Checkbox,
   Chip,
   DialogContent,
-  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
   IconButton,
   Input,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -25,7 +22,6 @@ import {
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import CopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
@@ -60,7 +56,8 @@ import {
   EmptyState,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 const QUERY_KEY = 'admin-oauth-clients';
 
@@ -380,32 +377,16 @@ function ClientRowMenu({
   onRotate: () => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${client.name}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`oauth-client-actions-${client.clientId}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
-          Edit client
+    <RowActionsMenu testId={`oauth-client-actions-${client.clientId}`} ariaLabel={`Actions for ${client.name}`}>
+      <MenuItem onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
+        Edit client
+      </MenuItem>
+      {isConfidential(client) && (
+        <MenuItem onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
+          Rotate secret
         </MenuItem>
-        {isConfidential(client) && (
-          <MenuItem onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
-            Rotate secret
-          </MenuItem>
-        )}
-      </Menu>
-    </Dropdown>
+      )}
+    </RowActionsMenu>
   );
 }
 

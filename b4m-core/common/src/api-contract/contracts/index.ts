@@ -118,6 +118,8 @@ import {
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './agents.contract';
 import {
   getClaudeBundleZipContract,
@@ -252,6 +254,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateAgentDescriptionContract,
   generateAgentSystemPromptContract,
   enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
   getClaudeBundleZipContract,
