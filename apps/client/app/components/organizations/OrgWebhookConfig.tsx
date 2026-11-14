@@ -349,6 +349,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
               <IconButton
                 variant="plain"
                 onClick={() => handleCopy(config.webhookUrl || '', 'Webhook URL')}
+                aria-label="Copy webhook URL"
                 data-testid="copy-webhook-url"
               >
                 <ContentCopyIcon />
@@ -367,13 +368,19 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
             value={secretToShow || ''}
             endDecorator={
               <Box sx={{ display: 'flex', gap: 0.5 }}>
-                <IconButton variant="plain" onClick={handleToggleSecret} data-testid="toggle-secret-visibility">
+                <IconButton
+                  variant="plain"
+                  onClick={handleToggleSecret}
+                  aria-label={showSecret ? 'Hide webhook secret' : 'Show webhook secret'}
+                  data-testid="toggle-secret-visibility"
+                >
                   {showSecret ? <VisibilityOffIcon /> : <VisibilityIcon />}
                 </IconButton>
                 {showSecret && (
                   <IconButton
                     variant="plain"
                     onClick={() => handleCopy(secretToShow || '', 'Secret')}
+                    aria-label="Copy webhook secret"
                     data-testid="copy-secret"
                   >
                     <ContentCopyIcon />
@@ -383,6 +390,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
                   variant="plain"
                   onClick={handleRotateSecret}
                   disabled={rotateSecret.isPending}
+                  aria-label="Rotate webhook secret"
                   data-testid="rotate-secret"
                 >
                   <RefreshIcon />
@@ -400,7 +408,13 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Typography level="title-sm">Subscribed Events</Typography>
             {!isEditingEvents ? (
-              <IconButton variant="plain" size="sm" onClick={handleStartEditEvents} data-testid="edit-events-btn">
+              <IconButton
+                variant="plain"
+                size="sm"
+                onClick={handleStartEditEvents}
+                aria-label="Edit subscribed events"
+                data-testid="edit-events-btn"
+              >
                 <EditIcon fontSize="small" />
               </IconButton>
             ) : (
@@ -411,6 +425,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
                   size="sm"
                   onClick={handleSaveEvents}
                   disabled={updateConfig.isPending}
+                  aria-label="Save subscribed events"
                   data-testid="save-events-btn"
                 >
                   <CheckIcon fontSize="small" />
@@ -420,6 +435,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
                   color="neutral"
                   size="sm"
                   onClick={handleCancelEditEvents}
+                  aria-label="Cancel editing subscribed events"
                   data-testid="cancel-edit-events-btn"
                 >
                   <CloseIcon fontSize="small" />

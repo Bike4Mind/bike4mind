@@ -556,3 +556,17 @@ describe('OrganizationUserCard row content', () => {
     });
   });
 });
+
+describe('OrganizationUserCard accessible names', () => {
+  it('uses a readable email name when a member has no display name', () => {
+    renderCard({ ...member('a', null), name: '' }, true);
+    expect(screen.getByRole('button', { name: 'Actions for a@example.test' })).toBeTruthy();
+  });
+
+  it('names the kebab menu after the member it acts on', () => {
+    renderCard(member('a', null), true);
+    expect(screen.getByRole('button', { name: 'Actions for User a' })).toBe(
+      screen.getByTestId('org-user-card-menu-btn')
+    );
+  });
+});
