@@ -35,10 +35,10 @@ const score = (variant: string, overrides: Partial<EvalSetScore> = {}): EvalSetS
   ...overrides,
 });
 
-const calibration = (model: string, brier: number | null): EvalSetCalibration => ({
+const calibration = (model: string, brier: number | null, n = brier === null ? 0 : 30): EvalSetCalibration => ({
   model,
-  flaggedLabelled: 10,
-  n: brier === null ? 0 : 5,
+  flaggedLabelled: 40,
+  n,
   brier,
   buckets: [],
 });
@@ -82,7 +82,6 @@ describe('compareEvalSetRuns', () => {
       truePositive: { current: 6, previous: 4, change: 2 },
       falsePositive: { change: 0 },
       abstained: { current: 0, previous: 2, change: -2 },
-      precision: { change: 0.057 },
       precisionLowerBound: { change: 0.1 },
     });
   });
@@ -98,7 +97,7 @@ describe('compareEvalSetRuns', () => {
       ['m0', 'removed'],
     ]);
     expect(comparison.scores[1].truePositive).toEqual({ current: 4, previous: null, change: null });
-    expect(comparison.scores[2].precision).toEqual({ current: null, previous: 0.8, change: null });
+    expect(comparison.scores[2].precisionLowerBound).toEqual({ current: null, previous: 0.4, change: null });
   });
 
   it('diffs labelled count and estimated recall, with no recall change when either run withheld it', () => {
@@ -123,6 +122,17 @@ describe('compareEvalSetRuns', () => {
       { model: 'm1', brier: { current: 0.12, previous: 0.15, change: -0.03 } },
       { model: 'm2', brier: { current: 0.2, previous: null, change: null } },
       { model: 'm3', brier: { current: null, previous: 0.1, change: null } },
+    ]);
+  });
+
+  it('withholds Brier below the minimum example count and lists models in name order', () => {
+    const comparison = compareEvalSetRuns(
+      report({ calibration: [calibration('m2', 0.1, 29), calibration('m1', 0.2, 30)] }),
+      report({ calibration: [calibration('m1', 0.25, 30), calibration('m2', 0.3, 30)] })
+    );
+    expect(comparison.brier).toEqual([
+      { model: 'm1', brier: { current: 0.2, previous: 0.25, change: -0.05 } },
+      { model: 'm2', brier: { current: null, previous: 0.3, change: null } },
     ]);
   });
 
