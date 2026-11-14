@@ -33,6 +33,23 @@ describe('abuseAssessmentRepository.findLatestJudgedForDetections', () => {
     ]);
   });
 
+  it('returns each row with its assessment id', async () => {
+    const { insertedId } = await insert('d1', 'abuse', '2026-11-01T00:00:00Z');
+    const [found] = await abuseAssessmentRepository.findLatestJudgedForDetections(['d1']);
+    expect(found.id).toBe(insertedId.toString());
+  });
+
+  it('finds an assessment by id, and null for a missing or malformed id', async () => {
+    const { insertedId } = await insert('d1', 'abuse', '2026-11-01T00:00:00Z');
+    await expect(abuseAssessmentRepository.findById(insertedId.toString())).resolves.toMatchObject({
+      id: insertedId.toString(),
+      detectionId: 'd1',
+      result: 'abuse',
+    });
+    await expect(abuseAssessmentRepository.findById('0'.repeat(24))).resolves.toBeNull();
+    await expect(abuseAssessmentRepository.findById('nope')).resolves.toBeNull();
+  });
+
   it('normalizes the missing reasons on an older stored assessment', async () => {
     await insert('legacy', 'abuse', '2026-11-01T00:00:00Z');
     const rows = await abuseAssessmentRepository.listForDetection('legacy');

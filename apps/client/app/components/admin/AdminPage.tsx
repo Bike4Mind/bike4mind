@@ -62,9 +62,8 @@ const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: f
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 
-// The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
-// their pages lands; each leaves this list in the change that drops its own outer padding, and no new
-// tab joins it (DESIGN_GUIDE section 3, "Page frame").
+// The shell gives every tab panel the page frame. A panel carrying this attribute pads itself instead:
+// every tab has left that list, and no new tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });

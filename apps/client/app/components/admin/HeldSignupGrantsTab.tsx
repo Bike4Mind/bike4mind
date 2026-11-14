@@ -1,20 +1,53 @@
 import { useState } from 'react';
-import { Alert, Button, Checkbox, DialogActions, DialogContent, Option, Select, Stack, Typography } from '@mui/joy';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  DialogActions,
+  DialogContent,
+  Dropdown,
+  IconButton,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Option,
+  Select,
+  Stack,
+  Typography,
+} from '@mui/joy';
+import { MoreHorizontal } from 'lucide-react';
+import { toast } from 'sonner';
+import type { AssessmentAiDecision } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
+import {
+  HELD_SIGNUP_GRANTS_QUERY_KEY,
+  useAcceptAssessmentSuggestion,
+} from '@client/app/hooks/data/aiAssessmentSuggestions';
+import type { SignupRiskReviewRow } from '@client/app/hooks/data/signupRiskReviews';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog } from './shared/ActionDialog';
-import { AdminDialog } from './shared/AdminDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
-import { DataTable } from './shared/DataTable';
-import { AdminPermissionAction } from './shared/MissingPermission';
+import { AdminDialog } from './shared/AdminDialog';
+import { DataTable, type DataColumn, type DataTableRowShortcut } from './shared/DataTable';
+import { AdminPermissionAction, useMissingAdminPermission } from './shared/MissingPermission';
+import { SignupAdvisoryCell, isAssessmentOpen } from './SignupAdvisoryCell';
 
-const QUERY_KEY = ['held-signup-grants'];
+const QUERY_KEY = HELD_SIGNUP_GRANTS_QUERY_KEY;
 const ENDPOINT = '/api/admin/held-signup-grants';
 
 type HeldReason = 'budget_exhausted';
-type HeldRow = { id: string; email: string | null; reason: HeldReason; createdAt: string };
+type HeldRow = {
+  id: string;
+  email: string | null;
+  reason: HeldReason;
+  createdAt: string;
+  advisory?: SignupRiskReviewRow['advisory'];
+};
+type ReleaseRequest = { userIds: string[]; reason: string; aiDecision?: AssessmentAiDecision };
+/** The accounts a release dialog is open for; `assessmentId` is set when it was opened by overriding the model's abuse verdict. */
+type Releasing = { userIds: string[]; assessmentId?: string };
 type ReleaseResult = {
   batchId: string;
   results: { userId: string; outcome: string; credits: number }[];
@@ -44,9 +77,7 @@ export default function HeldSignupGrantsTab() {
       ).data,
   });
   const release = useMutation({
-    mutationFn: async (body: { userIds: string[]; reason: string }) =>
-      (await api.post<ReleaseResult>(`${ENDPOINT}/release`, body)).data,
-    onSuccess: () => setSelected(new Set()),
+    mutationFn: async (request: ReleaseRequest) => (await api.post<ReleaseResult>(`${ENDPOINT}/release`, request)).data,
     onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
@@ -63,9 +94,13 @@ export default function HeldSignupGrantsTab() {
       ]);
     },
   });
+  const acceptSuggestion = useAcceptAssessmentSuggestion();
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [confirmRelease, setConfirmRelease] = useState(false);
+  const [releasing, setReleasing] = useState<Releasing | null>(null);
+  const [now] = useState(() => Date.now());
+  const releaseMissing = useMissingAdminPermission('credits:adjust');
   const rows = query.data?.data ?? [];
+  const hasAdvisories = rows.some(row => row.advisory);
   const busy = release.isPending || revoke.isPending;
   const toggle = (id: string) =>
     setSelected(current => {
@@ -73,6 +108,41 @@ export default function HeldSignupGrantsTab() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  const acceptAssessment = (row: HeldRow) => {
+    if (!isAssessmentOpen(row.advisory)) return;
+    acceptSuggestion.mutate(
+      { surface: 'heldSignupGrant', userId: row.id, assessmentId: row.advisory.assessmentId },
+      {
+        onSuccess: () => toast.success(`Accepted the abuse assessment for ${row.email ?? row.id}`),
+        onError: error => toast.error(getErrorMessage(error)),
+      }
+    );
+  };
+  const overrideAssessment = (row: HeldRow) => {
+    if (!isAssessmentOpen(row.advisory)) return;
+    release.reset();
+    setReleasing({ userIds: [row.id], assessmentId: row.advisory.assessmentId });
+  };
+  // Only an abuse verdict can be accepted or overridden; accepting records agreement and releases nothing.
+  const decisions = (row: HeldRow): Partial<Record<DataTableRowShortcut, () => void>> =>
+    isAssessmentOpen(row.advisory) && !releaseMissing
+      ? { a: () => acceptAssessment(row), o: () => overrideAssessment(row) }
+      : {};
+  const advisoryColumn: DataColumn<HeldRow> = {
+    id: 'advisory',
+    label: 'AI assessment',
+    render: row => (
+      <SignupAdvisoryCell
+        userId={row.id}
+        advisory={row.advisory ?? null}
+        now={now}
+        testIdPrefix="held-signup-grants"
+        abuseProposal="Likely abuse: keep held"
+        onAccept={decisions(row).a}
+        onOverride={decisions(row).o}
+      />
+    ),
+  };
   const paid = release.data?.results.filter(result => result.outcome === 'released') ?? [];
   const revokeDone =
     revoke.data?.batchId === release.data?.batchId &&
@@ -90,7 +160,7 @@ export default function HeldSignupGrantsTab() {
         budget; Revoke takes back the credits a release paid (balances already spent are skipped) and returns the
         account to this list.
       </Typography>
-      {release.error && !confirmRelease && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
+      {release.error && !releasing && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
       {revoke.error && <Alert color="danger">{getErrorMessage(revoke.error)}</Alert>}
       {release.data && (
         <Alert color="success" data-testid="held-signup-grants-release-result">
@@ -118,29 +188,6 @@ export default function HeldSignupGrantsTab() {
           {revoke.data.results.some(result => result.outcome === 'reversed' && !result.heldRestored) &&
             ' Releases without saved account state only had their credits taken back and were not returned to the held list.'}
         </Alert>
-      )}
-      {confirmRelease && (
-        <ActionDialog
-          open
-          onClose={() => setConfirmRelease(false)}
-          title={`Release ${selected.size} held grant${selected.size === 1 ? '' : 's'}`}
-          description="Pays each selected held signup grant now, outside the daily pool."
-          reasonPresets={ADMIN_REASON_PRESETS.signupGrantRelease}
-          confirmLabel="Release"
-          pending={release.isPending}
-          onConfirm={async reason => {
-            await release.mutateAsync({ userIds: [...selected], reason });
-            setConfirmRelease(false);
-          }}
-          data-testid="held-signup-grants-release-dialog"
-        >
-          {/* The dialog stays open on failure, so the error has to show inside it. */}
-          {release.error && (
-            <Alert color="danger" data-testid="held-signup-grants-release-dialog-error">
-              {getErrorMessage(release.error)}
-            </Alert>
-          )}
-        </ActionDialog>
       )}
       {confirmRevoke && (
         <AdminDialog
@@ -197,9 +244,8 @@ export default function HeldSignupGrantsTab() {
               disabled={missingPermission || busy || selected.size === 0}
               loading={release.isPending}
               onClick={() => {
-                // A failure from the previous attempt would otherwise reappear inside the fresh dialog.
-                if (release.error) release.reset();
-                setConfirmRelease(true);
+                release.reset();
+                setReleasing({ userIds: [...selected] });
               }}
             >
               Release selected ({selected.size})
@@ -225,6 +271,52 @@ export default function HeldSignupGrantsTab() {
           Next
         </Button>
       </Stack>
+      <ActionDialog
+        open={releasing !== null}
+        onClose={() => {
+          if (!release.isPending) setReleasing(null);
+        }}
+        title={
+          releasing && releasing.userIds.length > 1 ? `Release ${releasing.userIds.length} grants` : 'Release grant'
+        }
+        description="This pays the original signup grant without drawing the daily budget. Revoke is offered afterwards to take the credits back."
+        reasonPresets={ADMIN_REASON_PRESETS.signupGrantRelease}
+        confirmLabel={
+          releasing && releasing.userIds.length > 1 ? `Release ${releasing.userIds.length} grants` : 'Release grant'
+        }
+        pending={release.isPending}
+        onConfirm={reason => {
+          if (!releasing) return;
+          release.mutate(
+            {
+              userIds: releasing.userIds,
+              reason,
+              ...(releasing.assessmentId && releasing.userIds.length === 1
+                ? { aiDecision: { assessmentId: releasing.assessmentId } }
+                : {}),
+            },
+            {
+              onSuccess: () => {
+                setReleasing(null);
+                // An override release targets one row, so it leaves the unrelated multi-row selection alone.
+                setSelected(current => {
+                  if (!releasing.assessmentId) return new Set();
+                  const next = new Set(current);
+                  releasing.userIds.forEach(id => next.delete(id));
+                  return next;
+                });
+              },
+            }
+          );
+        }}
+        data-testid="held-signup-grants-release-dialog"
+      >
+        {release.error && (
+          <Alert color="danger" data-testid="held-signup-grants-release-dialog-error">
+            {getErrorMessage(release.error)}
+          </Alert>
+        )}
+      </ActionDialog>
       <DataTable<HeldRow>
         rows={rows}
         getRowId={row => row.id}
@@ -235,6 +327,38 @@ export default function HeldSignupGrantsTab() {
           void query.refetch();
         }}
         pagination={false}
+        rowShortcuts={decisions}
+        rowActions={row =>
+          isAssessmentOpen(row.advisory) ? (
+            <Dropdown>
+              <MenuButton
+                slots={{ root: IconButton }}
+                slotProps={{
+                  root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.id}` },
+                }}
+                disabled={!!releaseMissing}
+                data-testid={`held-signup-grants-actions-${row.id}`}
+              >
+                <MoreHorizontal size={16} />
+              </MenuButton>
+              <Menu placement="bottom-end">
+                <MenuItem
+                  disabled={acceptSuggestion.isPending}
+                  data-testid={`held-signup-grants-accept-assessment-${row.id}`}
+                  onClick={() => acceptAssessment(row)}
+                >
+                  Accept AI assessment
+                </MenuItem>
+                <MenuItem
+                  data-testid={`held-signup-grants-override-assessment-${row.id}`}
+                  onClick={() => overrideAssessment(row)}
+                >
+                  Override: release grant
+                </MenuItem>
+              </Menu>
+            </Dropdown>
+          ) : null
+        }
         empty={<Typography>No signup grants are held.</Typography>}
         columns={[
           {
@@ -250,6 +374,7 @@ export default function HeldSignupGrantsTab() {
             ),
           },
           { id: 'email', label: 'Account', render: row => row.email ?? row.id },
+          ...(hasAdvisories ? [advisoryColumn] : []),
           { id: 'reason', label: 'Reason', render: row => REASON_LABELS[row.reason] },
           { id: 'created', label: 'Signed up', render: row => new Date(row.createdAt).toLocaleString() },
         ]}

@@ -191,6 +191,20 @@ export class AdminAiSuggestionRepository {
     }
   }
 
+  /** Rows for any of these (entityId, inputHash) pairs, across policy versions; may over-match pairs. */
+  async findForEntities(
+    feature: AdminAiFeature,
+    keys: { entityId: string; inputHash: string }[]
+  ): Promise<AdminAiSuggestionItem[]> {
+    if (keys.length === 0) return [];
+    const docs = await AdminAiSuggestionModel.find({
+      feature,
+      entityId: { $in: [...new Set(keys.map(key => key.entityId))] },
+      inputHash: { $in: [...new Set(keys.map(key => key.inputHash))] },
+    }).lean<LeanAdminAiSuggestion[]>();
+    return docs.map(toItem);
+  }
+
   async findLatestForEntity(feature: AdminAiFeature, entityId: string): Promise<AdminAiSuggestionItem | null> {
     const doc = await AdminAiSuggestionModel.findOne({ feature, entityId })
       .sort({ createdAt: -1, _id: -1 })

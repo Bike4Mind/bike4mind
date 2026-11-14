@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AbuseAssessmentReasons } from './AbuseAssessmentReasons';
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import {
@@ -310,7 +310,12 @@ const EarlierAssessments: React.FC<{ items: AbuseAssessmentRow[] }> = ({ items }
   </Stack>
 );
 
-type Props = { detectionId: string; enabled: boolean } & DecisionProps;
+type Props = {
+  detectionId: string;
+  enabled: boolean;
+  /** The id of the judged assessment the suggestion shows (null when none), for the host to record a decision against. */
+  onLatestAssessment?: (assessmentId: string | null) => void;
+} & DecisionProps;
 
 /** An advisory model assessment of one detection, shown beside the facts it was made from. */
 export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({
@@ -319,6 +324,7 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({
   onAccept,
   onOverride,
   initialOverriding,
+  onLatestAssessment,
 }) => {
   const assessments = useAbuseAssessments(detectionId, { enabled });
   const request = useRequestAbuseAssessment();
@@ -341,6 +347,10 @@ export const ShadowDetectionAssessmentPanel: React.FC<Props> = ({
 
   const items = assessments.data ?? [];
   const [latest, ...earlier] = items;
+  const judgedAssessmentId = latest && assessmentToSuggestion(latest) ? latest.id : null;
+  useEffect(() => {
+    onLatestAssessment?.(judgedAssessmentId);
+  }, [judgedAssessmentId, onLatestAssessment]);
 
   return (
     <Stack gap={1} data-testid="shadow-detection-assessment-panel">
