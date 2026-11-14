@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "publishConfig": {
     "access": "restricted"
   },
