@@ -115,11 +115,16 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
 }
 
 /**
- * Check if a user requires MFA based on enforcement settings
- * When MFA is enforced, it applies to ALL users
+ * Test personas never owe MFA enrollment: they exist to exercise the rest of the platform, and MFA
+ * has its own e2e coverage. Shared by userRequiresMFA and the server gate (isMfaEnrollmentOwed).
  */
+export function isMfaEnforcementExempt(user: Pick<IUserDocument, 'isPersona'>): boolean {
+  return user.isPersona === true;
+}
+
+/** When MFA is enforced it applies to every user except the exempt ones (isMfaEnforcementExempt). */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting; // Enforcement applies to all users
+  return enforceMFASetting && !isMfaEnforcementExempt(user);
 }
 
 /**

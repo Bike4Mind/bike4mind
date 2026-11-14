@@ -7,7 +7,10 @@ const { mockReadEnforceMfa, mockLogEvent } = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (user: IUserDocument) => user.isPersona === true,
+    userHasMFAConfigured: (user: IUserDocument) => !!user.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   readEnforceMfa: (...a: unknown[]) => mockReadEnforceMfa(...a),
