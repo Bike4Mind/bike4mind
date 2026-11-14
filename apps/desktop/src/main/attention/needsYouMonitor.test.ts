@@ -69,6 +69,20 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
+  it('recounts the badge when a worker task finishes unaccepted, without a notice', async () => {
+    sessions = [
+      session('root'),
+      session('agent', 'root', {
+        workerTask: { state: { status: 'completed', accepted: false } },
+      } as Partial<ChatSessionSummary>),
+    ];
+    monitor.observe({ sessionId: 'agent', status: 'processing' });
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    expect(notices).toEqual([]);
+  });
+
   it('announces once per entry, and again after the session left needs-action', async () => {
     await enter('agent');
     await enter('agent');

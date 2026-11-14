@@ -48,7 +48,10 @@ export function countAgentStates(states: readonly AgentState[], parentsNeedingYo
   return counts;
 }
 
-/** "4 agents: 1 needs you, 2 working, 1 done", most urgent first, from countAgentStates. */
+/**
+ * "4 agents: 1 needs you, 2 working, 1 done", most urgent first, from countAgentStates. With no agents
+ * it says "No agents yet" whatever `parentsNeedingYou` is: a waiting parent has nobody to count beside.
+ */
 export function describeAgentStates(states: readonly AgentState[], parentsNeedingYou = 0): string {
   const counts = countAgentStates(states, parentsNeedingYou);
   if (counts.total === 0) return 'No agents yet';
@@ -83,6 +86,8 @@ export function deriveTaskAgentState(
   const runtimeState = deriveAgentState(status, session.lastOutcome);
   const task = session.workerTask?.state;
   if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
+  // Queued or running with no live status (a pre-reply gap, a model switch, a restart) waits on nothing.
+  if (task.status === 'queued' || task.status === 'running') return runtimeState;
   if (task.status === 'completed' && task.accepted) return 'done';
   return task.status === 'canceled' ? 'stopped' : 'needs-you';
 }
