@@ -24,6 +24,7 @@ const OUTSIDE_VPC = [
   'apps/workers/src/mcp/remoteMcpCall.handler',
   'apps/workers/src/media/imageProcessor.handler',
   'apps/workers/src/media/publishThumbnailRenderer.handler',
+  'apps/workers/src/turboCache/handler.handler',
 ];
 
 /** The object literal a `handler:` key sits in: the Lambda's own declaration. */

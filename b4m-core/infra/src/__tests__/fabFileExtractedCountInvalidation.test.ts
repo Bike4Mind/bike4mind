@@ -41,6 +41,8 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
   'packages/server-utils/src/tutorials/sheet.ts',
+  // Presigns Turborepo cache artifacts in a separate bucket; no FabFile row exists.
+  'apps/workers/src/turboCache/handler.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.

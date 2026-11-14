@@ -147,6 +147,7 @@ export default $config({
       PRODUCTION_STAGES,
       wafReadPermissions,
       wafWebAclArn,
+      turboCacheUrl,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -276,6 +277,7 @@ export default $config({
       websocketEndpoint: websocketApi.managementEndpoint,
       subscriberFanout: subscriberFanout.urn,
       scheduleTaskCron: scheduleTaskCron.urn,
+      turboCacheUrl,
     };
   },
 });
