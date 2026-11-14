@@ -158,6 +158,8 @@ type PersistedUserFields = Pick<
   | 'photoUrl'
   | 'isAdmin'
   | 'adminPermissions'
+  // Admin-role permissions, resolved server-side per request; persisted so the console gate holds on reload.
+  | 'roleAdminPermissions'
   | 'level'
   | 'organizationId'
   | 'emailVerified'
@@ -180,6 +182,21 @@ type PersistedUserFields = Pick<
   | 'deletion'
 >;
 
+/**
+ * Only the auth-resolved responses (identify, refresh, the self profile) carry `roleAdminPermissions`;
+ * a profile-update response or a realtime push of the same user does not. Keep the last resolved value
+ * across those, so a delegate whose access comes from roles is not locked out of the admin console
+ * until the next identify.
+ */
+export const carryRoleAdminPermissions = (
+  previous: IUserDocument | null,
+  next: IUserDocument | null
+): IUserDocument | null => {
+  if (!next || next.roleAdminPermissions !== undefined) return next;
+  if (!previous || previous.id !== next.id || previous.roleAdminPermissions === undefined) return next;
+  return { ...next, roleAdminPermissions: previous.roleAdminPermissions };
+};
+
 const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | null => {
   if (!user) return null;
   return {
@@ -190,6 +207,7 @@ const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | 
     photoUrl: user.photoUrl,
     isAdmin: user.isAdmin,
     adminPermissions: user.adminPermissions,
+    roleAdminPermissions: user.roleAdminPermissions,
     level: user.level,
     organizationId: user.organizationId,
     emailVerified: user.emailVerified,
@@ -259,7 +277,8 @@ export const useUser = create<UserContextProps>()(
       isDeveloper: false,
       isCustomer: false,
       avatarVersion: 0,
-      setCurrentUser: (currentUser: IUserDocument | null) => {
+      setCurrentUser: (nextUser: IUserDocument | null) => {
+        const currentUser = carryRoleAdminPermissions(get().currentUser, nextUser);
         set({
           currentUser,
           // Latch isHydrated on the first non-null user. zustand's `set` merges,

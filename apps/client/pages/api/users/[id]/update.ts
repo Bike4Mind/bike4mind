@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { emailSuspensionNoticeIfEnabled } from '@server/users/suspensionNoticeEmail';
@@ -158,6 +159,7 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
   adminPermissions?: string[];
+  adminRoleIds?: unknown[];
   isBanned?: boolean;
   isModerated?: boolean;
   currentCredits?: number;
@@ -293,7 +295,7 @@ const handler = baseApi().put(
       const body = userService.adminUpdateUserSchema.parse({ ...adminBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
+        .select('isAdmin adminPermissions adminRoleIds isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
       if (!targetBefore) return res.status(404).json({ error: 'User not found' });
       if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
@@ -347,6 +349,7 @@ const handler = baseApi().put(
                 realtimeConnections: realtimeConnectionRepository,
                 creditTransactions: creditTransactionRepository,
               },
+              resolveAdminRoles: resolveRoleAdminPermissions,
             }
           );
 

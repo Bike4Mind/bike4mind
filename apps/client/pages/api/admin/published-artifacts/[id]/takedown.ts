@@ -39,7 +39,7 @@ const checkedOwnerFilter = async (actor: Request['user'], publicId: string) => {
   if (isFullAdmin(actor)) return {};
   const artifact = await PublishedArtifact.findOne({ publicId }).select('ownerId').lean();
   if (!artifact) throw new NotFoundError('Artifact not found');
-  const owner = await User.findById(artifact.ownerId).select('isAdmin adminPermissions').lean();
+  const owner = await User.findById(artifact.ownerId).select('isAdmin adminPermissions adminRoleIds').lean();
   if (!owner) throw new NotFoundError('Artifact owner not found');
   assertCanActOnAdminTarget(actor, owner, 'moderate published pages owned by');
   return { ownerId: artifact.ownerId };

@@ -447,6 +447,13 @@ export interface IUser extends ICreditHolder {
   groups: Array<string> | null;
   isAdmin: boolean;
   adminPermissions?: AdminPermissionId[];
+  /** Admin roles held (b4m-core/common adminRoles.ts). Assigned through the admin permissions endpoint. */
+  adminRoleIds?: string[];
+  /**
+   * The permissions those roles carry, resolved per request by the auth step. A virtual, never
+   * stored: absent when roles were not resolved for this read.
+   */
+  roleAdminPermissions?: AdminPermissionId[];
   storageLimit: number /** Effective storage limit in decimal MB */;
   /** Manual or custom signup allocation; null means use plan/default. */
   storageLimitOverride?: number | null;
@@ -1143,10 +1150,15 @@ export interface IUserRepository
    * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
    * to a client: it carries admin permissions.
    */
-  findAdminTargetsByIds?: (
-    ids: string[]
-  ) => Promise<
-    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  findAdminTargetsByIds?: (ids: string[]) => Promise<
+    Array<{
+      id: string;
+      email?: string;
+      username?: string;
+      isAdmin?: boolean;
+      adminPermissions?: string[];
+      adminRoleIds?: string[];
+    }>
   >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;

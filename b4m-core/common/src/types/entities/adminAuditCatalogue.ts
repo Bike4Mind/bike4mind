@@ -423,6 +423,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Admin roles (pages/api/admin/admin-roles). Editing a role's permissions is a grant to every member.
+  'admin.role.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.role.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.role.deleted': { category: 'access', severity: 'notice', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;
