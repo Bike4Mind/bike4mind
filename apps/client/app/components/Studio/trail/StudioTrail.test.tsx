@@ -77,13 +77,23 @@ describe('StudioTrail', () => {
     expect(screen.getByTestId('studio-trail-redacted-hidden')).toHaveTextContent('Not available');
   });
 
-  it('restores a step with its stored request and medium', () => {
+  it('restores a step with its stored request, medium and the names of the files it can read', () => {
     const onRestore = vi.fn();
     render(<StudioTrail fileId="take" onRestore={onRestore} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('studio-trail-step-source'));
 
-    expect(onRestore).toHaveBeenCalledWith({ prompt: 'prompt source' }, 'image');
+    expect(onRestore).toHaveBeenCalledWith({
+      medium: 'image',
+      request: { prompt: 'prompt source' },
+      fileNames: {
+        take: 'take.png',
+        source: 'source.png',
+        hidden: null,
+        upload: 'upload.png',
+        child: 'child.png',
+      },
+    });
   });
 
   it('does not offer restore for a step without a stored request, or without onRestore', () => {

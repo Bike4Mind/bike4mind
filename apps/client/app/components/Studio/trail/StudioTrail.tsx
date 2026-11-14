@@ -16,6 +16,7 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import type { GeneratedAssetGenerator, GeneratedAssetLineageRole } from '@bike4mind/common';
 import type { FileLineage, LineageEdge, LineageNode, VisibleLineageNode } from '@server/files/fileLineage';
 import { useFileLineage } from '@client/app/hooks/data/fileLineage';
+import type { StudioRestoreRequest } from '@client/app/components/Studio/restore/studioRestore';
 import type { StudioMedium } from '@client/app/components/Studio/studioModality';
 
 export const LINEAGE_ROLE_LABELS: Record<GeneratedAssetLineageRole, string> = {
@@ -37,7 +38,9 @@ const GENERATOR_MEDIUM: Record<GeneratedAssetGenerator, StudioMedium> = {
   sound_effect: 'sound-effects',
 };
 
-export type StudioTrailRestore = (request: Record<string, unknown>, medium: StudioMedium) => void;
+export type StudioTrailRestore = (restore: StudioRestoreRequest) => void;
+
+type StepRestore = (request: Record<string, unknown>, medium: StudioMedium) => void;
 
 type StudioTrailProps = {
   fileId: string;
@@ -96,7 +99,7 @@ type StepProps = {
   /** How this node fed the next step: the roles on its edge(s). */
   roles: GeneratedAssetLineageRole[];
   isCurrent?: boolean;
-  onRestore?: StudioTrailRestore;
+  onRestore?: StepRestore;
 };
 
 const VisibleStep = ({ node, roles, isCurrent, onRestore }: StepProps & { node: VisibleLineageNode }) => {
@@ -197,7 +200,13 @@ const rolesInto = (edges: LineageEdge[], parentId: string, childId: string) =>
 /** Oldest generation first, so the list reads top to bottom in the order the take was made. */
 const stepsInOrder = (lineage: FileLineage) => [...lineage.ancestors].sort((a, b) => b.depth - a.depth);
 
-const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: StudioTrailRestore }) => (
+/** Every walked file's name by id (null when redacted), so a restored request can show its input files by name. */
+const fileNamesOf = (lineage: FileLineage): Record<string, string | null> =>
+  Object.fromEntries(
+    [...lineage.ancestors, ...lineage.children].map(node => [node.fileId, node.redacted ? null : node.fileName])
+  );
+
+const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: StepRestore }) => (
   <Stack gap={2}>
     {lineage.truncated && (
       <Typography level="body-xs" textColor="text.tertiary" data-testid="studio-trail-truncated">
@@ -250,7 +259,12 @@ const StudioTrail = ({ fileId, onRestore }: StudioTrailProps) => {
   }
   return (
     <Box data-testid="studio-trail">
-      <TrailBody lineage={lineage.data} onRestore={onRestore} />
+      <TrailBody
+        lineage={lineage.data}
+        onRestore={
+          onRestore && ((request, medium) => onRestore({ medium, request, fileNames: fileNamesOf(lineage.data) }))
+        }
+      />
     </Box>
   );
 };
