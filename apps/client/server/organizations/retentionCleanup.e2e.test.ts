@@ -84,7 +84,9 @@ async function file(organizationId?: string, createdAt = old, generated = false)
     tags: [],
     fileSize: 10,
     storageChargedAt: old,
-    ...(generated ? { sourceType: FabFileSourceType.TOOL_GENERATED } : {}),
+    ...(generated
+      ? { sourceType: FabFileSourceType.TOOL_GENERATED, sourceMetadata: { retentionOrganizationId: organizationId } }
+      : {}),
   });
   return insertedId;
 }
@@ -148,6 +150,21 @@ describe('explicit organization retention on disposable data', () => {
     expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
     expect(effects.files).not.toHaveBeenCalled();
   });
+  it('uses the retention stamp independently of storage ownership', async () => {
+    const target = await file(undefined, old, true);
+    await FabFile.collection.updateOne({ _id: target }, { $set: { 'sourceMetadata.retentionOrganizationId': orgId } });
+    const foreign = await file(orgId, old, true);
+    await FabFile.collection.updateOne(
+      { _id: foreign },
+      { $set: { 'sourceMetadata.retentionOrganizationId': otherOrg } }
+    );
+    expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 1 });
+    expect((await FabFile.collection.findOne({ _id: target }))?.deletedAt).toBeInstanceOf(Date);
+    expect((await FabFile.collection.findOne({ _id: foreign }))?.deletedAt).toBeNull();
+    expect(
+      (await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(orgId) }))?.currentStorageSize
+    ).toBe(1000);
+  });
   it('skips held notebooks, messages and files', async () => {
     const sessionId = await notebook(orgId);
     await Session.collection.updateOne({ _id: new mongoose.Types.ObjectId(sessionId) }, { $set: { legalHold: true } });
@@ -158,7 +175,12 @@ describe('explicit organization retention on disposable data', () => {
     expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
   });
   it('deletes only eligible chat, file and generated rows and audits once across reruns', async () => {
-    const target = await message(await notebook(orgId));
+    const sessionId = await notebook(orgId);
+    await Session.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(sessionId) },
+      { $set: { summary: 'old text', contextSummary: 'old context', contextSummaryUpToQuestId: 'old' } }
+    );
+    const target = await message(sessionId);
     const personal = await message(await notebook());
     const foreign = await message(await notebook(otherOrg));
     const exact = await message(await notebook(orgId), boundary);
@@ -168,6 +190,10 @@ describe('explicit organization retention on disposable data', () => {
     await file(otherOrg);
     expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 1, files: 1, media: 1 });
     expect((await Quest.collection.findOne({ _id: target }))?.deletedAt).toBeInstanceOf(Date);
+    const cleaned = await Session.collection.findOne({ _id: new mongoose.Types.ObjectId(sessionId) });
+    expect(cleaned).not.toHaveProperty('summary');
+    expect(cleaned).not.toHaveProperty('contextSummary');
+    expect(cleaned).not.toHaveProperty('contextSummaryUpToQuestId');
     for (const _id of [personal, foreign, exact])
       expect((await Quest.collection.findOne({ _id }))?.deletedAt).toBeNull();
     expect(effects.files).toHaveBeenCalledTimes(2);
@@ -270,6 +296,13 @@ describe('explicit organization retention on disposable data', () => {
     expect(await OrganizationAuditEventModel.countDocuments({ action: 'retention.deleted' })).toBe(1);
   });
   describe('failure paths', () => {
+    it('rejects policy saves for personal organizations', async () => {
+      await Organization.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(orgId) },
+        { $set: { personal: true } }
+      );
+      await expect(saveRetentionPolicy(orgId, ownerId, foreverRetention, 1)).rejects.toThrow('team organization');
+    });
     // An erased uploader no longer resolves, so deleting their file throws.
     const erasedUploaderFile = async () => {
       const _id = await file(orgId, new Date('2026-10-01T12:00:00Z'));
@@ -284,6 +317,14 @@ describe('explicit organization retention on disposable data', () => {
         sessionId,
         createdAt: old,
       });
+
+    it('rotates a full batch of erased-uploader failures so later content progresses', async () => {
+      for (let i = 0; i < 50; i++) await erasedUploaderFile();
+      await file(orgId);
+      await message(await notebook(orgId));
+      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 0, files: 0, media: 0 });
+      expect(await cleanupOrganizationRetention(orgId, options())).toEqual({ chats: 1, files: 1, media: 0 });
+    });
 
     it('logs a failed file delete and keeps sweeping later files, chats and media', async () => {
       const bad = await erasedUploaderFile();

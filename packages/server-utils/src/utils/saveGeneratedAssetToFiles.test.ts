@@ -8,11 +8,12 @@ const mocks = vi.hoisted(() => ({
   scopedSettingsRepository: { name: 'scopedSettings' },
   findSession: vi.fn(),
   recordObject: vi.fn(),
+  findOrganization: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({ saveGeneratedAsset: mocks.saveGeneratedAsset }));
 vi.mock('@bike4mind/database', () => ({
-  organizationRepository: {},
+  organizationRepository: { findById: mocks.findOrganization },
   adminSettingsRepository: {},
   dataLakeRepository: {},
   fabFileRepository: {},
@@ -40,6 +41,7 @@ const params = (signal?: AbortSignal): SaveGeneratedAssetParams => ({
 describe('saveGeneratedAssetToFiles', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.findOrganization.mockResolvedValue({ id: 'org1', userId: 'u1', personal: false, users: [] });
     mocks.saveGeneratedAsset.mockImplementation(
       async (_params: SaveGeneratedAssetParams, deps: SaveGeneratedAssetDeps) => {
         await deps.storage.upload('generated-video/k.mp4', Buffer.from('v'), {});
@@ -85,12 +87,20 @@ describe('saveGeneratedAssetToFiles', () => {
       },
       { upsert: true }
     );
-    expect(mocks.saveGeneratedAsset.mock.calls[0][1].ownerOrganizationId).toBe('org1');
+    expect(mocks.saveGeneratedAsset.mock.calls[0][1].retentionOrganizationId).toBe('org1');
+    expect(mocks.saveGeneratedAsset.mock.calls[0][1]).not.toHaveProperty('ownerOrganizationId');
   });
   it('keeps unbound or foreign-notebook generations personal', async () => {
     mocks.findSession.mockResolvedValue(null);
     await saveGeneratedAssetToFiles({ ...params(), sessionId: 'foreign', generatedOutputKey: 'output.png' }, logger);
     expect(mocks.recordObject).not.toHaveBeenCalled();
     expect(mocks.saveGeneratedAsset.mock.calls[0][1].ownerOrganizationId).toBeUndefined();
+  });
+  it('does not bind media for a former member', async () => {
+    mocks.findSession.mockResolvedValue({ id: 's1', retentionOrganizationId: 'org1' });
+    mocks.findOrganization.mockResolvedValue({ id: 'org1', userId: 'someone-else', personal: false, users: [] });
+    await saveGeneratedAssetToFiles({ ...params(), sessionId: 's1', generatedOutputKey: 'output.png' }, logger);
+    expect(mocks.recordObject).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAsset.mock.calls[0][1].retentionOrganizationId).toBeUndefined();
   });
 });

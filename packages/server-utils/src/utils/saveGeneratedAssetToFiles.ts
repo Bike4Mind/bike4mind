@@ -8,6 +8,7 @@ import {
   OrganizationGeneratedObject,
   User,
 } from '@bike4mind/database';
+import { orgAclRowConfersMembership } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { saveGeneratedAsset, type SaveGeneratedAssetParams, type SaveGeneratedAssetResult } from '@bike4mind/services';
 import { getFilesStorage } from './storage/index';
@@ -19,30 +20,22 @@ export async function saveGeneratedAssetToFiles(
 ): Promise<SaveGeneratedAssetResult> {
   const { contentType, signal } = params;
   const session = params.sessionId ? await sessionRepository.findByIdAndUserId(params.sessionId, params.userId) : null;
-  const ownerOrganizationId = session?.retentionOrganizationId;
+  const organization = session?.retentionOrganizationId
+    ? await organizationRepository.findById(session.retentionOrganizationId)
+    : null;
+  const retentionOrganizationId =
+    organization &&
+    !organization.personal &&
+    (organization.userId === params.userId ||
+      organization.users.some(row => row.userId === params.userId && orgAclRowConfersMembership(row)))
+      ? organization.id
+      : undefined;
   const key = params.generatedCopyKey ?? params.generatedOutputKey;
-  if (ownerOrganizationId && key) {
-    await OrganizationGeneratedObject.updateOne(
-      { key },
-      {
-        $setOnInsert: {
-          key,
-          organizationId: ownerOrganizationId,
-          userId: params.userId,
-          sessionId: session.id,
-          createdAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
-  }
-  return saveGeneratedAsset(params, {
-    ownerOrganizationId,
+  const result = await saveGeneratedAsset(params, {
+    retentionOrganizationId,
     db: {
       fabFiles: fabFileRepository,
       adminSettings: adminSettingsRepository,
-      // Absent, the admission lever (#1680) resolves platform-only, so a per-org/owner/lake enforcement
-      // override would silently not apply on this door.
       scopedSettings: scopedSettingsRepository,
       users: User,
       organizations: organizationRepository,
@@ -56,4 +49,20 @@ export async function saveGeneratedAssetToFiles(
     },
     logger,
   });
+  if (retentionOrganizationId && key && session) {
+    await OrganizationGeneratedObject.updateOne(
+      { key },
+      {
+        $setOnInsert: {
+          key,
+          organizationId: retentionOrganizationId,
+          userId: params.userId,
+          sessionId: session.id,
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  }
+  return result;
 }

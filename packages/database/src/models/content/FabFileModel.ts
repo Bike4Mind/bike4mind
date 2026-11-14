@@ -4346,7 +4346,14 @@ FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
 );
-FabFileSchema.index({ organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 });
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  { name: 'retention_files_partial', partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+FabFileSchema.index(
+  { 'sourceMetadata.retentionOrganizationId': 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  { partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $type: 'string' } } }
+);
 
 // An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
 // completed rows whose charge transaction has not committed. Pre-built by

@@ -117,9 +117,12 @@ export async function cleanupOrganizationRetention(
   for (const kind of ['files', 'media'] as const) {
     const cutoff = retentionCutoff(policy[kind], now);
     if (!cutoff || remaining <= 0 || Date.now() >= deadline) continue;
-    const filter = retentionFileFilter(organizationId, cutoff, kind === 'media');
+    const filter = {
+      ...retentionFileFilter(organizationId, cutoff, kind === 'media'),
+      'sourceMetadata.retentionLastCheckedAt': { $not: { $gte: new Date(now.getTime() - 3_600_000) } },
+    };
     const files = await FabFile.find(filter)
-      .sort({ createdAt: 1, _id: 1 })
+      .sort({ 'sourceMetadata.retentionLastCheckedAt': 1, createdAt: 1, _id: 1 })
       .limit(remaining)
       .maxTimeMS(RETENTION_QUERY_MS);
     for (const candidate of files) {
@@ -152,12 +155,18 @@ export async function cleanupOrganizationRetention(
             }
           );
           if (deleted.action !== 'deleted') throw new Error('Retention file delete did not complete');
-          await organizationRepository.incrementCurrentStorage(organizationId, -chargedBytes(file));
+          if (file.organizationId)
+            await organizationRepository.incrementCurrentStorage(file.organizationId, -chargedBytes(file));
+          else await userRepository.incrementCurrentStorage(file.userId, -chargedBytes(file));
           await audit(organizationId, kind, file.id, version);
           return deleted;
         });
       } catch (error) {
         await skipFailedItem(error, logger, kind, candidate.id);
+        await FabFile.collection.updateOne(
+          { _id: candidate._id },
+          { $set: { 'sourceMetadata.retentionLastCheckedAt': now } }
+        );
         continue;
       }
       if (result?.references) {

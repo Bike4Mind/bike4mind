@@ -12,10 +12,10 @@ describe('organization retention personal-data policy', () => {
     expect(holder.references).toEqual([{ path: 'actorUserId', matchBy: 'userId', action: 'deleteDocument' }]);
     expect(holder.secretPaths).toContain('token');
   });
-  it('keeps organization media records while anonymizing creator attribution', () => {
+  it('erases immutable organization media origin records with their creator', () => {
     const holder = DATA_HOLDER_REGISTRY.OrganizationGeneratedObject;
     if (holder.kind !== 'holder') throw new Error('Generated object must be a holder');
-    expect(holder.references).toEqual([{ path: 'userId', matchBy: 'userId', action: 'anonymize' }]);
+    expect(holder.references).toEqual([{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }]);
   });
 });
 

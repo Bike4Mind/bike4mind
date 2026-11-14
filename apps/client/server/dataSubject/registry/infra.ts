@@ -4,7 +4,7 @@ import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 export const infraHolders = {
   OrganizationGeneratedObject: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   OrganizationRetentionEstimate: {
     kind: 'holder',

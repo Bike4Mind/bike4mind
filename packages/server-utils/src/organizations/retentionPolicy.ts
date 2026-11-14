@@ -25,7 +25,7 @@ const notHeld = { legalHold: { $ne: true } };
 
 export function retentionFileFilter(organizationId: string, cutoff: Date, generated: boolean) {
   return {
-    organizationId,
+    ...(generated ? { 'sourceMetadata.retentionOrganizationId': organizationId } : { organizationId }),
     deletedAt: null,
     createdAt: { $lt: cutoff },
     $or: [{ moderationStatus: { $ne: 'blocked' } }, { blockReason: 'unsupported_format' }],
