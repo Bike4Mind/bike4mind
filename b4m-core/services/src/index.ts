@@ -11,6 +11,7 @@ export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
 export * as sessionService from './sessionService';
 export * as organizationService from './organizationService';
+export * as spaceService from './spaceService';
 export * as apiKeyService from './apiKeyService';
 export * as promptService from './promptService';
 export * as voiceService from './voiceService';

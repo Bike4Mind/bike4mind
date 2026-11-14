@@ -42,6 +42,7 @@ const DOCUMENT_ICONS = {
   Session: <NoteAltOutlinedIcon />,
   Tool: <HandymanOutlinedIcon />,
   Project: <HubIconIcon />,
+  Space: <GroupIcon />,
 };
 
 const StatusModal = ({

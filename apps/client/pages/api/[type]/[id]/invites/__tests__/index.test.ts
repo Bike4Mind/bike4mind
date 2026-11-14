@@ -65,6 +65,7 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
   FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
@@ -623,6 +624,28 @@ describe('DELETE /api/[type]/[id]/invites', () => {
     // This handler throws for the central errorHandler to map (400), rather than writing the
     // status itself the way the GET handler above does - hence rejects, not _getStatusCode.
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('Invalid cancel invite request');
+    expect(cancelInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe('Space invites on the generic [type] route', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['GET', () => mockRefs.getHandler],
+    ['POST', () => mockRefs.postHandler],
+    ['DELETE', () => mockRefs.deleteHandler],
+  ])('refuses %s and points at the Space routes', async (method, handlerOf) => {
+    const { req, res } = createMocks({
+      method: method as 'GET',
+      query: { type: 'Space', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await expect(handlerOf()!(req, res)).rejects.toThrow(/space invites/);
+    expect(listInvitesForDocument).not.toHaveBeenCalled();
+    expect(createInvite).not.toHaveBeenCalled();
     expect(cancelInvite).not.toHaveBeenCalled();
   });
 });

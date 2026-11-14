@@ -1,4 +1,6 @@
 import { sharingService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
@@ -7,6 +9,8 @@ import {
   projectRepository,
   fabFileRepository,
   userRepository,
+  spaceRepository,
+  adminSettingsRepository,
   Project,
   Group,
   fileTagRepository,
@@ -74,6 +78,14 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
   // atomically. Without it, a failure between the two writes could leave a user in an
   // org with organizationId still null. Mirrors the add-member handler, which already
   // wraps organizationService.addMember.
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    {
+      names: ['SpaceMaxMembers', 'EnableSpaces'],
+    }
+  );
+  const spaceMaxMembers = getSettingsValue('SpaceMaxMembers', settings);
+  const spacesEnabled = isSettingEnabled(getSettingsValue('EnableSpaces', settings));
   const { invite, outcome } = await withTransaction(() =>
     sharingService.acceptInvite(
       user.id,
@@ -87,7 +99,9 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
           groups: Group,
           organization: organizationRepository,
           users: userRepository,
+          spaces: spaceRepository,
         },
+        limits: { spaceMaxMembers: spaceMaxMembers ?? 1000, spacesEnabled },
       }
     )
   );
@@ -146,6 +160,7 @@ export async function refuseInviteForUser(req: InviteResponder, id: string) {
         projects: projectRepository,
         organizations: organizationRepository,
         groups: Group,
+        spaces: spaceRepository,
       },
     }
   );
