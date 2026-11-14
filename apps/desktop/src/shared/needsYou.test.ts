@@ -46,6 +46,19 @@ describe('needsYouCount', () => {
     expect(needsYouCount(new Map(), listed)).toBe(0);
   });
 
+  it('counts a worker task waiting on a decision, but not a queued or running one', () => {
+    const task = (state: object, id: string) =>
+      ({ ...session(id, 'root'), workerTask: { state } }) as unknown as ChatSessionSummary;
+    const sessions = [
+      session('root'),
+      task({ status: 'completed', accepted: false }, 'done-unaccepted'),
+      task({ status: 'completed', accepted: true }, 'done-accepted'),
+      task({ status: 'queued' }, 'queued'),
+      task({ status: 'running' }, 'running'),
+    ];
+    expect(needsYouCount(statuses({}), sessions)).toBe(1);
+  });
+
   it('skips plain sessions, archived ones, those under an archived agent, and unlisted ones', () => {
     const sessions = [
       session('plain'),

@@ -39,6 +39,7 @@ const handler = adminApi({
           }
           assertCanRunUsersBulkAction(req, record.action as AdminUsersBulkActionType, {
             unblocks: Boolean(record.blockedDomains?.length),
+            tags: record.users.flatMap(user => (user.tagAdded ? [user.tagAdded] : [])),
           });
         }
       );

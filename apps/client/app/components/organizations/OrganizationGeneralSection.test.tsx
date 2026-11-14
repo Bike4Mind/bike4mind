@@ -1,16 +1,21 @@
+import { QueryClient, QueryClientProvider, useMutation } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import OrganizationGeneralSection from './OrganizationGeneralSection';
 
-const update = vi.hoisted(() => vi.fn());
+type UpdateRequest = {
+  orgId: string;
+  data: Partial<Pick<IOrganizationDocument, 'name' | 'description' | 'billingContact'>>;
+};
+const update = vi.hoisted(() => vi.fn<(request: UpdateRequest) => Promise<unknown>>());
 const upload = vi.hoisted(() => vi.fn());
 const currentUser = vi.hoisted(() => ({ value: null as { id: string; isAdmin?: boolean } | null }));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useUpdateOrganization: () => ({ mutateAsync: update, isPending: false }),
+  useUpdateOrganization: () => useMutation({ mutationFn: (request: UpdateRequest) => update(request) }),
   useUploadOrganizationLogo: () => ({ mutateAsync: upload, isPending: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: currentUser.value }) }));
@@ -39,11 +44,16 @@ const org = {
 
 const renderAs = (user: { id: string; isAdmin?: boolean }, canEditProfile = true) => {
   currentUser.value = user;
-  return render(
-    <CssVarsProvider theme={appTheme}>
-      <OrganizationGeneralSection organization={org} canEditProfile={canEditProfile} />
-    </CssVarsProvider>
+  const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const view = (organization: typeof org) => (
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>
+        <OrganizationGeneralSection organization={organization} canEditProfile={canEditProfile} />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
+  const result = render(view(org));
+  return { ...result, renderOrganization: (organization: typeof org) => result.rerender(view(organization)) };
 };
 
 const input = (testId: string) => screen.getByTestId(testId) as HTMLInputElement;
@@ -63,6 +73,57 @@ describe('OrganizationGeneralSection', () => {
     fireEvent.click(saveButton());
 
     await waitFor(() => expect(update).toHaveBeenCalledWith({ orgId: 'org1', data: { name: 'Acme Labs' } }));
+  });
+
+  it.each(['resolve', 'reject'] as const)('locks submitted fields while pending and handles %s', async outcome => {
+    let resolveRequest!: (value: unknown) => void;
+    let rejectRequest!: (reason: Error) => void;
+    update.mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        resolveRequest = resolve;
+        rejectRequest = reject;
+      })
+    );
+    const { renderOrganization } = renderAs({ id: 'owner1' });
+    const name = input('organization-general-name-input');
+    const description = input('organization-general-description-input');
+    const contact = input('organization-general-billing-contact-input');
+    fireEvent.change(name, { target: { value: '  Acme Labs ' } });
+    fireEvent.change(description, { target: { value: '  Space ' } });
+    fireEvent.change(contact, { target: { value: 'billing@acme.test' } });
+    fireEvent.click(saveButton());
+    await waitFor(() => {
+      for (const field of [name, description, contact]) expect(field.disabled).toBe(true);
+      expect(saveButton().disabled).toBe(true);
+      expect(screen.getByTestId('organization-general-reset-btn')).toBeDisabled();
+    });
+    fireEvent.click(saveButton());
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({
+      orgId: 'org1',
+      data: { name: 'Acme Labs', description: 'Space', billingContact: 'billing@acme.test' },
+    });
+    await act(async () => {
+      if (outcome === 'reject') rejectRequest(new Error('save failed'));
+      else {
+        renderOrganization({ ...org, name: 'Acme Labs', description: 'Space', billingContact: 'billing@acme.test' });
+        resolveRequest({});
+      }
+    });
+    await waitFor(() => {
+      for (const field of [name, description, contact]) expect(field.disabled).toBe(false);
+    });
+    if (outcome === 'reject') {
+      expect(name.value).toBe('  Acme Labs ');
+      expect(description.value).toBe('  Space ');
+      expect(contact.value).toBe('billing@acme.test');
+      expect(saveButton()).not.toBeDisabled();
+    } else {
+      expect(name.value).toBe('Acme Labs');
+      expect(description.value).toBe('Space');
+      expect(saveButton()).toBeDisabled();
+    }
+    expect(update).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an empty name', () => {

@@ -53,6 +53,7 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
   const { currentUser } = useUser();
   const updateOrganization = useUpdateOrganization();
   const uploadLogo = useUploadOrganizationLogo();
+  const profileDisabled = !canEditProfile || updateOrganization.isPending;
   const logoInputRef = useRef<HTMLInputElement | null>(null);
 
   const canEditLogo = hasOrgUpdateAccess(currentUser, organization);
@@ -92,7 +93,7 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
   const blocked = !!nameError || (changes.billingContact !== undefined && !!billingContactError);
 
   const handleSave = async () => {
-    if (!canEditProfile || !hasChanges || blocked) return;
+    if (profileDisabled || !hasChanges || blocked) return;
     try {
       await updateOrganization.mutateAsync({ orgId: organization.id, data: changes });
       handleReset();
@@ -177,22 +178,22 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
           )}
         </Stack>
 
-        <FormControl error={!!nameError} disabled={!canEditProfile}>
+        <FormControl error={!!nameError} disabled={profileDisabled}>
           <FormLabel>Team name</FormLabel>
           <Input
             value={name}
-            disabled={!canEditProfile}
+            disabled={profileDisabled}
             onChange={e => setName(e.target.value)}
             slotProps={{ input: { maxLength: MAX_TEAM_NAME_LENGTH, 'data-testid': 'organization-general-name-input' } }}
           />
           {nameError && <FormHelperText>{nameError}</FormHelperText>}
         </FormControl>
 
-        <FormControl disabled={!canEditProfile}>
+        <FormControl disabled={profileDisabled}>
           <FormLabel>Description</FormLabel>
           <Textarea
             value={description}
-            disabled={!canEditProfile}
+            disabled={profileDisabled}
             onChange={e => setDescription(e.target.value)}
             minRows={2}
             maxRows={6}
@@ -208,10 +209,14 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
         </FormControl>
 
         {canEditBillingContact && (
-          <FormControl error={changes.billingContact !== undefined && !!billingContactError}>
+          <FormControl
+            error={changes.billingContact !== undefined && !!billingContactError}
+            disabled={updateOrganization.isPending}
+          >
             <FormLabel>Billing contact</FormLabel>
             <Input
               type="email"
+              disabled={updateOrganization.isPending}
               value={billingContact}
               onChange={e => setBillingContact(e.target.value)}
               placeholder="billing@example.com"

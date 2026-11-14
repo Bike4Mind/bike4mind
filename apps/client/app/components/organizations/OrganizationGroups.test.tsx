@@ -12,6 +12,7 @@ const unassignGroupMember = vi.fn();
 const assignGroupMember = vi.fn();
 const renameOrganizationGroup = vi.fn();
 const toastSuccess = vi.hoisted(() => vi.fn());
+const toastError = vi.hoisted(() => vi.fn());
 const createStandardGroup = vi.fn();
 
 vi.mock('@client/app/utils/groupsAPICalls', () => ({
@@ -37,7 +38,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: members }),
 }));
 
-vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: toastError } }));
 
 type ToastOptions = { action?: { label: string; onClick: () => void } } | undefined;
 const lastToast = () => {
@@ -83,8 +84,16 @@ describe('OrganizationGroups', () => {
     fetchOrganizationGroups.mockResolvedValue([]);
     unassignGroupMember.mockResolvedValue(undefined);
     assignGroupMember.mockReset().mockResolvedValue(undefined);
-    renameOrganizationGroup.mockReset().mockResolvedValue(undefined);
+    renameOrganizationGroup
+      .mockReset()
+      .mockImplementation(async (_organizationId: string, id: string, name: string) => ({
+        id,
+        name,
+        type: 'sales',
+        organizationId: 'org1',
+      }));
     toastSuccess.mockReset();
+    toastError.mockReset();
     createStandardGroup.mockReset().mockResolvedValue(undefined);
   });
 
@@ -175,8 +184,71 @@ describe('OrganizationGroups', () => {
 
     const { options } = lastToast();
     act(() => options!.action!.onClick());
-    await waitFor(() => expect(renameOrganizationGroup).toHaveBeenLastCalledWith('org1', 'g1', 'Sales'));
+    await waitFor(() =>
+      expect(renameOrganizationGroup).toHaveBeenLastCalledWith('org1', 'g1', 'Sales', { expectedName: 'Revenue' })
+    );
     await waitFor(() => expect(lastToast()).toEqual({ message: 'Group name restored to "Sales"', options: undefined }));
+  });
+
+  it('refuses an older Undo after a later successful rename', async () => {
+    let group = {
+      id: 'g1',
+      name: 'Sales',
+      type: 'sales',
+      organizationId: 'org1',
+      memberIds: [] as string[],
+      memberCount: 0,
+    };
+    fetchOrganizationGroups.mockImplementation(async () => [group]);
+    renameOrganizationGroup.mockImplementation(
+      async (_organizationId: string, groupId: string, name: string, options?: { expectedName?: string }) => {
+        expect(groupId).toBe(group.id);
+        if (options?.expectedName !== undefined && options.expectedName !== group.name)
+          throw new Error('The group name changed; reload before undoing');
+        group = { ...group, name };
+        return group;
+      }
+    );
+    renderGroups(org, false);
+    fireEvent.click(await screen.findByTestId('org-group-rename-btn-sales'));
+    fireEvent.change(screen.getByLabelText('Rename group Sales'), { target: { value: 'Revenue' } });
+    fireEvent.click(screen.getByTestId('org-group-rename-save-sales'));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    const firstUndo = lastToast().options?.action;
+    await waitFor(() => expect(screen.getByTestId('org-group-card-sales')).toHaveTextContent('Revenue'));
+    fireEvent.click(screen.getByTestId('org-group-rename-btn-sales'));
+    fireEvent.change(screen.getByLabelText('Rename group Revenue'), { target: { value: 'Growth' } });
+    fireEvent.click(screen.getByTestId('org-group-rename-save-sales'));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(2));
+    act(() => firstUndo!.onClick());
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('The group name changed; reload before undoing'));
+    expect(renameOrganizationGroup).toHaveBeenLastCalledWith('org1', 'g1', 'Sales', { expectedName: 'Revenue' });
+    expect(group.name).toBe('Growth');
+    expect(screen.getByTestId('org-group-card-sales')).toHaveTextContent('Growth');
+    expect(toastSuccess).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes the Undo expectation from the successful server response', async () => {
+    fetchOrganizationGroups.mockResolvedValue([
+      { id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1', memberIds: [], memberCount: 0 },
+    ]);
+    renameOrganizationGroup.mockResolvedValueOnce({
+      id: 'g1',
+      name: 'Server Revenue',
+      type: 'sales',
+      organizationId: 'org1',
+    });
+    renderGroups(org, false);
+    fireEvent.click(await screen.findByTestId('org-group-rename-btn-sales'));
+    fireEvent.change(screen.getByLabelText('Rename group Sales'), { target: { value: 'Revenue' } });
+    fireEvent.click(screen.getByTestId('org-group-rename-save-sales'));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
+    act(() => lastToast().options!.action!.onClick());
+    await waitFor(() =>
+      expect(renameOrganizationGroup).toHaveBeenLastCalledWith('org1', 'g1', 'Sales', {
+        expectedName: 'Server Revenue',
+      })
+    );
   });
 
   // A failed groups fetch must NOT render the empty state - telling an org that already has groups

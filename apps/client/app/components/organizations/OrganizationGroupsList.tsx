@@ -99,9 +99,21 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
   // `previousName` is set on a user rename so its toast can offer Undo; the undo itself omits it,
   // so undoing never offers a redo.
   const renameMutation = useMutation({
-    mutationFn: ({ groupId, name }: { groupId: string; name: string; previousName?: string }) =>
-      renameOrganizationGroup(orgId, groupId, name),
-    onSuccess: (_data, { groupId, name, previousName }) => {
+    mutationFn: ({
+      groupId,
+      name,
+      expectedName,
+    }: {
+      groupId: string;
+      name: string;
+      previousName?: string;
+      expectedName?: string;
+    }) =>
+      expectedName === undefined
+        ? renameOrganizationGroup(orgId, groupId, name)
+        : renameOrganizationGroup(orgId, groupId, name, { expectedName }),
+    onSuccess: (group, { groupId, previousName }) => {
+      const name = group.name;
       invalidateGroups();
       if (previousName === undefined) {
         toast.success(`Group name restored to "${name}"`);
@@ -110,7 +122,7 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
       toast.success(`Group renamed to "${name}"`, {
         action: {
           label: 'Undo',
-          onClick: () => renameMutation.mutate({ groupId, name: previousName }),
+          onClick: () => renameMutation.mutate({ groupId, name: previousName, expectedName: group.name }),
         },
       });
     },

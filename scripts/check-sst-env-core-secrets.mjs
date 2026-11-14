@@ -41,7 +41,11 @@ for (const file of coreFiles) {
   }
 }
 
-const files = git(staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM'] : ['ls-files'])
+// Limit Git's output to the inventory we inspect; a large monorepo can exceed execFileSync's buffer.
+const envPaths = ['--', 'sst-env.d.ts', '**/sst-env.d.ts'];
+const files = git(
+  staged ? ['diff', '--cached', '--name-only', '--diff-filter=AM', ...envPaths] : ['ls-files', ...envPaths]
+)
   .split('\n')
   .filter(f => f === 'sst-env.d.ts' || f.endsWith('/sst-env.d.ts'));
 
