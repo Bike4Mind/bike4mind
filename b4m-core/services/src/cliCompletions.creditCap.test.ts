@@ -53,10 +53,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 import { executeCompletion } from './cliCompletions';
 import { subtractCredits } from './creditService';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
+import { conservativeRoundInputUsd } from './llm/chatCreditCap';
 
 const hold = usdToCredits(getTextModelCost(MODEL_INFO, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS)));
 const perOutputTokenCredits = (25 / 1_000_000) * CREDITS_PER_USD_COST;
-const inputCredits = getTextModelCost(MODEL_INFO, INPUT_TOKENS, 0) * CREDITS_PER_USD_COST;
+// The cap prices input at the dearest rate it can bill: a 5-minute cache write.
+const inputCredits = conservativeRoundInputUsd(MODEL_INFO, INPUT_TOKENS, '5m') * CREDITS_PER_USD_COST;
 
 /**
  * A user whose balance moves with every increment, so the test sees what settlement leaves behind.
@@ -202,6 +204,111 @@ describe('executeCompletion - output capped at what the balance can pay for', ()
       expect.stringContaining('charged down to zero'),
       expect.objectContaining({ charged: hold + 200 })
     );
+  });
+});
+
+describe('executeCompletion - prompt-cache writes near a low balance', () => {
+  // 2.5 chars per estimated token
+  const text = (tokens: number) => 'x'.repeat(tokens * 2.5);
+  const logger: NonNullable<Parameters<typeof executeCompletion>[0]['logger']> & { error: ReturnType<typeof vi.fn> } = {
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  };
+  const overdrew = () => logger.error.mock.calls.some(([message]) => String(message).includes('charged down to zero'));
+  // A balance that pays for the hold and a little more, so the cap (not the hold) is what binds.
+  const cappedOutput = reservationOutputTokens(MAX_TOKENS) + 1_000;
+  const exactCredits = (writeTokens: number, outputTokens: number) =>
+    getTextModelCost(MODEL_INFO, 0, outputTokens, 0, writeTokens) * CREDITS_PER_USD_COST;
+
+  // The provider writes the whole prompt to the cache and answers up to the budget it was sent.
+  const writesEverything = (writeTokens: number, outputTokens?: number) =>
+    llm.complete.mockImplementation(async (_model, _messages, options: Partial<ICompletionOptions>, cb) => {
+      await cb([''], { cacheCreationInputTokens: writeTokens, outputTokens: outputTokens ?? options.maxTokens });
+    });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  describe('CLI first round (the server strategy writes the system prompt and history)', () => {
+    const messages = [
+      { role: 'system' as const, content: text(40_000) },
+      { role: 'user' as const, content: text(1_000) },
+    ];
+    const params = { ...baseParams, source: 'cli' as const, messages, logger };
+
+    it('holds at least what a full cache write plus the held output settles at', async () => {
+      const startingBalance = 1_000_000;
+      const { db, users, balance } = buildDb(startingBalance);
+      writesEverything(41_000, reservationOutputTokens(MAX_TOKENS));
+
+      await executeCompletion({ ...params, db });
+
+      const held = -users.incrementCredits.mock.calls[0][1];
+      const charged = startingBalance - balance();
+      expect(charged).toBeGreaterThanOrEqual(Math.floor(exactCredits(41_000, reservationOutputTokens(MAX_TOKENS))));
+      expect(held).toBeGreaterThanOrEqual(charged);
+    });
+
+    it('caps the answer so the cache write and output settle within a near-empty balance', async () => {
+      const startingBalance = Math.ceil(exactCredits(41_000, cappedOutput));
+      const { db, balance } = buildDb(startingBalance);
+      writesEverything(41_000);
+
+      await executeCompletion({ ...params, db });
+
+      expect(sentOptions().maxTokens).toBeLessThan(MAX_TOKENS);
+      expect(exactCredits(41_000, sentOptions().maxTokens!)).toBeLessThanOrEqual(startingBalance + 1e-6);
+      expect(overdrew()).toBe(false);
+      expect(balance()).toBeGreaterThanOrEqual(0);
+    });
+
+    it('refuses before any model call when the balance cannot pay for the cache write', async () => {
+      const startingBalance = Math.floor(getTextModelCost(MODEL_INFO, 41_000, 0) * CREDITS_PER_USD_COST);
+      const { db, balance } = buildDb(startingBalance);
+
+      await expect(executeCompletion({ ...params, db })).rejects.toBeInstanceOf(InsufficientCreditsError);
+
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(balance()).toBe(startingBalance);
+    });
+  });
+
+  describe('later round whose cache has lapsed (held as a read, billed as a write)', () => {
+    const messages = [
+      { role: 'system' as const, content: text(10_000), cache: true },
+      { role: 'user' as const, content: text(20_000) },
+      { role: 'assistant' as const, content: text(30_000), cache: true },
+      { role: 'user' as const, content: text(8_000) },
+    ];
+    const params = { ...baseParams, messages, logger };
+
+    it('caps the answer at what the balance pays for once the whole prompt is rewritten', async () => {
+      const startingBalance = Math.ceil(exactCredits(68_000, cappedOutput));
+      const { db, users, balance } = buildDb(startingBalance);
+      writesEverything(68_000);
+
+      await executeCompletion({ ...params, db });
+
+      // The premise: the hold assumed a warm cache, so it is well under the cold-cache cost.
+      expect(-users.incrementCredits.mock.calls[0][1]).toBeLessThan(
+        exactCredits(68_000, reservationOutputTokens(MAX_TOKENS))
+      );
+      expect(sentOptions().maxTokens).toBeLessThan(MAX_TOKENS);
+      expect(exactCredits(68_000, sentOptions().maxTokens!)).toBeLessThanOrEqual(startingBalance + 1e-6);
+      expect(overdrew()).toBe(false);
+      expect(balance()).toBeGreaterThanOrEqual(0);
+    });
+
+    it('refuses before any model call when the balance covers the warm-cache hold but not a rewrite', async () => {
+      const startingBalance = Math.floor(exactCredits(68_000, 0));
+      const { db, balance } = buildDb(startingBalance);
+
+      await expect(executeCompletion({ ...params, db })).rejects.toBeInstanceOf(InsufficientCreditsError);
+
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(balance()).toBe(startingBalance);
+    });
   });
 });
 
