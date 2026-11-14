@@ -31,8 +31,8 @@ export class NeedsYouMonitor {
     const previous = this.statuses.get(event.sessionId);
     this.statuses.set(event.sessionId, event.status);
     if (this.deps.hasWindow()) return;
-    // The badge counts only needs-action sessions, so other transitions cannot change it.
-    if (previous !== 'needs-action' && event.status !== 'needs-action') return;
+    // A worker task waiting on a decision counts too, and it surfaces as a session leaves processing,
+    // so every status event recounts the badge; only a new needs-action entry also raises a notice.
     const entered = event.status === 'needs-action' && previous !== 'needs-action' ? event.sessionId : null;
     this.enqueue(() => this.update(entered));
   }

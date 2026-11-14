@@ -714,6 +714,28 @@ describe('verifyApiKey exchange keys', () => {
     });
   });
 
+  it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {
+    isApiKeyAccessAllowedMock
+      .mockReset()
+      .mockImplementation(
+        async (_user: unknown, billing?: unknown) =>
+          !!(billing as { oauthExchangeClientId?: string } | undefined)?.oauthExchangeClientId
+      );
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).resolves.toMatchObject({ keyId: 'k1' });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' })
+    );
+
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...exchangeKey,
+      oauthExchangeClientId: undefined,
+    });
+    await expect(verifyApiKey({}, { allowExchangeKeys: true })).rejects.toMatchObject({ statusCode: 403 });
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+  });
+
   it('leaves a personal key with the same scopes unchanged either way', async () => {
     vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
       ...exchangeKey,

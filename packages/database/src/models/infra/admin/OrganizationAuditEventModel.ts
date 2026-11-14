@@ -8,6 +8,8 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'invite.created',
   'invite.revoked',
   'policy.updated',
+  'retention.deleted',
+  'retention.media_detached',
   'billing.updated',
   'api_key.created',
   'api_key.revoked',

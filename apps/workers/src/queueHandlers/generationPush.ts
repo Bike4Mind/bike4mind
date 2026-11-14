@@ -4,7 +4,7 @@ import {
   type ConnectionLookup,
   hasLiveConnection,
   isPushDeliveryConfigured,
-  truncateForPush,
+  generationPushBody,
 } from '@bike4mind/server-utils/utils/pushNotifications';
 
 /**
@@ -32,8 +32,8 @@ const JOB_TITLES: Record<PushedKind, string> = {
  * For a video or music job the engine just finished. Pushed regardless of websocket presence: these run
  * for minutes, long enough that the requester has usually moved on. Failed and cancelled jobs are not
  * pushed (there is no failure category), and neither is a job with a Slack delivery, which already
- * reports back in its own thread. Image jobs are not pushed either: they finish in seconds in Studio,
- * where the websocket update already lands, and a "make N" batch would push N times.
+ * reports back in its own thread. Image jobs are not pushed per job: a "make N" batch is pushed once,
+ * from the group completion decision (imageGroupPushSubscriber in server-utils generationJobs).
  */
 export async function publishGenerationJobReadyPush(
   jobId: string,
@@ -46,12 +46,11 @@ export async function publishGenerationJobReadyPush(
     if (!job || job.state !== 'succeeded' || job.delivery || job.kind === 'image') return;
 
     const sessionId = job.kind === 'music' ? job.payload.sessionId : undefined;
-    const prompt = job.payload.request.prompt?.replace(/\s+/g, ' ').trim();
     await deps.publish({
       userId: job.requestedBy,
       category: 'generation_ready',
       title: JOB_TITLES[job.kind],
-      body: prompt ? truncateForPush(prompt, 160) : `Your ${job.kind} is ready.`,
+      body: generationPushBody(job.payload.request.prompt, `Your ${job.kind} is ready.`),
       deepLink: sessionId ? deps.sessionDeepLink(sessionId) : deps.appRootDeepLink(),
       collapseId: `generation:${job.id}`,
       ...(job.questId && { questId: job.questId }),

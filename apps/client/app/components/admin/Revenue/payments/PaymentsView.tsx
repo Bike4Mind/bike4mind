@@ -1,20 +1,6 @@
 import React, { useMemo, useState, type ReactNode } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Dropdown,
-  IconButton,
-  Input,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Skeleton,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { Alert, Box, Button, Input, MenuItem, Skeleton, Stack, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import {
@@ -73,6 +59,7 @@ import {
 } from './paymentsSummary';
 import { usePaymentsParams } from './usePaymentsTabParams';
 import { fetchPaymentsExport, useAdminPaymentsList, useAdminPaymentsSummary } from './useAdminPayments';
+import { RowActionsMenu } from '../../shared/RowActionsMenu';
 
 const DAY_MS = 86_400_000;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -356,37 +343,18 @@ function PaymentRowActions({
 }) {
   if (!row.owner && !row.subscriptionId) return null;
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': 'Actions for this payment',
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`admin-payments-row-actions-${row.id}`}
-        // The row opens the customer on click; the menu must not.
-        onClick={event => event.stopPropagation()}
-        onKeyDown={event => event.stopPropagation()}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }} onClick={event => event.stopPropagation()}>
-        {row.owner && (
-          <MenuItem onClick={onOpenCustomer} data-testid={`admin-payments-row-open-customer-${row.id}`}>
-            Open customer
-          </MenuItem>
-        )}
-        {row.subscriptionId && (
-          <MenuItem onClick={onOpenSubscription} data-testid={`admin-payments-row-open-subscription-${row.id}`}>
-            Open subscription
-          </MenuItem>
-        )}
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu testId={`admin-payments-row-actions-${row.id}`} ariaLabel="Actions for this payment" stopRowClick>
+      {row.owner && (
+        <MenuItem onClick={onOpenCustomer} data-testid={`admin-payments-row-open-customer-${row.id}`}>
+          Open customer
+        </MenuItem>
+      )}
+      {row.subscriptionId && (
+        <MenuItem onClick={onOpenSubscription} data-testid={`admin-payments-row-open-subscription-${row.id}`}>
+          Open subscription
+        </MenuItem>
+      )}
+    </RowActionsMenu>
   );
 }
 

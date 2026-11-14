@@ -13,6 +13,7 @@ import {
   type ModelUnits,
   type ModelView,
 } from '@shared/model3d';
+import type { JointDragFrame } from './jointDrag';
 import { enableShadows, ModelComposer, ModelStage } from './modelStage';
 import { applyTexture, boxProjectUvs } from './proceduralTextures';
 
@@ -214,6 +215,55 @@ export function poseJoints(root: THREE.Object3D, angles: Record<string, number>)
       node.position.copy(jointPosition(joint, amount)).add(explodeShift(node));
     } else node.quaternion.copy(jointRotation(joint, amount));
   }
+}
+
+/**
+ * The joint node a press on `object` drives: its own joint, else its nearest jointed ancestor, so
+ * grabbing a lid's handle opens the lid. Null for a part that nothing moves.
+ */
+export function drivingJoint(object: THREE.Object3D): THREE.Object3D | null {
+  for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+    if (node.userData.joint) return node;
+  }
+  return null;
+}
+
+/** The first mesh of `root` under `ndc` (normalised device coordinates, -1 to 1), or null. */
+export function meshAt(root: THREE.Object3D, camera: THREE.Camera, ndc: THREE.Vector2): THREE.Intersection | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.intersectObject(root, true).find(entry => entry.object instanceof THREE.Mesh) ?? null;
+}
+
+/** The joint a part's arrow-key nudge moves (see drivingJoint), by name; null for a fixed or unknown part. */
+export function drivingJointName(root: THREE.Object3D, partName: string): string | null {
+  let part: THREE.Object3D | null = null;
+  root.traverse(node => {
+    if (!part && node instanceof THREE.Mesh && node.name === partName) part = node;
+  });
+  return part ? (drivingJoint(part)?.name ?? null) : null;
+}
+
+/**
+ * A joint node's motion in world space as it is posed now, for dragging it (jointDrag.ts). The
+ * axis is stored in the parent's frame, so a posed parent carries a child's hinge with it.
+ */
+export function jointDragFrame(node: THREE.Object3D): JointDragFrame {
+  const joint = node.userData.joint as JointData | undefined;
+  if (!joint) throw new Error(`${node.name} is not a joint.`);
+  node.updateWorldMatrix(true, false);
+  const parentMatrix = node.parent?.matrixWorld ?? new THREE.Matrix4();
+  const axis = new THREE.Vector3(...joint.axis)
+    .normalize()
+    .applyMatrix3(new THREE.Matrix3().setFromMatrix4(parentMatrix));
+  const scale = axis.length();
+  return {
+    motion: joint.motion,
+    pivot: node.getWorldPosition(new THREE.Vector3()),
+    axis: axis.normalize(),
+    range: joint.range,
+    scale,
+  };
 }
 
 /** The node's current exploded-view shift (zero when the view is assembled). */
@@ -523,6 +573,29 @@ export function frameCamera(
 ): THREE.Vector3 {
   root.updateMatrixWorld(true);
   return frameBox(camera, new THREE.Box3().setFromObject(root), direction);
+}
+
+/** How close to the view's edge, as a share of its half-width, a model may reach before it counts as cropped. */
+export const VIEW_EDGE_MARGIN = 0.02;
+
+/**
+ * Whether some corner of `box` lies past the camera's view, or within `margin` of its edge, or behind
+ * it: a rebuild that grew the model out of frame. Reads the camera's current matrices.
+ */
+export function extendsPastView(camera: THREE.PerspectiveCamera, box: THREE.Box3, margin = VIEW_EDGE_MARGIN): boolean {
+  if (box.isEmpty()) return false;
+  camera.updateMatrixWorld();
+  camera.updateProjectionMatrix();
+  const limit = 1 - margin;
+  const corner = new THREE.Vector3();
+  for (let index = 0; index < 8; index += 1) {
+    corner.set(index & 1 ? box.max.x : box.min.x, index & 2 ? box.max.y : box.min.y, index & 4 ? box.max.z : box.min.z);
+    corner.applyMatrix4(camera.matrixWorldInverse);
+    if (corner.z > -camera.near) return true;
+    corner.applyMatrix4(camera.projectionMatrix);
+    if (Math.abs(corner.x) > limit || Math.abs(corner.y) > limit) return true;
+  }
+  return false;
 }
 
 /** frameCamera for a box rather than a whole object: what a close-up of some parts frames. */

@@ -85,6 +85,19 @@ describe('createOAuthClient', () => {
     expect(removed.after.federatedIdp).toBeUndefined();
   });
 
+  it('stores unpaidAccountsAllowed on any client and leaves it unset by default', async () => {
+    const { client } = await createOAuthClient(base);
+    expect(client).not.toHaveProperty('unpaidAccountsAllowed');
+    const off = await updateOAuthClient(client.id, { unpaidAccountsAllowed: false });
+    expect(off.after.unpaidAccountsAllowed).toBe(false);
+    expect((await listOAuthClients())[0].unpaidAccountsAllowed).toBe(false);
+    const on = await updateOAuthClient(client.id, { unpaidAccountsAllowed: true });
+    expect(on.before.unpaidAccountsAllowed).toBe(false);
+    expect(on.after.unpaidAccountsAllowed).toBe(true);
+    const created = await createOAuthClient({ ...base, name: 'Other App', unpaidAccountsAllowed: false });
+    expect(created.client.unpaidAccountsAllowed).toBe(false);
+  });
+
   it('requires federation to add a profile to an ordinary client', async () => {
     const { client } = await createOAuthClient(base);
     await expect(

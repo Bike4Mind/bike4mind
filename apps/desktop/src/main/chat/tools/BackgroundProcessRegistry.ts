@@ -170,7 +170,8 @@ export class BackgroundProcessRegistry {
       });
     } catch (err) {
       await launch.cleanup();
-      throw err;
+      // Node throws some spawn failures (ENOTDIR) synchronously instead of emitting 'error'.
+      throw err instanceof Error ? spawnFailure(err, request.cwd, launch) : err;
     }
 
     const tracked = this.track(info, child, child.pid ?? null, launch, request.wakeOnExit === true);

@@ -39,6 +39,7 @@ import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
+import './organizationRetention';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',

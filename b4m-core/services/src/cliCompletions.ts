@@ -99,6 +99,7 @@ import {
 } from './llm/shadowTier';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { conservativeRoundInputUsd } from './llm/chatCreditCap';
 import {
   MIN_AFFORDABLE_OUTPUT_TOKENS,
   affordableRoundBudget,
@@ -339,8 +340,8 @@ export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHono
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
  * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
- * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
- * caching never lowers a hold.
+ * below discounts a Claude read only on Anthropic and only for `cache` flags (client-sent, or the
+ * first-round breakpoints withFirstRoundCacheBreakpoints adds, which only raise the hold).
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -390,6 +391,25 @@ function buildClaudeCacheStrategy(
   };
 }
 
+/**
+ * A first round's messages with the breakpoints the server's Claude cache strategy will place
+ * (system prompt, history anchor; see AnthropicCachingAdapter) marked as if the client had flagged
+ * them, so the hold prices that round's cache write. Only for a round with no assistant message:
+ * nothing is cached yet, so every breakpoint can only write. Later rounds keep pricing the client's
+ * own flags, and the per-round cap prices a cache miss on any round.
+ */
+function withFirstRoundCacheBreakpoints(messages: IMessage[], strategy: ICacheStrategy | undefined): IMessage[] {
+  if (!strategy?.enableCaching || messages.some(m => m.role === 'assistant')) return messages;
+  // Must stay in sync with the history-anchor rule in AnthropicCachingAdapter, or the hold under-prices the write.
+  let anchorIndex = strategy.cacheConversationHistory
+    ? messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0)
+    : -1;
+  while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
+  return messages.map((m, index) =>
+    index === anchorIndex || (strategy.cacheSystemPrompt && m.role === 'system') ? { ...m, cache: true } : m
+  );
+}
+
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
 const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
 
@@ -408,9 +428,11 @@ const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
  * last assistant message included); the rest is plain input. Auto-caching backends read the
  * system messages that precede the last assistant message (they preserve message order, so a later
  * one is new content) and the conversation up to the message before the last assistant, and bill
- * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
- * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
- * actual usage.
+ * the rest plain. A conversation with no assistant message yet has nothing cached: an auto-caching
+ * backend bills it plain, and on Anthropic every breakpoint writes its whole prefix (the hoisted system
+ * messages included), so that prefix is held at cache_write and the tail plain. If the provider misses
+ * (cache TTL lapsed) the real cost is higher; settlement charges actual usage, and the per-round cap
+ * (conservativeRoundInputUsd) prices that miss so it cannot overdraw.
  *
  * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
  * client-claimed or lapsed cache cannot shrink the hold below it.
@@ -427,7 +449,9 @@ function estimateReservationUsd(
   cacheTtl: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
-  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+  const hasAssistant = messages.some(m => m.role === 'assistant');
+  // A first-round Claude on Bedrock is held plain; the per-round cap prices its cache write.
+  if (!hasAssistant && modelInfo.backend !== ModelBackend.Anthropic) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   const conversation = messages.filter(m => m.role !== 'system');
@@ -457,13 +481,15 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  // Priced plain: tool schemas carry no flag here, so no discount is assumed. On a first round the
+  // server's cacheTools writes them, so the hold runs ~0.25x of tool tokens short; the cap covers it.
   let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
     if (m.role === 'system') {
-      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      if (hoistsSystem && !hasAssistant) writeTokens += tokens;
+      else if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
       else plainTokens += tokens;
       return;
     }
@@ -931,8 +957,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
-  // Prices a round's input the way the hold does and returns the output budget `availableCredits`
-  // can pay for on top of it; see completionCreditBudget. Set only when credits are enforced.
+  // Prices a round's input at the dearest rate the provider can bill it (a cold cache writes the whole
+  // prefix) and returns the output budget `availableCredits` can pay for on top of it; see
+  // completionCreditBudget. Set only when credits are enforced.
   let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
   const refundReservation = async () => {
     const refund = async () => {
@@ -967,7 +994,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
     const estimatedUsdCost = estimateReservationUsd(
       chargedModelInfo!,
-      messages,
+      withFirstRoundCacheBreakpoints(messages, cacheStrategy),
       estimatedInputTokens,
       estimatedOutputTokens,
       estimatedToolTokens,
@@ -1046,7 +1073,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
       return affordableRoundBudget({
         modelInfo: chargedModelInfo!,
-        inputUsd: estimateReservationUsd(chargedModelInfo!, roundMessages, inputTokens, 0, toolTokens),
+        // Not estimateReservationUsd: the hold assumes a warm cache; see the cap note above.
+        inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
         inputTokens,
         availableCredits,
         minimumOutputTokens,

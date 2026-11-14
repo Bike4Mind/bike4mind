@@ -27,7 +27,8 @@ export async function readEnforceMfa({ skipCache = true }: { skipCache?: boolean
  * in middlewares/oauthRouteGate.ts) - keep those four in sync, or a credential refused at one
  * surface rides another. websocket/connect.ts is a known gap: a header JWT opens a socket there
  * with no user lookup. An admin impersonation session (the token's impersonatedBy claim) is
- * exempt: the admin proved their own factor, and support must reach the account.
+ * exempt: the admin proved their own factor, and support must reach the account. A test persona is
+ * exempt too (mfaService.isMfaEnforcementExempt), matching the `required` flag of the MFA status.
  *
  * Reads the setting through the cache because it runs per request. An enrolled user never
  * reaches the read, and a toggle reaches other instances within one settings-cache TTL.
@@ -36,7 +37,9 @@ export async function isMfaEnrollmentOwed(
   user: IUserDocument,
   { impersonatedBy }: { impersonatedBy?: unknown } = {}
 ): Promise<boolean> {
-  if (impersonatedBy || mfaService.userHasMFAConfigured(user)) return false;
+  if (impersonatedBy || mfaService.isMfaEnforcementExempt(user) || mfaService.userHasMFAConfigured(user)) {
+    return false;
+  }
   return readEnforceMfa({ skipCache: false });
 }
 
