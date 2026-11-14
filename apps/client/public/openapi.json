@@ -27189,7 +27189,7 @@
             }
           },
           "403": {
-            "description": "A file the action attaches is not accessible to you.",
+            "description": "MCP servers or custom connectors are disabled, or a file the action attaches is not accessible to you.",
             "content": {
               "application/json": {
                 "schema": {

@@ -12244,7 +12244,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description A file the action attaches is not accessible to you. */
+      /** @description MCP servers or custom connectors are disabled, or a file the action attaches is not accessible to you. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

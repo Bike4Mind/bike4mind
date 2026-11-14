@@ -49,7 +49,11 @@ export const approvePendingActionContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
-    403: { description: 'A file the action attaches is not accessible to you.', schema: ApiErrorSchema },
+    403: {
+      description:
+        'MCP servers or custom connectors are disabled, or a file the action attaches is not accessible to you.',
+      schema: ApiErrorSchema,
+    },
     404: { description: 'No such quest, or it is not yours.', schema: ApiErrorSchema },
     409: { description: CONFLICT, schema: PendingActionErrorSchema },
     422: { description: 'The body is not `{ pendingActionTs }`.', schema: ApiErrorSchema },
