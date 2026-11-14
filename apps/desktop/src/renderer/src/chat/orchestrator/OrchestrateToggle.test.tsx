@@ -44,6 +44,20 @@ describe('OrchestrateToggle', () => {
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
   });
 
+  it('counts the orchestrating session waiting on the user, as the Tavern does', async () => {
+    await themed.render(
+      <OrchestrateToggle
+        states={['working', 'working']}
+        parentNeedsYou
+        surface="chat"
+        onSurfaceChange={onSurfaceChange}
+      />
+    );
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
+      `Show agents, ${describeAgentStates(['working', 'working'], 1)}`
+    );
+  });
+
   it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
     await renderToggle(['done', 'idle', 'stopped']);
     expect(el('chat-orchestrate-count').textContent).toBe('3');

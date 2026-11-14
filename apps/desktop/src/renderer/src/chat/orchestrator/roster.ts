@@ -16,7 +16,6 @@ import {
 export {
   AGENT_STATE_LABEL,
   AGENT_STATE_PRIORITY,
-  countAgentStates,
   deriveAgentState,
   deriveTaskAgentState,
   describeAgentStates,

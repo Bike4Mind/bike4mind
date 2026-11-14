@@ -14,13 +14,13 @@ const DOT_COLOR: Record<AgentState, ColorPaletteProp> = {
   idle: 'neutral',
 };
 
-/** The tiny window: every orchestration as a cluster of state dots. A click opens it in the app. */
 /** A cluster's name and counts: the same describeAgentStates line as the menu-bar header and the Tavern. */
 export function miniStripLabel(orchestration: WatchOrchestration): string {
   const states = orchestration.agents.map(agent => agent.state);
   return `${orchestration.title}: ${describeAgentStates(states, rootNeedsYou(orchestration))}`;
 }
 
+/** The tiny window: every orchestration as a cluster of state dots. A click opens it in the app. */
 export function MiniStrip({
   orchestrations,
   onOpen,
