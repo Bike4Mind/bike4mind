@@ -22,6 +22,7 @@ import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgC
 import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
+import OrganizationRetentionSection from '@client/app/components/organizations/OrganizationRetentionSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
 import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
 import { isAxiosError } from 'axios';
@@ -379,6 +380,7 @@ const OrganizationPage: FC = () => {
                 />
               )}
               <OrganizationOverviewSection organization={organization} />
+              <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
             {selectedTab === OrganizationTabs.Library && (
               <TabPanel value={OrganizationTabs.Library}>
