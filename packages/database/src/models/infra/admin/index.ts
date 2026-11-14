@@ -12,6 +12,7 @@ export * from './AdminApprovalModel';
 export * from './AdminGateReservationModel';
 export * from './AdminAiSuggestionModel';
 export * from './OrgDomainClaimModel';
+export * from './SpaceModel';
 export * from './AdminMorningBriefModel';
 export * from './AdminAiOperationsModel';
 

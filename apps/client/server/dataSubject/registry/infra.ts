@@ -492,6 +492,15 @@ export const infraHolders = {
     secretPaths: ['downloadUrl'],
     unrelatedPaths: ['includeUserNames'],
   },
+  // `ownerUserId` is anonymized like an organization owner, so members keep the Space.
+  Space: {
+    kind: 'holder',
+    references: [
+      { path: 'ownerUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'members.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'removedUserIds', matchBy: 'userId', action: 'pullFromArray' },
+    ],
+  },
   SreErrorPattern: { kind: 'noUserData', note: 'Learned error diagnosis pattern.' },
   // `fixVerdict.by` is a GitHub login of a staff reviewer, not a Bike4Mind user reference.
   SreErrorTracking: {

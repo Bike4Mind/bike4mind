@@ -44,6 +44,7 @@ export * from './BaseTypes';
 export * from './SubscriberTypes';
 export * from './PartnerSignupRuleTypes';
 export * from './OrgDomainClaimTypes';
+export * from './SpaceTypes';
 export * from './ReportTypes';
 export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
