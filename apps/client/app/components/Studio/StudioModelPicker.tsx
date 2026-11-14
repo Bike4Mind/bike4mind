@@ -262,6 +262,7 @@ const ModelPanel = ({ testIdPrefix, cards, selectedId, onSelect, headingId }: Mo
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState(ALL_PROVIDERS);
   const radioName = useId();
+  const providerLabelId = useId();
   const providers = [...new Set(cards.map(card => card.provider))];
   const shortlist = shortlistOf(cards, selectedId);
   const listed = showAll
@@ -296,7 +297,8 @@ const ModelPanel = ({ testIdPrefix, cards, selectedId, onSelect, headingId }: Mo
             size="sm"
             value={provider}
             onChange={(_event, value) => setProvider(value ?? ALL_PROVIDERS)}
-            aria-label="Provider"
+            // aria-labelledby, not aria-label: inside a FormControl, Joy labels the Select with the field's label instead.
+            aria-labelledby={providerLabelId}
             slotProps={{ button: { 'data-testid': `${testIdPrefix}-model-provider-select` } }}
             sx={{ minWidth: 140 }}
           >
@@ -307,6 +309,7 @@ const ModelPanel = ({ testIdPrefix, cards, selectedId, onSelect, headingId }: Mo
               </Option>
             ))}
           </Select>
+          <HiddenText id={providerLabelId}>Provider</HiddenText>
         </Filters>
       )}
       <OptionList role="radiogroup" aria-labelledby={headingId} data-testid={`${testIdPrefix}-model-panel`}>

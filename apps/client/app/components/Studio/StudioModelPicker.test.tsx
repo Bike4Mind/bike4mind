@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import FormControl from '@mui/joy/FormControl';
+import FormLabel from '@mui/joy/FormLabel';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import StudioModelPicker from './StudioModelPicker';
@@ -109,6 +111,20 @@ describe('StudioModelPicker', () => {
     fireEvent.click(screen.getByTestId('pick-model-provider-select'));
     fireEvent.click(screen.getByRole('option', { name: 'Globex' }));
     expect(optionIds()).toEqual(['g', 'h']);
+  });
+
+  it('names the provider filter "Provider" even inside a labelled FormControl', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <FormControl>
+          <FormLabel>Model</FormLabel>
+          <StudioModelPicker testIdPrefix="pick" cards={CARDS} selectedId="a" onSelect={vi.fn()} />
+        </FormControl>
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('pick-model-change-btn'));
+    fireEvent.click(screen.getByTestId('pick-model-show-all-btn'));
+    expect(screen.getByTestId('pick-model-provider-select')).toHaveAccessibleName('Provider');
   });
 
   it('offers no "Show all" when the shortlist already holds every model', () => {
