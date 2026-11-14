@@ -18,6 +18,7 @@ const {
   defineAbilitiesForSpy,
   createAttachmentLakeAccessSpy,
   fabFileFindMetadataByIds,
+  resolveRetention,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -59,6 +60,7 @@ const {
     defineAbilitiesForSpy: vi.fn(),
     createAttachmentLakeAccessSpy: vi.fn(),
     fabFileFindMetadataByIds: vi.fn(),
+    resolveRetention: vi.fn(),
   };
 });
 
@@ -113,6 +115,8 @@ vi.mock('../dataLakes/attachmentLakeAccess', () => ({
 }));
 
 vi.mock('../utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
+
+vi.mock('../organizations/retentionOwnership', () => ({ resolveRetentionOrganization: resolveRetention }));
 
 vi.mock('@casl/mongoose', () => ({
   accessibleBy: accessibleBySpy,
@@ -197,6 +201,13 @@ describe('sessionCrud', () => {
     it('throws NotFoundError when the owner-only fallback finds nothing', async () => {
       sessionRepoFindByIdAndUserId.mockResolvedValueOnce(null);
       await expect(getOrCreateSession({ sessionId: 'not-owned', user, logger })).rejects.toThrow('Session not found');
+    });
+
+    it('hands the retention resolver to the session service', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+      await getOrCreateSession({ sessionName: 'New Notebook', user, ability: allowAbility, logger });
+      const [, , adapters] = createSessionService.mock.calls.at(-1)!;
+      expect(adapters.resolveRetentionOrganization).toBe(resolveRetention);
     });
 
     it('creates a session, notifies clients, and defers analytics + last-notebook update', async () => {
@@ -501,6 +512,33 @@ describe('sessionCrud', () => {
   });
 
   describe('createSession', () => {
+    it('binds retention from the resolver and the real owner, ignoring client-supplied values', async () => {
+      const owner = { id: 'user-1' };
+      userRepoFindById.mockResolvedValueOnce(owner);
+      resolveRetention.mockResolvedValueOnce('resolved-org');
+      await createSession(
+        'user-1',
+        {
+          name: 'X',
+          organizationId: 'notebook-org',
+          userId: 'forged-user',
+          retentionOrganizationId: 'forged-org',
+        } as never,
+        allowAbility
+      );
+      expect(resolveRetention).toHaveBeenCalledWith(owner, 'notebook-org');
+      expect(SessionModelMock).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', retentionOrganizationId: 'resolved-org' })
+      );
+    });
+
+    it('leaves the notebook unbound when the owner cannot be loaded', async () => {
+      userRepoFindById.mockResolvedValueOnce(null);
+      await createSession('user-1', { name: 'X', retentionOrganizationId: 'forged-org' } as never, allowAbility);
+      expect(resolveRetention).not.toHaveBeenCalled();
+      expect(SessionModelMock).toHaveBeenCalledWith(expect.objectContaining({ retentionOrganizationId: undefined }));
+    });
+
     it('throws when the ability denies session creation', async () => {
       const denyAbility = mockAbility(false);
       await expect(createSession('user-1', { name: 'X' }, denyAbility)).rejects.toThrow('Cannot create session');

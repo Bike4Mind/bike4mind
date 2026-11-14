@@ -115,11 +115,6 @@ export interface ShellScan {
    */
   sends: { reason: string; target: RepositoryWrite | null }[];
   /**
-   * True when every command is one `containedCommand` accepts and nothing in the script sets the
-   * environment, so no part of it can carry data to a host of the caller's choosing.
-   */
-  contained: boolean;
-  /**
    * True when every command only reads: a contained program that writes nothing, or a git
    * subcommand that only reports (see `readOnlyGit`), with no redirect, in-place edit or
    * environment change. Lets a worktree session read its main checkout unasked.
@@ -4979,9 +4974,22 @@ function curlModeled(args: readonly string[]): boolean {
   return (
     options !== null &&
     options.every(({ name, value }) =>
-      name === 'url' ? curlUrl(value ?? '') : name !== 'write-out' || !/%output|^@/.test(value ?? '')
+      name === 'url'
+        ? curlUrl(value ?? '')
+        : name === 'form'
+          ? simpleCurlForm(value ?? '')
+          : name !== 'write-out' || !/%output|^@/.test(value ?? '')
     )
   );
+}
+
+/** Curl parses its own quoting, file lists and attributes inside a form value; those need a decision. */
+function simpleCurlForm(value: string): boolean {
+  if (/[,;"\\\r\n]/.test(value)) return false;
+  const equals = value.indexOf('=');
+  if (equals === -1) return false;
+  const data = value.slice(equals + 1);
+  return !/^[@<]/.test(data.trimStart()) || !/\s/.test(data);
 }
 
 /** `text` as one single-quoted shell word. */
@@ -4991,8 +4999,10 @@ const shellQuoted = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`
  * The files a curl call reads and writes, as shell words: `-o` (under `--output-dir`), `-c`, `-D`, a `-O` name
  * taken from each URL, `-b` without `=`, `-T`, and `@file` data. `named` when `-J` lets the server name the file.
  */
-function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } {
-  const options = curlOptions(args) ?? [];
+function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } | null {
+  const options = curlOptions(args);
+  if (!options || options.some(({ name, value }) => name === 'form' && !simpleCurlForm(wordValue(value ?? ''))))
+    return null;
   const values = (...names: string[]): string[] =>
     options.flatMap(({ name, value }) => (names.includes(name) && value !== undefined ? [value] : []));
   const directory = values('output-dir').at(-1);
@@ -6462,7 +6472,6 @@ export async function scanShell(
     // Commands that write, or may change what git or a walk lists, in the order read; see `trusted`.
     const touchedBy: number[] = [];
     const laterChecks: { own: ReadonlySet<number>; anywhere: boolean; alongside: ReadonlySet<number> }[] = [];
-    let contained = true;
     let readOnly = true;
     // What each command names, and whether it only reads; a writer's places, cwd included, go to `writtenPlaces`.
     let part: { places: string[]; reads: boolean } | null = null;
@@ -7972,7 +7981,6 @@ export async function scanShell(
         }
       }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
-      if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       if (
         reason ||
         assigns ||
@@ -8015,9 +8023,9 @@ export async function scanShell(
       }
       if (name === 'curl') {
         const curl = curlFiles(wrappedRest);
-        if (curl.named) unreadOperands++;
-        for (const path of curl.reads) await check(path, state.cwd);
-        for (const path of curl.writes) {
+        if (!curl || curl.named) unreadOperands++;
+        for (const path of curl?.reads ?? []) await check(path, state.cwd);
+        for (const path of curl?.writes ?? []) {
           noteWrite(path);
           await check(path, state.cwd);
         }
@@ -8640,7 +8648,6 @@ export async function scanShell(
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
-        contained = false;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -8653,9 +8660,8 @@ export async function scanShell(
         commands.push({ text: header, always: header, coverable: false, words: header });
         const variable = node.childForFieldName('variable')?.text ?? '';
         // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
-        // `GIT_DIR` and `http_proxy` all fail it), so the loop stays contained if its body does.
+        // `GIT_DIR` and `http_proxy` all fail it), so that binding does not change the environment.
         if (!/^[a-z][a-z0-9]*$/.test(variable)) {
-          contained = false;
           setsEnvironment = true;
         }
         const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
@@ -8833,7 +8839,6 @@ export async function scanShell(
       envFiles: [...envFiles],
       outbound: [...outbound],
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
-      contained: contained && commands.length > 0,
       readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],
       writtenTrees: [...writtenTrees],

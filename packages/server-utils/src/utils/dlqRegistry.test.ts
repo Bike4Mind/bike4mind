@@ -57,6 +57,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'revenue-snapshot',
       'subscription-reconciliation',
       'account-deletion-sweep',
+      'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
       'session-enrichment',
@@ -144,7 +145,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(62);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {

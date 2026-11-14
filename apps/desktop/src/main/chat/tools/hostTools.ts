@@ -173,7 +173,7 @@ export const sessionSpawn: ToolDefinition = {
       'dismiss it. If they ask in chat to change the task, use session_suggestion_update on the ' +
       'same id instead of suggesting it again; if they decline it or say to do it here, use ' +
       'session_suggestion_dismiss and do the work yourself. In a session that was itself started ' +
-      'by another one, the user is asked to approve the start instead, and the call waits. ' +
+      'by another one, this requests the start directly instead, and the call waits. ' +
       'A started session runs on its own, does not report into your turn, and tells this ' +
       'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
       'carry the whole task. The USER chooses where it runs: in this working directory, in a ' +

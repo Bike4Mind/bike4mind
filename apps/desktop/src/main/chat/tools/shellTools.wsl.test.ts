@@ -30,7 +30,6 @@ vi.mock('./shellScan', async importOriginal => ({
           envFiles: [],
           outbound: [],
           sends: [],
-          contained: true,
           readOnly: false,
           writes: [],
           writtenTrees: [],
@@ -44,7 +43,7 @@ const context: Pick<ToolContext, 'roots' | 'signal' | 'protectedPaths'> = {
 };
 
 describe('a shell command that reaches a WSL distro no root is in', () => {
-  it('asks in every mode but full, names the path, and offers no folder to remember', async () => {
+  it('asks in every mode, names the path, and offers no folder to remember', async () => {
     scanned.ungranted = [DEBIAN];
 
     const prompt = await shellApproval('bash_execute', { command: `ls '${DEBIAN}'` }, context);
@@ -141,13 +140,13 @@ describe('a shell command the scan could not read', () => {
     scanned.unreadable = false;
   });
 
-  it('in a Windows-drive project that names no distro, stays rememberable and runs in auto and full mode', async () => {
+  it('asks in auto and full mode for an unread command even when the project names no distro', async () => {
     scanned.unreadable = true;
 
     const prompt = await shellApproval('bash_execute', { command: 'cat ~/x' }, context);
 
-    expect(prompt.askInAuto).toBeUndefined();
-    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(prompt.always).toBeUndefined();
     expect(prompt.unchecked).toBe(true);
     expect(prompt.reasons).toEqual(['Could not read this command, so where it acts cannot be checked.']);

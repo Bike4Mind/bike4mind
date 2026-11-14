@@ -57,6 +57,7 @@ describe('links and copy in the thread', () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   const render = (messages: ChatMessage[], streaming = false) =>
@@ -77,6 +78,57 @@ describe('links and copy in the thread', () => {
   const within = (testId: string) => container.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!;
   const hrefs = (scope: HTMLElement, linkTestId: string) =>
     [...scope.querySelectorAll(`[data-testid="${linkTestId}"]`)].map(anchor => anchor.getAttribute('href'));
+
+  it.each([
+    [20, 'just now'],
+    [60, '1 minute ago'],
+    [120, '2 minutes ago'],
+    [3600, '1 hour ago'],
+    [7200, '2 hours ago'],
+    [86400, '1 day ago'],
+    [604800, '1 week ago'],
+    [2592000, '1 month ago'],
+    [31536000, '1 year ago'],
+    [-60, 'just now'],
+  ])('shows %s seconds of message age as "%s" on hover', (seconds, expected) => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse(at) + seconds * 1000);
+    render([prompt, reply]);
+
+    for (const role of ['user', 'assistant']) {
+      const message = within(`chat-message-${role}`);
+      act(() => message.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+      expect(message.title).toBe(expected);
+    }
+  });
+
+  it('refreshes the relative time when hovering again without a rerender', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(at) + 120_000);
+    render([prompt, reply]);
+
+    for (const role of ['user', 'assistant']) {
+      now.mockReturnValue(Date.parse(at) + 120_000);
+      const message = within(`chat-message-${role}`);
+      act(() => message.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+      expect(message.title).toBe('2 minutes ago');
+      act(() => message.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+      now.mockReturnValue(Date.parse(at) + 180_000);
+      act(() => message.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+      expect(message.title).toBe('3 minutes ago');
+    }
+  });
+
+  it('does not show an invalid timestamp on hover', () => {
+    render([
+      { ...prompt, createdAt: 'invalid' },
+      { ...reply, createdAt: 'invalid' },
+    ]);
+
+    for (const role of ['user', 'assistant']) {
+      const message = within(`chat-message-${role}`);
+      act(() => message.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+      expect(message.title).toBe('');
+    }
+  });
 
   it('links the urls in a prompt without rendering the prompt as markdown', () => {
     render([prompt]);

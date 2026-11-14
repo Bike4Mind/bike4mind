@@ -7037,6 +7037,8 @@ export class ChatService {
     };
     if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
 
+    // What an "Allow in this chat" is filed, looked up and revoked under.
+    const allowanceKey = prompt.chatKey ?? prompt.key;
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -7064,7 +7066,7 @@ export class ChatService {
       if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
       const standing = gate.isStanding(
         sessionId,
-        prompt.key,
+        allowanceKey,
         runnable.map(option => option.id)
       );
       if (standing) {
@@ -7158,7 +7160,7 @@ export class ChatService {
     const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
-      prompt.key,
+      allowanceKey,
       signal,
       approvalId => {
         requestedAt = new Date().toISOString();
@@ -7278,9 +7280,9 @@ export class ChatService {
       await this.deps.capabilities
         .grant({
           subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
-          capability: capabilityFor(call.name, prompt.key),
-          scope: capabilityScope(call.name, prompt.key),
-          approvalKey: prompt.key,
+          capability: capabilityFor(call.name, allowanceKey),
+          scope: capabilityScope(call.name, allowanceKey),
+          approvalKey: allowanceKey,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
@@ -7664,8 +7666,9 @@ export class ChatService {
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
    * own words name, reach permission settings, or a folder outside the project the user has not
-   * allowed that the command may write in. A command the scan cannot follow or parse, one that
-   * can send data out, or one that runs code written in this conversation runs like any other.
+   * allowed that the command may write in. Commands the scan cannot follow or parse ask in
+   * every mode. A modeled outbound command or code written in this conversation is decided on
+   * its own paths and risks, without a per-reply read-content trigger.
    */
   private autoApproves(
     mode: ChatApprovalMode,

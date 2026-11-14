@@ -124,6 +124,7 @@ describe('publishRunPendingAction', () => {
       collapseId: `approval:${QUEST_ID}`,
       questId: QUEST_ID,
       sessionId: 'session-1',
+      pendingActionTs: 123,
     });
   });
 

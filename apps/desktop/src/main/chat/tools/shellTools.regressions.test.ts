@@ -965,7 +965,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
     ...SENDING_GIT.map(sending => `git ${sending}`),
-  ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
+  ])('names the outbound capability of %s on the card', async command => {
     const prompt = await shellApproval(
       'bash_execute',
       { command, cwd: proj },

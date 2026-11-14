@@ -752,6 +752,11 @@ export interface ApprovalPrompt {
   mcp?: { server: string; tool: string };
   /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
   alwaysCovers?: string;
+  /**
+   * What "Allow in this chat" is filed under when it stands for more than this one call. A write
+   * tool's `key` names the exact change, which the stale-file check needs; this names the file.
+   */
+  chatKey?: string;
 }
 
 /** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */

@@ -174,16 +174,23 @@ function runCommand(
   options: RunOptions = {}
 ): Promise<CommandOutcome> {
   return new Promise((resolve, reject) => {
-    const child = spawn(launch.executable, [...launch.args], {
-      cwd,
-      // Its own process group, so the timeout reaches the command's children too and the command
-      // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
-      // a WSL command is not detached.
-      detached: spawnsDetached(launch),
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(launch.executable, [...launch.args], {
+        cwd,
+        // Its own process group, so the timeout reaches the command's children too and the command
+        // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
+        // a WSL command is not detached.
+        detached: spawnsDetached(launch),
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+    } catch (err) {
+      // Node throws some spawn failures (ENOTDIR) synchronously instead of emitting 'error'.
+      reject(err instanceof Error ? spawnFailure(err, cwd, launch) : err);
+      return;
+    }
 
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
@@ -521,8 +528,7 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan)
-    return unreadApproval(tool, command, detail, key, ungranted, directories, [startDirectory, ...context.roots]);
+  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -558,6 +564,11 @@ export async function shellApproval(
   // A part that can send data out says so on the card but does not stop auto mode.
   const parts = await Promise.all(scan.commands.map(entry => partAsk(entry)));
   const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const opaque =
+    gitUnlisted.length > 0 ||
+    scan.unreadScript === true ||
+    (scan.unread === true && !scan.commands.some(entry => entry.refsMovedOnly)) ||
+    scan.commands.some(entry => entry.unread && !entry.refsMovedOnly);
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -566,6 +577,7 @@ export async function shellApproval(
   const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
   const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
+    opaque ||
     envScript ||
     !!gitProgram ||
     scan.gitPathUnplaced === true ||
@@ -576,6 +588,7 @@ export async function shellApproval(
     uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
+    opaque ||
     (writesProtected && !scan.readOnly) ||
     uncheckedSettingsWrite ||
     secret ||
@@ -681,15 +694,9 @@ export async function shellApproval(
 /** What `ungranted` holds for a command the scan could not read that may reach a WSL distro. */
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
-/** A `.env` file named in text the scan could not read, as envFiles.ts `isEnvFile` reads one: not `.env.example` or `.envrc`. */
-const NAMES_ENV_FILE = /\.env(?![\w-])(?!\.example(?![\w.]))/i;
-
 /**
- * The prompt for a command the scan could not read. Auto and full mode run it unless its own text gives a
- * reason to stop: auto asks when it names a `.env` file or the permission settings or runs outside the
- * granted folders (`outside`), full when it names the permission settings. When the command may reach a
- * WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it asks in every mode and
- * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
+ * The prompt for a command the scan could not read. Every mode asks because its protected paths cannot
+ * be checked. A possible WSL target additionally carries `ungranted`, so no saved grant can cover it.
  */
 function unreadApproval(
   tool: string,
@@ -697,20 +704,17 @@ function unreadApproval(
   detail: string,
   key: string,
   ungranted: readonly string[],
-  outside: readonly string[],
   places: readonly string[]
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
   // Not drawn on the card, which shows the command itself; the reason keeps the call off quick surfaces.
   if (!mayReachDistro) {
-    const settings = namesRuleFile(command);
-    const asks = settings || outside.length > 0 || NAMES_ENV_FILE.test(command);
     return {
       detail,
       key,
-      ...(asks ? { askInAuto: true as const } : {}),
-      ...(settings ? { askInFull: true as const } : {}),
+      askInAuto: true,
+      askInFull: true,
       reasons: ['Could not read this command, so where it acts cannot be checked.'],
       unchecked: true,
     };

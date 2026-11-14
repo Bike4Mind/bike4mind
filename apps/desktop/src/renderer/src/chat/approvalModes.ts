@@ -34,14 +34,14 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
     mode: 'auto',
     label: 'Approve for me',
     description:
-      'Runs everything except commands that write outside this project or write protected settings, reads of .env files, and repeated calls',
+      'Runs everything except commands Desktop cannot follow, commands that write outside this project or write protected settings, reads of .env files, and repeated calls',
     tone: 'neutral',
   },
   {
     mode: 'full',
     label: 'Full access',
     description:
-      'Runs commands and edits without asking, except deletes that cannot be undone, signed-in browser pages and changes to protected settings. Commands can read any file on this computer and reach the internet',
+      'Runs commands and edits without asking, except commands Desktop cannot follow, deletes that cannot be undone, signed-in browser pages and changes to protected settings. Commands can read any file on this computer and reach the internet',
     tone: 'warning',
   },
 ];
@@ -62,8 +62,8 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
   '"Approve for me" runs every other command and edit without asking, including builds, installs and downloads, as you.',
   '"Approve for me" asks before a command may write outside your folders, before a .env file is read, and when the same call is made three times in a row. A command that only reads outside your folders runs.',
-  '"Approve for me" and "Full access" run commands Desktop cannot fully follow or parse, and git forms it does not list as safe, without asking. They still ask when such a command names permission and hook settings and may write, and "Approve for me" also asks when it names a .env file or runs outside your folders.',
-  '"Approve for me" runs commands that can send data off this computer (uploads, git push, ssh, inline scripts such as node -e, GitHub writes such as gh pr comment), and scripts or test configs the agent wrote in this conversation, without asking, whatever the reply has read.',
+  '"Approve for me" and "Full access" ask before commands Desktop cannot fully follow or parse, including git forms it does not list as safe. Only the listed Git operations with understood reference changes keep their usual behavior.',
+  'Modeled commands that can send data off this computer can run without asking, whatever the reply has read. "Approve for me" asks about upload sources outside your shared folders. An unknown option or complex curl form asks in both modes. Scripts or test configs are judged on their own paths and risks.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
   '"Full access" asks before an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks before a command that may reach a WSL distro this project has no folder in.',

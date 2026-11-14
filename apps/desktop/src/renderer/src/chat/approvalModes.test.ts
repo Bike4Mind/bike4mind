@@ -41,11 +41,12 @@ describe('approval mode copy', () => {
     expect(approvalModeOption('auto').description).toMatch(/write protected settings/i);
   });
 
-  it('says approve-for-me and full access run what Desktop cannot follow, and when they still ask', () => {
+  it('says approve-for-me and full access ask for commands Desktop cannot follow', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/"Approve for me" and "Full access" run commands Desktop cannot fully follow or parse/);
-    expect(notes).toMatch(/names permission and hook settings and may write/i);
-    expect(notes).toMatch(/names a \.env file or runs outside your folders/i);
+    expect(notes).toMatch(
+      /"Approve for me" and "Full access" ask before commands Desktop cannot fully follow or parse/
+    );
+    expect(notes).toMatch(/unknown option or complex curl form asks in both modes/i);
   });
 
   it('says approve-for-me runs reads outside your folders and commands that send data out', () => {

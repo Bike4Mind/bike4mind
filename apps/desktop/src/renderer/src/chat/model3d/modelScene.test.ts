@@ -17,6 +17,8 @@ import {
   summarizeParts,
   canExplode,
   explodeModel,
+  extendsPastView,
+  frameBox,
 } from './modelScene';
 
 /** An axis-aligned box from 0 to (x, y, z): 8 corners, 12 triangles, wound outward. */
@@ -34,6 +36,34 @@ describe('fitAngle', () => {
     expect(fitAngle(camera)).toBeCloseTo(THREE.MathUtils.degToRad(20));
     camera.aspect = 0.5;
     expect(fitAngle(camera)).toBeCloseTo(Math.atan(Math.tan(THREE.MathUtils.degToRad(20)) * 0.5));
+  });
+});
+
+describe('extendsPastView', () => {
+  const framedOn = (box: THREE.Box3) => {
+    const camera = new THREE.PerspectiveCamera(35, 1.5, 0.01, 1000);
+    camera.lookAt(frameBox(camera, box));
+    return camera;
+  };
+
+  it('keeps a framed model, and a rebuild that stays inside it, in view', () => {
+    const lantern = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 1));
+    const camera = framedOn(lantern);
+    expect(extendsPastView(camera, lantern)).toBe(false);
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2.1, 1)))).toBe(
+      false
+    );
+  });
+
+  it('flags a model that grew past the view, or reaches behind the camera', () => {
+    const camera = framedOn(new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 1)));
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 4, 1)))).toBe(true);
+    const behind = camera.position.clone().multiplyScalar(2);
+    expect(extendsPastView(camera, new THREE.Box3(new THREE.Vector3(0, 0, 0), behind))).toBe(true);
+  });
+
+  it('never flags an empty model', () => {
+    expect(extendsPastView(new THREE.PerspectiveCamera(), new THREE.Box3())).toBe(false);
   });
 });
 

@@ -12,6 +12,7 @@ import { MODEL_EXAMPLE_PROMPTS, ModelPane, type PartEditTurn } from './ModelPane
 const handle = vi.hoisted(() => ({
   recordTurntable: vi.fn<ModelViewportHandle['recordTurntable']>(async () => new Uint8Array([1, 2, 3])),
   setView: vi.fn(),
+  fit: vi.fn(),
   orbit: vi.fn(),
   zoom: vi.fn(),
   partPoint: vi.fn(() => ({ x: 60, y: 50 })),
@@ -35,6 +36,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     onPick,
     clip,
     exploded,
+    onCroppedChange,
     handleRef,
   }: {
     dimmed: boolean;
@@ -45,6 +47,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     onPick: (pick: { name: string | null; additive: boolean; point: { x: number; y: number } }) => void;
     clip: string | null;
     exploded: boolean;
+    onCroppedChange?: (cropped: boolean) => void;
     handleRef?: { current: unknown };
   }) => {
     if (handleRef) handleRef.current = handle;
@@ -67,6 +70,8 @@ vi.mock('./model3d/ModelViewport', () => ({
           data-testid="pick-body"
           onClick={event => onPick({ name: 'body', additive: event.shiftKey, point: { x: 20, y: 30 } })}
         />
+        <button data-testid="report-cropped" onClick={() => onCroppedChange?.(true)} />
+        <button data-testid="report-in-view" onClick={() => onCroppedChange?.(false)} />
         <button
           data-testid="pick-none"
           onClick={() => onPick({ name: null, additive: false, point: { x: 0, y: 0 } })}
@@ -522,6 +527,23 @@ describe('ModelPane', () => {
     act(() => byTestId('model-pane-view-btn')?.click());
     act(() => byTestId('model-pane-view-top')?.click());
     expect(handle.setView).toHaveBeenCalledWith('top');
+  });
+
+  it('offers a fit once the model grows past a placed camera, by button and by F', () => {
+    handle.fit.mockClear();
+    render(engine(BUILT));
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
+    act(() => byTestId('report-cropped')?.click());
+    act(() => byTestId('model-pane-fit-btn')?.click());
+    expect(handle.fit).toHaveBeenCalledTimes(1);
+    act(() => {
+      byTestId('model-pane-stage')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true })
+      );
+    });
+    expect(handle.fit).toHaveBeenCalledTimes(2);
+    act(() => byTestId('report-in-view')?.click());
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
   });
 
   it('drops the highlight when another file opens', () => {

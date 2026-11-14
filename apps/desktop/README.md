@@ -1165,6 +1165,16 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
+"Approve for me" and "Full access" ask before a shell command Desktop cannot follow or parse.
+That includes unknown curl options and complex multipart forms such as file lists or header-file
+attributes. Simple modeled uploads still check their source paths; listed Git operations retain
+the narrow exception for understood reference changes. Commands run as the user without an OS
+sandbox, so these checks are not filesystem confinement.
+
+Reading web or other content no longer changes the approval policy for later calls. Credit-spending
+tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
+limits remain. Protected paths, irreversible actions and signed-in browser actions keep their own checks.
+
 Settings -> Permissions also shows the local capability ledger: active grants for files,
 tools, browser origins, imported identity, project trust and credit-spending actions,
 followed by their 200 most recent audit events. Tool execution does not

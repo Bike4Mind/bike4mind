@@ -12,6 +12,8 @@ import { describeAgentStates, type AgentState } from './roster';
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
+  /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
+  parentNeedsYou?: boolean;
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
 }
@@ -82,7 +84,7 @@ function Segment({
  * nothing to navigate to. The conversation segment stays icon-only, since "Chat" already names the
  * sidebar's Chat/Code mode and would misread in a Code session.
  */
-export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
+export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onSurfaceChange }: OrchestrateToggleProps) {
   const dark = useTheme().palette.mode === 'dark';
   const available = states.length > 0;
 
@@ -104,12 +106,12 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange }: Orchestr
 
   if (!available) return null;
 
-  const needsYou = states.includes('needs-you');
+  const needsYou = parentNeedsYou || states.includes('needs-you');
   const failed = !needsYou && states.includes('failed');
   const working = !needsYou && !failed && states.includes('working');
   const raisedBg = dark ? 'background.level2' : 'background.surface';
   const badgeColor = needsYou ? 'warning' : failed ? 'danger' : 'neutral';
-  const description = describeAgentStates(states);
+  const description = describeAgentStates(states, parentNeedsYou ? 1 : 0);
 
   return (
     <Box

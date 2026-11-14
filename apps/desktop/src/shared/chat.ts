@@ -334,7 +334,7 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  /** Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop). */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -1221,12 +1221,12 @@ export type ChatSessionMode = 'chat' | 'code';
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
  *           command that writes outside the granted folders, a read of a `.env` file, a
  *           command that writes permission settings, or the same call a third time in a row.
- *           A command the scan cannot follow or parse, one that sends data out, or one that
- *           runs code written in this conversation runs like any other. Modelled on
- *           opencode's permission defaults; see ChatService.autoApproves.
- *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
- *           this user can read and reach the internet with nobody looking. Chosen per
- *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *           Commands the scan cannot follow or parse also ask, including unsupported curl
+ *           options and multipart forms. Modeled outbound commands are judged on their own
+ *           paths and risks; reading content does not change that policy.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
+ *           irreversible actions and signed-in browser actions still ask. Chosen per conversation,
+ *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
  * output can raise it; see ChatService.setApprovalMode and HostContext.

@@ -664,7 +664,7 @@ export function generateVideoSchema(models: readonly VideoModel[]): ToolSchema {
   return {
     name: 'generate_video',
     description: [
-      'Start generating a short video clip on the Bike4Mind server. Costs the user credits, which they approve first.',
+      'Start generating a short video clip on the Bike4Mind server. Costs the user credits.',
       'Returns as soon as the job is queued: the clip renders in the background and appears in the conversation as a',
       'card the user can play. You do not receive the video and are not told when it finishes - do not wait for it,',
       'poll for it, or promise a result time beyond the estimate. Settings a model does not support are refused, not',
