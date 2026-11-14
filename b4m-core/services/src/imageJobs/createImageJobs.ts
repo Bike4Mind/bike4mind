@@ -95,9 +95,10 @@ export async function createImageJobs(
   const caps = getImageModelCatalogEntry(parsed.data.model);
   const provider = deps.providers.get(caps.provider);
   // A retired id is refused rather than rendered as its successor: the job records the model it renders.
+  // Local checkpoints are discovered at runtime, so the local provider lists no models and serves every local id.
   const served =
     provider !== undefined &&
-    (provider.models as readonly string[]).includes(parsed.data.model) &&
+    (caps.provider === 'local' || (provider.models as readonly string[]).includes(parsed.data.model)) &&
     resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
   if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);
@@ -237,6 +238,7 @@ async function persistBatch(
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
           source: input.source,
+          ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
           payload: { request, providerId, groupId, groupSize: input.count },
           pollCount: 0,
