@@ -103,6 +103,7 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
           { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
           { field: 'federatedIdp', before: null, after: null },
           { field: 'rateLimit', before: null, after: null },
+          { field: 'unpaidAccountsAllowed', before: null, after: null },
         ],
       })
     );
@@ -154,6 +155,22 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
       );
     }
   );
+
+  it('audits an unpaidAccountsAllowed opt-out', async () => {
+    db.updateOAuthClient.mockResolvedValue({
+      before: view(),
+      after: view({ unpaidAccountsAllowed: false }),
+    });
+    const { req, res } = makeReqRes('PATCH', { body: { unpaidAccountsAllowed: false } });
+    await handlers.update.patch(req, res);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { unpaidAccountsAllowed: false });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        changes: expect.arrayContaining([{ field: 'unpaidAccountsAllowed', before: null, after: false }]),
+      })
+    );
+  });
 
   it('passes federatedIdp null through to remove the trust config', async () => {
     db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });

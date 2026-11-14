@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
   canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -357,6 +358,7 @@ describe('resolveAccessibleTab', () => {
     canViewBilling: true,
     canManageConnectors: true,
     canManageApiKeys: true,
+    canManageDomains: true,
   };
 
   it('leaves a tab the caller may see alone', () => {
@@ -438,6 +440,7 @@ describe('resolveAccessibleTab', () => {
       canManageConnectors: false,
       canManageGroups: false,
       canViewBilling: false,
+      canManageDomains: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Overview, none)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Members, none)).toBe(OrganizationTabs.Members);
@@ -482,10 +485,61 @@ describe('canManageOrgConnectors', () => {
       canManageGroups: false,
       canViewBilling: false,
       canManageConnectors: false,
+      canManageDomains: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Connectors, access)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Connectors, { ...access, canManageConnectors: true })).toBe(
       OrganizationTabs.Connectors
+    );
+  });
+});
+
+describe('canManageOrgDomains', () => {
+  // The Domains tab fronts organizations/[id]/domains/*, gated by canAdministerOrganization.
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'lapsed1'],
+    users: [
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'member1', permissions: [Permission.read, Permission.update] },
+    ],
+  };
+
+  it('admits the owner, a current manager and a platform admin', () => {
+    expect(canManageOrgDomains({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgDomains({ id: 'manager1' }, org)).toBe(true);
+    expect(canManageOrgDomains({ id: 'stranger', isAdmin: true }, org)).toBe(true);
+  });
+
+  it('refuses a plain member, a manager no longer on the roster, a stranger, and a still-loading page', () => {
+    expect(canManageOrgDomains({ id: 'member1' }, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'lapsed1' }, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'stranger' }, org)).toBe(false);
+    expect(canManageOrgDomains(null, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'owner1' }, undefined)).toBe(false);
+  });
+
+  it('hides the tab on a personal organization, even for its owner or a platform admin', () => {
+    const personal = { ...org, personal: true };
+    expect(canManageOrgDomains({ id: 'owner1' }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'stranger', isAdmin: true }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'owner1' }, { ...org, personal: false })).toBe(true);
+  });
+
+  it('bounces a ?tab=domains deep link to Overview for a caller who may not manage domains', () => {
+    const access = {
+      canManageOrg: true,
+      canViewUsage: false,
+      canViewAnalysis: true,
+      canManageIntegrations: false,
+      canManageGroups: false,
+      canViewBilling: false,
+      canManageConnectors: false,
+      canManageDomains: false,
+    };
+    expect(resolveAccessibleTab(OrganizationTabs.Domains, access)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(
+      OrganizationTabs.Domains
     );
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { COMMAND_TAG_ENV } from './commandTree';
 import { resolveGitBash } from './gitBash';
 import { wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../../wsl/wslPath';
@@ -58,6 +59,22 @@ export async function launchCommand(
 
 /** A detached Windows child has no console, and wsl.exe without one exits -1 or drops the output; a WSL command is found by its tag instead. */
 export const spawnsDetached = (launch: Pick<SandboxedCommand, 'wslDistro'>): boolean => !launch.wslDistro;
+
+/**
+ * What a failed spawn in `cwd` reports. Node blames the shell with ENOENT when it is `cwd` that is missing; a WSL
+ * folder is left unchecked, since a stat of one can block while the distro starts.
+ */
+export function spawnFailure(
+  error: NodeJS.ErrnoException,
+  cwd: string,
+  launch: Pick<SandboxedCommand, 'wslDistro'>
+): Error {
+  if (error.code !== 'ENOENT' || launch.wslDistro || existsSync(cwd)) return error;
+  return new Error(
+    `The working folder ${cwd} no longer exists. It may have been moved, renamed or deleted, so the command was not run.`,
+    { cause: error }
+  );
+}
 
 /**
  * `env` with `safe.bareRepository=explicit` appended to git's GIT_CONFIG_COUNT entries and to a GIT_CONFIG_PARAMETERS

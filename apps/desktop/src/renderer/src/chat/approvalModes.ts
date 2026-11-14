@@ -34,14 +34,14 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
     mode: 'auto',
     label: 'Approve for me',
     description:
-      'Runs everything except commands that reach outside this project or can send data out, reads of .env files and repeated calls',
+      'Runs everything except commands that reach outside this project or write protected settings, reads of .env files, repeated calls, and calls that send data out after reading web content',
     tone: 'neutral',
   },
   {
     mode: 'full',
     label: 'Full access',
     description:
-      'Runs commands and edits without asking, except credit spending, deletes that cannot be undone, signed-in browser pages, commands Desktop cannot follow, and changes to protected settings. Commands can read any file on this computer and reach the internet',
+      'Runs commands and edits without asking, except credit spending, deletes that cannot be undone, signed-in browser pages and changes to protected settings. Commands can read any file on this computer and reach the internet',
     tone: 'warning',
   },
 ];
@@ -62,13 +62,14 @@ export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
   '"Approve for me" runs every other command and edit without asking, including builds, installs and downloads, as you.',
   '"Approve for me" asks before a command names a path outside your folders, before a .env file is read, and when the same call is made three times in a row.',
-  '"Approve for me" asks before a command that can send data off this computer (uploads, git push, ssh, inline scripts, GitHub writes such as gh pr comment), and before any command, web fetch, browsing a site, MCP call or message to another session once the reply has read web, browser, MCP or account skill content, or another conversation.',
+  '"Approve for me" and "Full access" run commands Desktop cannot fully follow or parse, and git forms it does not list as safe, without asking. They still ask when such a command names permission and hook settings and may write, and "Approve for me" also asks when it names a .env file or runs outside your folders.',
+  '"Approve for me" runs commands that can send data off this computer (uploads, git push, ssh, inline scripts such as node -e, GitHub writes such as gh pr comment), and scripts or test configs the agent wrote in this conversation, without asking until the reply has read web, browser, MCP or account skill content, or another conversation. From then on it asks before any such command, web fetch, browsing a site, MCP call or message to another session.',
   '"Approve for me" still runs commands that only read files or read from GitHub (ls, grep, git diff, git log, gh pr view, gh api GET requests) after the reply has read such content, because they have nowhere to send it.',
   '"Approve for me" counts a web page, an MCP result, a skill from your account or another conversation as content the reply has read. A skill from your own skills folder or from a project you trusted is not counted, and neither is what a command downloaded and printed, which is covered by the command rules above.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
-  '"Full access" asks before spending credits, an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks when Desktop cannot follow a command or its operands. It asks about unlisted Git forms and ungranted WSL distros too. Listed Git forms whose only uncertainty is an earlier reference change can run without asking.',
+  '"Full access" asks before spending credits, an action that cannot be undone, acting in a browser page you are signed in to, and a command Desktop can see writes permission and hook settings or reaches this app\'s data or a credential folder. It also asks before a command that may reach a WSL distro this project has no folder in.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',
   'A session the agent starts on its own never runs at full access; it inherits at most "Approve for me".',
   'A new conversation starts in the mode you picked last, except "Full access", which is never carried over.',

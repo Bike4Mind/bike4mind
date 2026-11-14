@@ -61,6 +61,17 @@ API-key responses include `X-RateLimit-Limit-Minute`, `X-RateLimit-Remaining-Min
 include `Retry-After` in seconds; reset headers are Unix epoch seconds. Pause for
 `Retry-After` rather than re-exchanging a key.
 
+### Paid-only API key switch
+
+Under `apiKeyAccess = paid`, a key from the exchange is admitted for an owner without
+paid standing, both at mint and on every use, unless the OAuth client sets
+`unpaidAccountsAllowed: false`. Unset means allowed. The marker is the key's own
+`oauthExchangeClientId`, projected from trusted key metadata; the exchange passes the
+client it just verified by secret. Mint and rotate of personal keys never carry it, so
+personal keys and CLI login stay paid-only. `disabled` still refuses everything. The
+client lookup runs only after the paid-standing check fails, ignores `isActive`, is
+cached for 30 seconds, and a lookup failure is a retryable 5xx rather than a refusal.
+
 ### Operator rollout
 
 After deploying, use the existing audited admin OAuth-client PATCH API with the
