@@ -351,6 +351,7 @@ export function ModelViewport({
     };
     const orbit = (azimuth: number, polar: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       spherical.theta -= azimuth;
@@ -363,6 +364,7 @@ export function ModelViewport({
     };
     const zoom = (factor: number) => {
       if (recording) return;
+      stopFit();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       camera.position.copy(controls.target).add(offset);
       userMoved.current = true;
@@ -451,6 +453,7 @@ export function ModelViewport({
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       clearTimeout(idleTimer);
       stopFit();
+      onCroppedChangeRef.current?.(false);
       cancelAnimationFrame(buildFrame.current);
       if (flash.current) cancelAnimationFrame(flash.current.frame);
       controls.dispose();
