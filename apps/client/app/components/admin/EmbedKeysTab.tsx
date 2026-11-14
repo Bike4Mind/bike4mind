@@ -15,14 +15,11 @@ import {
   Chip,
   ChipDelete,
   DialogContent,
-  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
   ListDivider,
-  Menu,
-  MenuButton,
   MenuItem,
   Option,
   Select,
@@ -33,7 +30,6 @@ import {
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import CopyIcon from '@mui/icons-material/ContentCopy';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -76,7 +72,8 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
 
 dayjs.extend(relativeTime);
 
@@ -919,34 +916,21 @@ function EmbedKeyRowMenu({
   onRevoke: () => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${embedKey.name}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        disabled={isRevoked(embedKey)}
-        data-testid={`embed-key-row-actions-${embedKey.id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        <MenuItem onClick={onConfigure} data-testid={`embed-key-configure-${embedKey.id}`}>
-          Configure
-        </MenuItem>
-        <MenuItem onClick={onRotate} disabled={rotating} data-testid={`embed-key-rotate-${embedKey.id}`}>
-          Rotate key
-        </MenuItem>
-        <ListDivider />
-        <MenuItem color="danger" onClick={onRevoke} data-testid={`embed-key-revoke-${embedKey.id}`}>
-          Revoke key
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+    <RowActionsMenu
+      testId={`embed-key-row-actions-${embedKey.id}`}
+      ariaLabel={`Actions for ${embedKey.name}`}
+      disabled={isRevoked(embedKey)}
+    >
+      <MenuItem onClick={onConfigure} data-testid={`embed-key-configure-${embedKey.id}`}>
+        Configure
+      </MenuItem>
+      <MenuItem onClick={onRotate} disabled={rotating} data-testid={`embed-key-rotate-${embedKey.id}`}>
+        Rotate key
+      </MenuItem>
+      <ListDivider />
+      <MenuItem color="danger" onClick={onRevoke} data-testid={`embed-key-revoke-${embedKey.id}`}>
+        Revoke key
+      </MenuItem>
+    </RowActionsMenu>
   );
 }

@@ -206,7 +206,7 @@ const ALLOWLIST: Record<string, string> = {
     'text-only mime, never an image — throws BadRequestError for any mimeType outside a fixed text/code allowlist before ever minting a signed URL',
   'apps/client/pages/api/notebooks/download.ts':
     'text-only mime, never an image — downloads/converts only the curated-notebook document (markdown/html/txt), identified via session.curatedNotebookFileId',
-  'apps/client/pages/api/agents/create-from-context.ts':
+  'apps/client/server/agents/createAgentFromContext.ts':
     'images filtered out (mimeType.startsWith("image/")) before the shared getFileContent extractor is ever called on a file',
 
   'apps/client/pages/api/files/createFabFile.ts':

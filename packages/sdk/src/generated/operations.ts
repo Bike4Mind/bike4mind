@@ -17,6 +17,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/system-prompts',
   },
+  approvePendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/approve',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -40,6 +44,10 @@ export const operations = {
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
+  },
+  createAgentFromContext: {
+    method: 'POST',
+    path: '/api/v1/agents/from-context',
   },
   createArtifact: {
     method: 'POST',
@@ -136,6 +144,10 @@ export const operations = {
   deleteSessionMessage: {
     method: 'DELETE',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  denyPendingAction: {
+    method: 'POST',
+    path: '/api/v1/pending-actions/{questId}/deny',
   },
   editImage: {
     method: 'POST',
@@ -460,6 +472,10 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  transferAgentCredits: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/transfer-credits',
   },
   unregisterPushToken: {
     method: 'DELETE',

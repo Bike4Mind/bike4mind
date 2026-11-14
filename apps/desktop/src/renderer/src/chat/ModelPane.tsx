@@ -137,7 +137,7 @@ export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: 
   { lighting: 'night', label: 'Night' },
 ];
 const KEY_HELP =
-  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
+  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
 
 function nextLighting(lighting: ModelLighting): ModelLighting {
   const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
@@ -256,6 +256,9 @@ export function ModelPane({
   const [grid, setGrid] = useState(false);
   const [lighting, setLighting] = useState<ModelLighting>('studio');
   const [exploded, setExploded] = useState(false);
+  // The model grew past a camera the user placed (ModelViewport never moves that one on a rebuild).
+  const [cropped, setCropped] = useState(false);
+  const [adjusting, setAdjusting] = useState(false);
   // The recorded share of the clip (0..1) while a turntable records, else null.
   const [recordProgress, setRecordProgress] = useState<number | null>(null);
   const recording = recordProgress !== null;
@@ -414,6 +417,7 @@ export function ModelPane({
       '+': () => handle?.zoom(ZOOM_STEP),
       '=': () => handle?.zoom(ZOOM_STEP),
       '-': () => handle?.zoom(1 / ZOOM_STEP),
+      f: () => handle?.fit(),
       w: () => setWireframe(value => !value),
       g: () => setGrid(value => !value),
       l: () => setLighting(nextLighting),
@@ -568,6 +572,8 @@ export function ModelPane({
               editing={editingNames}
               onEditSettled={onEditSettled}
               clip={playingClip}
+              onCroppedChange={setCropped}
+              adjusting={adjusting}
               handleRef={viewportHandle}
             />
             {promptOpen && (
@@ -705,6 +711,20 @@ export function ModelPane({
                   </Menu>
                 </Dropdown>
               </Stack>
+            )}
+            {object && cropped && !recording && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                startDecorator={<FrameIcon />}
+                onClick={() => viewportHandle.current?.fit()}
+                aria-keyshortcuts="f"
+                sx={{ position: 'absolute', top: 52, right: 8, boxShadow: 'sm' }}
+                data-testid="model-pane-fit-btn"
+              >
+                Fit model
+              </Button>
             )}
             {object && (
               <Typography
@@ -848,8 +868,15 @@ export function ModelPane({
                 max={param.max}
                 step={param.step}
                 value={param.value}
-                onChange={(_event, value) => typeof value === 'number' && engine.previewParam(key, value)}
-                onChangeCommitted={(_event, value) => typeof value === 'number' && void engine.commitParam(key, value)}
+                onChange={(_event, value) => {
+                  if (typeof value !== 'number') return;
+                  setAdjusting(true);
+                  engine.previewParam(key, value);
+                }}
+                onChangeCommitted={(_event, value) => {
+                  setAdjusting(false);
+                  if (typeof value === 'number') void engine.commitParam(key, value);
+                }}
                 slotProps={{ input: { 'aria-label': key } }}
                 data-testid={`model-pane-param-${key}`}
               />
