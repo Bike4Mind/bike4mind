@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { SoundEffectsGallery, SpeechGallery } from '@client/app/components/AudioStudio/AudioGallery';
 import {
   SoundEffectsStudioWorkspace,
@@ -18,7 +19,8 @@ export type StudioModalityDefinition = {
   testId: string;
   // The modality's form, gated on its usable models (or, for speech and sound effects, its usable providers).
   Workspace: ComponentType<{ testId: string }>;
-  Gallery: ComponentType;
+  // `onRestore` reaches each take's trail; only Create v2 passes it.
+  Gallery: ComponentType<{ onRestore?: StudioTrailRestore }>;
 };
 
 export const STUDIO_MODALITY_DEFINITIONS: Record<StudioModality, StudioModalityDefinition> = {

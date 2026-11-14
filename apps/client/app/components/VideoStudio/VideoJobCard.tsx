@@ -4,6 +4,8 @@ import { toast } from 'sonner';
 import type { GenerationJobState, VideoGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
+import StudioTrailButton from '@client/app/components/Studio/trail/StudioTrailButton';
+import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { isTerminalVideoState } from '@client/app/hooks/data/videoGenerationCache';
 import { useCancelVideoGeneration, useVideoGeneration } from '@client/app/hooks/data/videoGenerations';
 import { downloadData, downloadUrl } from '@client/app/utils/download';
@@ -31,7 +33,7 @@ const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending', 'running']
 const videoFileName = (jobId: string, contentType: string | undefined): string =>
   `video-${jobId}.${contentType === 'video/webm' ? 'webm' : 'mp4'}`;
 
-const VideoJobCard = ({ jobId }: { jobId: string }) => {
+const VideoJobCard = ({ jobId, onRestore }: { jobId: string; onRestore?: StudioTrailRestore }) => {
   const { data: job, isPending, refetch } = useVideoGeneration(jobId);
   const cancel = useCancelVideoGeneration();
   const openFiles = useFileBrowser(state => state.setOpen);
@@ -179,6 +181,9 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
           <Button size="sm" variant="plain" onClick={() => openFiles(true)} data-testid="video-job-card-open-files-btn">
             Open in Files
           </Button>
+        )}
+        {output?.file_id && onRestore && (
+          <StudioTrailButton fileId={output.file_id} testId="video-job-card-trail-btn" onRestore={onRestore} />
         )}
       </Stack>
     </Card>

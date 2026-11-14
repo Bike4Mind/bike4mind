@@ -1,17 +1,21 @@
-import { useMemo } from 'react';
-import { Box, Button, Card, Divider, Stack, Textarea, Typography } from '@mui/joy';
+import { useCallback, useMemo, useState } from 'react';
+import { Alert, Box, Button, Card, Divider, Stack, Textarea, Typography } from '@mui/joy';
 import {
   estimateSoundCreditCost,
   estimateTtsCreditCost,
   SOUND_EFFECTS_MAX_INPUT_CHARS,
   TTS_DEFAULT_MODEL,
   TTS_MAX_INPUT_CHARS,
+  type VoiceGenerationVendor,
 } from '@bike4mind/common';
 import { AudioGenerationSettings } from '@client/app/components/Session/AISettings/AudioGenerationSettings';
 import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
+import { useConsumeStudioRestore, type StudioRestore } from '@client/app/components/Studio/restore/studioRestore';
 import StudioModelsGate from '@client/app/components/Studio/StudioModelsGate';
+import type { StudioMedium } from '@client/app/components/Studio/studioModality';
 import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
+import { restoreAudioForm } from './audioRestore';
 import { useAudioStudioDraft } from './useAudioStudioDraft';
 import { useGenerateAudio } from './useGenerateAudio';
 
@@ -32,10 +36,31 @@ const useEstimatedCredits = (mode: AudioGenMode, characters: number): number => 
   );
 };
 
-const AudioStudioForm = ({ mode, testId }: { mode: AudioGenMode; testId: string }) => {
+const MODE_MEDIUM: Record<AudioGenMode, StudioMedium> = { tts: 'speech', 'sound-effects': 'sound-effects' };
+
+type AudioStudioFormProps = {
+  mode: AudioGenMode;
+  testId: string;
+  // The speech providers the user has a key for; a restored take on another provider keeps the current settings.
+  speechProviders: readonly VoiceGenerationVendor[];
+};
+
+const AudioStudioForm = ({ mode, testId, speechProviders }: AudioStudioFormProps) => {
   const text = useAudioStudioDraft(state => state.text[mode]);
   const setText = useAudioStudioDraft(state => state.setText);
   const ttsProvider = useAudioGenSettings(state => state.ttsProvider);
+  const applySettings = useAudioGenSettings(state => state.applySettings);
+  const [restoreNotices, setRestoreNotices] = useState<string[]>([]);
+  const applyRestore = useCallback(
+    (restore: StudioRestore) => {
+      const restored = restoreAudioForm(restore, mode, speechProviders);
+      applySettings(restored.value.settings);
+      setText(mode, restored.value.text);
+      setRestoreNotices(restored.notices);
+    },
+    [mode, speechProviders, applySettings, setText]
+  );
+  useConsumeStudioRestore(MODE_MEDIUM[mode], applyRestore);
   const { generate, isGenerating, result } = useGenerateAudio(mode);
   const estimatedCredits = useEstimatedCredits(mode, text.length);
 
@@ -44,6 +69,17 @@ const AudioStudioForm = ({ mode, testId }: { mode: AudioGenMode; testId: string 
 
   return (
     <Card variant="outlined" sx={{ gap: 2 }} data-testid={`${testId}-form`}>
+      {restoreNotices.length > 0 && (
+        <Alert color="warning" variant="soft" data-testid={`${testId}-restore-notices`}>
+          <Stack>
+            {restoreNotices.map(notice => (
+              <Typography key={notice} level="body-sm">
+                {notice}
+              </Typography>
+            ))}
+          </Stack>
+        </Alert>
+      )}
       <Box>
         <Textarea
           value={text}
@@ -101,6 +137,8 @@ const AudioStudioForm = ({ mode, testId }: { mode: AudioGenMode; testId: string 
   );
 };
 
+const NO_PROVIDERS: readonly VoiceGenerationVendor[] = [];
+
 const NOUN: Record<AudioGenMode, string> = {
   tts: 'speech',
   'sound-effects': 'sound effect',
@@ -117,7 +155,7 @@ const AudioStudioWorkspace = ({ mode, testId }: { mode: AudioGenMode; testId: st
       itemsLabel="providers"
       models={{ isPending: providers.isPending, data: usable }}
     >
-      {() => <AudioStudioForm mode={mode} testId={testId} />}
+      {() => <AudioStudioForm mode={mode} testId={testId} speechProviders={providers.data?.speech ?? NO_PROVIDERS} />}
     </StudioModelsGate>
   );
 };

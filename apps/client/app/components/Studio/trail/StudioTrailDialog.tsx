@@ -20,8 +20,8 @@ const StudioTrailDialog = ({ fileId, open, onClose, onRestore }: StudioTrailDial
             fileId={fileId}
             onRestore={
               onRestore &&
-              ((request, medium) => {
-                onRestore(request, medium);
+              (restore => {
+                onRestore(restore);
                 onClose();
               })
             }
