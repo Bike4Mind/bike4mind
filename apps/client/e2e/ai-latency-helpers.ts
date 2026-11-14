@@ -135,6 +135,35 @@ export interface PromptScenario {
   textStreamingBudgetSec?: number;
 }
 
+/** One `POST /api/ai/llm` completion the page made during a timed attempt. */
+export interface CompletionRef {
+  /** The completion's quest id: the key its `[ToolRound]` log lines carry. */
+  questId: string;
+  sessionId?: string;
+  /** `X-Request-ID` of the API call; joins API-side logs only (the worker logs under its own id). */
+  requestId?: string;
+  receivedAt: string;
+}
+
+/**
+ * Which completion(s) a row timed. Only `captured` (exactly one completion) is attributable to a
+ * single set of ToolRound logs; a resend inside one attempt is `ambiguous`, never collapsed.
+ */
+export interface PromptCorrelation {
+  status: 'captured' | 'missing' | 'ambiguous';
+  completions: CompletionRef[];
+  /** ISO time of Enter, and of the stream ending. */
+  sentAt?: string;
+  streamEndAt?: string;
+  /**
+   * Quest `fallbackInfo`, or 'unknown' when the quest could not be read. null means the poll body
+   * reports none; a dropped or cleared record also reads null.
+   */
+  fallback: Record<string, unknown> | null | 'unknown';
+  /** Quests do not persist the effective reasoning effort. */
+  effort: 'unknown';
+}
+
 export interface PromptResult {
   id: string;
   prompt: string;
@@ -183,4 +212,6 @@ export interface PromptResult {
    */
   firstTokenMs?: number;
   firstTokenSec?: number;
+  /** Absent on rows written before correlation was recorded. */
+  correlation?: PromptCorrelation;
 }

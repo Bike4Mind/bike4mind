@@ -192,8 +192,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode: it acts as the signed-in
+   * user (`askInFull`) or spends credits. Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -1215,8 +1227,11 @@ export type ChatSessionMode = 'chat' | 'code';
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
+ *           command naming a path outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, an outbound call after the reply read
+ *           untrusted content, or the same call a third time in a row. Over a clean reply, a
+ *           command the scan cannot follow or parse, one that sends data out, or one that runs
+ *           code written in this conversation runs like any other. Modelled on
  *           opencode's permission defaults; see ChatService.autoApproves.
  *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
  *           this user can read and reach the internet with nobody looking. Chosen per

@@ -403,9 +403,21 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       error: 'subscription_required',
       error_description: 'API keys require an active paid subscription',
     });
-    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, undefined, req);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('gives a starter-only user a key when the gate admits the verified client, with no request-supplied marker', async () => {
+    isApiKeyAccessAllowedMock.mockImplementation(
+      async (_user: unknown, billing?: { oauthExchangeClientId?: string }) =>
+        billing?.oauthExchangeClientId === 'client-1'
+    );
+    const { req, res } = makeReq({ ...VALID_BODY, oauthExchangeClientId: 'other-client' });
+    await handler(...([req, res] as unknown as Parameters<typeof handler>));
+    expect(res._getStatusCode()).toBe(200);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
+    expect(mockCreateUserApiKey).toHaveBeenCalled();
   });
 
   it('AC5: reuse-or-replace revokes the prior exchange key for this (user, client) before minting', async () => {

@@ -218,9 +218,13 @@ actor FakeRealtime: RealtimeClient {
 
   func events() -> AsyncStream<RealtimeEvent> {
     let (stream, continuation) = AsyncStream<RealtimeEvent>.makeStream()
-    continuations[UUID()] = continuation
+    let id = UUID()
+    continuations[id] = continuation
+    continuation.onTermination = { [weak self] _ in Task { await self?.removeListener(id) } }
     return stream
   }
+
+  private func removeListener(_ id: UUID) { continuations[id] = nil }
 
   func emit(_ event: RealtimeEvent) {
     if case .connectionChanged(let newState) = event { state = newState }

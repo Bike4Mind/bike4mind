@@ -46,10 +46,12 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: vi.fn() }));
 vi.mock('@bike4mind/server-utils/auth/signupNetworkLimits', () => ({ retainDeletedSignupTraces: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: effects.billingEvent }));
-vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: effects.email }));
+vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
+  sendAccountDeletionCompleteEmail: effects.email,
+}));
 // Spy, not replace: the revokes are called from inside this module, so only the arguments can show them skipped.
-vi.mock('@server/services/purgeDeletedUserData', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/services/purgeDeletedUserData')>();
+vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/services/purgeDeletedUserData')>();
   effects.purge.mockImplementation(actual.purgeDeletedUserData);
   return { ...actual, purgeDeletedUserData: effects.purge };
 });
@@ -60,7 +62,7 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
 }));
 
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { reapplyErasure } from './reapplyErasure';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

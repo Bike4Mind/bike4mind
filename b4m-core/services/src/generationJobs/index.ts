@@ -4,3 +4,6 @@ export * from './engine';
 export * from './sweep';
 export * from './createJob';
 export * from './settlement';
+export * from './groupCompletion';
+export * from './studioJobCompletion';
+export * from './storeOutput';

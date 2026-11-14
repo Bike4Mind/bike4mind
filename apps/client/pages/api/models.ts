@@ -11,7 +11,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { getCallerModelList } from '@server/utils/callerModelList';
 
 const handler = baseApi({
-  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+  requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ, ApiKeyScope.ADMIN],
   grandfatherLegacyKeys: true,
 }).get(async (req, res) => {
   const payload = await getCallerModelList(req.user ?? null, req.logger);

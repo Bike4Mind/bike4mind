@@ -98,6 +98,9 @@ private struct DrawerContent: View {
           row("New chat", symbol: "square.and.pencil", id: "drawer-newchat-btn") {
             services.navigator.apply(.compose(ComposeRequest(target: .newConversation)))
           }
+          row("Voice chat", symbol: "waveform", id: "drawer-voice-btn") {
+            services.navigator.startVoiceConversation(.newConversation)
+          }
           row("Studio", symbol: "wand.and.stars", id: "drawer-studio-btn") { services.navigator.apply(.media) }
           notebooks
         }

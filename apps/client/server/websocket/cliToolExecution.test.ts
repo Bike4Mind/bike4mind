@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1', email: 'u1@example.test' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -13,7 +13,7 @@ vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', () => ({
 }));
 
 const webExecutors = vi.hoisted(() => ({ web_search: vi.fn(), web_fetch: vi.fn() }));
-vi.mock('@server/cli/webToolExecutors', () => ({ buildWebToolExecutors: vi.fn(() => webExecutors) }));
+vi.mock('@bike4mind/server-utils/cli/webToolExecutors', () => ({ buildWebToolExecutors: vi.fn(() => webExecutors) }));
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
@@ -22,12 +22,12 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@bike4mind/server-utils/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { buildWebToolExecutors } from '@bike4mind/server-utils/cli/webToolExecutors';
 import { func } from './cliToolExecution';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };

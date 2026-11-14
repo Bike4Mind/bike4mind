@@ -7,6 +7,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -178,8 +179,8 @@ const ROWS: [string, string, string][] = [
   ['git worktree add ../wt -b wt', '', 'rrrr'],
   ['git worktree remove ../wt', '', 'rrrr'],
   ['git init newrepo', '', 'rrrr'],
-  ['git config user.email t@example.com', '', 'rrar'],
-  ['git apply changes.patch', '', 'rrar'],
+  ['git config user.email t@example.com', '', 'rrrr'],
+  ['git apply changes.patch', '', 'rrrr'],
   ['git format-patch -1 HEAD', '', 'rrrr'],
   ['git fetch', '', 'rrrr'],
   ['git fetch origin', '', 'rrrr'],
@@ -192,14 +193,14 @@ const ROWS: [string, string, string][] = [
   ['git push', '', 'rrrr'],
   ['git push origin HEAD', '', 'rrrr'],
   ['git push -u origin topic', '', 'rrrr'],
-  ['git push --force-with-lease', '', 'raar'],
-  ['git push origin --delete topic', '', 'raar'],
+  ['git push --force-with-lease', '', 'rrrr'],
+  ['git push origin --delete topic', '', 'rrrr'],
   ['git push --tags', '', 'rrrr'],
   ['git ls-remote origin', '', 'rrrr'],
   ['git clone https://example.com/acme/proj.git cl1', '', 'raar'],
   ['git clone --depth 1 https://example.com/acme/proj.git cl2', '', 'raar'],
-  ['git remote add fork git@example.com:acme/fork.git', '', 'raar'],
-  ['git remote set-url origin https://example.com/acme/proj2.git', '', 'raar'],
+  ['git remote add fork git@example.com:acme/fork.git', '', 'rrrr'],
+  ['git remote set-url origin https://example.com/acme/proj2.git', '', 'rrrr'],
   ['git submodule update --init --recursive', '', 'rrrr'],
   ['git submodule status', '', 'rrrr'],
   ['git fetch && git status', '', 'rrrr'],
@@ -320,9 +321,9 @@ describe('shell approval of common agent git commands', () => {
     const covered = subject !== null && rules.evaluate(subject).decision === 'allow';
     return [
       covered,
-      !prompt.askInAuto,
-      !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
-      !prompt.askInFull,
+      runsCheckedInAuto(prompt),
+      runsCheckedInAuto(withSession) && (withSession.always?.directories ?? []).length === 0,
+      runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))
       .join('');

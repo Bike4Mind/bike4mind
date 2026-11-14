@@ -396,6 +396,12 @@ type BranchLease = { reservation: BranchReservation | null; launched: boolean };
 
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
+type TaskDecisionIndexLoad = {
+  scope: string | null;
+  touched: Set<string> | null;
+  ready: Promise<void>;
+};
+
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 
@@ -1055,7 +1061,7 @@ export class ChatService {
    * built from the store once per scope, for decisions asked before a restart.
    */
   private readonly decisionIndex = new Map<string, PendingTaskDecision & { parentId: string; scope: string | null }>();
-  private decisionIndexLoad: { scope: string | null; ready: Promise<void> } | null = null;
+  private decisionIndexLoad: TaskDecisionIndexLoad | null = null;
 
   /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
@@ -1874,6 +1880,7 @@ export class ChatService {
         ...session.workerSelection?.requirements,
       });
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
+      if (updated) this.markTaskDecisionMutation(sessionId, scope);
       this.syncTaskDecision(updated, scope);
       if (updated) this.deps.summaryChanged?.(updated);
       return updated;
@@ -2063,14 +2070,21 @@ export class ChatService {
     expectedScope?: string | null,
     model?: string
   ): Promise<ChatSessionSummary | null> {
-    const updated = await this.deps.store.updateWorkerTask(sessionId, change, expectedScope, model);
-    this.syncTaskDecision(updated, expectedScope === undefined ? this.deps.store.scopeKey() : expectedScope);
+    const scope = expectedScope === undefined ? this.deps.store.scopeKey() : expectedScope;
+    const updated = await this.deps.store.updateWorkerTask(sessionId, change, scope, model);
+    if (updated) this.markTaskDecisionMutation(sessionId, scope);
+    this.syncTaskDecision(updated, scope);
     return updated;
+  }
+
+  /** A successful write takes precedence over an older snapshot still loading from disk. */
+  private markTaskDecisionMutation(sessionId: string, scope: string | null): void {
+    if (this.decisionIndexLoad?.scope === scope) this.decisionIndexLoad.touched?.add(sessionId);
   }
 
   /** Index (or drop) the decision `session` waits on; a no-op when nothing changed. */
   private syncTaskDecision(session: ChatSessionSummary | null, scope: string | null): void {
-    if (!session) return;
+    if (!session || this.deps.store.scopeKey() !== scope) return;
     const decision = pendingDecisionOf(session.workerTask);
     const known = this.decisionIndex.get(session.id);
     const parentId = session.origin?.parentSessionId;
@@ -2117,17 +2131,23 @@ export class ChatService {
         this.decisionIndex.delete(sessionId);
         this.deps.activity?.decisionChanged(sessionId, false);
       }
-      const ready = this.deps.store.list().then(
-        sessions => {
-          if (this.deps.store.scopeKey() !== scope) return;
-          for (const session of sessions) if (session.workerTask) this.syncTaskDecision(session, scope);
-        },
-        (error: unknown) => {
+      // Install before reading: task writes/deletes can finish while list captures its snapshots.
+      const load: TaskDecisionIndexLoad = { scope, touched: new Set<string>(), ready: Promise.resolve() };
+      this.decisionIndexLoad = load;
+      load.ready = (async () => {
+        try {
+          const sessions = await this.deps.store.list();
+          // Identity also rejects an old A load after switching A -> B -> A.
+          if (this.decisionIndexLoad !== load || this.deps.store.scopeKey() !== scope) return;
+          for (const session of sessions)
+            if (session.workerTask && !load.touched?.has(session.id)) this.syncTaskDecision(session, scope);
+        } catch (error: unknown) {
           this.deps.logger.warn(`CHAT: could not read pending task decisions: ${String(error)}`);
-          if (this.decisionIndexLoad?.ready === ready) this.decisionIndexLoad = null;
+          if (this.decisionIndexLoad === load) this.decisionIndexLoad = null;
+        } finally {
+          load.touched = null;
         }
-      );
-      this.decisionIndexLoad = { scope, ready };
+      })();
     }
     await this.decisionIndexLoad?.ready;
     return this.currentTaskDecisions();
@@ -2299,6 +2319,47 @@ export class ChatService {
         next = acceptTask(task, action.assessment);
       } else if (action.kind === 'cancel') {
         this.stop(sessionId);
+        const pending = pendingDecisionOf(task);
+        const parentId = child.origin?.parentSessionId;
+        if (pending && parentId) {
+          // Let the original finalizer see the pending decision and skip its report first.
+          await this.untilAgentIdle(sessionId);
+          if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+          const latest = await this.deps.store.get(sessionId);
+          const assertSameDecision = (current: WorkerTask) => {
+            if (
+              pendingDecisionOf(current)?.id !== pending.id ||
+              current.attempts.at(-1)?.id !== task.attempts.at(-1)?.id
+            )
+              throw new Error('This decision is no longer pending.');
+          };
+          if (!latest?.workerTask) throw new Error('No structured task exists.');
+          assertSameDecision(latest.workerTask);
+          const settling = Symbol();
+          this.agentsSettling.set(sessionId, { parentId, settling });
+          try {
+            const updated = await this.updateTask(
+              sessionId,
+              current => {
+                assertSameDecision(current);
+                return { ...current, state: { status: 'canceled', reason: action.reason } };
+              },
+              scope
+            );
+            if (!updated) throw new Error('Account or task changed. Reload agent details.');
+            if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+            this.deps.summaryChanged?.(updated);
+            const canceled = await this.deps.store.get(sessionId);
+            if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
+            if (!canceled) throw new Error('No structured task exists.');
+            await this.reportSettledAgent(parentId, canceled, isLocalModel(canceled.model));
+            if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+            await this.wakeParentForAgents(parentId);
+            return updated;
+          } finally {
+            if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+          }
+        }
         next = { ...task, state: { status: 'canceled', reason: action.reason } };
       } else if (action.kind === 'deny' || action.kind === 'upgrade') {
         if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
@@ -2749,6 +2810,7 @@ export class ChatService {
   ): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
+    const decisionScope = this.deps.store.scopeKey();
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
@@ -2779,7 +2841,10 @@ export class ChatService {
     this.deps.model?.forget?.(sessionId);
     // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
     const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
-    if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    if (deleteStoredSession) {
+      await this.deps.store.delete(sessionId);
+      this.markTaskDecisionMutation(sessionId, decisionScope);
+    }
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
@@ -7322,6 +7387,8 @@ export class ChatService {
     };
     if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
 
+    // What an "Allow in this chat" is filed, looked up and revoked under.
+    const allowanceKey = prompt.chatKey ?? prompt.key;
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -7355,7 +7422,7 @@ export class ChatService {
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
-        prompt.key,
+        allowanceKey,
         runnable.map(option => option.id)
       );
       // Over a tainted reply only an answer given knowing about the taint, or one for a tool
@@ -7421,10 +7488,21 @@ export class ChatService {
     }
 
     // Only the reasons beyond the tool's own: an ask rule, untrusted content, a loop.
-    const askedBecause =
-      [askedByRule, tainted ? untrustedReason(tainted) : null, stuck ? LOOP_ASK_REASON : null]
-        .filter((reason): reason is string => !!reason)
-        .join(' ') || undefined;
+    const askedReasons = [
+      askedByRule,
+      tainted ? untrustedReason(tainted) : null,
+      stuck ? LOOP_ASK_REASON : null,
+    ].filter((reason): reason is string => !!reason);
+    const askedBecause = askedReasons.join(' ') || undefined;
+    // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
+    // 'ask' sets no `tainted`, yet a sending call over untrusted content still needs its reason here.
+    const untrusted = directories.untrusted;
+    const untrustedInAsk = !tainted && untrusted && taintedParts() ? untrustedReason(untrusted) : null;
+    const approvalReasons = [
+      ...(asked.prompt.reasons ?? []),
+      ...askedReasons,
+      ...(untrustedInAsk ? [untrustedInAsk] : []),
+    ];
     let requestedAt: string | undefined;
     // What answered this card when another card's "always" or a newly saved rule covered it.
     let coveredBy: ChatApprovalDecidedBy | undefined;
@@ -7444,7 +7522,7 @@ export class ChatService {
     const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
-      prompt.key,
+      allowanceKey,
       signal,
       approvalId => {
         requestedAt = new Date().toISOString();
@@ -7457,11 +7535,13 @@ export class ChatService {
             status: 'awaiting-approval',
             approvalId,
             approvalDetail: asked.prompt.detail,
+            ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
             ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
+            ...(asked.prompt.askInFull || spendsCredits(call.name) ? { approvalInAppOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,
@@ -7565,9 +7645,9 @@ export class ChatService {
       await this.deps.capabilities
         .grant({
           subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
-          capability: capabilityFor(call.name, prompt.key),
-          scope: capabilityScope(call.name, prompt.key),
-          approvalKey: prompt.key,
+          capability: capabilityFor(call.name, allowanceKey),
+          scope: capabilityScope(call.name, allowanceKey),
+          approvalKey: allowanceKey,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
@@ -7950,10 +8030,12 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
-   * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
-   * project the user has not allowed.
+   * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
+   * own words name, reach permission settings, an outbound call after the reply read untrusted
+   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path
+   * outside the project the user has not allowed. Over a clean reply, a command the scan cannot
+   * follow or parse, one that can send data out, or one that runs code written in this
+   * conversation runs like any other.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -9251,8 +9333,8 @@ interface PartDecision {
 
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
-  if (mode === 'full') return part.ask?.mode !== 'full';
-  return mode === 'auto' && part.ask === undefined;
+  if (mode === 'full') return true;
+  return mode === 'auto' && (part.ask === undefined || part.ask.mode === 'ask');
 }
 
 /**
@@ -9315,7 +9397,6 @@ function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts
   return {
     prompt: {
       ...rest,
-      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
       always: { ...always, commands: parts.uncovered, directories: parts.directories },
     },
     subject: subject.shell

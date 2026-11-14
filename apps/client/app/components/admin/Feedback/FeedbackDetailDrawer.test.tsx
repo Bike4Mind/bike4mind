@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({ getFeedbackByIdFromServer: mocks.getFeedbackByIdFromServer }));
 vi.mock('./FeedbackHistory', () => ({ default: () => <div data-testid="feedback-history-stub" /> }));
+vi.mock('./FeedbackSimilarReports', () => ({ default: () => <div data-testid="feedback-similar-stub" /> }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({
   openHelpPanel: mocks.openHelpPanel,
   useHelpPanel: <T,>(selector: (state: { open: boolean }) => T) => selector({ open: mocks.helpPanelOpen }),
@@ -98,6 +99,17 @@ describe('FeedbackDetailDrawer', () => {
     expect(link).toHaveTextContent('Open conversation at this turn');
     expect(link).toHaveAttribute('href', '/notebooks/sess-1?questId=quest-1');
     expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('links a duplicate resolution back to the original report', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(
+      makeRecord({ resolution: 'duplicate', resolutionDuplicateId: 'original-report' })
+    );
+    renderDrawer();
+    expect(await screen.findByTestId('feedback-detail-duplicate-link')).toHaveAttribute(
+      'href',
+      '/admin?tab=feedback&feedbackId=original-report'
+    );
   });
 
   describe('emailing the reporter', () => {
@@ -254,6 +266,23 @@ describe('FeedbackDetailDrawer', () => {
 
     await userEvent.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('supports j/k and i/c/e on the fetched report without a list row', async () => {
+    const record = makeRecord();
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(record);
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    const { onStatusChange } = renderDrawer({ onNext, onPrevious });
+    const email = await screen.findByTestId('feedback-detail-email-reporter-btn');
+    const emailClick = vi.spyOn(email, 'click').mockImplementation(() => {});
+    expect(screen.getByTestId('feedback-detail-close-btn')).toHaveFocus();
+    await userEvent.keyboard('jkice');
+    expect(onNext).toHaveBeenCalledOnce();
+    expect(onPrevious).toHaveBeenCalledOnce();
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.InProgress);
+    expect(onStatusChange).toHaveBeenCalledWith(record, FeedbackStatus.Closed);
+    expect(emailClick).toHaveBeenCalledOnce();
   });
 
   it('changes the status from the drawer', async () => {

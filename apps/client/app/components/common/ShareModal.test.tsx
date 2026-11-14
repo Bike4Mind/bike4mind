@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   cancelInvite: vi.fn(),
   confirm: vi.fn(),
   apiPost: vi.fn(),
+  apiGet: vi.fn(),
   currentUser: { id: 'u1', email: 'me@test.com', username: 'me' } as {
     id: string;
     email: string;
@@ -55,7 +56,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: mocks.currentUser }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: mocks.apiPost },
+  api: { post: mocks.apiPost, get: mocks.apiGet },
 }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
@@ -93,6 +94,7 @@ const rejectWith = (error: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mutateAsync.mockResolvedValue({});
+  mocks.apiGet.mockResolvedValue({ data: { policy: null } });
   mocks.shareData = undefined;
   mocks.currentUser = { id: 'u1', email: 'me@test.com', username: 'me' };
 });
@@ -105,6 +107,27 @@ const openByUsersTab = async (files?: IFabFileDocument[]) => {
 };
 
 describe('ShareModal - By Link tab', () => {
+  it('blocks generation but keeps existing link revocation available under organization restrictions', async () => {
+    mocks.apiGet.mockResolvedValue({
+      data: { policy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: ['partner.example'] } },
+    });
+    renderModal();
+    await screen.findByTestId('share-modal-policy-explanation');
+    expect(screen.getByTestId('share-modal-link-tab')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('share-modal-submit-button')).toBeDisabled();
+    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    const confirmation = mocks.confirm.mock.calls.at(-1)?.[0] as { onOk: () => void };
+    confirmation.onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByTestId('share-modal-policy-explanation')).toHaveTextContent(
+      'Your organization does not allow public links'
+    );
+    expect(
+      screen.getByText('Only organization members and recipients at partner.example can receive this share.')
+    ).toBeInTheDocument();
+  });
+
   it('marks the Description field as optional', () => {
     renderModal();
     // The "By Link" tab is the default (tabIndex 1), so the Description field is visible.

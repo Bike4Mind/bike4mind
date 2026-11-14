@@ -151,12 +151,14 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     await openApprovals(page);
     const ownRow = page.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(ownRow).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await expect(ownRow.getByTestId('admin-approve-btn')).toBeDisabled();
+    await ownRow.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await expect(page.getByTestId('admin-approve-btn')).toHaveAttribute('aria-disabled', 'true');
 
     await openApprovals(pageB);
     const row = pageB.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(row).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await row.getByTestId('admin-approve-btn').click();
+    await row.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await pageB.getByTestId('admin-approve-btn').click();
     await expect(row).toHaveCount(0, { timeout: TIMEOUTS.ACTION });
 
     await expect
@@ -186,7 +188,8 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     await openApprovals(pageB);
     const row = pageB.getByTestId(`admin-approval-row-${approvalId}`);
     await expect(row).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await row.getByTestId('admin-reject-btn').click();
+    await row.getByTestId(`admin-approval-actions-${approvalId}`).click();
+    await pageB.getByTestId('admin-reject-btn').click();
     await pageB.getByTestId('admin-approval-reject-dialog-reason-input').fill('Not needed after review');
     await pageB.getByTestId('admin-approval-reject-dialog-confirm-btn').click();
     await expect(row).toHaveCount(0, { timeout: TIMEOUTS.ACTION });

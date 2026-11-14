@@ -8,7 +8,7 @@ import { creditService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
-import { reserveRequestCredits, type CreditLedgerEntry } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits, type CreditLedgerEntry } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
 
 // A billing state, not a bug. Each caller maps it onto its own established
@@ -38,7 +38,7 @@ export interface CreditPreflightArgs {
  * (TTS in deductTtsCredits.ts, transcription in pages/api/ai/transcribe). Run it
  * before the provider so a caller who cannot pay never incurs provider cost.
  *
- * A check, not a reservation (compare server/billing/reserveRequestCredits.ts):
+ * A check, not a reservation (compare packages/server-utils/src/billing/reserveRequestCredits.ts):
  * the post-call deduction moves the balance, so concurrent requests can still
  * overdraw by the cost of the calls in flight.
  *
@@ -118,7 +118,7 @@ export interface PreflightCreditHold {
 /**
  * Reserve the estimated cost of a provider call (TTS, transcription) BEFORE it runs, so concurrent
  * calls cannot overdraw the balance, on top of the same durable hold primitive the stateless paid
- * API routes use (server/billing/reserveRequestCredits.ts): the hold is a `PendingCreditHold` row,
+ * API routes use (packages/server-utils/src/billing/reserveRequestCredits.ts): the hold is a `PendingCreditHold` row,
  * so a lambda killed mid-call leaves a refund for the expired-hold sweep instead of a silent debit.
  *
  * Refuses with InsufficientCreditsPreflightError like assertPreflightCredits.

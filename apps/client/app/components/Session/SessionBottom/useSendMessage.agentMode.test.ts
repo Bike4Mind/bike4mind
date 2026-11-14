@@ -24,4 +24,12 @@ describe('useSendMessage - agentMode reaches both dispatch paths', () => {
       expect(callSite(opener)).toMatch(/^\s*agentMode: effectiveAgentMode,\s*$/m);
     }
   );
+
+  it('forwards thinking as-is on agent dispatch so enabled:false reaches the executor', () => {
+    expect(callSite('agentExecution.start({')).toMatch(/^\s*thinking: sentThinking,\s*$/m);
+  });
+
+  it('derives sentThinking through thinkingForSend so always-on models send none', () => {
+    expect(source).toMatch(/const sentThinking = thinkingForSend\(thinking, currentModelInfo\);/);
+  });
 });

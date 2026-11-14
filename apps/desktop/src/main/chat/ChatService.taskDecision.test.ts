@@ -36,7 +36,7 @@ const contractFor = (outcome: string): TaskContract => ({
 const ASKING = 'Build the stacked feature';
 const SIBLING = 'Build the sibling feature';
 const decisionReport = {
-  status: 'blocked',
+  status: 'blocked' as const,
   reason: 'The prerequisite branch has not merged',
   evidence: ['The prerequisite PR is still open'],
   decision: {
@@ -50,6 +50,14 @@ const decisionReport = {
 
 const frame = (payload: unknown) => `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 type Wire = { model: string; messages: { role: string; content: unknown }[] };
+
+function barrier() {
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return { ready, release };
+}
 
 describe('a worker decision that only the user can make', () => {
   let store: SessionStore;
@@ -76,8 +84,16 @@ describe('a worker decision that only the user can make', () => {
       opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    service = createService();
+    await service.setRolePolicy({
+      ...inheritancePolicy(),
+      roles: { implementation: 'worker', exploration: 'inherit', review: 'inherit' },
+    });
+  });
+
+  function createService() {
     const boundPost = post;
-    service = new ChatService({
+    return new ChatService({
       store,
       activity,
       queue: new MessageQueue(() => undefined),
@@ -93,12 +109,30 @@ describe('a worker decision that only the user can make', () => {
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: (_event: ChatStreamEvent) => undefined,
     });
-    await service.setRolePolicy({
-      ...inheritancePolicy(),
-      roles: { implementation: 'worker', exploration: 'inherit', review: 'inherit' },
+  }
+
+  function restart() {
+    service.dispose();
+    activity = new SessionActivity(() => undefined);
+    decisionPushes = [];
+    service = createService();
+  }
+
+  function holdNextList() {
+    const captured = barrier();
+    const resume = barrier();
+    const list = store.list.bind(store);
+    vi.spyOn(store, 'list').mockImplementationOnce(async () => {
+      const sessions = await list();
+      captured.release();
+      await resume.ready;
+      return sessions;
     });
-  });
+    return { captured: captured.ready, release: resume.release };
+  }
+
   afterEach(() => {
+    vi.restoreAllMocks();
     service.dispose();
     for (const stream of streams) stream.end();
   });
@@ -322,5 +356,265 @@ describe('a worker decision that only the user can make', () => {
     } finally {
       restarted.dispose();
     }
+  });
+
+  it.each(['skip', 'cancel', 'delete', 'model change'] as const)(
+    'does not resurrect a pending snapshot after a successful %s while loading',
+    async action => {
+      const { asker, decision } = await ask();
+      restart();
+      const held = holdNextList();
+      const loading = service.listTaskDecisions();
+      try {
+        await held.captured;
+        if (action === 'skip') await service.answerTaskDecision(asker.id, decision.decision.id, { status: 'skipped' });
+        else if (action === 'cancel')
+          await service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled by user' });
+        else if (action === 'delete') await service.deleteSession(asker.id);
+        else await service.setSessionModel(asker.id, 'planner');
+      } finally {
+        held.release();
+      }
+      expect(await loading).toEqual([]);
+      expect(await service.listTaskDecisions()).toEqual([]);
+      expect(activity.statusOf(asker.id)).not.toBe('needs-action');
+      expect(decisionPushes.at(-1) ?? []).toEqual([]);
+    }
+  );
+
+  it('does not erase a newer pending report with an older snapshot', async () => {
+    const { asker } = await ask();
+    await service.actOnTask(asker.id, asker.id, {
+      kind: 'report',
+      report: { status: 'blocked', reason: 'Waiting for evidence', evidence: ['No decision yet'] },
+    });
+    restart();
+    const held = holdNextList();
+    const loading = service.listTaskDecisions();
+    try {
+      await held.captured;
+      await service.actOnTask(asker.id, asker.id, { kind: 'report', report: decisionReport });
+    } finally {
+      held.release();
+    }
+    const decisions = await loading;
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].sessionId).toBe(asker.id);
+    expect(decisionPushes.at(-1)).toEqual(decisions);
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
+  });
+
+  it('still seeds a valid pending decision after a failed task write', async () => {
+    const { asker, decision } = await ask();
+    restart();
+    const held = holdNextList();
+    const loading = service.listTaskDecisions();
+    try {
+      await held.captured;
+      vi.spyOn(store, 'updateWorkerTask').mockRejectedValueOnce(new Error('Disk write failed'));
+      await expect(service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled by user' })).rejects.toThrow(
+        'Disk write failed'
+      );
+    } finally {
+      held.release();
+    }
+    expect(await loading).toEqual([decision]);
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
+  });
+
+  it('retries a failed initial snapshot', async () => {
+    const { decision } = await ask();
+    restart();
+    vi.spyOn(store, 'list').mockRejectedValueOnce(new Error('Temporary read failure'));
+    expect(await service.listTaskDecisions()).toEqual([]);
+    expect(await service.listTaskDecisions()).toEqual([decision]);
+  });
+
+  it('rejects the old load after an A to B to A scope round trip', async () => {
+    const { asker } = await ask();
+    restart();
+    const scope = vi.spyOn(store, 'scopeKey').mockReturnValue('A');
+    const oldA = holdNextList();
+    const loadingOldA = service.listTaskDecisions();
+    await oldA.captured;
+    scope.mockReturnValue('B');
+    const oldB = holdNextList();
+    const loadingOldB = service.listTaskDecisions();
+    await oldB.captured;
+    scope.mockReturnValue('A');
+    await service.actOnTask(asker.id, asker.id, {
+      kind: 'report',
+      report: { status: 'blocked', reason: 'No longer asking', evidence: ['The user took over'] },
+    });
+    const newA = holdNextList();
+    const loadingNewA = service.listTaskDecisions();
+    try {
+      await newA.captured;
+      oldA.release();
+      expect(await loadingOldA).toEqual([]);
+      expect(activity.statusOf(asker.id)).not.toBe('needs-action');
+      oldB.release();
+      expect(await loadingOldB).toEqual([]);
+    } finally {
+      oldA.release();
+      oldB.release();
+      newA.release();
+    }
+    expect(await loadingNewA).toEqual([]);
+  });
+
+  it('reports an idle pending cancellation once and wakes the parent with both siblings', async () => {
+    const { root, asker, sibling, siblingStream, before, decision } = await ask();
+    finish(siblingStream, 'Sibling done');
+    await idle(sibling.id);
+    await vi.waitUntil(
+      async () => (await stored(root.id)).messages.some(message => String(message.content).includes(SIBLING)),
+      { timeout: 5000 }
+    );
+    expect(plannerCalls()).toBe(before);
+    const workerCalls = () => post.mock.calls.filter((_call, index) => wire(index).model === 'worker').length;
+    const workersBefore = workerCalls();
+    await service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled by user' });
+    const canceledReports = async () =>
+      (await stored(root.id)).messages.filter(message => String(message.content).includes('Canceled by user'));
+    expect(await canceledReports()).toHaveLength(1);
+    expect(String((await canceledReports())[0].content)).toContain('"status":"canceled"');
+    const wake = await nextStream('Canceled by user', -1, 'planner');
+    expect(wireText(wake)).toContain(SIBLING);
+    expect(wireText(wake)).toContain(ASKING);
+    expect((await stored(asker.id)).workerTask?.state).toEqual({ status: 'canceled', reason: 'Canceled by user' });
+    expect(await service.listTaskDecisions()).toEqual([]);
+    expect(decisionPushes.at(-1)).toEqual([]);
+    expect(activity.statusOf(asker.id)).toBe('done');
+    finish(wake);
+    await idle(root.id);
+    await service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled by user' });
+    await expect(service.answerTaskDecision(asker.id, decision.decision.id, { status: 'skipped' })).rejects.toThrow(
+      'no longer pending'
+    );
+    expect(await canceledReports()).toHaveLength(1);
+    expect(plannerCalls()).toBe(before + 1);
+    expect(workerCalls()).toBe(workersBefore);
+  });
+
+  it('waits for the original finalizer before taking ownership of a pending cancellation', async () => {
+    const { root, asker, sibling, askingStream, siblingStream } = await twoWorkers();
+    tool(askingStream, 'task_report', { report: decisionReport });
+    const followUp = await nextStream('End your turn now', askingStream);
+    finish(siblingStream, 'Sibling done');
+    await idle(sibling.id);
+    const entered = barrier();
+    const resume = barrier();
+    const get = store.get.bind(store);
+    let held = false;
+    vi.spyOn(store, 'get').mockImplementation(async id => {
+      const session = await get(id);
+      if (id === asker.id && !held && !service.isSessionBusy(id)) {
+        held = true;
+        entered.release();
+        await resume.ready;
+      }
+      return session;
+    });
+    finish(followUp, 'Waiting on the user.');
+    await entered.ready;
+    const stopped = barrier();
+    const stop = service.stop.bind(service);
+    vi.spyOn(service, 'stop').mockImplementation(id => {
+      stop(id);
+      stopped.release();
+    });
+    const cancel = service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled during settlement' });
+    try {
+      await stopped.ready;
+      expect((await get(asker.id))?.workerTask?.state.status).toBe('blocked');
+      expect(decisionPushes.at(-1)).toHaveLength(1);
+      const decision = decisionPushes.at(-1)![0];
+      await expect(service.answerTaskDecision(asker.id, decision.decision.id, { status: 'skipped' })).rejects.toThrow(
+        'already in progress'
+      );
+    } finally {
+      resume.release();
+    }
+    await cancel;
+    const wake = await nextStream('Canceled during settlement', -1, 'planner');
+    expect(wireText(wake)).toContain(SIBLING);
+    const reports = (await stored(root.id)).messages.filter(message =>
+      String(message.content).includes('Canceled during settlement')
+    );
+    expect(reports).toHaveLength(1);
+    expect(String(reports[0].content)).toContain('"status":"canceled"');
+    finish(wake);
+  });
+
+  it('does not cancel an obsolete decision replaced before the serialized write', async () => {
+    const { root, asker } = await ask();
+    const update = store.updateWorkerTask.bind(store);
+    vi.spyOn(store, 'updateWorkerTask').mockImplementationOnce(async (...args) => {
+      // Reports bypass the action guard and can win the real store writer queue.
+      await service.actOnTask(asker.id, asker.id, {
+        kind: 'report',
+        report: { ...decisionReport, decision: { ...decisionReport.decision, question: 'A newer decision?' } },
+      });
+      return update(...args);
+    });
+    await expect(
+      service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Obsolete cancellation' })
+    ).rejects.toThrow('no longer pending');
+    expect((await stored(asker.id)).workerTask?.state.status).toBe('blocked');
+    const decisions = await service.listTaskDecisions();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].decision.question.question).toBe('A newer decision?');
+    expect(
+      (await stored(root.id)).messages.some(message => String(message.content).includes('Obsolete cancellation'))
+    ).toBe(false);
+    // The failed cancellation releases its own action and settling guards.
+    await service.answerTaskDecision(asker.id, decisions[0].decision.id, { status: 'skipped' });
+  });
+
+  it('rejects cancel while an answer is writing and resumes only that answer', async () => {
+    const { asker, decision } = await ask();
+    const entered = barrier();
+    const resume = barrier();
+    const update = store.updateWorkerTask.bind(store);
+    vi.spyOn(store, 'updateWorkerTask').mockImplementationOnce(async (...args) => {
+      entered.release();
+      await resume.ready;
+      return update(...args);
+    });
+    const answer = service.answerTaskDecision(asker.id, decision.decision.id, {
+      status: 'answered',
+      answers: [{ selected: ['Wait for the merge'] }],
+    });
+    try {
+      await entered.ready;
+      await expect(
+        service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Cancel after answer' })
+      ).rejects.toThrow('already in progress');
+    } finally {
+      resume.release();
+    }
+    await answer;
+    const resumed = await nextStream('The user answered your decision');
+    expect((await stored(asker.id)).workerTask?.state.status).toBe('running');
+    expect(post.mock.calls.filter((_call, index) => wireText(index).includes('The user answered'))).toHaveLength(1);
+    finish(resumed);
+  });
+
+  it('does not deliver a cancellation report after switching scope during its final read', async () => {
+    const { root, asker } = await ask();
+    const scope = vi.spyOn(store, 'scopeKey');
+    const get = store.get.bind(store);
+    vi.spyOn(store, 'get').mockImplementation(async id => {
+      const session = await get(id);
+      if (id === asker.id && session?.workerTask?.state.status === 'canceled') scope.mockReturnValue('other');
+      return session;
+    });
+    await expect(
+      service.actOnTask(null, asker.id, { kind: 'cancel', reason: 'Canceled before account change' })
+    ).rejects.toThrow('Account changed');
+    expect(
+      (await get(root.id))?.messages.some(message => String(message.content).includes('Canceled before account change'))
+    ).toBe(false);
   });
 });

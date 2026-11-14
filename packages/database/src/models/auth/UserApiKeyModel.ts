@@ -10,6 +10,9 @@ import {
   IUserApiKeyDocument,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
+  LegacyApiKeyCandidatePage,
+  LegacyApiKeyCandidateQuery,
+  OrgApiKeyGrant,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -66,6 +69,36 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       { $group: { _id: '$userId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  async findLegacyCandidatesPage({
+    createdBefore,
+    usedSince,
+    excludeScopes,
+    skip,
+    limit,
+  }: LegacyApiKeyCandidateQuery): Promise<LegacyApiKeyCandidatePage> {
+    const now = new Date();
+    const filter = {
+      status: ApiKeyStatus.ACTIVE,
+      // Explicit because countDocuments and aggregate skip the soft-delete filter.
+      deletedAt: null,
+      lastUsedAt: { $gte: usedSince },
+      ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+      scopes: { $nin: [...excludeScopes] },
+      'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
+    };
+    const [keys, total, owners] = await Promise.all([
+      this.model.find(filter).sort({ lastUsedAt: -1, _id: -1 }).skip(skip).limit(limit).exec(),
+      this.model.countDocuments(filter).exec(),
+      this.model.aggregate<{ count: number }>([
+        { $match: filter },
+        { $group: { _id: '$userId' } },
+        { $count: 'count' },
+      ]),
+    ]);
+    return { keys, total, ownerCount: owners[0]?.count ?? 0 };
   }
 
   /** When each user created their first key, deleted keys included; users with no key are absent. */
@@ -506,10 +539,26 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
-    // Org-owned key (see IUserApiKey.orgOwned). Set on insert only.
+    // Org-owned key (see IUserApiKey.orgOwned). `createdByUserId` is set on insert only; `grants`
+    // is the key's reach, edited by pages/api/organizations/[id]/api-keys/[keyId]/index.ts.
     orgOwned: {
-      type: new mongoose.Schema<{ createdByUserId: string }>(
-        { createdByUserId: { type: String, required: true } },
+      type: new mongoose.Schema<{ createdByUserId: string; grants?: OrgApiKeyGrant[] }>(
+        {
+          createdByUserId: { type: String, required: true },
+          grants: {
+            type: [
+              new mongoose.Schema<OrgApiKeyGrant>(
+                {
+                  resourceType: { type: String, enum: ['organization', 'group'], required: true },
+                  resourceId: { type: String, required: true },
+                  permission: { type: String, enum: ['read'], required: true },
+                },
+                { _id: false }
+              ),
+            ],
+            default: undefined,
+          },
+        },
         { _id: false }
       ),
       default: undefined,

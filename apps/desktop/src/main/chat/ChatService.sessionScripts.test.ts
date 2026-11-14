@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import { isQuickApproval } from '@shared/watch';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -102,12 +103,16 @@ describe('ChatService running a script written in the same session', () => {
     vi.restoreAllMocks();
   });
 
-  /** One reply of `rounds`; each round waits for the previous round's call to settle. */
-  async function reply(sessionId: string, rounds: Round[]): Promise<number> {
+  /**
+   * One reply of `rounds`; each round waits for the previous round's call to settle. `lastIn` switches
+   * the mode before the last round, so earlier writes run unasked and the last call shows its card.
+   */
+  async function reply(sessionId: string, rounds: Round[], lastIn?: ChatApprovalMode): Promise<number> {
     const before = streams.length;
     await service.send(sessionId, 'go');
     for (const [index, [name, input]] of rounds.entries()) {
       await vi.waitUntil(() => streams.length === before + index + 1, { timeout: 5000, interval: 5 });
+      if (lastIn && index === rounds.length - 1) await service.setApprovalMode(sessionId, lastIn);
       const stream = streams[before + index];
       const prior = calls(name, 'done').length + calls(name, 'error').length;
       stream.write(toolTurn(`c${before + index}`, name, input));
@@ -134,22 +139,46 @@ describe('ChatService running a script written in the same session', () => {
   const write = (name: string, content = 'echo hi\n'): Round => ['file_write', { path: join(root, name), content }];
   const shell = (command: string): Round => ['bash_execute', { command, cwd: root }];
 
-  it('asks before running a script this session just wrote', async () => {
+  it('runs a script this session just wrote in auto mode while the reply has read nothing untrusted', async () => {
+    const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
     const id = await session('auto');
     await reply(id, [read(), write('setup.sh'), shell('bash setup.sh')]);
+
+    await settled('bash_execute');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('names a script this session just wrote on the card', async () => {
+    const id = await session('auto');
+    await reply(id, [read(), write('setup.sh'), shell('bash setup.sh')], 'ask');
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
     expect(calls('file_write', 'awaiting-approval')).toHaveLength(0);
   });
 
+  // The menu bar and the mini window show only the command line, so the reason the gate gave must
+  // keep the call off their approve-once path.
+  it('carries the reason apart from the detail, so the call is not answerable from the menu bar', async () => {
+    const id = await session('auto');
+    await reply(id, [write('deploy.sh'), shell('./deploy.sh')], 'ask');
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalParts).toBeUndefined();
+    expect(asked.approvalReasons).toEqual([expect.stringContaining('deploy.sh, which was written in this session')]);
+    for (const reason of asked.approvalReasons ?? []) expect(asked.approvalDetail).toContain(reason);
+    expect(isQuickApproval(asked)).toBe(false);
+  });
+
   it.each(['./setup.sh', 'sh ./setup.sh', 'source setup.sh', 'timeout 5 python3 -u setup.sh', 'cat setup.sh | sh'])(
-    'asks before %s after writing it',
+    'names setup.sh on the card for %s after writing it',
     async command => {
       const id = await session('auto');
-      await reply(id, [write('setup.sh'), shell(command)]);
+      await reply(id, [write('setup.sh'), shell(command)], 'ask');
 
-      await awaitCall('bash_execute', 'awaiting-approval');
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
     }
   );
 
@@ -166,17 +195,19 @@ describe('ChatService running a script written in the same session', () => {
       await settled('apply_patch');
       expect(calls('apply_patch', 'done')).toHaveLength(1);
       await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+      await service.setApprovalMode(id, 'ask');
       streams[1].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[1].write(frame('[DONE]'));
     }
 
-    it('asks before running a script it added', async () => {
+    it('names a script it added on the card', async () => {
       await patchThenRun([`*** Add File: ${join(root, 'setup.sh')}`, '+echo hi'], 'bash setup.sh');
 
-      await awaitCall('bash_execute', 'awaiting-approval');
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
     });
 
-    it('asks before running a script it renamed', async () => {
+    it('names a script it renamed on the card', async () => {
       await patchThenRun(
         [
           `*** Update File: ${join(root, 'run.sh')}`,
@@ -188,59 +219,65 @@ describe('ChatService running a script written in the same session', () => {
         'bash moved.sh'
       );
 
-      await awaitCall('bash_execute', 'awaiting-approval');
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('moved.sh, which was written in this session');
     });
   });
 
   it.each([
     ["sed -i.bak 's/old/new/' run.sh", 'run.sh'],
     ['mkdir out && tar -cf a.tar run.sh && tar -xf a.tar -C out', 'out/run.sh'],
-  ])('asks before running a script after %s', async (edit, script) => {
+  ])('names the script on the card after %s', async (edit, script) => {
     const id = await session('auto');
-    await reply(id, [shell(edit), shell(`bash ${script}`)]);
+    await reply(id, [shell(edit), shell(`bash ${script}`)], 'ask');
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain(`${script}, which was written in this session`);
     expect(calls('bash_execute', 'done')).toHaveLength(1);
   });
 
-  it('asks before running a script from another folder after a cd', async () => {
+  it('names a script run from another folder after a cd', async () => {
     const id = await session('auto');
-    await reply(id, [write('tools/go.sh'), shell('cd tools && bash go.sh')]);
+    await reply(id, [write('tools/go.sh'), shell('cd tools && bash go.sh')], 'ask');
 
-    await awaitCall('bash_execute', 'awaiting-approval');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('go.sh, which was written in this session');
   });
 
-  it('asks before running an existing script this session edited', async () => {
+  it('names an existing script this session edited', async () => {
     const id = await session('auto');
-    await reply(id, [
-      ['file_edit', { path: join(root, 'run.sh'), oldText: 'echo old', newText: 'echo new' }],
-      shell('sh run.sh'),
-    ]);
+    await reply(
+      id,
+      [['file_edit', { path: join(root, 'run.sh'), oldText: 'echo old', newText: 'echo new' }], shell('sh run.sh')],
+      'ask'
+    );
 
-    await awaitCall('bash_execute', 'awaiting-approval');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('run.sh, which was written in this session');
   });
 
-  it('asks before a package script after this session edited package.json', async () => {
+  it('names package.json on the card for a package script after this session edited it', async () => {
     const id = await session('auto');
-    await reply(id, [
-      write('package.json', '{"name":"x","scripts":{"build":"echo changed"}}\n'),
-      shell('npm run build'),
-    ]);
+    await reply(
+      id,
+      [write('package.json', '{"name":"x","scripts":{"build":"echo changed"}}\n'), shell('npm run build')],
+      'ask'
+    );
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('package.json, which was written in this session');
   });
 
-  it('asks in a later reply of the same conversation too', async () => {
+  it('names the script in a later reply of the same conversation too', async () => {
     const id = await session('auto');
     const next = await reply(id, [write('setup.sh')]);
     await settled('file_write');
     await finish(next);
 
     events.length = 0;
-    await reply(id, [shell('bash setup.sh')]);
-    await awaitCall('bash_execute', 'awaiting-approval');
+    await reply(id, [shell('bash setup.sh')], 'ask');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
   });
 
   it.each(['git status', 'npm test', 'node --version', 'sh run.sh'])(
@@ -266,32 +303,34 @@ describe('ChatService running a script written in the same session', () => {
   );
 
   it.each(["printf 'echo hi\\n' > new.sh && bash new.sh", 'cp run.sh y.sh && bash y.sh'])(
-    'asks before %s, which writes the script it runs',
+    'names the script on the card for %s, which writes the script it runs',
     async command => {
-      const id = await session('auto');
+      const id = await session('ask');
       await reply(id, [shell(command)]);
 
-      await awaitCall('bash_execute', 'awaiting-approval');
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('which was written in this session');
     }
   );
 
-  it('asks before running a script an earlier shell command wrote', async () => {
+  it('names a script an earlier shell command wrote', async () => {
     const id = await session('auto');
-    await reply(id, [shell("cat > x.sh <<'EOF'\necho hi\nEOF"), shell('bash x.sh')]);
+    await reply(id, [shell("cat > x.sh <<'EOF'\necho hi\nEOF"), shell('bash x.sh')], 'ask');
 
-    await awaitCall('bash_execute', 'awaiting-approval');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('x.sh, which was written in this session');
     expect(calls('bash_execute', 'done')).toHaveLength(1);
   });
 
-  it('asks before running a script a clustered curl -o downloaded', async () => {
+  it('names a script a clustered curl -o downloaded', async () => {
     const id = await session('auto');
-    await reply(id, [shell('curl -fsSLo x.sh http://127.0.0.1:9/x.sh; true'), shell('bash x.sh')]);
+    await reply(id, [shell('curl -fsSLo x.sh http://127.0.0.1:9/x.sh; true'), shell('bash x.sh')], 'ask');
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).toContain('x.sh, which was written in this session');
   });
 
-  it('still asks after the conversation is archived and unarchived', async () => {
+  it('still names the script after the conversation is archived and unarchived', async () => {
     const id = await session('auto');
     const next = await reply(id, [write('setup.sh')]);
     await settled('file_write');
@@ -300,8 +339,9 @@ describe('ChatService running a script written in the same session', () => {
     await service.setSessionArchived(id, false);
 
     events.length = 0;
-    await reply(id, [shell('bash setup.sh')]);
-    await awaitCall('bash_execute', 'awaiting-approval');
+    await reply(id, [shell('bash setup.sh')], 'ask');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('setup.sh, which was written in this session');
   });
 
   describe('in a git repository', () => {
@@ -311,12 +351,13 @@ describe('ChatService running a script written in the same session', () => {
       execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
     });
 
-    it('asks before the next git command after a hook was written, then not again', async () => {
+    it('names a hook written in this session on the next git command, then not again', async () => {
       const id = await session('auto');
-      const next = await reply(id, [
-        shell("printf '#!/bin/sh\\nexit 0\\n' > .git/hooks/pre-commit"),
-        shell('git status'),
-      ]);
+      const next = await reply(
+        id,
+        [shell("printf '#!/bin/sh\\nexit 0\\n' > .git/hooks/pre-commit"), shell('git status')],
+        'ask'
+      );
       const asked = await awaitCall('bash_execute', 'awaiting-approval');
       expect(asked.approvalDetail).toContain('.git or .husky folder was changed in this session');
       approvals.resolve(asked.approvalId!, { decision: 'once' });
@@ -326,8 +367,8 @@ describe('ChatService running a script written in the same session', () => {
       await vi.waitUntil(() => streams.length > next, { timeout: 5000, interval: 5 });
       streams[next].write(toolTurn('again', 'bash_execute', { command: 'git status', cwd: root }));
       streams[next].write(frame('[DONE]'));
-      await settled('bash_execute');
-      expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+      const again = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(again.approvalDetail).not.toContain('.git or .husky folder');
     });
 
     it('runs a plain git commit unasked when nothing under .git was written', async () => {
@@ -372,12 +413,13 @@ describe('ChatService running a script written in the same session', () => {
     expect(asked.approvalDetail).toContain('Sets core.fsmonitor');
   });
 
-  it('asks before a test runner after its config was edited', async () => {
+  it('names a test config edited in this session on the card for its runner', async () => {
     const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
     const id = await session('auto');
-    await reply(id, [write('vitest.config.ts', 'export default {};\n'), shell('npx --no-install vitest run')]);
+    await reply(id, [write('vitest.config.ts', 'export default {};\n'), shell('npx --no-install vitest run')], 'ask');
 
-    await awaitCall('bash_execute', 'awaiting-approval');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('vitest.config.ts, which was written in this session');
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -388,10 +430,10 @@ describe('ChatService running a script written in the same session', () => {
     await finish(next);
 
     events.length = 0;
-    const runner = await session('auto');
+    const runner = await session('ask');
     await reply(runner, [shell('bash setup.sh')]);
-    await settled('bash_execute');
-    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).not.toContain('written in this session');
   });
 
   it('leaves full access alone', async () => {
@@ -408,16 +450,22 @@ describe('ChatService running a script written in the same session', () => {
 
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(asked.approvalDetail).not.toContain('written in this session');
+    // A working directory below the command is not a reason, but the one-line menu summary
+    // would hide it, so the call goes to the app card.
+    expect(asked.approvalReasons).toBeUndefined();
+    expect(isQuickApproval(asked)).toBe(false);
   });
 
   it('asks again after an "always" on a run whose script check failed', async () => {
     vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
-    const id = await session('auto');
+    const id = await session('ask');
     await reply(id, [shell('bash run.sh')]);
     const first = await awaitCall('bash_execute', 'awaiting-approval');
     expect(first.approvalDetail).toContain('Could not check');
     expect(first.approvalRules).toBeUndefined();
     expect(first.approvalOnceOnly).toBe(true);
+    expect(first.approvalReasons).toEqual([expect.stringContaining('Could not check')]);
+    expect(isQuickApproval(first)).toBe(false);
     approvals.resolve(first.approvalId!, { decision: 'always' });
     await settled('bash_execute');
     expect(rememberAllows).not.toHaveBeenCalled();
@@ -430,16 +478,15 @@ describe('ChatService running a script written in the same session', () => {
     await awaitCall('bash_execute', 'awaiting-approval');
   });
 
-  it('asks in ask mode after an "always" on a failed script check, once the check succeeds', async () => {
+  it('asks again after an "always" on a failed script check, once the check succeeds', async () => {
     const check = vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
-    const id = await session('auto');
+    const id = await session('ask');
     await reply(id, [shell('bash run.sh')]);
     const first = await awaitCall('bash_execute', 'awaiting-approval');
     approvals.resolve(first.approvalId!, { decision: 'always' });
     await settled('bash_execute');
 
     check.mockRestore();
-    await service.setApprovalMode(id, 'ask');
     events.length = 0;
     const next = streams.length;
     streams[next - 1].write(toolTurn('again', 'bash_execute', { command: 'bash run.sh', cwd: root }));
@@ -449,7 +496,7 @@ describe('ChatService running a script written in the same session', () => {
 
   it('saves no rule when a failed script check is answered "always" everywhere', async () => {
     vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValue(new Error('unreadable'));
-    const id = await session('auto');
+    const id = await session('ask');
     await reply(id, [shell('bash run.sh')]);
     const first = await awaitCall('bash_execute', 'awaiting-approval');
     expect(first.approvalRules).toBeUndefined();
@@ -467,7 +514,7 @@ describe('ChatService running a script written in the same session', () => {
 
   it('lets an exact "always" stand only until the script is written again', async () => {
     const id = await session('auto');
-    await reply(id, [write('setup.sh'), shell('bash setup.sh')]);
+    await reply(id, [write('setup.sh'), shell('bash setup.sh')], 'ask');
     const first = await awaitCall('bash_execute', 'awaiting-approval');
     approvals.resolve(first.approvalId!, { decision: 'always' });
     await settled('bash_execute');
@@ -481,9 +528,11 @@ describe('ChatService running a script written in the same session', () => {
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
 
     events.length = 0;
+    await service.setApprovalMode(id, 'auto');
     streams[next].write(toolTurn('rewrite', 'file_write', { path: join(root, 'setup.sh'), content: 'echo two\n' }));
     streams[next].write(frame('[DONE]'));
     await vi.waitUntil(() => streams.length === next + 2, { timeout: 5000, interval: 5 });
+    await service.setApprovalMode(id, 'ask');
     streams[next + 1].write(toolTurn('third', 'bash_execute', { command: 'bash setup.sh', cwd: root }));
     streams[next + 1].write(frame('[DONE]'));
     await awaitCall('bash_execute', 'awaiting-approval');

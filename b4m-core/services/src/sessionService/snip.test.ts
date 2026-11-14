@@ -466,4 +466,21 @@ describe('snipSession', () => {
     ).rejects.toThrow('Message not found');
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'missing');
   });
+  it('makes a personal snip once its owner is no longer a member of the session organization', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      organizationId: 'org-1',
+      knowledgeIds: [],
+      tags: [],
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.organizations = { findById: vi.fn().mockResolvedValue({ userId: 'owner-1', users: [] }) };
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
+
+    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(db.sessions.create.mock.calls[0][0].organizationId).toBeUndefined();
+  });
 });

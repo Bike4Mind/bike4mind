@@ -1,19 +1,6 @@
 import EditTagModal, { useEditAppFileTagModal } from '@client/app/components/admin/FilesTab/EditTagModal';
 import { IAppFileDocument, IAppFileGetAllApiResponse, KnowledgeType } from '@bike4mind/common';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
-import {
-  Box,
-  Button,
-  Chip,
-  Dropdown,
-  IconButton,
-  ListDivider,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, Chip, ListDivider, MenuItem, Stack, Typography } from '@mui/joy';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import FilePondPluginImageExifOrientation from 'filepond-plugin-image-exif-orientation';
@@ -42,6 +29,7 @@ import {
   type DataColumn,
 } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 // any: react-filepond's class component typings do not satisfy the current JSX element type.
 const FilePondComponent = FilePond as any;
@@ -274,35 +262,19 @@ const AdminFilesTab = () => {
           onRetry={() => void appFiles.refetch()}
           onRowActivate={editTags}
           rowActions={f => (
-            <Dropdown>
-              <MenuButton
-                slots={{ root: IconButton }}
-                slotProps={{
-                  root: {
-                    size: 'sm',
-                    variant: 'plain',
-                    'aria-label': `Actions for ${f.name}`,
-                    sx: { color: 'admin.inkMuted' },
-                  },
-                }}
-                data-testid={`admin-files-row-actions-${f.id}`}
-              >
-                <MoreHorizIcon sx={{ fontSize: 18 }} />
-              </MenuButton>
-              <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-                <MenuItem onClick={() => editTags(f)} data-testid={`admin-files-edit-${f.id}`}>
-                  Edit tags and description
-                </MenuItem>
-                {canDelete(f) && (
-                  <>
-                    <ListDivider />
-                    <MenuItem color="danger" onClick={() => setDeleting(f)} data-testid={`admin-files-delete-${f.id}`}>
-                      Delete file
-                    </MenuItem>
-                  </>
-                )}
-              </Menu>
-            </Dropdown>
+            <RowActionsMenu testId={`admin-files-row-actions-${f.id}`} ariaLabel={`Actions for ${f.name}`}>
+              <MenuItem onClick={() => editTags(f)} data-testid={`admin-files-edit-${f.id}`}>
+                Edit tags and description
+              </MenuItem>
+              {canDelete(f) && (
+                <>
+                  <ListDivider />
+                  <MenuItem color="danger" onClick={() => setDeleting(f)} data-testid={`admin-files-delete-${f.id}`}>
+                    Delete file
+                  </MenuItem>
+                </>
+              )}
+            </RowActionsMenu>
           )}
           minWidth="64rem"
           maxHeight="none"

@@ -1,5 +1,4 @@
 import React from 'react';
-import { Box, Stack } from '@mui/joy';
 import {
   Area,
   AreaChart,
@@ -9,7 +8,6 @@ import {
   ComposedChart,
   Line,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -22,57 +20,27 @@ import {
   BAD,
   BORDER,
   COMPARISON_OPACITY,
-  ChartLegend,
-  ChartTooltipBox,
+  ChartFrame,
   GOOD,
   INK,
   INK_MUTED,
+  SURFACE,
   WARN,
+  tooltipFor,
   xAxisProps,
   yAxisProps,
   type ChartLegendItem,
-  type ChartTooltipLine,
-} from './chartParts';
+} from '../shared/chartParts';
 import { OTHER_PLANS_KEY, type PlanPoint, type PlanSeries, type RevenuePeriod } from './revenueChartData';
 import { formatTrendDay } from './revenueFormat';
 
-const CHART_HEIGHT = 200;
 const MOVEMENT_TEST_ID = 'admin-revenue-movement-chart';
 const BY_PLAN_TEST_ID = 'admin-revenue-by-plan-chart';
 const BY_OWNER_TEST_ID = 'admin-revenue-by-owner-chart';
 const AT_RISK_TEST_ID = 'admin-revenue-at-risk-chart';
-const SURFACE = 'var(--joy-palette-admin-surface)';
 
 const money = (amount: number) => formatMoney(amount, MRR_CURRENCY);
 const compactMoney = (amount: number) => formatMoney(amount, MRR_CURRENCY, { compact: true });
-
-type TooltipProps<Row> = { active?: boolean; payload?: Array<{ payload: Row }> };
-
-/** Builds a recharts tooltip from a row; recharts clones `content`, so it must be an element. */
-function tooltipFor<Row>(testId: string, render: (row: Row) => { title: string; lines: ChartTooltipLine[] }) {
-  const ChartTooltip = ({ active, payload }: TooltipProps<Row>) => {
-    const row = payload?.[0]?.payload;
-    if (!active || !row) return null;
-    const { title, lines } = render(row);
-    return <ChartTooltipBox testId={testId} title={title} lines={lines} />;
-  };
-  return <ChartTooltip />;
-}
-
-const ChartFrame: React.FC<{ testId: string; legend: readonly ChartLegendItem[]; children: React.ReactElement }> = ({
-  testId,
-  legend,
-  children,
-}) => (
-  <Stack gap={1}>
-    <Box data-testid={testId} sx={{ height: CHART_HEIGHT, minWidth: 0 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
-    </Box>
-    <ChartLegend testId={testId} items={legend} />
-  </Stack>
-);
 
 const MOVEMENT_LEGEND: ChartLegendItem[] = [
   { label: 'New MRR', color: GOOD },
