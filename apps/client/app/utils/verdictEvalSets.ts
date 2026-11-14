@@ -113,6 +113,37 @@ export const evalSetScoreSchema = verdictEvalScoreSchema.extend({
 });
 export type EvalSetScore = z.infer<typeof evalSetScoreSchema>;
 
+/** Equal-width buckets on [0, 1] for the calibration table; the last one includes 1. */
+export const EVAL_SET_CALIBRATION_BUCKETS = 5;
+
+const unitSchema = z.number().min(0).max(1);
+
+export const evalSetCalibrationBucketSchema = z.object({
+  lower: unitSchema,
+  upper: unitSchema,
+  n: countSchema,
+  /** Null when the bucket is empty. */
+  meanPredicted: unitSchema.nullable(),
+  observedAbuseRate: unitSchema.nullable(),
+});
+export type EvalSetCalibrationBucket = z.infer<typeof evalSetCalibrationBucketSchema>;
+
+/**
+ * How well one assessment model's p(abuse) matches the labels, over labelled held-out flagged
+ * examples (unflagged ones have no assessment). Built by verdictEval/calibration.ts.
+ */
+export const evalSetCalibrationSchema = z.object({
+  model: z.string(),
+  /** Labelled held-out flagged examples: the population `n` is drawn from. */
+  flaggedLabelled: countSchema,
+  /** Of those, the ones this model assessed with a judgment and a p(abuse). */
+  n: countSchema,
+  /** Mean squared error of p(abuse) against the label; null when n is 0. */
+  brier: unitSchema.nullable(),
+  buckets: z.array(evalSetCalibrationBucketSchema),
+});
+export type EvalSetCalibration = z.infer<typeof evalSetCalibrationSchema>;
+
 export const evalSetRunReportSchema = z.object({
   split: z.literal('heldOut'),
   /** Held-out examples. */
@@ -149,7 +180,10 @@ export const evalSetRunReportSchema = z.object({
   }),
   /** Flagged held-out examples by cohort. */
   cohorts: z.array(verdictEvalCohortRowSchema),
-  labelSources: z.record(z.string(), countSchema),
+  /** Defaulted because the store drops an empty object, which a run with no labels writes. */
+  labelSources: z.record(z.string(), countSchema).default({}),
+  /** Per assessment model. Runs stored before calibration was graded read as empty. */
+  calibration: z.array(evalSetCalibrationSchema).default([]),
 });
 export type EvalSetRunReport = z.infer<typeof evalSetRunReportSchema>;
 
@@ -212,3 +246,101 @@ export const evalSetListSchema = z.object({ data: z.array(evalSetSummarySchema) 
 export type EvalSetList = z.infer<typeof evalSetListSchema>;
 
 export const evalSetIdQuerySchema = z.object({ id: z.string() });
+
+/**
+ * Risk-review labels as a share of a run's labels; null when the run has none. Those labels exist
+ * only for accounts the signup-risk queue flagged before, so they say nothing about the rest.
+ */
+export function riskReviewShare(
+  labelSources: Readonly<Record<string, number>>
+): { count: number; total: number; share: number } | null {
+  const riskReviewCount = labelSources.riskReview ?? 0;
+  if (riskReviewCount === 0) return null;
+  const total = Object.values(labelSources).reduce((sum, value) => sum + value, 0);
+  return { count: riskReviewCount, total, share: riskReviewCount / total };
+}
+
+/** A value in two runs; `change` is current minus previous, null unless both have one. */
+export type EvalSetValueChange = { current: number | null; previous: number | null; change: number | null };
+
+export type EvalSetScoreComparisonField =
+  | 'truePositive'
+  | 'falsePositive'
+  | 'falseNegative'
+  | 'trueNegative'
+  | 'abstained'
+  | 'precision'
+  | 'precisionLowerBound';
+
+export type EvalSetScoreComparison = {
+  key: string;
+  grader: EvalSetScore['grader'];
+  variant: string;
+  /** `added`: only in the current run; `removed`: only in the previous one. */
+  presence: 'both' | 'added' | 'removed';
+} & Record<EvalSetScoreComparisonField, EvalSetValueChange>;
+
+export type EvalSetRunComparison = {
+  labelled: EvalSetValueChange;
+  estimatedRecall: EvalSetValueChange;
+  scores: EvalSetScoreComparison[];
+  /** Per assessment model in either run. */
+  brier: { model: string; brier: EvalSetValueChange }[];
+};
+
+// Four places keeps rate and Brier differences free of float noise without rounding them away.
+const valueChange = (current: number | null, previous: number | null): EvalSetValueChange => ({
+  current,
+  previous,
+  change: current === null || previous === null ? null : Math.round((current - previous) * 10_000) / 10_000,
+});
+
+export const evalSetScoreKey = (score: Pick<EvalSetScore, 'grader' | 'variant'>) => `${score.grader}-${score.variant}`;
+
+/** The current run against the previous one on the same set: score rows by grader and variant, then the totals. */
+export function compareEvalSetRuns(run: EvalSetRunReport, previous: EvalSetRunReport): EvalSetRunComparison {
+  const previousScores = new Map(previous.scores.map(score => [evalSetScoreKey(score), score]));
+  const currentKeys = new Set(run.scores.map(evalSetScoreKey));
+  const compareScore = (
+    identity: EvalSetScore,
+    current: EvalSetScore | undefined,
+    before: EvalSetScore | undefined
+  ): EvalSetScoreComparison => {
+    const change = (field: EvalSetScoreComparisonField) =>
+      valueChange(current?.[field] ?? null, before?.[field] ?? null);
+    return {
+      key: evalSetScoreKey(identity),
+      grader: identity.grader,
+      variant: identity.variant,
+      presence: current && before ? 'both' : current ? 'added' : 'removed',
+      truePositive: change('truePositive'),
+      falsePositive: change('falsePositive'),
+      falseNegative: change('falseNegative'),
+      trueNegative: change('trueNegative'),
+      abstained: change('abstained'),
+      precision: change('precision'),
+      precisionLowerBound: change('precisionLowerBound'),
+    };
+  };
+  const scores = [
+    ...run.scores.map(score => compareScore(score, score, previousScores.get(evalSetScoreKey(score)))),
+    ...previous.scores
+      .filter(score => !currentKeys.has(evalSetScoreKey(score)))
+      .map(score => compareScore(score, undefined, score)),
+  ];
+
+  const brierOf = (report: EvalSetRunReport) => new Map(report.calibration.map(entry => [entry.model, entry.brier]));
+  const currentBrier = brierOf(run);
+  const previousBrier = brierOf(previous);
+  const models = [...new Set([...currentBrier.keys(), ...previousBrier.keys()])].sort();
+
+  return {
+    labelled: valueChange(run.labelled, previous.labelled),
+    estimatedRecall: valueChange(run.recall.estimatedRecall, previous.recall.estimatedRecall),
+    scores,
+    brier: models.map(model => ({
+      model,
+      brier: valueChange(currentBrier.get(model) ?? null, previousBrier.get(model) ?? null),
+    })),
+  };
+}
