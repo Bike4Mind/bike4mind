@@ -11,6 +11,11 @@ import type { ResearchCandidate } from './executeResearchRun';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const earliestDate = (list: Keyed[]): Date | null => {
+  const times = list.flatMap(entry => (entry.at === null ? [] : [entry.at]));
+  return times.length ? new Date(Math.min(...times)) : null;
+};
+
 export type FeedSelectionLevers = ResearchFeedFingerprintLevers & Pick<ResearchRunLevers, 'maxResults'>;
 
 export interface FeedSelection {
@@ -23,6 +28,11 @@ export interface FeedSelection {
   skipped: string[];
   /** Cursor runs only: eligible items not taken, left for the next run. */
   backlog: number;
+  /**
+   * Cursor runs only: the earliest clamped date among untaken items counted in `backlog`. The
+   * cursor's floor must stay at or below it, or the date backstop could drop the item unjudged.
+   */
+  oldestWaitingAt: Date | null;
 }
 
 interface Keyed {
@@ -104,10 +114,12 @@ export function selectFeedCandidates(
       ...oldestFirst(eligible.filter(retried)),
     ];
     const taken = ordered.slice(0, levers.maxResults);
+    const waiting = ordered.slice(levers.maxResults);
     return {
       candidates: taken.map(entry => entry.candidate),
       skipped: [],
-      backlog: ordered.length - taken.length,
+      backlog: waiting.length,
+      oldestWaitingAt: earliestDate(waiting),
     };
   }
 
@@ -120,15 +132,18 @@ export function selectFeedCandidates(
   if (mode === 'same_feed') {
     const previouslySeen = new Set(cursor!.seenKeys);
     const skipped = oldestFirst(rest.filter(entry => previouslySeen.has(entry.key)));
+    const waiting = rest.filter(entry => !previouslySeen.has(entry.key));
     return {
       candidates: oldestFirst(taken).map(entry => entry.candidate),
       skipped: skipped.map(entry => entry.key),
-      backlog: rest.length - skipped.length,
+      backlog: waiting.length,
+      oldestWaitingAt: earliestDate(waiting),
     };
   }
   return {
     candidates: oldestFirst(taken).map(entry => entry.candidate),
     skipped: oldestFirst(rest).map(entry => entry.key),
     backlog: 0,
+    oldestWaitingAt: null,
   };
 }

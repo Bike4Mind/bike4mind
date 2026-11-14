@@ -103,7 +103,7 @@ describe('selectFeedCandidates - consecutive runs', () => {
 
   it('later runs go oldest first and report what is left as backlog', () => {
     const l = levers({ maxResults: 2 });
-    const cursor = settleAll(l, null, { candidates: [], skipped: [], backlog: 0 });
+    const cursor = settleAll(l, null, { candidates: [], skipped: [], backlog: 0, oldestWaitingAt: null });
     const feed = [item('n3', daysAgo(1)), item('n1', daysAgo(3)), item('n2', daysAgo(2)), item('u1'), item('u2')];
 
     const run1 = selectFeedCandidates(feed, cursor, l, NOW);
@@ -149,7 +149,7 @@ describe('selectFeedCandidates - consecutive runs', () => {
 
   it('clamps a future-dated item to now plus the skew allowance', () => {
     const l = levers();
-    const cursor = settleAll(l, null, { candidates: [], skipped: [], backlog: 0 });
+    const cursor = settleAll(l, null, { candidates: [], skipped: [], backlog: 0, oldestWaitingAt: null });
     const result = selectFeedCandidates([item('future', new Date('2030-01-01T00:00:00Z'))], cursor, l, NOW);
     expect(result.candidates[0].publishedAt).toEqual(new Date(NOW.getTime() + RESEARCH_FEED_FUTURE_SKEW_MS));
   });
@@ -216,6 +216,24 @@ describe('selectFeedCandidates - retried items', () => {
     expect(run.backlog).toBe(2);
     expect(ids(selectFeedCandidates(feed.slice(0, 4), cursor, l, NOW).candidates)).toEqual(['f1', 'f2', 'p1']);
   });
+
+  it('reports the oldest waiting date when a retried old item is left out behind fresh ones', () => {
+    const l = levers({ maxResults: 2 });
+    const cursor: ResearchFeedCursor = {
+      fingerprint: researchFeedFingerprint(l),
+      newestPublishedAt: null,
+      seenKeys: [],
+      retries: [{ key: key('p1'), attempts: 1 }],
+    };
+    const feed = [item('p1', daysAgo(9)), item('f1', daysAgo(3)), item('f2', daysAgo(2)), item('f3', daysAgo(1))];
+    const run = selectFeedCandidates(feed, cursor, l, NOW);
+    expect(ids(run.candidates)).toEqual(['f1', 'f2']);
+    expect(run.oldestWaitingAt).toEqual(daysAgo(9));
+    expect(selectFeedCandidates(feed, cursor, levers({ maxResults: 10 }), NOW).oldestWaitingAt).toBeNull();
+    expect(
+      selectFeedCandidates([item('f1', daysAgo(3)), item('u1'), item('u2')], cursor, l, NOW).oldestWaitingAt
+    ).toBeNull();
+  });
 });
 
 describe('selectFeedCandidates - settings changed on the same feed', () => {
@@ -242,6 +260,14 @@ describe('selectFeedCandidates - settings changed on the same feed', () => {
     expect(ids(run.candidates)).toEqual(['w28', 'w29']);
     expect(run.skipped).toEqual([key('s1'), key('s2'), key('s3')]);
     expect(run.backlog).toBe(28);
+  });
+
+  it('reports the oldest untaken unseen item, ignoring skipped ones, and null for a fresh run', () => {
+    const before = levers({ maxResults: 2 });
+    const after = levers({ maxResults: 2, minRelevance: 0.9 });
+    const run = selectFeedCandidates(feed, sameFeedCursor(before, ['s1', 's2', 's3']), after, NOW);
+    expect(run.oldestWaitingAt).toEqual(daysAgo(30));
+    expect(selectFeedCandidates(feed, null, after, NOW).oldestWaitingAt).toBeNull();
   });
 
   it('treats a cursor without an address key, or for another address, as fresh', () => {

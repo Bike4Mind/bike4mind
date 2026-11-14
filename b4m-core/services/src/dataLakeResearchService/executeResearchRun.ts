@@ -203,6 +203,7 @@ export async function executeResearchRun(
   let feedKeysInFeed = new Set<string>();
   let feedSkipped: string[] = [];
   let feedBacklog = 0;
+  let feedOldestWaitingAt: Date | null = null;
   const markFeedItem = (candidate: ResearchCandidate, state: FeedItemState): void => {
     if (!isFeed) return;
     const key = canonicalSourceKey(candidate.url);
@@ -232,7 +233,8 @@ export async function executeResearchRun(
       let state: FeedItemState | 'unreached' | 'given_up' = feedStates.get(key) ?? 'unreached';
       if (state === 'transient') {
         const attempts = (oldAttempts.get(key) ?? 0) + 1;
-        // Giving up is a completed run's call: a failed judge says nothing about the item.
+        // Attempts count on every run that takes the item, so an item the judge always fails on
+        // can still reach the limit. Only a completed run gives up.
         if (attempts >= RESEARCH_FEED_MAX_RETRIES && !judgeStepFailed) {
           givenUp.push(key);
           state = 'given_up';
@@ -250,9 +252,10 @@ export async function executeResearchRun(
     const retries = [...keptRetries, ...nextRetries];
     if (judgeStepFailed) return { ...base!, retries };
 
-    // The floor never passes an item that still needs a run; a given-up item no longer does.
+    // The floor never passes an item that still needs a run, taken or left out; a given-up item no longer does.
     const blockedAt = Math.min(
       Infinity,
+      feedOldestWaitingAt?.getTime() ?? Infinity,
       ...dated.filter(item => item.state === 'unreached' || item.state === 'transient').map(item => item.at)
     );
     let newest = base?.newestPublishedAt?.getTime() ?? null;
@@ -262,8 +265,10 @@ export async function executeResearchRun(
 
     // Retaken items leave the old list: they are settled again below or are waiting in retries.
     const retaken = new Set(candidates.map(candidate => canonicalSourceKey(candidate.url)));
-    const carried =
-      (mode === 'same_feed' ? (base?.seenKeys ?? []).filter(key => !retaken.has(key)) : base?.seenKeys) ?? [];
+    // Keys of items that left the feed are dropped so a long-lived config does not sit at the cap.
+    const carried = (base?.seenKeys ?? []).filter(
+      key => feedKeysInFeed.has(key) && (mode !== 'same_feed' || !retaken.has(key))
+    );
     return {
       fingerprint,
       feedUrlKey: researchFeedUrlKey(levers.feedUrl),
@@ -300,6 +305,7 @@ export async function executeResearchRun(
     candidates = selection.candidates;
     feedSkipped = selection.skipped;
     feedBacklog = selection.backlog;
+    feedOldestWaitingAt = selection.oldestWaitingAt;
   } else {
     candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
   }

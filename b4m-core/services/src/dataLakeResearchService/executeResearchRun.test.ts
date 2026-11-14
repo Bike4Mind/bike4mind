@@ -620,13 +620,47 @@ describe('executeResearchRun - feed source', () => {
 
     it('puts old keys first and trims from the front at the cap', async () => {
       const l = feedLevers();
-      const old = Array.from({ length: RESEARCH_FEED_SEEN_KEYS_MAX }, (_, i) => `old${i}`);
-      const { ports } = feedPorts([dated(1, 1)]);
-      const result = await executeResearchRun(l, 'run-1', ports, cursorFor(l, { seenKeys: old }));
+      const inFeed = Array.from({ length: RESEARCH_FEED_SEEN_KEYS_MAX }, (_, i) => dated(1000 + i, 40));
+      const { ports } = feedPorts([...inFeed, dated(1, 1)]);
+      const stored = cursorFor(l, { seenKeys: inFeed.map(c => canonicalSourceKey(c.url)!) });
+      const result = await executeResearchRun(l, 'run-1', ports, stored);
       const keys = result.feedCursor!.seenKeys;
       expect(keys).toHaveLength(RESEARCH_FEED_SEEN_KEYS_MAX);
-      expect(keys[0]).toBe('old1');
+      expect(keys[0]).toBe(keyOf(1001));
       expect(keys.at(-1)).toBe(keyOf(1));
+    });
+
+    it('drops seen keys whose items left the feed and keeps the ones still in it', async () => {
+      const l = feedLevers();
+      const stored = cursorFor(l, { seenKeys: ['gone-a', keyOf(1), 'gone-b', keyOf(2)] });
+      const { ports } = feedPorts([dated(1, 3), dated(2, 2), dated(3, 1)]);
+      const result = await executeResearchRun(l, 'run-1', ports, stored);
+      expect(result.feedCursor!.seenKeys).toEqual([keyOf(1), keyOf(2), keyOf(3)]);
+    });
+
+    it('keeps the floor below a waiting retried item so the backstop never drops it unjudged', async () => {
+      const l = feedLevers({ maxResults: 2 });
+      const seenItems = Array.from({ length: RESEARCH_FEED_SEEN_KEYS_MAX }, (_, i) => dated(1000 + i, 40));
+      // Item 900 is retried and old; 901-903 are fresh and fill the run first.
+      const feed = [...seenItems, dated(900, 12), dated(901, 4), dated(902, 3), dated(903, 2)];
+      let cursor: ResearchFeedCursor | null = cursorFor(l, {
+        newestPublishedAt: daysAgo(13),
+        seenKeys: seenItems.map(c => canonicalSourceKey(c.url)!),
+        retries: [{ key: keyOf(900), attempts: 1 }],
+      });
+      const judgedPerRun: string[][] = [];
+      const floors: (Date | null)[] = [];
+      for (let run = 1; run <= 3; run += 1) {
+        const { ports, calls } = feedPorts(feed);
+        const result: ResearchRunResult = await executeResearchRun(l, `run-${run}`, ports, cursor);
+        judgedPerRun.push(calls.judged);
+        cursor = result.feedCursor!;
+        floors.push(cursor.newestPublishedAt);
+      }
+      expect(judgedPerRun[0]).toEqual([hit(901).url, hit(902).url]);
+      expect(floors[0]!.getTime()).toBeLessThanOrEqual(daysAgo(12).getTime());
+      expect(judgedPerRun[1]).toEqual([hit(903).url, hit(900).url]);
+      expect(cursor!.seenKeys).toContain(keyOf(900));
     });
 
     it('ignores a stored cursor written under different levers', async () => {
