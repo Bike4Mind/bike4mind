@@ -8,7 +8,7 @@ This page covers the app database part of the review. Other systems in scope (th
 
 The review runs in the first week of January, April, July and October. The daily `secretRotationNotifier` cron (09:00 UTC) posts the reminder to the LiveOps Slack channel on the first Monday of each of those months, in production only. The message names the quarter, lists the current counts and links back here. The same run logs the counts as one JSON line (`"report":"access-review"`) in the function's CloudWatch logs, so the quarter's starting point is on record even before anyone acts on it.
 
-The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read or Slack does not accept the reminder, the cron logs the error and still posts any secrets due for rotation; start the review from the report below instead.
+The reminder needs the LiveOps Slack webhook admin setting. Without it the cron logs that the webhook is not configured and posts nothing. If the counts cannot be read or Slack does not accept the reminder, the cron logs the error; start the review from the report below instead.
 
 ## What the report covers
 

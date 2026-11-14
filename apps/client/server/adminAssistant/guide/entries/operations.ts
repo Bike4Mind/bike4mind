@@ -48,21 +48,6 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     ],
   },
   {
-    id: 'secrets-rotation',
-    title: 'Secrets rotation',
-    summary:
-      'Tracks which secrets are on a rotation schedule, when each was last renewed and when the next rotation is due, so overdue secrets are easy to spot.',
-    views: ['admin.secrets_rotation'],
-    settings: [],
-    howTo: [
-      'Open Secrets rotation. Each row shows the secret, its description, interval in days, last renewed, last renewed by, next rotation and a status of Active, Overdue or Inactive.',
-      'Open the row menu, choose Mark renewed and confirm. This records you as the person who renewed it and restarts its cycle. It needs update permission on secret rotations. For other secrets, click it after you rotate them in the source system.',
-      'For the signing secret, click Mark renewed BEFORE you deploy the replacement secret: it snapshots the secret the running process uses, and a capture that matches the last one is refused.',
-      'To change a schedule, open the row menu, choose Edit rotation, set the description and the rotation interval (1 to 365 days), then click Save changes.',
-    ],
-    keywords: ['rotate keys', 'credential rotation', 'overdue secret', 'renew secret', 'key expiry'],
-  },
-  {
     id: 'system-secrets',
     title: 'System secrets',
     summary:

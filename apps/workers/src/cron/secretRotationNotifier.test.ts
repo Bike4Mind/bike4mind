@@ -3,10 +3,8 @@ import { Logger } from '@bike4mind/observability';
 
 const mocks = vi.hoisted(() => ({
   expirePreviousKey: vi.fn(),
-  find: vi.fn(),
   postMessageToSlack: vi.fn(),
   resolveSlackWebhookUrl: vi.fn(),
-  rotationConfig: vi.fn(),
   sendAccessReviewReminder: vi.fn(),
   resource: { App: { stage: 'dev' } },
 }));
@@ -17,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { expirePreviousKey: mocks.expirePreviousKey, find: mocks.find },
+  secretRotationRepository: { expirePreviousKey: mocks.expirePreviousKey },
 }));
 
 vi.mock('@bike4mind/utils', () => ({
@@ -33,10 +31,6 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%' },
 }));
 
-vi.mock('@bike4mind/server-utils/lib/secretRotation/constants', () => ({
-  getSecretRotationConfig: mocks.rotationConfig,
-}));
-
 vi.mock('@bike4mind/server-utils/security/accessReview/accessReviewData', () => ({
   sendAccessReviewReminder: mocks.sendAccessReviewReminder,
 }));
@@ -45,18 +39,9 @@ vi.mock('sst', () => ({ Resource: mocks.resource }));
 
 import { handler } from './secretRotationNotifier';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 // First Monday of January: an access review reminder day.
 const REMINDER_DAY = new Date('2027-01-04T09:00:00Z');
 const ORDINARY_DAY = new Date('2027-01-12T09:00:00Z');
-
-const secret = (keyName: string, daysOut: number, description?: string) => ({
-  keyName,
-  isActive: true,
-  nextRotation: new Date(Date.now() + daysOut * DAY_MS),
-  rotationIntervalDays: 90,
-  description,
-});
 
 describe('secretRotationNotifier', () => {
   beforeEach(() => {
@@ -65,8 +50,6 @@ describe('secretRotationNotifier', () => {
     vi.setSystemTime(ORDINARY_DAY);
     mocks.resource.App.stage = 'dev';
     mocks.expirePreviousKey.mockResolvedValue(undefined);
-    mocks.find.mockResolvedValue([]);
-    mocks.rotationConfig.mockReturnValue({});
     mocks.resolveSlackWebhookUrl.mockReturnValue('https://hooks.example/liveops');
     mocks.sendAccessReviewReminder.mockResolvedValue('2027-Q1');
     mocks.postMessageToSlack.mockResolvedValue(true);
@@ -85,46 +68,19 @@ describe('secretRotationNotifier', () => {
     expect(mocks.expirePreviousKey).toHaveBeenCalledWith('JWT_SECRET', 24 * 60 * 60 * 1000);
   });
 
-  it('posts nothing when no secret is due and no review is due', async () => {
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 30), secret('UNCONFIGURED', 1)]);
+  it('posts nothing on an ordinary day', async () => {
+    mocks.resource.App.stage = 'production';
 
-    await expect(handler()).resolves.toEqual({ status: 'OK', message: 'No secrets due for rotation' });
+    await expect(handler()).resolves.toEqual({ status: 'OK' });
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
-  });
-
-  it('posts the configured secrets due within a week', async () => {
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {}, SESSION_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 3, 'Signs tokens'), secret('SESSION_SECRET', 2)]);
-
-    await expect(handler()).resolves.toEqual({ status: 'OK', notified: 2 });
-    const [url, text] = mocks.postMessageToSlack.mock.calls[0];
-    expect(url).toBe('https://hooks.example/liveops');
-    expect(text).toContain('*2 secret(s) due for rotation*');
-    expect(text).toContain('_Description:_ Signs tokens');
-    expect(text).toContain('_Description:_ None');
     expect(mocks.sendAccessReviewReminder).not.toHaveBeenCalled();
-  });
-
-  it('skips posting when the webhook is not configured', async () => {
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 1)]);
-    mocks.resolveSlackWebhookUrl.mockReturnValue('');
-
-    await expect(handler()).resolves.toEqual({
-      status: 'OK',
-      notified: 0,
-      skipped: true,
-      reason: 'Slack webhook not configured',
-    });
-    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 
   it('posts the quarterly access review reminder on its day in production', async () => {
     vi.setSystemTime(REMINDER_DAY);
     mocks.resource.App.stage = 'production';
 
-    await expect(handler()).resolves.toEqual({ status: 'OK', notified: 0, accessReviewQuarter: '2027-Q1' });
+    await expect(handler()).resolves.toEqual({ status: 'OK', accessReviewQuarter: '2027-Q1' });
     expect(mocks.sendAccessReviewReminder).toHaveBeenCalledWith(REMINDER_DAY, expect.any(Function));
     const post = mocks.sendAccessReviewReminder.mock.calls[0][1] as (text: string) => Promise<unknown>;
     await post('reminder text');
@@ -132,37 +88,18 @@ describe('secretRotationNotifier', () => {
     expect(mocks.postMessageToSlack).toHaveBeenCalledWith('https://hooks.example/liveops', 'reminder text');
   });
 
-  it('posts both the reminder and due secrets on a reminder day', async () => {
+  it('skips the reminder when the webhook is not configured', async () => {
     vi.setSystemTime(REMINDER_DAY);
     mocks.resource.App.stage = 'production';
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 1)]);
+    mocks.resolveSlackWebhookUrl.mockReturnValue('');
 
-    await expect(handler()).resolves.toEqual({ status: 'OK', notified: 1, accessReviewQuarter: '2027-Q1' });
-    expect(mocks.sendAccessReviewReminder).toHaveBeenCalledTimes(1);
-    expect(mocks.postMessageToSlack).toHaveBeenCalledWith(
-      'https://hooks.example/liveops',
-      expect.stringContaining('*1 secret(s) due for rotation*')
-    );
+    await expect(handler()).resolves.toEqual({ status: 'OK', skipped: true, reason: 'Slack webhook not configured' });
+    expect(mocks.sendAccessReviewReminder).not.toHaveBeenCalled();
   });
 
-  it('still posts due secrets when the access review reminder fails', async () => {
+  it('logs a failed reminder without failing the run', async () => {
     vi.setSystemTime(REMINDER_DAY);
     mocks.resource.App.stage = 'production';
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 1)]);
-    mocks.sendAccessReviewReminder.mockRejectedValue(new Error('read failed'));
-
-    await expect(handler()).resolves.toEqual({ status: 'OK', notified: 1 });
-    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
-    expect(Logger.error).toHaveBeenCalledWith('Access review reminder failed', { error: expect.any(Error) });
-  });
-
-  it('reports a failed Slack delivery without marking the quarter notified or blocking due secrets', async () => {
-    vi.setSystemTime(REMINDER_DAY);
-    mocks.resource.App.stage = 'production';
-    mocks.rotationConfig.mockReturnValue({ JWT_SECRET: {} });
-    mocks.find.mockResolvedValue([secret('JWT_SECRET', 1)]);
     mocks.postMessageToSlack.mockResolvedValueOnce(false);
     mocks.sendAccessReviewReminder.mockImplementationOnce(
       async (_now: Date, post: (text: string) => Promise<unknown>) => {
@@ -171,21 +108,16 @@ describe('secretRotationNotifier', () => {
       }
     );
 
-    await expect(handler()).resolves.toEqual({ status: 'OK', notified: 1 });
+    await expect(handler()).resolves.toEqual({ status: 'OK' });
     expect(Logger.error).toHaveBeenCalledWith('Access review reminder failed', {
       error: expect.objectContaining({ message: 'Access review reminder was not accepted by Slack' }),
     });
-    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(2);
-    expect(mocks.postMessageToSlack).toHaveBeenLastCalledWith(
-      'https://hooks.example/liveops',
-      expect.stringContaining('*1 secret(s) due for rotation*')
-    );
   });
 
   it('sends no access review reminder outside production', async () => {
     vi.setSystemTime(REMINDER_DAY);
 
-    await expect(handler()).resolves.toEqual({ status: 'OK', message: 'No secrets due for rotation' });
+    await expect(handler()).resolves.toEqual({ status: 'OK' });
     expect(mocks.sendAccessReviewReminder).not.toHaveBeenCalled();
   });
 

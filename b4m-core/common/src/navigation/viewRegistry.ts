@@ -512,16 +512,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.secrets_rotation',
-    section: 'admin',
-    label: 'Secrets Rotation',
-    description: 'Manage API key rotation and secret lifecycle',
-    navigationType: 'tab',
-    target: '16', // AdminTab.SecretsRotation
-    keywords: ['secrets', 'rotation', 'API keys', 'credentials'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.feedback',
     section: 'admin',
     label: 'Feedback',

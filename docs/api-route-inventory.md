@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1164 routes: 96 contracted, 11 aliases of another route, 294 with no static caller in `apps/client/app`.
+1168 routes: 98 contracted, 11 aliases of another route, 298 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -109,7 +109,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | organization-library | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
-| organizations | 58 | 0 | 35 | 24 | 0 | 0 | 1 |
+| organizations | 63 | 0 | 35 | 29 | 0 | 0 | 3 |
 | otc | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | overwatch | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
 | partners | 3 | 0 | 1 | 2 | 0 | 0 | 1 |
@@ -130,7 +130,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | research | 8 | 0 | 8 | 0 | 0 | 0 | 1 |
 | roll | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | search-image | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
-| secret-rotations | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
@@ -152,7 +151,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 94 | 90 | 87 | 1 | 0 | 6 | 83 |
+| v1 | 96 | 92 | 87 | 3 | 0 | 6 | 85 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1254,6 +1253,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]/bulk-invite` | POST | jwt | - | - | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/[id]/custom-mcp/connections` | GET | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
 | `/api/organizations/[id]/custom-mcp/policy` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/useOrgCustomMcpPolicy.ts` |
+| `/api/organizations/[id]/domain-join` | POST | jwt | - | - | no | - | 1: `utils/orgDomainAPICalls.ts` |
+| `/api/organizations/[id]/domains` | GET, POST | jwt | - | - | no | - | 1: `utils/orgDomainAPICalls.ts` |
+| `/api/organizations/[id]/domains/[claimId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
+| `/api/organizations/[id]/domains/[claimId]/verify` | POST | jwt | - | - | no | - | 0 |
 | `/api/organizations/[id]/feedback-report` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
 | `/api/organizations/[id]/feedback-report/[feedbackId]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
 | `/api/organizations/[id]/feedback-report/items` | GET | jwt+key | - | - | no | - | 1: `hooks/data/orgFeedbackReport.ts` |
@@ -1293,6 +1296,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]/webhooks/github/rotate-secret` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
 | `/api/organizations/[id]/webhooks/github/test` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
 | `/api/organizations/create-dev` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/organizations/domain-suggestions` | GET | jwt | - | - | no | - | 1: `utils/orgDomainAPICalls.ts` |
 | `/api/organizations/stats` | GET | jwt+key | - | - | no | - | 1: `utils/organizationAPICalls.tsx` |
 | `/api/organizations/subscriptions/subscribe` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/organizations/subscriptions/update-seats` | POST | jwt+key | - | - | no | - | 1: `hooks/data/subscriptions.ts` |
@@ -1472,14 +1476,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/search-image` | GET | jwt | - | - | no | - | 1: `components/Session/SearchResultCards.tsx` |
-
-### secret-rotations
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/secret-rotations` | GET | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/[id]` | PUT | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
-| `/api/secret-rotations/renewed` | POST | jwt+key | `admin:*` | - | no | - | 1: `components/admin/SecretsRotationTab.tsx` |
 
 ### security
 
@@ -1817,6 +1813,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/music-models` | GET | jwt+key | `ai:generate` | - | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
+| `/api/v1/pending-actions/[questId]/approve` | POST | jwt | - | - | yes | - | 0 |
+| `/api/v1/pending-actions/[questId]/deny` | POST | jwt | - | - | yes | - | 0 |
 | `/api/v1/personas` | POST | jwt+key | `personas:mint` | - | yes | - | 0 |
 | `/api/v1/personas/[id]` | DELETE | jwt+key | `personas:mint` | - | yes | - | 0 |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | - | yes | - | 0 |

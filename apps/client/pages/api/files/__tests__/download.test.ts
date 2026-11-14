@@ -60,10 +60,6 @@ vi.mock('@bike4mind/database', async () => ({
   QuestMasterPlan: class QuestMasterPlan {},
 }));
 
-vi.mock('@bike4mind/database/infra', () => ({
-  SecretRotation: class SecretRotation {},
-}));
-
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));

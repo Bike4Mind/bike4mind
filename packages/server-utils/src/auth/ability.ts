@@ -23,7 +23,6 @@ import {
   hasAdminPermission,
   hasDeveloperUserTag,
 } from '@bike4mind/common';
-import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '../models/Subscription';
 import { SubscriptionOwnerType } from '../lib/subscriptions/types';
 
@@ -142,10 +141,6 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow(Permission.read, FeedbackModel);
       allow(Permission.delete, FeedbackModel);
       allow(Permission.update, FeedbackModel);
-
-      allow(Permission.read, SecretRotation);
-      allow(Permission.create, SecretRotation);
-      allow(Permission.update, SecretRotation);
 
       allow(Permission.create, Session);
       allow(Permission.delete, Session);
