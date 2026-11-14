@@ -24,6 +24,32 @@ export const AGENT_REQUEST_TIMEOUT_MS = 5_000;
 // `armedAt` is stamped when the agent call returns, after the refresh timer's phase. Without
 // this slack every tick finds the refresh just short of due and only every other tick refreshes.
 export const REFRESH_TOLERANCE_MS = 30_000;
+// One retry of a transient failure (timeout, network, throttling, 5xx) before giving up until
+// the next update() or timer tick.
+export const MAX_TRANSIENT_ATTEMPTS = 2;
+export const TRANSIENT_RETRY_DELAY_MS = 1_000;
+
+// The agent's reason when the task is already being stopped: protection can no longer be set and
+// the SIGTERM drain covers in-flight work, so this is expected rather than a fault.
+const TASK_STOPPING_REASON = 'TASK_STOPPING_OR_STOPPED';
+const TRANSIENT_REASONS = new Set(['ThrottlingException', 'ServerException']);
+
+type FailureKind = 'stopping' | 'transient' | 'fatal';
+
+class ProtectionCallError extends Error {
+  constructor(
+    message: string,
+    readonly kind: FailureKind
+  ) {
+    super(message);
+  }
+}
+
+const classifyAgentFailure = (reason: string | undefined, status: number): FailureKind => {
+  if (reason === TASK_STOPPING_REASON) return 'stopping';
+  if ((reason && TRANSIENT_REASONS.has(reason)) || status === 429 || status >= 500) return 'transient';
+  return 'fatal';
+};
 
 // The agent answers 200 with either `protection` or `failure`; a non-2xx carries `error`.
 const AgentResponseSchema = z.object({
@@ -33,6 +59,7 @@ const AgentResponseSchema = z.object({
 
 type ProtectionLogger = {
   info(message: string, metadata?: Record<string, unknown>): void;
+  warn(message: string, metadata?: Record<string, unknown>): void;
   error(message: string, metadata?: Record<string, unknown>): void;
 };
 
@@ -51,10 +78,12 @@ export function createTaskProtection({
   agentUri,
   logger,
   fetchFn = fetch,
+  retryDelayMs = TRANSIENT_RETRY_DELAY_MS,
 }: {
   agentUri: string | undefined;
   logger: ProtectionLogger;
   fetchFn?: FetchFn;
+  retryDelayMs?: number;
 }): TaskProtection {
   if (!agentUri) return noopProtection;
 
@@ -66,6 +95,8 @@ export function createTaskProtection({
   let armedAt = 0;
   let busySince = 0;
   let lastCallFailed = false;
+  // Set once the agent reports the task is stopping; no later call can succeed.
+  let taskStopping = false;
   let pump: Promise<void> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -74,49 +105,76 @@ export function createTaskProtection({
     applied &&
     now - armedAt >= PROTECTION_REFRESH_MS - REFRESH_TOLERANCE_MS &&
     now - busySince < MAX_REFRESHED_BUSY_MS;
-  const callNeeded = () => !appliedKnown || desired !== applied || refreshDue(Date.now());
+  const callNeeded = () => !taskStopping && (!appliedKnown || desired !== applied || refreshDue(Date.now()));
 
   const setProtection = async (enabled: boolean): Promise<void> => {
     const body = enabled
       ? { ProtectionEnabled: true, ExpiresInMinutes: PROTECTION_EXPIRES_IN_MINUTES }
       : { ProtectionEnabled: false };
-    const response = await fetchFn(endpoint, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      // A hung call would otherwise pin `pump` and freeze protection in its last state.
-      signal: AbortSignal.timeout(AGENT_REQUEST_TIMEOUT_MS),
-    });
+    let response: Response;
+    try {
+      response = await fetchFn(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        // A hung call would otherwise pin `pump` and freeze protection in its last state.
+        signal: AbortSignal.timeout(AGENT_REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      // Timeout or network error reaching the agent.
+      throw new ProtectionCallError(err instanceof Error ? err.message : String(err), 'transient');
+    }
     const parsed = AgentResponseSchema.safeParse(await response.json().catch(() => ({})));
     const payload = parsed.success ? parsed.data : {};
     if (!response.ok || payload.failure || payload.error) {
       const reason = payload.failure?.Reason ?? payload.error?.Code ?? `HTTP ${response.status}`;
       const detail = payload.failure?.Detail ?? payload.error?.Message;
-      throw new Error(detail ? `${reason}: ${detail}` : reason);
+      const kind = classifyAgentFailure(payload.failure?.Reason ?? payload.error?.Code, response.status);
+      throw new ProtectionCallError(detail ? `${reason}: ${detail}` : reason, kind);
     }
   };
 
   // One agent call at a time, always converging on the latest desired state, so a quick
   // busy -> idle -> busy flip can never land as an out-of-order "disable" last.
+  const reportFailure = (target: boolean, err: unknown) => {
+    const kind = err instanceof ProtectionCallError ? err.kind : 'fatal';
+    if (kind === 'stopping') taskStopping = true;
+    // Logged once per failure streak so a missing IAM grant doesn't log on every quest.
+    if (lastCallFailed) return;
+    const metadata = { enabled: target, error: err instanceof Error ? err.message : String(err) };
+    if (kind === 'stopping') {
+      logger.warn(
+        'Task is stopping - scale-in protection not applied, the SIGTERM drain covers in-flight work',
+        metadata
+      );
+    } else if (kind === 'transient') {
+      // Expected now and then from the agent; retried on the next update() or timer tick.
+      logger.warn('Task scale-in protection call failed after retry - this task can be scaled in mid-quest', metadata);
+    } else {
+      logger.error('Failed to update task scale-in protection - this task can be scaled in mid-quest', metadata);
+    }
+  };
+
   const drive = async (): Promise<'converged' | 'failed'> => {
+    let transientAttempts = 0;
     while (callNeeded()) {
       const target = desired;
       try {
         await setProtection(target);
         applied = target;
         appliedKnown = true;
+        transientAttempts = 0;
         if (target) armedAt = Date.now();
         if (lastCallFailed) logger.info('Task scale-in protection calls recovered', { enabled: target });
         lastCallFailed = false;
       } catch (err) {
         appliedKnown = false;
-        // Logged once per failure streak so a missing IAM grant doesn't log on every quest.
-        if (!lastCallFailed) {
-          logger.error('Failed to update task scale-in protection - this task can be scaled in mid-quest', {
-            enabled: target,
-            error: err instanceof Error ? err.message : String(err),
-          });
+        const transient = err instanceof ProtectionCallError && err.kind === 'transient';
+        if (transient && ++transientAttempts < MAX_TRANSIENT_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+          continue;
         }
+        reportFailure(target, err);
         lastCallFailed = true;
         // Retried on the next update() or timer tick, never in a loop against a failing agent.
         return 'failed';
@@ -128,7 +186,7 @@ export function createTaskProtection({
   // The timer refreshes protection through a long busy stretch and retries a failed call
   // (including a failed disable, which would otherwise leave an idle task protected).
   const syncTimer = () => {
-    const active = desired || applied || !appliedKnown;
+    const active = !taskStopping && (desired || applied || !appliedKnown);
     if (active && !timer) {
       timer = setInterval(kick, PROTECTION_REFRESH_MS);
       timer.unref?.();

@@ -15,7 +15,13 @@ const okResponse = () => new Response(JSON.stringify({ protection: { ProtectionE
 const failureResponse = () =>
   new Response(JSON.stringify({ failure: { Reason: 'TASK_NOT_VALID', Detail: 'nope' } }), { status: 200 });
 
-const makeLogger = () => ({ info: vi.fn(), error: vi.fn() });
+const makeLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
+const timeout = () => {
+  throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+};
+const stoppingResponse = () =>
+  new Response(JSON.stringify({ failure: { Reason: 'TASK_STOPPING_OR_STOPPED' } }), { status: 200 });
 
 const sentBodies = (fetchFn: ReturnType<typeof vi.fn>) =>
   fetchFn.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
@@ -39,7 +45,7 @@ describe('createTaskProtection', () => {
 
   it('is a no-op outside ECS (no agent URI)', async () => {
     const fetchFn = vi.fn();
-    const protection = createTaskProtection({ agentUri: undefined, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: undefined, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(3);
     await protection.idle();
@@ -49,7 +55,7 @@ describe('createTaskProtection', () => {
 
   it('arms protection with an expiry and a request timeout when work starts, and clears it when idle', async () => {
     const fetchFn = vi.fn().mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -65,7 +71,7 @@ describe('createTaskProtection', () => {
 
   it('does not call the agent again for more work arriving before a refresh is due', async () => {
     const fetchFn = vi.fn().mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -79,7 +85,7 @@ describe('createTaskProtection', () => {
 
   it('refreshes protection on a timer while one long quest keeps the task busy', async () => {
     const fetchFn = vi.fn().mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -99,7 +105,7 @@ describe('createTaskProtection', () => {
       vi.advanceTimersByTime(latencyMs);
       return okResponse();
     });
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -114,7 +120,7 @@ describe('createTaskProtection', () => {
 
   it('refreshes on new work once a refresh is due', async () => {
     const fetchFn = vi.fn().mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -127,7 +133,7 @@ describe('createTaskProtection', () => {
 
   it('stops refreshing once the task has been busy past the cap, and re-arms after it next goes idle', async () => {
     const fetchFn = vi.fn().mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -153,7 +159,7 @@ describe('createTaskProtection', () => {
       .fn()
       .mockImplementationOnce(() => held.pending)
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     protection.update(0);
@@ -172,7 +178,7 @@ describe('createTaskProtection', () => {
       .mockImplementationOnce(async () => okResponse())
       .mockImplementationOnce(() => held.pending)
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -191,7 +197,7 @@ describe('createTaskProtection', () => {
       .fn()
       .mockImplementationOnce(() => held.pending)
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     protection.update(0);
@@ -209,7 +215,7 @@ describe('createTaskProtection', () => {
       .mockImplementationOnce(async () => failureResponse())
       .mockImplementation(async () => okResponse());
     const logger = makeLogger();
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -231,7 +237,7 @@ describe('createTaskProtection', () => {
       .fn()
       .mockImplementationOnce(async () => failureResponse())
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -247,7 +253,7 @@ describe('createTaskProtection', () => {
       .mockImplementationOnce(async () => okResponse())
       .mockImplementationOnce(async () => failureResponse())
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -275,7 +281,7 @@ describe('createTaskProtection', () => {
       )
       .mockImplementation(async () => okResponse());
     const logger = makeLogger();
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -294,11 +300,10 @@ describe('createTaskProtection', () => {
     const fetchFn = vi
       .fn()
       .mockImplementationOnce(async () => okResponse())
-      .mockImplementationOnce(async () => {
-        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
-      })
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementationOnce(async () => timeout())
       .mockImplementation(async () => okResponse());
-    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn, retryDelayMs: 0 });
 
     protection.update(1);
     await protection.idle();
@@ -308,6 +313,110 @@ describe('createTaskProtection', () => {
     protection.update(1);
     await protection.idle();
 
-    expect(sentBodies(fetchFn)).toEqual([ENABLE, DISABLE, ENABLE]);
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, DISABLE, DISABLE, ENABLE]);
+  });
+
+  it('retries a timed-out call once and stays quiet when the retry succeeds', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementation(async () => okResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+
+    // Applied: more work before a refresh is due sends nothing.
+    protection.update(2);
+    await protection.idle();
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a 5xx', () => new Response('{}', { status: 503 })],
+    ['throttling', () => new Response(JSON.stringify({ error: { Code: 'ThrottlingException' } }), { status: 400 })],
+  ])('retries %s response once', async (_label, transientResponse) => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => transientResponse())
+      .mockImplementation(async () => okResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('logs at warn, not error, when the retry also fails transiently, and recovers on the next update', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementationOnce(async () => timeout())
+      .mockImplementation(async () => okResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({
+      enabled: true,
+      error: 'The operation was aborted due to timeout',
+    });
+
+    protection.update(2);
+    await protection.idle();
+
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE, ENABLE]);
+    expect(logger.info).toHaveBeenCalledWith('Task scale-in protection calls recovered', { enabled: true });
+  });
+
+  it('does not retry a non-transient failure within the same call', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ error: { Code: 'AccessDeniedException' } }), { status: 400 })
+      );
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0][1]).toMatchObject({ enabled: true, error: 'AccessDeniedException' });
+  });
+
+  it('logs a stopping task at warn and makes no further agent calls', async () => {
+    const fetchFn = vi.fn().mockImplementation(async () => stoppingResponse());
+    const logger = makeLogger();
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger, fetchFn, retryDelayMs: 0 });
+
+    protection.update(1);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({ enabled: true, error: 'TASK_STOPPING_OR_STOPPED' });
+
+    protection.update(0);
+    protection.update(1);
+    vi.advanceTimersByTime(PROTECTION_REFRESH_MS * 3);
+    await protection.idle();
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });
