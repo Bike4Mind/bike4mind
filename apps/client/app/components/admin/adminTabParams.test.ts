@@ -388,6 +388,8 @@ describe('Security tab params', () => {
   });
 });
 
+import { PAYMENT_REVIEW_SEARCH_KEYS } from './Revenue/paymentReviewSearch';
+
 describe('useAdminListUrlState keys', () => {
   // Every key set passed to useAdminListUrlState, by the name its caller imports it under.
   const LIST_SEARCH_KEYS: Readonly<Record<string, AdminListSearchKeys>> = {
@@ -400,6 +402,7 @@ describe('useAdminListUrlState keys', () => {
     PENDING_SEARCH_KEYS,
     STRIPE_DISPUTE_SEARCH_KEYS,
     MODEL_METRICS_SEARCH_KEYS,
+    PAYMENT_REVIEW_SEARCH_KEYS,
     ECONOMY_SEARCH_KEYS: {
       query: 'economyQuery',
       view: 'creditView',
@@ -426,6 +429,7 @@ describe('useAdminListUrlState keys', () => {
     'disputeView',
     'metricsQuery',
     'metricsView',
+    'paymentUnused',
     'economyQuery',
     'dlqQuery',
     'dlqView',
