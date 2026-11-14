@@ -258,7 +258,10 @@ export async function executeResearchRun(
       feedOldestWaitingAt?.getTime() ?? Infinity,
       ...dated.filter(item => item.state === 'unreached' || item.state === 'transient').map(item => item.at)
     );
+    // A carried floor at or above a waiting item (old settings never made it eligible) is rebuilt from
+    // settled items below it. A null floor turns the date backstop off.
     let newest = base?.newestPublishedAt?.getTime() ?? null;
+    if (newest !== null && Number.isFinite(blockedAt) && newest >= blockedAt) newest = null;
     for (const item of dated) {
       if (item.state === 'settled' && item.at < blockedAt && (newest === null || item.at > newest)) newest = item.at;
     }

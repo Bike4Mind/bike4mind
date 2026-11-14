@@ -663,6 +663,33 @@ describe('executeResearchRun - feed source', () => {
       expect(cursor!.seenKeys).toContain(keyOf(900));
     });
 
+    it('resets a carried floor that sits above a waiting item after a same-feed settings change', async () => {
+      const before = feedLevers({ maxResults: 2, recencyDays: 7 });
+      const after = feedLevers({ maxResults: 2, recencyDays: 30 });
+      const seenItems = Array.from({ length: RESEARCH_FEED_SEEN_KEYS_MAX }, (_, i) => dated(1000 + i, 40));
+      // Items 21-23 are 8-30 days old: never eligible under 7 days, unseen, so they wait under 30.
+      const feed = [...seenItems, dated(21, 29), dated(22, 15), dated(23, 8)];
+      let cursor: ResearchFeedCursor | null = cursorFor(before, {
+        feedUrlKey: researchFeedUrlKey(FEED_URL),
+        newestPublishedAt: daysAgo(1),
+        seenKeys: seenItems.map(c => canonicalSourceKey(c.url)!),
+      });
+      const judgedPerRun: string[][] = [];
+      const floors: (Date | null)[] = [];
+      for (let run = 1; run <= 2; run += 1) {
+        const { ports, calls } = feedPorts(feed);
+        const result: ResearchRunResult = await executeResearchRun(after, `run-${run}`, ports, cursor);
+        judgedPerRun.push(calls.judged);
+        cursor = result.feedCursor!;
+        floors.push(cursor.newestPublishedAt);
+      }
+      expect(floors[0] === null || floors[0].getTime() <= daysAgo(29).getTime()).toBe(true);
+      // A same-feed run takes the newest items, so the oldest one waits.
+      expect(judgedPerRun[0]).toEqual([hit(22).url, hit(23).url]);
+      expect(judgedPerRun[1]).toEqual([hit(21).url]);
+      expect(cursor!.seenKeys).toEqual(expect.arrayContaining([keyOf(21), keyOf(22), keyOf(23)]));
+    });
+
     it('ignores a stored cursor written under different levers', async () => {
       const l = feedLevers();
       const stale = { ...cursorFor(l, { seenKeys: [keyOf(1)] }), fingerprint: 'different' };
