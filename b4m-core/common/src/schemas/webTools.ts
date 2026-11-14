@@ -8,7 +8,7 @@ import { z } from 'zod';
  */
 export const WebSearchToolRequestSchema = z.object({
   query: z.string().describe('The search query.'),
-  num_results: z.number().optional().describe('How many results to return. Defaults to 3.'),
+  num_results: z.number().int().min(1).max(10).optional().describe('How many results to return. Defaults to 3.'),
 });
 
 export type WebSearchToolRequest = z.infer<typeof WebSearchToolRequestSchema>;
@@ -29,8 +29,8 @@ export const WebFetchToolRequestSchema = z.object({
 export type WebFetchToolRequest = z.infer<typeof WebFetchToolRequestSchema>;
 
 export const WeatherToolRequestSchema = z.object({
-  lat: z.number().describe('Latitude in decimal degrees.'),
-  lon: z.number().describe('Longitude in decimal degrees.'),
+  lat: z.number().min(-90).max(90).describe('Latitude in decimal degrees.'),
+  lon: z.number().min(-180).max(180).describe('Longitude in decimal degrees.'),
   units: z.enum(['imperial', 'metric']).optional().describe('Temperature units. Defaults to `imperial`.'),
 });
 

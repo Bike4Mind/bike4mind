@@ -23,7 +23,7 @@ const SCOPES = [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE];
 
 const AUTH =
   'Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call ' +
-  'counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints.';
+  'counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.';
 
 const BILLED =
   "Billed per call from the caller's credits (or their organization's) when the deployment's provider " +

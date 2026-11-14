@@ -140,7 +140,7 @@ export interface paths {
     put?: never;
     /**
      * Search the web
-     * @description Runs one web search on the provider this deployment is configured with and returns the hits as one formatted text block (title, link and snippet per result), ready to hand to a model. When no search provider is configured, `result` says so instead of listing hits. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints.
+     * @description Runs one web search on the provider this deployment is configured with and returns the hits as one formatted text block (title, link and snippet per result), ready to hand to a model. When no search provider is configured, `result` says so instead of listing hits. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
      */
     post: operations['searchWeb'];
     delete?: never;
@@ -160,7 +160,7 @@ export interface paths {
     put?: never;
     /**
      * Read a web page
-     * @description Fetches one public http or https page and returns its readable content as Markdown, headed by the page title when it has one. A long page is truncated, and the end of `result` says which `offset` to pass to read the next part. Private, loopback and cloud-metadata addresses are refused. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints.
+     * @description Fetches one public http or https page and returns its readable content as Markdown, headed by the page title when it has one. A long page is truncated, and the end of `result` says which `offset` to pass to read the next part. Private, loopback and cloud-metadata addresses are refused. Billed per call from the caller's credits (or their organization's) when the deployment's provider charges for it, and refused with a 422 `insufficient_credits` before the provider is called when the payer cannot cover it. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
      */
     post: operations['fetchWebPage'];
     delete?: never;
@@ -180,7 +180,7 @@ export interface paths {
     put?: never;
     /**
      * Get the current weather
-     * @description Returns the current temperature and conditions at a coordinate as one sentence. Not billed. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints.
+     * @description Returns the current temperature and conditions at a coordinate as one sentence. Not billed. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT. Every call counts against one hourly budget of 600 calls per user, shared by the three `/api/v1/tools/*` endpoints and the three `/api/tools/*` routes.
      */
     post: operations['getCurrentWeather'];
     delete?: never;
