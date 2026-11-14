@@ -44,6 +44,20 @@ describe('OrchestrateToggle', () => {
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
   });
 
+  it('counts the orchestrating session waiting on the user, as the Tavern does', async () => {
+    await themed.render(
+      <OrchestrateToggle
+        states={['working', 'working']}
+        parentNeedsYou
+        surface="chat"
+        onSurfaceChange={onSurfaceChange}
+      />
+    );
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
+      `Show agents, ${describeAgentStates(['working', 'working'], 1)}`
+    );
+  });
+
   it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
     await renderToggle(['done', 'idle', 'stopped']);
     expect(el('chat-orchestrate-count').textContent).toBe('3');
@@ -70,13 +84,17 @@ describe('OrchestrateToggle', () => {
   it('names the agents segment with the agent states, most urgent first, and hides the badge', async () => {
     await renderToggle(['done', 'working', 'needs-you', 'idle']);
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
-      'Show agents, 4 agents: 1 needs you, 1 working, 2 done'
+      'Show agents, 4 agents: 1 needs you, 1 working, 1 idle, 1 done'
     );
     expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toContain('1 needs you');
     expect(el('chat-orchestrate-count').getAttribute('aria-hidden')).toBe('true');
     expect(el('chat-orchestrate-count').hasAttribute('aria-label')).toBe(false);
     expect(describeAgentStates(['failed'])).toBe('1 agent: 1 failed');
     expect(describeAgentStates([])).toBe('No agents yet');
+    // Idle and stopped are never done; a waiting parent adds to "needs you" without adding an agent.
+    expect(describeAgentStates(['idle', 'stopped', 'done'], 1)).toBe(
+      '3 agents: 1 needs you, 1 stopped, 1 idle, 1 done'
+    );
   });
 
   it('marks the shown surface as pressed', async () => {

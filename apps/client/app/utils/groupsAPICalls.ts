@@ -56,11 +56,12 @@ export const shareGroupProject = async (
 export const renameOrganizationGroup = async (
   organizationId: string,
   groupId: string,
-  name: string
+  name: string,
+  options?: { expectedName?: string }
 ): Promise<IGroupDocument> => {
   const response = await api.patch<{ group: IGroupDocument }>(
     `/api/organizations/${organizationId}/groups/${groupId}`,
-    { name }
+    { name, ...(options?.expectedName === undefined ? {} : { expectedName: options.expectedName }) }
   );
   return response.data.group;
 };

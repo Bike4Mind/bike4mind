@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Dropdown, IconButton, Link, Menu, MenuButton, MenuItem, Skeleton, Stack } from '@mui/joy';
+import { Alert, Button, Link, MenuItem, Skeleton, Stack } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { REVENUE_SPARKLINE_DAYS } from '@bike4mind/server-utils/app/utils/adminRevenue';
@@ -44,6 +43,7 @@ import {
 } from './useAdminSubscriptionsList';
 import { useOpenSubscriptionOwner, useOpenSubscriptionRow } from './useOpenSubscriptionRow';
 import { useSubscriptionsParams, useSubscriptionsTab, useSubscriptionsTabUrlSync } from './useSubscriptionsTabParams';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 const copyToClipboard = async (value: string, what: string) => {
   try {
@@ -64,49 +64,34 @@ function SubscriptionRowActions({
   onOpenOwner: () => void;
 }) {
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for subscription ${row.subscriptionId}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`admin-subscriptions-row-actions-${row.id}`}
-        // The row opens the subscription on click; the menu must not.
-        onClick={event => event.stopPropagation()}
-        onKeyDown={event => event.stopPropagation()}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }} onClick={event => event.stopPropagation()}>
-        <MenuItem onClick={onOpen} data-testid={`admin-subscriptions-row-open-${row.id}`}>
-          Open subscription
+    <RowActionsMenu
+      testId={`admin-subscriptions-row-actions-${row.id}`}
+      ariaLabel={`Actions for subscription ${row.subscriptionId}`}
+      stopRowClick
+    >
+      <MenuItem onClick={onOpen} data-testid={`admin-subscriptions-row-open-${row.id}`}>
+        Open subscription
+      </MenuItem>
+      {row.owner && (
+        <MenuItem onClick={onOpenOwner} data-testid={`admin-subscriptions-row-open-owner-${row.id}`}>
+          Open customer
         </MenuItem>
-        {row.owner && (
-          <MenuItem onClick={onOpenOwner} data-testid={`admin-subscriptions-row-open-owner-${row.id}`}>
-            Open customer
-          </MenuItem>
-        )}
-        {row.source === 'stripe' && (
-          <MenuItem
-            onClick={() => copyToClipboard(row.subscriptionId, 'Stripe subscription ID')}
-            data-testid={`admin-subscriptions-row-copy-sub-${row.id}`}
-          >
-            Copy Stripe subscription ID
-          </MenuItem>
-        )}
+      )}
+      {row.source === 'stripe' && (
         <MenuItem
-          onClick={() => copyToClipboard(row.ownerId, 'Owner ID')}
-          data-testid={`admin-subscriptions-row-copy-owner-${row.id}`}
+          onClick={() => copyToClipboard(row.subscriptionId, 'Stripe subscription ID')}
+          data-testid={`admin-subscriptions-row-copy-sub-${row.id}`}
         >
-          Copy owner ID
+          Copy Stripe subscription ID
         </MenuItem>
-      </Menu>
-    </Dropdown>
+      )}
+      <MenuItem
+        onClick={() => copyToClipboard(row.ownerId, 'Owner ID')}
+        data-testid={`admin-subscriptions-row-copy-owner-${row.id}`}
+      >
+        Copy owner ID
+      </MenuItem>
+    </RowActionsMenu>
   );
 }
 

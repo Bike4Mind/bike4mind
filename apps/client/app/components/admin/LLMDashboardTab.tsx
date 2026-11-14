@@ -47,7 +47,7 @@ import {
   type AdminSelection,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
+import { ADMIN_REGION_GAP, adminFocusScope, adminSaveBarZIndex } from './shared/adminStyles';
 import { useAdminModal } from './useAdminModal';
 import { adminTabToSlug } from './adminTabSlugs';
 import { adminSearchForTab } from './adminTabParams';
@@ -667,7 +667,7 @@ const LLMDashboardTab: React.FC = () => {
         <Stack
           gap={1}
           alignItems="flex-start"
-          sx={{ position: 'sticky', bottom: 8, zIndex: 3, pointerEvents: 'none' }}
+          sx={{ position: 'sticky', bottom: 8, zIndex: adminSaveBarZIndex, pointerEvents: 'none' }}
           data-testid="llm-dashboard-dock"
         >
           {selectedModelIds.length > 0 && (
