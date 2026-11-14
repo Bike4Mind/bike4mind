@@ -264,12 +264,7 @@ export function riskReviewShare(
 export type EvalSetValueChange = { current: number | null; previous: number | null; change: number | null };
 
 export type EvalSetScoreComparisonField =
-  | 'truePositive'
-  | 'falsePositive'
-  | 'falseNegative'
-  | 'trueNegative'
-  | 'abstained'
-  | 'precisionLowerBound';
+  'truePositive' | 'falsePositive' | 'falseNegative' | 'trueNegative' | 'abstained' | 'precisionLowerBound';
 
 export type EvalSetScoreComparison = {
   key: string;

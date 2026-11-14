@@ -26,7 +26,9 @@ export type CalibratedAssessment = EvalAssessment & {
  * advisories list (server-utils aiAbuseAdvisories.ts abuseProbabilityOf) shows the raw entry, so a
  * distribution that sums below 1 reads higher here than there.
  */
-export function renormalisedAbuseProbability(probabilities: readonly { value: string; probability: number }[]): number | null {
+export function renormalisedAbuseProbability(
+  probabilities: readonly { value: string; probability: number }[]
+): number | null {
   const entry = probabilities.find(candidate => candidate.value === 'abuse');
   if (!entry) return null;
   const total = probabilities.reduce((sum, candidate) => sum + candidate.probability, 0);
