@@ -12,8 +12,8 @@ import type { GroupCompletion, GroupCompletionSubscriber } from '@bike4mind/serv
 import type { SignedOutput, StoredOutputRef } from '../generations/signedOutput';
 
 // Slack accepts far larger files, but the whole output is buffered in the job worker before the upload.
-export const SLACK_VIDEO_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
-export const SLACK_VIDEO_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const SLACK_OUTPUT_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+export const SLACK_OUTPUT_LINK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 // A clip saved to Files is created `pending` and only turns serveable once the async S3 scan runs (typically a
 // second or two), so a job can notify as succeeded before its file may be served.
@@ -47,23 +47,34 @@ export type SlackJobDeliveryDeps = {
   logger: Logger;
 };
 
+type Medium = 'video' | 'image';
+
+// What each medium's output is called in the fixed texts below ("clip" is only used for the size reason).
+const MEDIUM_NOUNS: Record<Medium, { name: string; stored: string }> = {
+  video: { name: 'video', stored: 'clip' },
+  image: { name: 'image', stored: 'image' },
+};
+
 // A Slack thread is visible to the whole channel, so a job's own error text (provider exception messages,
 // configuration details) is never posted: only these fixed reasons are.
-const FAILURE_REASONS: Partial<Record<GenerationJobErrorCode, string>> = {
-  provider_timeout: 'the provider did not finish in time',
-  output_too_large: 'the clip was too large to store',
-  input_image_not_found: 'the input image could not be found',
-  region_unavailable: 'the model is not available in this region',
+const failureReason = (code: GenerationJobErrorCode, medium: Medium): string | undefined =>
+  ({
+    provider_timeout: 'the provider did not finish in time',
+    output_too_large: `the ${MEDIUM_NOUNS[medium].stored} was too large to store`,
+    input_image_not_found: 'the input image could not be found',
+    region_unavailable: 'the model is not available in this region',
+  })[code as string];
+
+const failureText = (medium: Medium, job: IGenerationJobDocument): string => {
+  const noun = `${MEDIUM_NOUNS[medium].name[0].toUpperCase()}${MEDIUM_NOUNS[medium].name.slice(1)} generation`;
+  if (job.state === 'cancelled') return `${noun} was cancelled.`;
+  if (job.state === 'blocked') return `${noun} was blocked by the content policy. Try rewording your request.`;
+  const reason = job.error && failureReason(job.error.code, medium);
+  return reason ? `${noun} failed: ${reason}.` : `${noun} failed. Please try again.`;
 };
 
-const failureText = (job: IGenerationJobDocumentOf<'video'>): string => {
-  if (job.state === 'cancelled') return 'Video generation was cancelled.';
-  if (job.state === 'blocked') return 'Video generation was blocked by the content policy. Try rewording your request.';
-  const reason = job.error && FAILURE_REASONS[job.error.code];
-  return reason ? `Video generation failed: ${reason}.` : 'Video generation failed. Please try again.';
-};
-
-type Medium = 'video' | 'image';
+const notPostedText = (medium: Medium): string =>
+  `I could not post it here. Check your ${MEDIUM_NOUNS[medium].name}'s status in Bike4Mind.`;
 
 const post = async (
   client: SlackPoster,
@@ -71,18 +82,16 @@ const post = async (
   target: SlackDelivery,
   text: string,
   deps: SlackJobDeliveryDeps,
-  medium: Medium = 'video'
+  medium: Medium
 ) => {
   // sendMessage reports a failure (an open circuit breaker included) as null rather than throwing.
   const ts = await client.sendMessage({ channel: target.channelId, threadTs: target.threadTs, text });
   if (ts === null) deps.logger.warn(`slack ${medium} message was not delivered`, { jobId });
 };
 
-const NOT_POSTED_TEXT = "I could not post it here. Check your video's status in Bike4Mind.";
-
 const waitUntilServeable = async (output: StoredOutputRef, deps: SlackJobDeliveryDeps): Promise<SignedOutput> => {
   for (let attempt = 1; ; attempt++) {
-    const signed = await deps.signOutputUrl(output, SLACK_VIDEO_LINK_TTL_SECONDS);
+    const signed = await deps.signOutputUrl(output, SLACK_OUTPUT_LINK_TTL_SECONDS);
     if (signed.availability !== 'pending_scan' || attempt >= SCAN_WAIT_ATTEMPTS) return signed;
     await deps.sleep(SCAN_WAIT_INTERVAL_MS);
   }
@@ -125,7 +134,7 @@ const postOutput = async (
       });
       return false;
     }
-    if (output.bytes <= SLACK_VIDEO_UPLOAD_MAX_BYTES) {
+    if (output.bytes <= SLACK_OUTPUT_UPLOAD_MAX_BYTES) {
       try {
         const uploaded = await client.uploadFile({
           channel: target.channelId,
@@ -142,7 +151,7 @@ const postOutput = async (
     }
     // An upload can fail because the download gate observed a deletion or moderation change.
     // Recheck before publishing a link rather than reusing the URL from before that failure.
-    const fallback = await deps.signOutputUrl(output, SLACK_VIDEO_LINK_TTL_SECONDS);
+    const fallback = await deps.signOutputUrl(output, SLACK_OUTPUT_LINK_TTL_SECONDS);
     if (fallback.availability !== 'ready') {
       deps.logger.warn(`slack ${medium} link skipped: the output is no longer serveable`, {
         jobId,
@@ -150,12 +159,12 @@ const postOutput = async (
       });
       return false;
     }
-    const link = deps.buildOutputLink(output, item.requestedBy, SLACK_VIDEO_LINK_TTL_SECONDS);
+    const link = deps.buildOutputLink(output, item.requestedBy, SLACK_OUTPUT_LINK_TTL_SECONDS);
     if (!link) {
       deps.logger.warn(`slack ${medium} link skipped: the output cannot be linked`, { jobId });
       return false;
     }
-    const expiry = `(the link expires in ${SLACK_VIDEO_LINK_TTL_SECONDS / 86400} days)`;
+    const expiry = `(the link expires in ${SLACK_OUTPUT_LINK_TTL_SECONDS / 86400} days)`;
     const linkText = `<${link}|${item.linkLabel}> ${expiry}.`;
     await post(
       client,
@@ -193,7 +202,7 @@ const deliverClip = async (
     client,
     deps
   );
-  if (!posted) await post(client, job.id, target, NOT_POSTED_TEXT, deps);
+  if (!posted) await post(client, job.id, target, notPostedText('video'), deps, 'video');
 };
 
 /**
@@ -216,7 +225,7 @@ export async function deliverJobToSlack(job: IGenerationJobDocument, deps: Slack
     await deliverClip(job, output, job.delivery, client, deps);
     return;
   }
-  await post(client, job.id, job.delivery, failureText(job), deps);
+  await post(client, job.id, job.delivery, failureText('video', job), deps, 'video');
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -226,31 +235,21 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/gif': 'gif',
 };
 
-const IMAGE_FAILURE_REASONS: Partial<Record<GenerationJobErrorCode, string>> = {
-  provider_timeout: 'the provider did not finish in time',
-  output_too_large: 'the image was too large to store',
-  input_image_not_found: 'the input image could not be found',
-  region_unavailable: 'the model is not available in this region',
-};
-
-const IMAGE_NOT_POSTED_TEXT = 'I could not post it here. Check your image in Bike4Mind.';
-
-const singleImageFailureText = (job: IGenerationJobDocument): string => {
-  if (job.state === 'blocked') return 'Image generation was blocked by the content policy. Try rewording your request.';
-  const reason = job.error && IMAGE_FAILURE_REASONS[job.error.code];
-  return reason ? `Image generation failed: ${reason}.` : 'Image generation failed. Please try again.';
-};
-
 /** The one closing message for a batch, or null when every image went out. Fixed texts only, as for video. */
 const imageBatchSummary = (completion: GroupCompletion, notPosted: number): string | null => {
-  const { members, readyCount, failedCount, anchor } = completion;
-  if (members.length === 1) {
-    if (readyCount === 0) return singleImageFailureText(anchor);
-    return notPosted > 0 ? IMAGE_NOT_POSTED_TEXT : null;
+  const { members, readyCount, failedCount, cancelledCount } = completion;
+  // Takes the user cancelled are not part of the batch, as in the push count.
+  const wanted = members.length - cancelledCount;
+  if (wanted === 1) {
+    if (readyCount === 0) {
+      const failed = members.find(member => member.state !== 'succeeded' && member.state !== 'cancelled');
+      return failed ? failureText('image', failed) : null;
+    }
+    return notPosted > 0 ? notPostedText('image') : null;
   }
   if (readyCount === 0) return 'None of the images could be generated. Please try again.';
   const parts: string[] = [];
-  if (failedCount > 0) parts.push(`${failedCount} of ${members.length} images could not be generated.`);
+  if (failedCount > 0) parts.push(`${failedCount} of ${wanted} images could not be generated.`);
   if (notPosted > 0) parts.push(`I could not post ${notPosted} of them here. Check your images in Bike4Mind.`);
   return parts.length > 0 ? parts.join(' ') : null;
 };
