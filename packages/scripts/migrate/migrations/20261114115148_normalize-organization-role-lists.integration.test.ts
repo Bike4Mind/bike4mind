@@ -12,7 +12,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20261113101510_normalize-organization-role-lists';
+import migration from './20261114115148_normalize-organization-role-lists';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
