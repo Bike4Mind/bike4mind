@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
 import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
@@ -268,7 +268,7 @@ export class BackgroundProcessRegistry {
       };
       const ended = (): BackgroundProcessStatus => (tracked.info.status === 'killed' ? 'killed' : 'exited');
 
-      child.on('error', error => settle('failed', null, null, error.message));
+      child.on('error', error => settle('failed', null, null, spawnFailure(error, info.cwd, launch).message));
 
       // The better of the two when it comes: 'close' means the output has drained as well.
       child.on('close', (code, signal) => settle(ended(), code, signal));

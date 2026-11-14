@@ -1325,7 +1325,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/personas/redeem` | GET, POST | handler | - | - | no | - | 0 |
+| `/api/personas/redeem` | POST | handler | - | - | no | - | 0 |
 
 ### ping
 

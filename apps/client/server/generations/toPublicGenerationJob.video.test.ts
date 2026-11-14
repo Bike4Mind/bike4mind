@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, VideoGenerationSchema, type IGenerationJobDocument } from '@bike4mind/common';
-import { OUTPUT_URL_TTL_SECONDS } from '@bike4mind/server-utils/generations/signedOutput';
-import { toPublicVideoGeneration } from './toPublicVideoGeneration';
+import {
+  CreditHolderType,
+  VideoGenerationSchema,
+  type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
+} from '@bike4mind/common';
+import { OUTPUT_URL_TTL_SECONDS, type JobMapperDeps } from '@bike4mind/server-utils/generations/signedOutput';
+import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from './toPublicGenerationJob';
+
+const toPublicVideoGeneration = (job: IGenerationJobDocumentOf<'video'>, deps: JobMapperDeps) =>
+  toPublicGenerationJob(job, deps, VIDEO_GENERATION_PROJECTION);
 
 const job = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJobDocument =>
   ({
@@ -58,7 +66,7 @@ const succeeded = (location: 'files' | 'generated') =>
     },
   });
 
-describe('toPublicVideoGeneration', () => {
+describe('toPublicGenerationJob (video)', () => {
   it('never echoes the generated-image key of an agent job', async () => {
     const key = '86cdc650-43d2-416e-aca6-23ff4fe23081.png';
     const agentJob = job({

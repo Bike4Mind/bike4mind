@@ -81,6 +81,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
   rateLimit?: IUserApiKeyRateLimit;
+  /** Unset means allowed; false keeps this client's exchange keys paid-only. */
+  unpaidAccountsAllowed?: boolean;
   /**
    * The Overwatch product an account created to sign in to this client is credited to, with its
    * later payments (apps/client server/analytics/oauthSignupCredit.ts). Absent: no credit.
@@ -149,6 +151,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
       required: false,
     },
     overwatchProductId: { type: String, required: false },
+    unpaidAccountsAllowed: { type: Boolean, required: false },
     rateLimit: {
       type: new Schema<IUserApiKeyRateLimit>(
         {

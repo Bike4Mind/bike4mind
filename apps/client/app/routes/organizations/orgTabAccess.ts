@@ -20,6 +20,7 @@ export enum OrganizationTabs {
   GitHub = 'github',
   Webhooks = 'webhooks',
   Connectors = 'connectors',
+  Domains = 'domains',
   ApiKeys = 'api-keys',
   Settings = 'settings',
   Audit = 'audit',
@@ -88,6 +89,15 @@ export const canManageOrgApiKeys = permissionGate('manageKeys');
 export const canViewOrgBilling = (currentUser: TabViewer, organization: TabOrg): boolean =>
   !!currentUser && !!organization && orgMemberHasPermission(organization, currentUser.id, 'manageBilling');
 
+/**
+ * Who may see the Domains tab: the same `manageMembers` check `loadOrgForDomainAdmin` runs for the
+ * `organizations/[id]/domains/*` routes; never a personal org.
+ */
+export const canManageOrgDomains = (
+  currentUser: TabViewer,
+  organization: (OrgRoleSubject & { personal?: boolean }) | null | undefined
+): boolean => !!organization && !organization.personal && permissionGate('manageMembers')(currentUser, organization);
+
 export interface OrgTabAccess {
   canManageOrg: boolean;
   canViewUsage: boolean;
@@ -97,6 +107,7 @@ export interface OrgTabAccess {
   canViewBilling: boolean;
   canManageConnectors: boolean;
   canManageApiKeys: boolean;
+  canManageDomains: boolean;
   canViewAudit?: boolean;
 }
 
@@ -119,6 +130,7 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
   if (!access.canManageConnectors && selected === OrganizationTabs.Connectors) return OrganizationTabs.Overview;
   if (!access.canManageApiKeys && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
+  if (!access.canManageDomains && selected === OrganizationTabs.Domains) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg; see canViewOrgBilling.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;
   return selected;

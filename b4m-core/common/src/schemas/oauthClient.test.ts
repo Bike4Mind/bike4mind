@@ -55,6 +55,15 @@ describe('createOAuthClientSchema', () => {
     expect(updateOAuthClientSchema.safeParse({ rateLimit }).success).toBe(false);
   });
 
+  it('accepts unpaidAccountsAllowed on any client and rejects non-booleans', () => {
+    const plain = { name: 'App', redirectUris: ['https://app.example.test/cb'] };
+    expect(createOAuthClientSchema.parse({ ...plain, unpaidAccountsAllowed: false }).unpaidAccountsAllowed).toBe(false);
+    expect(createOAuthClientSchema.parse(plain).unpaidAccountsAllowed).toBeUndefined();
+    expect(updateOAuthClientSchema.parse({ unpaidAccountsAllowed: true }).unpaidAccountsAllowed).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ unpaidAccountsAllowed: 'no' }).success).toBe(false);
+    expect(updateOAuthClientSchema.safeParse({ unpaidAccountsAllowed: null }).success).toBe(false);
+  });
+
   it('trims the name and defaults clientType to relying-party', () => {
     const parsed = createOAuthClientSchema.parse({ name: '  App ', redirectUris: ['https://a.example.test/cb'] });
     expect(parsed).toMatchObject({ name: 'App', clientType: 'relying-party' });
