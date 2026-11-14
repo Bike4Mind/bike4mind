@@ -97,13 +97,18 @@ export async function saveGeneratedAssetToFiles(
     // These new Files keys were uploaded by this invocation; the org's inline key stays owned by its ledger.
     for (const path of uploadedPaths) {
       try {
-        await rememberGeneratedFileCleanup(path);
-      } catch (error) {
-        // The exact object is ours even if its retry receipt cannot be stored.
-        await getFilesStorage().deletePermanently(path);
-        throw error;
+        try {
+          await rememberGeneratedFileCleanup(path);
+        } catch (receiptError) {
+          // The exact object is ours even if its retry receipt cannot be stored.
+          await getFilesStorage().deletePermanently(path);
+          throw receiptError;
+        }
+        await deleteRememberedGeneratedFile(path);
+      } catch (cleanupError) {
+        // Keep the primary save result/error. A persisted receipt remains available to the cron.
+        logger.error('Could not complete generated Files upload cleanup', { path, cleanupError });
       }
-      await deleteRememberedGeneratedFile(path);
     }
   };
   let result: SaveGeneratedAssetResult;

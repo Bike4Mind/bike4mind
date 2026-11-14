@@ -158,7 +158,7 @@ describe('saveGeneratedAssetToFiles', () => {
       expect(mocks.deleteFile).not.toHaveBeenCalled();
     }
   );
-  it('still removes its exact upload and reports failure when the cleanup receipt cannot be persisted', async () => {
+  it('keeps the primary save result when receipt persistence fails after removing its exact upload', async () => {
     const path = 'generated-video/12345678-1234-1234-1234-123456789abc.mp4';
     mocks.lockCreator.mockResolvedValue(false);
     mocks.rememberFileCleanup.mockRejectedValueOnce(new Error('receipt database unavailable'));
@@ -173,7 +173,15 @@ describe('saveGeneratedAssetToFiles', () => {
         throw new Error('Expected creator refusal');
       }
     );
-    await expect(saveGeneratedAssetToFiles(params(), logger)).rejects.toThrow('receipt database unavailable');
+    await expect(saveGeneratedAssetToFiles(params(), logger)).resolves.toMatchObject({
+      saved: false,
+      reason: 'error',
+      cause: { message: 'The generated asset creator is no longer active' },
+    });
+    expect(logger.error).toHaveBeenCalledWith('Could not complete generated Files upload cleanup', {
+      path,
+      cleanupError: expect.objectContaining({ message: 'receipt database unavailable' }),
+    });
     expect(mocks.deleteFile.mock.calls).toEqual([[path]]);
     expect(mocks.deleteRememberedFile).not.toHaveBeenCalled();
     expect(mocks.createFile).not.toHaveBeenCalled();

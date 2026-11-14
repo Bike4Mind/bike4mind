@@ -8,7 +8,7 @@ export const infraHolders = {
   },
   OrganizationGeneratedObject: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize' }],
   },
   OrganizationRetentionEstimate: {
     kind: 'holder',

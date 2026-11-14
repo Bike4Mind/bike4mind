@@ -3,6 +3,7 @@ import { Alert, Button, Card, FormControl, FormLabel, Input, Stack, Typography }
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   canAdministerOrganization,
+  MAX_RETENTION_DAYS,
   foreverRetention,
   retentionKinds,
   shortensRetention,
@@ -79,7 +80,9 @@ export default function OrganizationRetentionSection({ organization }: { organiz
                 placeholder="Keep forever"
                 value={next[kind] ?? ''}
                 disabled={busy || !data}
-                slotProps={{ input: { min: 1, max: 36500, 'data-testid': `organization-retention-${kind}-input` } }}
+                slotProps={{
+                  input: { min: 1, max: MAX_RETENTION_DAYS, 'data-testid': `organization-retention-${kind}-input` },
+                }}
                 onChange={event => {
                   setDraft({ ...next, [kind]: event.target.value === '' ? null : Number(event.target.value) });
                   setEstimate(null);

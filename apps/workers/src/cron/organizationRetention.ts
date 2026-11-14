@@ -1,14 +1,15 @@
-import { retentionKinds } from '@bike4mind/common';
+import { MAX_RETENTION_DAYS, retentionKinds } from '@bike4mind/common';
 import { connectDB, Organization } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { retryGeneratedFileCleanup } from '@bike4mind/server-utils/utils/generatedFileCleanup';
-import { cleanupOrganizationRetention } from '@workers/organizations/retentionCleanup';
+import { cleanupOrganizationRetention, RetentionPolicyChangedError } from '@workers/organizations/retentionCleanup';
+import { Logger } from '@bike4mind/observability';
 
 export const organizationRetentionFilter = {
   personal: false,
   retentionVersion: { $gt: 0 },
-  $or: retentionKinds.map(kind => ({ [`retentionPolicy.${kind}`]: { $gte: 1, $lte: 36500 } })),
+  $or: retentionKinds.map(kind => ({ [`retentionPolicy.${kind}`]: { $gte: 1, $lte: MAX_RETENTION_DAYS } })),
 };
 
 export async function handler() {
@@ -22,7 +23,8 @@ export async function runOrganizationRetention() {
   let fileCleanupFailed = false;
   try {
     await retryGeneratedFileCleanup({ deadline });
-  } catch {
+  } catch (error) {
+    Logger.globalInstance.error('Generated Files retention cleanup batch failed', { error });
     fileCleanupFailed = true;
   }
   const organizations = await Organization.find(organizationRetentionFilter)
@@ -33,8 +35,13 @@ export async function runOrganizationRetention() {
     if (Date.now() >= deadline) break;
     try {
       await cleanupOrganizationRetention(org.id, { deadline });
-    } catch {
-      failures++;
+    } catch (error) {
+      if (error instanceof RetentionPolicyChangedError) {
+        Logger.globalInstance.info('Organization retention stopped after a policy change', { organizationId: org.id });
+      } else {
+        Logger.globalInstance.error('Organization retention sweep failed', { organizationId: org.id, error });
+        failures++;
+      }
     } finally {
       await Organization.updateOne({ _id: org._id }, { $set: { retentionLastSweptAt: new Date() } });
     }

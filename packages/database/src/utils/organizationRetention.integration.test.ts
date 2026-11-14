@@ -109,6 +109,29 @@ describe('organization retention metadata erasure over real transactions', () =>
     expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: userId })).toBe(1);
   });
 
+  it.each([false, true])(
+    'refuses ledger redaction when the lease fails between phases (transaction=%s)',
+    async transactional => {
+      await recordRetainedGeneratedObject(input);
+      await estimate();
+      const lostLease = new Error('purge lease lost between phases');
+      const assertLease = vi
+        .fn<() => Promise<void>>()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(lostLease);
+      const pending = transactional
+        ? withTransaction(session => eraseOrganizationRetentionForUser(userId, { session, assertLease }))
+        : eraseOrganizationRetentionForUser(userId, { assertLease });
+      await expect(pending).rejects.toBe(lostLease);
+      expect(assertLease).toHaveBeenCalledTimes(2);
+      expect((await OrganizationGeneratedObject.findOne({ key }).lean())?.userId).toBe(userId);
+      expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: userId })).toBe(transactional ? 1 : 0);
+      await eraseOrganizationRetentionForUser(userId, { assertLease: async () => {} });
+      expect((await OrganizationGeneratedObject.findOne({ key }).lean())?.userId).toBe(ERASED_RETENTION_CREATOR);
+      expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: userId })).toBe(0);
+    }
+  );
+
   it('keeps a late verified ownership record anonymous after deletion wins without recreating User', async () => {
     await erase();
     expect(await recordRetainedGeneratedObject(input)).toBe(false);

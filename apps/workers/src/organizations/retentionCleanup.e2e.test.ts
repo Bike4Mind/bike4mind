@@ -445,6 +445,58 @@ describe('explicit organization retention on disposable data', () => {
     }
     expect(await OrganizationRetentionEstimate.countDocuments({})).toBe(0);
   });
+  it.each([
+    ['files', FabFile],
+    ['media', FabFile],
+    ['media', OrganizationGeneratedObject],
+  ] as const)('does not mint a token after the %s count exhausts the deadline', async (kind, model) => {
+    await file(orgId, old, kind === 'media');
+    if (model === OrganizationGeneratedObject)
+      await OrganizationGeneratedObject.create({
+        key,
+        organizationId: orgId,
+        userId: ownerId,
+        sessionId: await notebook(orgId),
+        createdAt: old,
+      });
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const count = model.collection.countDocuments.bind(model.collection);
+    vi.spyOn(model.collection, 'countDocuments').mockImplementationOnce(async (...args) => {
+      const result = await count(...args);
+      clock.mockReturnValue(start + RETENTION_ESTIMATE_MS + 1);
+      return result;
+    });
+    try {
+      await expect(
+        createRetentionEstimate(orgId, ownerId, 1, { chats: null, files: null, media: null, [kind]: 1 }, now)
+      ).rejects.toThrow('timed out');
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await OrganizationRetentionEstimate.countDocuments({})).toBe(0);
+  });
+
+  it('stops before an unprocessed candidate at the deadline and resumes finite work next run', async () => {
+    const sessionId = await notebook(orgId);
+    const first = await message(sessionId);
+    const second = await message(sessionId);
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    effects.unpublish.mockImplementationOnce(async () => {
+      clock.mockReturnValue(start + 5001);
+    });
+    try {
+      expect((await cleanupOrganizationRetention(orgId, { ...options(), deadline: start + 5000 })).chats).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+    expect((await Quest.collection.findOne({ _id: first }))?.deletedAt).toBeInstanceOf(Date);
+    expect((await Quest.collection.findOne({ _id: second }))?.deletedAt).toBeNull();
+    expect((await cleanupOrganizationRetention(orgId, options())).chats).toBe(1);
+    expect((await Quest.collection.findOne({ _id: second }))?.deletedAt).toBeInstanceOf(Date);
+  });
+
   it('cannot recreate a subject estimate after erasure wins during the count', async () => {
     await message(await notebook(orgId));
     let releaseCount: (() => void) | undefined;

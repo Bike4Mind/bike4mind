@@ -72,6 +72,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.restoreAllMocks();
+  vi.clearAllMocks();
   h.upload.mockReset();
   h.deleteFile.mockReset();
   h.deleteFileCount.mockReset().mockImplementation(async (path: string) => {
@@ -193,11 +194,20 @@ describe('actual generated Files writer and erasure over local Mongo', () => {
       if (abort) controller.abort();
       h.deleteFile.mockRejectedValueOnce(new Error('temporary delete failure'));
       finishUpload.release();
-      await expect(pending).rejects.toThrow('temporary delete failure');
+      if (abort) await expect(pending).rejects.toThrow('creator is no longer active');
+      else await expect(pending).resolves.toMatchObject({ saved: false, reason: 'error' });
+
       expect(await FabFile.countDocuments({})).toBe(0);
       expect(await User.countDocuments({})).toBe(0);
       const receipts = await GeneratedFileCleanupModel.find().lean();
       expect(receipts).toHaveLength(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not complete generated Files upload cleanup',
+        expect.objectContaining({
+          path: receipts[0].filePath,
+          cleanupError: expect.objectContaining({ message: 'temporary delete failure' }),
+        })
+      );
       expect(objects.has(receipts[0].filePath)).toBe(true);
       expect(receipts[0].filePath).not.toBe(inlineKey);
       expect(JSON.stringify(receipts)).not.toContain(userId);

@@ -16,7 +16,13 @@ Shortening any period requires requesting a server-generated estimate, then pres
 
 Hosted and self-host workers run hourly. A run visits at most twenty organizations, attempts at most fifty items per organization and stops starting work after two minutes. Query deadlines also bound candidate lookups. Work not reached is retried in later sweeps; organizations and retained media rotate so an old failure or shared object cannot permanently block later candidates.
 
+Chat scans currently restart from the lowest notebook identifier. Continuous expired traffic in early notebooks, or a deadline spent on earlier pages, can leave later notebooks waiting indefinitely. Durable pending-work and cursor coordination is a separate follow-up; the complete estimate pager still fails without issuing a token if its deadline expires.
+
 Each row deletion and its append-only organization audit entry commit together, guarded by the policy version. Media reference removal is audited separately from object deletion: expired references in the owning notebook are detached even when another live reference retains the shared object. Existing message and file deletion services handle tombstones, file chunks, references and owner storage accounting. Failed file candidates rotate behind unchecked candidates, including files whose uploader was erased. Object storage and CDN operations use the existing deletion helpers; physical storage is not transactional with MongoDB. A failed sweep is retried by the next schedule and hosted failures go to a monitored dead-letter queue.
+
+Rejected or interrupted Files uploads retain anonymous exact-path cleanup receipts. An empty storage listing does not prove that an interrupted upload cannot finish later, so those locators have no age-based expiry. Batches rotate by last attempt. Secondary compensation failures are logged while preserving the original save result or error; persisted receipts remain available for retry.
+
+Personal account erasure preserves organization-owned generated copies when a live team keeps them forever or has no active media period. The current exemption also includes soft-deleted team organizations. Permanent organization cleanup and its legal-hold authority remain a separate lifecycle follow-up.
 
 Estimates count eligible messages, file rows and generated object records, not unique physical blobs or guaranteed storage savings. Counts may change between estimation and cleanup. Deletion follows existing soft-delete and versioned-storage semantics; this is not a promise of immediate irreversible erasure of backups or storage versions.
 

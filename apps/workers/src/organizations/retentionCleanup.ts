@@ -109,7 +109,7 @@ async function hasHeldMediaNotebook(key: string): Promise<boolean> {
   throw new Error('Retention media reference scan timed out; object retained');
 }
 
-class RetentionPolicyChangedError extends Error {}
+export class RetentionPolicyChangedError extends Error {}
 
 async function skipFailedItem(error: unknown, logger: Logger, kind: RetentionKind, id: string) {
   if (error instanceof RetentionPolicyChangedError) throw error;

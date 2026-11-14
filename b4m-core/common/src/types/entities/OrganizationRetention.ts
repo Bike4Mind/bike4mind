@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
+export const MAX_RETENTION_DAYS = 36500;
+
 export const retentionPolicySchema = z
   .object({
-    chats: z.number().int().min(1).max(36500).nullable(),
-    files: z.number().int().min(1).max(36500).nullable(),
-    media: z.number().int().min(1).max(36500).nullable(),
+    chats: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable(),
+    files: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable(),
+    media: z.number().int().min(1).max(MAX_RETENTION_DAYS).nullable(),
   })
   .strict();
 
