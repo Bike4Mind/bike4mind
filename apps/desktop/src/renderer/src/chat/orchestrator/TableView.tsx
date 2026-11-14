@@ -90,7 +90,8 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
       >
         <thead>
           <tr>
-            <th style={{ width: 96 }}>State</th>
+            {/* Wide enough for the longest chip, "Needs your decision" (AgentStateChip). */}
+            <th style={{ width: 152 }}>State</th>
             <SortHeader sortKey="agent" label="Agent" sort={sort} onSort={toggleSort} />
             <th>Now</th>
             <SortHeader sortKey="updated" label="Updated" sort={sort} onSort={toggleSort} />
