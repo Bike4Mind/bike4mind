@@ -43,7 +43,7 @@ export const IMAGE_PROVIDER_LABELS: Record<ImageProviderId, string> = {
   bfl: 'Black Forest Labs',
   xai: 'xAI',
   gemini: 'Google',
-  test: 'Test (non-production)',
+  test: 'Test',
   local: 'Local',
 };
 

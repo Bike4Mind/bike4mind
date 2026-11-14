@@ -3,7 +3,6 @@ import {
   getImageModelCatalogEntry,
   ImageJobRequestSchema,
   imageJobInputs,
-  isLocalImageModelId,
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
@@ -99,7 +98,7 @@ export async function createImageJobs(
   // Local checkpoints are discovered at runtime, so the local provider lists no models and serves every local id.
   const served =
     provider !== undefined &&
-    (isLocalImageModelId(parsed.data.model) || (provider.models as readonly string[]).includes(parsed.data.model)) &&
+    (caps.provider === 'local' || (provider.models as readonly string[]).includes(parsed.data.model)) &&
     resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
   if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);

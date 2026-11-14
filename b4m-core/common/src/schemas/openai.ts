@@ -5,6 +5,7 @@ import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 import { BFL_IMAGE_MODELS } from './bfl';
 import { XAI_IMAGE_MODELS } from './xai';
 import { GEMINI_IMAGE_MODELS } from './gemini';
+import { LOCAL_IMAGE_MODEL_PREFIX } from '../image/types';
 
 export const ChatCompletionCreateInputSchema = z.object({
   // We are flexible about model name, since we'll validate it against the model info
@@ -194,7 +195,7 @@ export const MAX_IMAGES_PER_REQUEST = 10;
 export const LocalImageModelIdSchema = z
   .string()
   .max(MAX_MODEL_ID_LENGTH)
-  .regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/);
+  .regex(new RegExp(`^${LOCAL_IMAGE_MODEL_PREFIX}(?=.*\\S)[\\w.:/ -]+$`));
 
 export const OpenAIImageGenerationInput = z.object({
   prompt: z.string(),

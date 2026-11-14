@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ImageModels } from '../models';
-import { IMAGE_JOB_INPUTS_MAX, IMAGE_JOB_PROMPT_MAX_CHARS, ImageJobRequestSchema, imageJobInputs } from './jobRequest';
+import {
+  IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX,
+  IMAGE_JOB_INPUTS_MAX,
+  IMAGE_JOB_PROMPT_MAX_CHARS,
+  ImageJobRequestSchema,
+  imageJobInputs,
+} from './jobRequest';
 
 const FILE_ID = 'a'.repeat(24);
 const valid = { model: ImageModels.GPT_IMAGE_1, mode: 'generate', prompt: 'a red bicycle' } as const;
@@ -93,6 +99,24 @@ describe('ImageJobRequestSchema job-only models and edit regions', () => {
     expect(ImageJobRequestSchema.safeParse({ ...valid, editRegions: [{ prompt: 'x', bbox: [0, 0, 1] }] }).success).toBe(
       false
     );
+  });
+});
+
+describe('editRegions payload bound', () => {
+  const region = { prompt: 'x', bbox: [0, 0, 0.5, 0.5] };
+  const request = (count: number) => ({
+    ...valid,
+    mode: 'edit',
+    editRegions: Array.from({ length: count }, () => region),
+  });
+
+  it('leaves the per-model cap to the catalog', () => {
+    expect(ImageJobRequestSchema.safeParse(request(9)).success).toBe(true);
+  });
+
+  it('bounds the payload', () => {
+    expect(ImageJobRequestSchema.safeParse(request(IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX)).success).toBe(true);
+    expect(ImageJobRequestSchema.safeParse(request(IMAGE_JOB_EDIT_REGIONS_PAYLOAD_MAX + 1)).success).toBe(false);
   });
 });
 

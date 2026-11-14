@@ -93,6 +93,12 @@ describe('LocalImageProvider', () => {
     expect(result).toMatchObject({ status: 'failed', retryable: true });
   });
 
+  it('does not retry a 5xx server response', async () => {
+    generateMock.mockRejectedValue(httpError(503));
+    const result = await provider.generate(request(), {}, context());
+    expect(result).toMatchObject({ status: 'failed', retryable: false });
+  });
+
   it('turns any other error into a non-retryable failure carrying its message', async () => {
     generateMock.mockRejectedValue(new Error('connection refused'));
     const result = await provider.generate(request(), {}, context());

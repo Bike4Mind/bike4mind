@@ -152,6 +152,37 @@ describe('createImageJobs', () => {
       expect(deps.enqueue).not.toHaveBeenCalled();
     });
 
+    it('refuses edit regions on a model that takes none, holding nothing and creating nothing', async () => {
+      const { deps, repository } = makeDeps();
+      const result = await run(deps, {
+        model: ImageModels.GPT_IMAGE_2,
+        mode: 'edit',
+        prompt: 'x',
+        inputs: [{ role: 'edit_source', fileId: SOURCE_ID }],
+        editRegions: [{ prompt: 'make it blue', bbox: [0.1, 0.1, 0.5, 0.5] }],
+      });
+      if (result.ok || result.code !== 'unsupported_by_model') throw new Error('expected unsupported_by_model');
+      expect(result.failures.map(failure => failure.code)).toContain('unsupported_edit_regions');
+      expect(holdCredits).not.toHaveBeenCalled();
+      expect(repository.jobs.size).toBe(0);
+    });
+
+    it.each([
+      ['an inverted bbox', [0.5, 0.1, 0.1, 0.5]],
+      ['a bbox outside 0..1', [0, 0, 1.5, 1]],
+    ])('refuses %s with 400 invalid_request', async (_label, bbox) => {
+      const { deps } = makeDeps();
+      const result = await run(deps, {
+        model: ImageModels.GPT_IMAGE_2,
+        mode: 'edit',
+        prompt: 'x',
+        inputs: [{ role: 'edit_source', fileId: SOURCE_ID }],
+        editRegions: [{ prompt: 'make it blue', bbox }],
+      });
+      expect(result).toMatchObject({ ok: false, status: 400, code: 'invalid_request' });
+      expect(holdCredits).not.toHaveBeenCalled();
+    });
+
     it('reports several failures at once', async () => {
       const { deps } = makeDeps();
       const result = await run(deps, {

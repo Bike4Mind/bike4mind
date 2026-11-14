@@ -6,6 +6,7 @@ import {
   isBflImageModel,
   isGPTImageModel,
   isGeminiImageModel,
+  isLocalImageModelId,
   TEST_IMAGE_MODEL,
   UnprocessableEntityError,
   // From common, NOT @bike4mind/utils: the utils barrel pulls fab-pipeline
@@ -51,7 +52,7 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
   // provider spend, so they are free. Guarding here keeps them out of the
   // UnsupportedImageModelError path, which credit validation surfaces as
   // "Model not supported" in ToolBuilder.onStart.
-  if (modelId.startsWith('local-image/')) {
+  if (isLocalImageModelId(modelId)) {
     return 0;
   }
   // The image job test provider renders a fixture: free, like the video and music test models.
