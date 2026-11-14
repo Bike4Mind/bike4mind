@@ -17,6 +17,7 @@ const OPTIMIZE_INPUT_MAX_CHARS = 16_000;
 
 // A model that reasons inside its output budget (GPT-5.x, Kimi K3, ...) spends that budget on reasoning
 // before any visible text, so the answer-sized cap alone comes back as `length` with an empty reply.
+// Sized for the lowest effort; retune from the `stopReason: length` error log if long inputs still end empty.
 const REASONING_RESERVE_TOKENS = 2_000;
 
 export function optimizeCompletionOptions(

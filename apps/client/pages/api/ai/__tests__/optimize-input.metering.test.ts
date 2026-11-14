@@ -249,6 +249,18 @@ describe('POST /api/ai/optimize-input metering', () => {
     expect((wrapped as Error).cause).toBe(providerError);
   });
 
+  it('logs a null stop reason when the completion callback receives no info', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+      await cb(['']);
+    });
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(500);
+    const [, fields] = res.logger.error.mock.calls[0];
+    expect(fields).toMatchObject({ errorName: 'EmptyOptimizationError', stopReason: null });
+  });
+
   it('sends the answer-sized budget to a model that does not reason', async () => {
     await call();
 
@@ -265,6 +277,21 @@ describe('optimizeCompletionOptions', () => {
     );
 
     expect(options).toEqual({ maxTokens: 134 + 2_000, temperature: 0.3, reasoningEffort: 'low' });
+  });
+
+  it('reserves headroom but sends no effort to a reasoning model that lists none', () => {
+    const noEfforts = { id: 'adaptive-model', backend: ModelBackend.Gemini, thinkingStyle: 'adaptive' } as ModelInfo;
+
+    const options = optimizeCompletionOptions(noEfforts, undefined);
+
+    expect(options).toEqual({ maxTokens: 134 + 2_000, temperature: 0.3 });
+    expect(options).not.toHaveProperty('reasoningEffort');
+  });
+
+  it('adds the reserve on top of the maxLength-sized answer cap for a reasoning model', () => {
+    const luna = { id: ChatModels.GPT5_6_LUNA, backend: ModelBackend.OpenAI } as ModelInfo;
+
+    expect(optimizeCompletionOptions(luna, 2_400).maxTokens).toBe(800 + 2_000);
   });
 
   it('keeps the answer cap bounded by maxLength for a plain model', () => {
