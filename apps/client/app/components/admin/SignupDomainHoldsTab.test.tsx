@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,10 +86,21 @@ function renderTab() {
   return invalidate;
 }
 
-async function releaseThroughDialog(domain: string) {
-  fireEvent.click(await screen.findByTestId(`signup-domain-release-${domain}`));
-  fireEvent.click(await screen.findByTestId('signup-domain-release-dialog-confirm-btn'));
-}
+const openMenu = async (domain: string) =>
+  fireEvent.click(await screen.findByTestId(`signup-domain-actions-${domain}`));
+const confirmDialog = async () => {
+  fireEvent.click(await screen.findByTestId('signup-domain-decision-dialog-reason-input-preset-0'));
+  fireEvent.click(screen.getByTestId('signup-domain-decision-dialog-confirm-btn'));
+};
+const decideThroughDialog = async (domain: string, action: 'release' | 'confirm') => {
+  await openMenu(domain);
+  fireEvent.click(screen.getByTestId(`signup-domain-${action}-${domain}`));
+  await confirmDialog();
+};
+const expectDisabledItem = (testId: string) =>
+  expect(screen.getByTestId(testId)).toHaveAttribute('aria-disabled', 'true');
+const expectEnabledItem = (testId: string) =>
+  expect(screen.getByTestId(testId)).not.toHaveAttribute('aria-disabled', 'true');
 
 const listParams = (overrides: Record<string, unknown> = {}) => ({
   params: { page: 1, status: 'pending', includeOlder: 'false', ...overrides },
@@ -104,6 +115,16 @@ beforeEach(() => {
 });
 
 describe('SignupDomainHoldsTab', () => {
+  it('reports a failed list request for both tables instead of claiming the source refresh has not run', async () => {
+    getMock.mockRejectedValue(new Error('Holds unavailable'));
+    renderTab();
+
+    const errors = await screen.findAllByTestId('admin-error-state');
+    expect(errors).toHaveLength(2);
+    for (const error of errors) expect(error).toHaveTextContent('Holds unavailable');
+    expect(screen.queryByText('The disposable list refresh has not run yet')).not.toBeInTheDocument();
+  });
+
   it('marks a hold the disposable list rule confirmed and keeps Release available', async () => {
     getMock.mockResolvedValue({
       data: {
@@ -123,8 +144,9 @@ describe('SignupDomainHoldsTab', () => {
       'Auto-confirmed by the disposable list rule'
     );
     expect(screen.queryByTestId('signup-domain-auto-decision-alpha.test')).not.toBeInTheDocument();
-    expect(screen.getByTestId('signup-domain-release-beta.test')).toBeEnabled();
-    expect(screen.getByTestId('signup-domain-confirm-beta.test')).toBeDisabled();
+    await openMenu('beta.test');
+    expectEnabledItem('signup-domain-release-beta.test');
+    expectDisabledItem('signup-domain-confirm-beta.test');
   });
   it('shows the advisory verdict, its auto-confirmation and a failed assessment', async () => {
     const young = 'young-domain (<30 days)';
@@ -184,7 +206,6 @@ describe('SignupDomainHoldsTab', () => {
       'Advisory verdict: insufficient evidence (60% confidence)'
     );
     expect(screen.queryByTestId('signup-domain-auto-decision-alpha.test')).not.toBeInTheDocument();
-    expect(screen.getByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
     expect(screen.getByTestId('signup-domain-assessment-gamma.test')).toHaveTextContent(
       'Advisory assessment failed (provider error, attempt 2)'
     );
@@ -223,10 +244,11 @@ describe('SignupDomainHoldsTab', () => {
     });
     postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
     renderTab();
-    expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
-    expect(screen.getByTestId('signup-domain-release-alpha.test')).toHaveTextContent('Release');
-    expect(screen.getByTestId('signup-domain-release-alpha.test')).not.toHaveTextContent('Retry');
-    await releaseThroughDialog('alpha.test');
+    await openMenu('alpha.test');
+    expectEnabledItem('signup-domain-confirm-alpha.test');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toHaveTextContent('Release hold');
+    fireEvent.click(screen.getByTestId('signup-domain-release-alpha.test'));
+    await confirmDialog();
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(endpoint, {
         domain: 'alpha.test',
@@ -250,20 +272,27 @@ describe('SignupDomainHoldsTab', () => {
     });
     postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null } });
     renderTab();
-    fireEvent.click(await screen.findByTestId('signup-domain-retry-alpha.test'));
+    await openMenu('alpha.test');
+    fireEvent.click(screen.getByTestId('signup-domain-retry-alpha.test'));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'release' }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('signup-domain-decision-dialog')).not.toBeInTheDocument();
   });
   it('offers no auto-release retry on a pending hold', async () => {
     renderTab();
-    expect(await screen.findByTestId('signup-domain-release-alpha.test')).toBeInTheDocument();
+    await openMenu('alpha.test');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeInTheDocument();
     expect(screen.queryByTestId('signup-domain-retry-alpha.test')).not.toBeInTheDocument();
   });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
-    expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
-    expect(screen.getByTestId('signup-domain-confirm-beta.test')).toBeDisabled();
-    expect(screen.getByTestId('signup-domain-confirm-gamma.test')).toBeDisabled();
+    await openMenu('alpha.test');
+    expectEnabledItem('signup-domain-confirm-alpha.test');
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await openMenu('beta.test');
+    expectDisabledItem('signup-domain-confirm-beta.test');
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await openMenu('gamma.test');
+    expectDisabledItem('signup-domain-confirm-gamma.test');
     expect(screen.getByTestId('signup-domain-release-gamma.test')).toHaveTextContent('Retry pending grants');
     expect(screen.queryByTestId('admin-table-page-size')).not.toBeInTheDocument();
     expect(screen.queryByTestId('admin-table-next-btn')).not.toBeInTheDocument();
@@ -285,26 +314,99 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(screen.getByTestId('signup-domain-holds-next')).toBeEnabled());
     fireEvent.click(screen.getByTestId('signup-domain-holds-next'));
     await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(2, endpoint, listParams({ page: 2 })));
-    fireEvent.click(await screen.findByTestId('signup-domain-confirm-alpha.test'));
+    await decideThroughDialog('alpha.test', 'confirm');
     await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(3, endpoint, listParams({ page: 2 })));
     await waitFor(() => expect(getMock).toHaveBeenNthCalledWith(4, endpoint, listParams()));
     await waitFor(() => expect(screen.getByTestId('signup-domain-holds-previous')).toBeDisabled());
   });
 
-  it('sends one decision for a double-click', async () => {
+  it('sends one decision for two connected Retry clicks before React re-renders', async () => {
+    const pendingDecision = Promise.withResolvers<unknown>();
+    postMock.mockReturnValue(pendingDecision.promise);
+    renderTab();
+    await openMenu('gamma.test');
+    const retry = screen.getByTestId('signup-domain-release-gamma.test');
+    expect(retry).toHaveTextContent('Retry pending grants');
+    expect(retry).toBeEnabled();
+    expect(retry.isConnected).toBe(true);
+    try {
+      act(() => {
+        fireEvent.click(retry);
+        expect(retry.isConnected).toBe(true);
+        fireEvent.click(retry);
+      });
+      await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+      expect(postMock).toHaveBeenCalledWith(endpoint, {
+        domain: 'gamma.test',
+        action: 'release',
+        afterUserId: undefined,
+      });
+      expect(screen.queryByText(/Released 0 credits/)).not.toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        pendingDecision.resolve({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
+      });
+    }
+    expect(await screen.findByText(/Released 0 credits/)).toBeInTheDocument();
+  });
+
+  it('does not release until the dialog is confirmed', async () => {
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 5, remaining: 0, nextCursor: null } });
+    renderTab();
+    await openMenu('alpha.test');
+    fireEvent.click(screen.getByTestId('signup-domain-release-alpha.test'));
+    expect(await screen.findByTestId('signup-domain-decision-dialog')).toBeInTheDocument();
+    expect(postMock).not.toHaveBeenCalled();
+    await confirmDialog();
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+    expect(postMock).toHaveBeenCalledWith(endpoint, {
+      domain: 'alpha.test',
+      action: 'release',
+      afterUserId: undefined,
+      overrideAutoDecision: true,
+    });
+  });
+
+  it('confirms a hold only through the dialog', async () => {
     postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
     renderTab();
-    const confirm = await screen.findByTestId('signup-domain-confirm-alpha.test');
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
+    await decideThroughDialog('alpha.test', 'confirm');
     await waitFor(() => expect(screen.getByText('Domain confirmed; pending credits remain held.')).toBeInTheDocument());
     expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'confirm' });
+  });
+
+  it('offers a way out of an empty Pending view', async () => {
+    getMock.mockResolvedValue({ data: { data: [], total: 0 } });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-holds-empty')).toHaveTextContent(
+      'No holds are waiting for a decision.'
+    );
+    fireEvent.click(screen.getByTestId('signup-domain-holds-empty-action'));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status: 'all' })));
+  });
+
+  it('clears the reason filter from the empty state action', async () => {
+    router.set({ holdStatus: 'all', holdReason: 'young-domain' });
+    getMock.mockResolvedValue({ data: { data: [], total: 0 } });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('signup-domain-holds-empty-action'));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status: 'all' })));
+    expect(router.get().holdReason).toBeFalsy();
+  });
+
+  it('explains why Confirm hold is unavailable on a settled hold', async () => {
+    renderTab();
+    await openMenu('gamma.test');
+    expect(screen.getByTestId('signup-domain-confirm-hint-gamma.test')).toHaveTextContent(
+      'Only pending or auto-released holds'
+    );
   });
 
   it('refreshes pending exposure when a domain release fails after possible payouts', async () => {
     postMock.mockRejectedValue(new Error('Request interrupted'));
     const invalidate = renderTab();
-    await releaseThroughDialog('alpha.test');
+    await decideThroughDialog('alpha.test', 'release');
     expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
   });
@@ -319,13 +421,17 @@ describe('SignupDomainHoldsTab', () => {
       })
       .mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
     const invalidate = renderTab();
-    await releaseThroughDialog('alpha.test');
-    await waitFor(() => expect(screen.getByTestId('signup-domain-release-beta.test')).toBeEnabled());
+    await decideThroughDialog('alpha.test', 'release');
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
-    await releaseThroughDialog('beta.test');
+    await decideThroughDialog('beta.test', 'release');
     await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeEnabled());
-    await releaseThroughDialog('alpha.test');
+    await openMenu('gamma.test');
+    fireEvent.click(await screen.findByTestId('signup-domain-release-gamma.test'));
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(3));
+    await openMenu('alpha.test');
+    fireEvent.click(await screen.findByTestId('signup-domain-release-alpha.test'));
+    await confirmDialog();
     await waitFor(() =>
       expect(postMock).toHaveBeenLastCalledWith(endpoint, {
         domain: 'alpha.test',
@@ -397,22 +503,19 @@ describe('SignupDomainHoldsTab', () => {
     });
     renderTab();
     expect(await screen.findByTestId('signup-domain-aged-alpha.test')).toHaveTextContent(
-      'Domain now past the young-domain age (registered'
+      'Domain now agedPast the young-domain threshold (registered'
     );
     expect(screen.getByTestId('signup-domain-aged-alpha.test')).not.toHaveTextContent('Release');
-    expect(screen.getByTestId('signup-domain-release-alpha.test')).toBeEnabled();
     expect(screen.queryByTestId('signup-domain-aged-beta.test')).not.toBeInTheDocument();
     expect(screen.queryByTestId('signup-domain-aged-delta.test')).not.toBeInTheDocument();
   });
 
   it('says that decisions only touch free signup credits and that Release is permanent', async () => {
     renderTab();
-    const toggle = await screen.findByTestId('signup-domain-holds-help-toggle');
-    expect(screen.queryByTestId('signup-domain-holds-help')).not.toBeInTheDocument();
-    fireEvent.click(toggle);
-    const tab = screen.getByTestId('signup-domain-holds-help');
-    expect(tab).toHaveTextContent('Confirm and Release only change free signup credits, never the account itself.');
-    expect(tab).toHaveTextContent('exempts the domain from holds permanently; it cannot be re-blocked');
+    fireEvent.mouseEnter(await screen.findByTestId('signup-domain-holds-help-btn'));
+    const help = await screen.findByRole('tooltip');
+    expect(help).toHaveTextContent('Confirm and Release only change free signup credits, never the account itself.');
+    expect(help).toHaveTextContent('exempts the domain from holds permanently; it cannot be re-blocked');
   });
 
   it('hides the aged caption when the latest assessment judged abuse', async () => {
@@ -473,47 +576,36 @@ describe('SignupDomainHoldsTab', () => {
     expect(link).toHaveAttribute('rel', 'noopener noreferrer nofollow');
   });
 
-  it('asks before an irreversible release and sends nothing on cancel', async () => {
-    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 1000, remaining: 0, nextCursor: null } });
+  it('sends nothing when the release dialog is cancelled', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('signup-domain-release-alpha.test'));
-    const body = await screen.findByTestId('signup-domain-release-dialog-body');
-    expect(body).toHaveTextContent('alpha.test');
-    expect(body).toHaveTextContent('every verified account still waiting');
-    expect(body).toHaveTextContent('cannot be undone');
-    fireEvent.click(screen.getByTestId('signup-domain-release-dialog-cancel-btn'));
-    await waitFor(() => expect(screen.queryByTestId('signup-domain-release-dialog-body')).not.toBeInTheDocument());
-    expect(postMock).not.toHaveBeenCalled();
-    await releaseThroughDialog('alpha.test');
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith(endpoint, {
-        domain: 'alpha.test',
-        action: 'release',
-        overrideAutoDecision: true,
-      })
+    await openMenu('alpha.test');
+    fireEvent.click(screen.getByTestId('signup-domain-release-alpha.test'));
+    expect(await screen.findByTestId('signup-domain-decision-dialog')).toHaveTextContent(
+      'exempt the domain from holds'
     );
-    expect(postMock.mock.calls[0][1]).not.toHaveProperty('signupCount');
+    fireEvent.click(screen.getByTestId('signup-domain-decision-dialog-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('signup-domain-decision-dialog')).not.toBeInTheDocument());
+    expect(postMock).not.toHaveBeenCalled();
   });
 
-  it('confirms in one click without a dialog', async () => {
+  it('confirms a hold only after the dialog', async () => {
     postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
     renderTab();
-    fireEvent.click(await screen.findByTestId('signup-domain-confirm-alpha.test'));
+    await decideThroughDialog('alpha.test', 'confirm');
     await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'confirm' }));
-    expect(screen.queryByTestId('signup-domain-release-dialog')).not.toBeInTheDocument();
   });
 
   it('refreshes the sidebar action counts after a decision', async () => {
     postMock.mockResolvedValue({ data: { status: 'blocked', creditsReleased: 0, remaining: 0, nextCursor: null } });
     const invalidate = renderTab();
-    fireEvent.click(await screen.findByTestId('signup-domain-confirm-alpha.test'));
+    await decideThroughDialog('alpha.test', 'confirm');
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: adminActionCountsQueryKey }));
   });
 
   it('drops the retry guidance once a release has nothing left', async () => {
     postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 1000, remaining: 0, nextCursor: null } });
     renderTab();
-    await releaseThroughDialog('alpha.test');
+    await decideThroughDialog('alpha.test', 'release');
     expect(await screen.findByTestId('signup-domain-holds-release-result')).toHaveTextContent(
       /^Released 1,000 credits\.$/
     );
@@ -524,9 +616,17 @@ describe('SignupDomainHoldsTab', () => {
       data: { status: 'released', creditsReleased: 5, remaining: 2, nextCursor: 'cursor' },
     });
     renderTab();
-    await releaseThroughDialog('alpha.test');
+    await decideThroughDialog('alpha.test', 'release');
     expect(await screen.findByTestId('signup-domain-holds-release-result')).toHaveTextContent(
       'Released 5 credits. 2 pending grants remain'
     );
+  });
+
+  it('disables Confirm and Release for a delegate without the moderation and credit permissions', async () => {
+    useUser.setState({ currentUser: { id: 'd-1', isAdmin: false, adminPermissions: ['support:read'] } as never });
+    renderTab();
+    await openMenu('alpha.test');
+    expectDisabledItem('signup-domain-confirm-alpha.test');
+    expectDisabledItem('signup-domain-release-alpha.test');
   });
 });

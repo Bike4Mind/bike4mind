@@ -1,5 +1,21 @@
 import { useRef, useState } from 'react';
-import { Alert, Button, DialogContent, Link, Stack, Switch, Typography } from '@mui/joy';
+import {
+  Alert,
+  Box,
+  Button,
+  Dropdown,
+  IconButton,
+  Link,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Stack,
+  Switch,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import { MoreHorizontal } from 'lucide-react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS,
@@ -16,15 +32,21 @@ import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGran
 import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
-import { DataTable } from './shared/DataTable';
-import { AdminPermissionAction } from './shared/MissingPermission';
-import { AdminPageHeader } from './shared/AdminPageHeader';
-import { AdminDialog, AdminDialogFooter } from './shared/AdminDialog';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  FilterBar,
+  StatusChip,
+  ViewTabs,
+  useAdminListUrlState,
+} from './shared';
+import { useMissingAdminPermission } from './shared/MissingPermission';
 import { RelativeTime } from './shared/EntityHeader';
-import { StatusChip } from './shared/StatusChip';
-import { FilterBar } from './shared/FilterBar';
-import { ViewTabs } from './shared/ViewTabs';
-import { useAdminListUrlState } from './shared/useAdminListUrlState';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 
 const QUERY_KEY = ['signup-domain-holds'];
@@ -43,6 +65,11 @@ const REASON_LABELS: Record<SignupDomainHoldReasonFilter, string> = {
   'disposable-list': 'Disposable list',
   'burner-mx': 'Disposable mail provider',
   'signup-burst': 'Signup burst',
+};
+const HOLD_STATUS_CHIPS: Record<SignupDomainReview['status'], { label: string; tone: AdminStatusTone }> = {
+  held_pending_review: { label: 'Pending review', tone: 'warn' },
+  blocked: { label: 'Blocked', tone: 'bad' },
+  released: { label: 'Released', tone: 'good' },
 };
 const EMPTY_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
   pending: 'No holds are waiting for a decision.',
@@ -143,8 +170,6 @@ export default function SignupDomainHoldsTab() {
   const [cursors, setCursors] = useState<Record<string, string | undefined>>({});
   // isPending only flips after a re-render, so a double-click would otherwise send two decisions.
   const decisionInFlight = useRef(false);
-  const [releaseTarget, setReleaseTarget] = useState<SignupDomainReview | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: [...QUERY_KEY, status, reason, includeOlder, page],
@@ -174,51 +199,79 @@ export default function SignupDomainHoldsTab() {
       ]);
     },
   });
-  const decide = (input: DecisionInput) => {
+  // A failure shows in the Alert below (decision.error), so the promise never rejects.
+  const decide = async (input: DecisionInput) => {
     if (decisionInFlight.current) return;
     decisionInFlight.current = true;
-    decision.mutate(input);
+    try {
+      await decision.mutateAsync(input);
+    } catch {
+      /* reported through decision.error */
+    }
   };
+  const release = (review: SignupDomainReview, overrideAutoDecision?: boolean) =>
+    decide({
+      domain: review.domain,
+      action: 'release',
+      afterUserId: cursors[review.domain],
+      ...(overrideAutoDecision ? { overrideAutoDecision } : {}),
+    });
+  const missingModerate = useMissingAdminPermission('users:moderate');
+  const missingRelease = useMissingAdminPermission({ allOf: ['users:moderate', 'credits:adjust'] });
+  // Release and Confirm change what free credits pay out, so they ask first; Retry re-posts a decided release.
+  const [reviewing, setReviewing] = useState<{ review: SignupDomainReview; action: 'confirm' | 'release' } | null>(
+    null
+  );
+  const openAll = !reason && status === 'all';
   return (
-    <Stack spacing={2} data-testid="signup-domain-holds-tab">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="signup-domain-holds-tab">
       <AdminPageHeader
         title="Signup domain holds"
         count={query.data?.total}
-        description="New accounts from a risky domain get their free signup credits held until you confirm or release the domain."
+        description={
+          <>
+            Free signup credits held from domains that look risky. Confirm keeps them held; Release pays them out.
+            <Tooltip
+              variant="outlined"
+              placement="bottom-start"
+              sx={{ maxWidth: 480 }}
+              title={
+                <Typography level="body-sm" component="div">
+                  A hold defers the free signup credits of new accounts from a domain that looks risky: a patterned
+                  signup burst, a domain only on the aggregate disposable list, a freshly registered domain, or mail run
+                  by a disposable provider. Confirm and Release only change free signup credits, never the account
+                  itself. Confirm keeps pending credits held and future signups from the domain get none; it can still
+                  be released later. Release pays out the held grants and exempts the domain from holds permanently; it
+                  cannot be re-blocked. Granted balances are never changed. Configure detection in Users settings. Holds
+                  from domains only on the aggregate disposable list are confirmed automatically on stages that run
+                  scheduled jobs unless that is turned off in Users settings; each is recorded in the Admin Audit Log as
+                  a system action and can still be released here. When the advisory assessment is on, a model judges
+                  young-domain holds from counts and flags; a confident abuse verdict confirms the hold the same way. A
+                  confident legitimate verdict releases the hold only when auto-release is turned on and the hold passes
+                  every guard (a real site, Google or Microsoft mail, no disposable-mail wording, known residential
+                  networks, few waiting accounts), up to a daily cap; each auto-release is recorded in the Admin Audit
+                  Log and pays only the accounts it judged. Its domain stays watched: a burst, or a later signup while
+                  the domain is still young, puts it back in this queue. Retry pending grants on an auto-released row
+                  pays only those judged accounts; Release takes the release over and exempts the domain for good. Any
+                  other verdict leaves it for you. Young-domain holds are rechecked, and one whose domain has since
+                  passed the age threshold is marked. Settled holds older than {query.data?.settledVisibleDays ?? 90}{' '}
+                  days are hidden, never deleted; turn on Include older to see them.
+                </Typography>
+              }
+            >
+              <IconButton
+                size="sm"
+                variant="plain"
+                aria-label="About signup domain holds"
+                data-testid="signup-domain-holds-help-btn"
+                sx={{ '--IconButton-size': '24px', ml: 0.5, verticalAlign: 'middle' }}
+              >
+                <HelpOutlineIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+          </>
+        }
       />
-      <Stack spacing={1} alignItems="flex-start">
-        <Button
-          size="sm"
-          variant="plain"
-          aria-expanded={showHelp}
-          data-testid="signup-domain-holds-help-toggle"
-          onClick={() => setShowHelp(current => !current)}
-        >
-          How holds work
-        </Button>
-        {showHelp && (
-          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="signup-domain-holds-help">
-            A hold defers the free signup credits of new accounts from a domain that looks risky: a patterned signup
-            burst, a domain only on the aggregate disposable list, a freshly registered domain, or mail run by a
-            disposable provider. Confirm and Release only change free signup credits, never the account itself. Confirm
-            keeps pending credits held and future signups from the domain get none; it can still be released later.
-            Release pays out the held grants and exempts the domain from holds permanently; it cannot be re-blocked.
-            Granted balances are never changed. Configure detection in Users settings. Holds from domains only on the
-            aggregate disposable list are confirmed automatically on stages that run scheduled jobs unless that is
-            turned off in Users settings; each is recorded in the Admin Audit Log as a system action and can still be
-            released here. When the advisory assessment is on, a model judges young-domain holds from counts and flags;
-            a confident abuse verdict confirms the hold the same way. A confident legitimate verdict releases the hold
-            only when auto-release is turned on and the hold passes every guard (a real site, Google or Microsoft mail,
-            no disposable-mail wording, known residential networks, few waiting accounts), up to a daily cap; each
-            auto-release is recorded in the Admin Audit Log and pays only the accounts it judged. Its domain stays
-            watched: a burst, or a later signup while the domain is still young, puts it back in this queue. Retry
-            pending grants on an auto-released row pays only those judged accounts; Release takes the release over and
-            exempts the domain for good. Any other verdict leaves it for you. Young-domain holds are rechecked, and one
-            whose domain has since passed the age threshold is marked. Settled holds older than{' '}
-            {query.data?.settledVisibleDays ?? 90} days are hidden, never deleted; turn on Include older to see them.
-          </Typography>
-        )}
-      </Stack>
       <ViewTabs
         aria-label="Hold status"
         data-testid="signup-domain-holds-status"
@@ -271,22 +324,6 @@ export default function SignupDomainHoldsTab() {
           {releaseMessage(decision.data)}
         </Alert>
       )}
-      <Stack direction="row" spacing={1}>
-        <Button
-          data-testid="signup-domain-holds-previous"
-          disabled={page === 1 || query.isPending}
-          onClick={() => setPage(current => current - 1)}
-        >
-          Previous
-        </Button>
-        <Button
-          data-testid="signup-domain-holds-next"
-          disabled={query.isPending || page * PAGE_SIZE >= (query.data?.total ?? 0)}
-          onClick={() => setPage(current => current + 1)}
-        >
-          Next
-        </Button>
-      </Stack>
       <DataTable<SignupDomainReview>
         rows={query.data?.data ?? []}
         getRowId={review => review.domain}
@@ -297,7 +334,95 @@ export default function SignupDomainHoldsTab() {
           void query.refetch();
         }}
         pagination={false}
-        empty={<Typography data-testid="signup-domain-holds-empty">{EMPTY_LABELS[status]}</Typography>}
+        testId="signup-domain-holds-table"
+        minWidth="56rem"
+        empty={
+          <Box data-testid="signup-domain-holds-empty">
+            <EmptyState
+              title={EMPTY_LABELS[status]}
+              action={
+                openAll ? (
+                  !includeOlder && (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      onClick={() => setFilters({ older: 'true' })}
+                      data-testid="signup-domain-holds-empty-action"
+                    >
+                      Include older settled holds
+                    </Button>
+                  )
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    onClick={() => setFilters({ status: 'all', reason: '' })}
+                    data-testid="signup-domain-holds-empty-action"
+                  >
+                    Show all holds
+                  </Button>
+                )
+              }
+            />
+          </Box>
+        }
+        rowActions={review => (
+          <Dropdown>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{ root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${review.domain}` } }}
+              data-testid={`signup-domain-actions-${review.domain}`}
+            >
+              <MoreHorizontal size={16} />
+            </MenuButton>
+            <Menu placement="bottom-end">
+              {isAutoReleased(review) && (
+                // Pays only the accounts the automated release judged, within budget, and keeps its decision.
+                <MenuItem
+                  disabled={!!missingRelease || decision.isPending}
+                  data-testid={`signup-domain-retry-${review.domain}`}
+                  onClick={() => void decide({ domain: review.domain, action: 'release' })}
+                >
+                  Retry pending grants
+                </MenuItem>
+              )}
+              {isAdminReleased(review) ? (
+                <MenuItem
+                  disabled={!!missingRelease || decision.isPending}
+                  data-testid={`signup-domain-release-${review.domain}`}
+                  onClick={() => void release(review)}
+                >
+                  Retry pending grants
+                </MenuItem>
+              ) : (
+                <MenuItem
+                  disabled={!!missingRelease || decision.isPending}
+                  data-testid={`signup-domain-release-${review.domain}`}
+                  onClick={() => setReviewing({ review, action: 'release' })}
+                >
+                  Release hold
+                </MenuItem>
+              )}
+              <MenuItem
+                color="danger"
+                disabled={!!missingModerate || decision.isPending || !canConfirm(review)}
+                data-testid={`signup-domain-confirm-${review.domain}`}
+                onClick={() => setReviewing({ review, action: 'confirm' })}
+              >
+                <div>
+                  Confirm hold
+                  {(missingModerate || !canConfirm(review)) && (
+                    <Typography level="body-xs" data-testid={`signup-domain-confirm-hint-${review.domain}`}>
+                      {missingModerate ?? 'Only pending or auto-released holds can be confirmed'}
+                    </Typography>
+                  )}
+                </div>
+              </MenuItem>
+            </Menu>
+          </Dropdown>
+        )}
         columns={[
           {
             id: 'domain',
@@ -332,7 +457,10 @@ export default function SignupDomainHoldsTab() {
             label: 'Status',
             render: review => (
               <>
-                {review.status}
+                <StatusChip
+                  tone={HOLD_STATUS_CHIPS[review.status].tone}
+                  label={HOLD_STATUS_CHIPS[review.status].label}
+                />
                 {review.autoDecision && (
                   <Typography level="body-sm" data-testid={`signup-domain-auto-decision-${review.domain}`}>
                     {autoDecisionLabel(review.status, review.autoDecision.policy)}{' '}
@@ -342,13 +470,18 @@ export default function SignupDomainHoldsTab() {
                 {review.status === 'held_pending_review' &&
                   review.domainAgedAt &&
                   !isJudgedAbuse(review.assessment) && (
-                    <Typography level="body-sm" data-testid={`signup-domain-aged-${review.domain}`}>
-                      Domain now past the young-domain age
-                      {review.domainRegisteredAt
-                        ? ` (registered ${new Date(review.domainRegisteredAt).toLocaleDateString()})`
-                        : ''}
-                      .
-                    </Typography>
+                    <Stack gap={0.5} sx={{ mt: 0.5 }} data-testid={`signup-domain-aged-${review.domain}`}>
+                      <Box>
+                        <StatusChip tone="neutral" label="Domain now aged" />
+                      </Box>
+                      <Typography level="body-sm">
+                        Past the young-domain threshold
+                        {review.domainRegisteredAt
+                          ? ` (registered ${new Date(review.domainRegisteredAt).toLocaleDateString()})`
+                          : ''}
+                        .
+                      </Typography>
+                    </Stack>
                   )}
                 {review.assessment && (
                   <Typography level="body-sm" data-testid={`signup-domain-assessment-${review.domain}`}>
@@ -358,113 +491,58 @@ export default function SignupDomainHoldsTab() {
               </>
             ),
           },
-          {
-            id: 'review',
-            label: 'Review',
-            render: review => (
-              <Stack direction="row" spacing={1}>
-                <AdminPermissionAction requirement="users:moderate">
-                  {missing => (
-                    <Button
-                      size="sm"
-                      color="danger"
-                      data-testid={`signup-domain-confirm-${review.domain}`}
-                      disabled={missing || decision.isPending || !canConfirm(review)}
-                      onClick={() => decide({ domain: review.domain, action: 'confirm' })}
-                    >
-                      Confirm
-                    </Button>
-                  )}
-                </AdminPermissionAction>
-                {isAutoReleased(review) && (
-                  // Pays only the accounts the automated release judged, within budget, and keeps its decision.
-                  <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
-                    {missing => (
-                      <Button
-                        size="sm"
-                        variant="outlined"
-                        data-testid={`signup-domain-retry-${review.domain}`}
-                        disabled={missing || decision.isPending}
-                        onClick={() => decide({ domain: review.domain, action: 'release' })}
-                      >
-                        Retry pending grants
-                      </Button>
-                    )}
-                  </AdminPermissionAction>
-                )}
-                <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
-                  {missing => (
-                    <Button
-                      size="sm"
-                      color={review.status === 'held_pending_review' && review.domainAgedAt ? 'success' : 'primary'}
-                      data-testid={`signup-domain-release-${review.domain}`}
-                      disabled={missing || decision.isPending}
-                      onClick={() =>
-                        isAdminReleased(review)
-                          ? decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
-                          : setReleaseTarget(review)
-                      }
-                    >
-                      {isAdminReleased(review) ? 'Retry pending grants' : 'Release'}
-                    </Button>
-                  )}
-                </AdminPermissionAction>
-              </Stack>
-            ),
-          },
         ]}
       />
-      <AdminDialog
-        open={releaseTarget !== null}
-        onClose={() => setReleaseTarget(null)}
-        title="Release held signup credits"
-        role="alertdialog"
-        data-testid="signup-domain-release-dialog"
-      >
-        {releaseTarget && (
-          <>
-            <DialogContent data-testid="signup-domain-release-dialog-body">
-              Release {releaseTarget.domain}? This pays out the held free signup credits of every verified account still
-              waiting on this domain and exempts the domain from holds permanently. This cannot be undone.
-            </DialogContent>
-            <AdminDialogFooter>
-              <Button
-                variant="plain"
-                data-testid="signup-domain-release-dialog-cancel-btn"
-                onClick={() => setReleaseTarget(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                data-testid="signup-domain-release-dialog-confirm-btn"
-                onClick={() => {
-                  decide({
-                    domain: releaseTarget.domain,
-                    action: 'release',
-                    afterUserId: cursors[releaseTarget.domain],
-                    overrideAutoDecision: true,
-                  });
-                  setReleaseTarget(null);
-                }}
-              >
-                Release {releaseTarget.domain}
-              </Button>
-            </AdminDialogFooter>
-          </>
-        )}
-      </AdminDialog>
-      <Typography level="title-md">Disposable list sources</Typography>
+      <Stack direction="row" gap={1} justifyContent="flex-end">
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          data-testid="signup-domain-holds-previous"
+          disabled={page === 1 || query.isPending}
+          onClick={() => setPage(current => current - 1)}
+        >
+          Previous
+        </Button>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          data-testid="signup-domain-holds-next"
+          disabled={query.isPending || page * PAGE_SIZE >= (query.data?.total ?? 0)}
+          onClick={() => setPage(current => current + 1)}
+        >
+          Next
+        </Button>
+      </Stack>
+      <AdminPageHeader level="section" title="Disposable list sources" />
       <DataTable<DisposableSourceStatus>
         rows={query.data?.sources ?? []}
         getRowId={source => source.source}
         label="Disposable list sources"
         testId="signup-domain-holds-sources"
         loading={query.isPending}
+        error={query.error ? getErrorMessage(query.error) : undefined}
         onRetry={() => {
           void query.refetch();
         }}
         pagination={false}
-        empty={<Typography>The disposable list refresh has not run yet.</Typography>}
+        empty={
+          <EmptyState
+            title="The disposable list refresh has not run yet"
+            action={
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => void query.refetch()}
+                data-testid="signup-domain-holds-sources-retry-btn"
+              >
+                Retry
+              </Button>
+            }
+          />
+        }
         columns={[
           { id: 'source', label: 'Source', render: source => source.source },
           { id: 'count', label: 'Domains', numeric: true, render: source => source.count },
@@ -484,6 +562,39 @@ export default function SignupDomainHoldsTab() {
         ]}
       />
       {query.data && <Typography level="body-sm">Cached domain lookups: {query.data.intelCacheSize}</Typography>}
+      <ActionDialog
+        open={!!reviewing}
+        onClose={() => setReviewing(null)}
+        title={reviewing?.action === 'confirm' ? 'Confirm hold' : 'Release hold'}
+        tone={reviewing?.action === 'confirm' ? 'danger' : 'neutral'}
+        description={
+          reviewing?.action === 'confirm' ? (
+            <>
+              Keep the pending signup credits for <b>{reviewing.review.domain}</b> held and give future signups from the
+              domain none. It can still be released later.
+            </>
+          ) : (
+            <>
+              Pay out the held signup credits for <b>{reviewing?.review.domain}</b> and exempt the domain from holds
+              permanently. It cannot be re-blocked.
+            </>
+          )
+        }
+        reasonPresets={
+          reviewing?.action === 'confirm'
+            ? ADMIN_REASON_PRESETS.signupDomainHoldConfirm
+            : ADMIN_REASON_PRESETS.signupDomainHoldRelease
+        }
+        reasonAudited={false}
+        confirmLabel={reviewing?.action === 'confirm' ? 'Confirm hold' : 'Release hold'}
+        onConfirm={async () => {
+          if (!reviewing) return;
+          const { review, action } = reviewing;
+          setReviewing(null);
+          await (action === 'release' ? release(review, true) : decide({ domain: review.domain, action }));
+        }}
+        data-testid="signup-domain-decision-dialog"
+      />
     </Stack>
   );
 }
