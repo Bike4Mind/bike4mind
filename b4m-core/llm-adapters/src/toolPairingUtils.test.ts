@@ -229,3 +229,53 @@ describe('ensureToolPairingIntegrity adjacency', () => {
     expect(adjacencyWarnings[1]).toContain('message 4');
   });
 });
+
+describe('ensureToolPairingIntegrity duplicate tool ids', () => {
+  it('drops a tool_use and tool_result repeating an id within one round', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+
+    expect(ensureToolPairingIntegrity(messages)).toEqual(
+      asMessages([
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: [toolUse('a')] },
+        { role: 'user', content: [toolResult('a')] },
+      ])
+    );
+  });
+
+  it('replaces a later round that repeats an earlier tool_use id with placeholders', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'user', content: [toolResult('a')] },
+    ]);
+
+    const result = ensureToolPairingIntegrity(messages);
+
+    expect(result.slice(0, 3)).toEqual(messages.slice(0, 3));
+    expect(result[3]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: '[Tool calls removed during message repair]' }],
+    });
+    expect(result[4]).toEqual({ role: 'user', content: '[Tool results removed during adjacency repair]' });
+  });
+
+  it('leaves the input array untouched', () => {
+    const messages = asMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolUse('a'), toolUse('a')] },
+      { role: 'user', content: [toolResult('a'), toolResult('a')] },
+    ]);
+    const snapshot = structuredClone(messages);
+
+    ensureToolPairingIntegrity(messages);
+
+    expect(messages).toEqual(snapshot);
+  });
+});
