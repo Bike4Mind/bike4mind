@@ -3,6 +3,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   userRepository,
+  orgDomainClaimRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -90,6 +91,7 @@ export async function deleteSoleOwnedOrganizations(
           logger,
         }
       );
+      await orgDomainClaimRepository.deleteByOrganization(org.id);
       return true;
     });
     if (!removed) continue;

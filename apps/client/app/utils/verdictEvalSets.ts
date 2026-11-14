@@ -180,7 +180,7 @@ export const evalSetRunReportSchema = z.object({
   }),
   /** Flagged held-out examples by cohort. */
   cohorts: z.array(verdictEvalCohortRowSchema),
-  /** Defaulted because the store drops an empty object, which a run with no labels writes. */
+  // Mongoose omits this map when a run has no labelled examples.
   labelSources: z.record(z.string(), countSchema).default({}),
   /** Per assessment model. Runs stored before calibration was graded read as empty. */
   calibration: z.array(evalSetCalibrationSchema).default([]),

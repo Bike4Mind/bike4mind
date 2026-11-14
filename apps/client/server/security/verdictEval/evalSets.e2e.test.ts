@@ -266,6 +266,20 @@ describe('drawEvalSet campaign links', () => {
 });
 
 describe('shadow mode', () => {
+  it('stores a readable run when no held-out examples have labels', async () => {
+    await seedWorld();
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a'), NOW);
+    await AbuseEvalSetModel.updateOne(
+      { _id: id },
+      { $set: { 'examples.$[].frozenLabel': null, 'examples.$[].verdicts': [] } }
+    );
+
+    const result = await runEvalSet(id, ADMIN_ID, null, deps('unused'), NOW);
+
+    expect(result.run.report.labelled).toBe(0);
+    expect(result.run.report.labelSources).toEqual({});
+  });
+
   it('draws, labels and runs a set without writing to users, credits or usage', async () => {
     const world = await seedWorld();
     const snapshot = async () => ({

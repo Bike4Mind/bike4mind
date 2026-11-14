@@ -28,6 +28,16 @@ export type SpendSourceTotal = {
   credits: number;
 };
 
+/** AI usage of one owner scope on one model over a window, read from the ledger. */
+export type SpendOwnerModelActivity = {
+  scopeType: 'User' | 'Organization' | 'Agent';
+  scopeId: string;
+  model: string;
+  credits: number;
+  /** Ledger usage rows on this model; one generation or completion writes one row per model it ran. */
+  calls: number;
+};
+
 export const SPEND_RULE_IDS = [
   'platform_spike',
   'platform_cost_spike',
@@ -94,6 +104,15 @@ export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
     to: Date,
     scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>
   ): Promise<SpendSourceTotal[]>;
+  /**
+   * Credits and usage rows per model over [from, to) for each owner scope, read from the ledger. Rows
+   * without a model are skipped; other scope types are ignored.
+   */
+  ownerModelActivity(
+    from: Date,
+    to: Date,
+    scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>
+  ): Promise<SpendOwnerModelActivity[]>;
 }
 /** A persisted alert as the repository returns it. */
 export type SpendAlertRecord = ISpendAlert & { id: string };
