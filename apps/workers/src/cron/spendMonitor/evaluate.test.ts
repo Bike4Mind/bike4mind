@@ -110,6 +110,12 @@ function createFakes() {
       sourceTotals.filter(row => scopes.some(s => s.scopeType === row.scopeType && s.scopeId === row.scopeId))
   );
 
+  const ownerModelActivity = vi.fn<EvaluateDeps['rollups']['ownerModelActivity']>(async () => []);
+  const topAccountContextDeps: EvaluateDeps['topAccountContextDeps'] = {
+    findUsers: vi.fn(async () => []),
+    findOrganizations: vi.fn(async () => []),
+  };
+
   const create = vi.fn(async (alert: ISpendAlert) => {
     if (alert.openKey && alerts.some(existing => existing.openKey === alert.openKey)) {
       throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
@@ -173,8 +179,9 @@ function createFakes() {
   };
   const deps: EvaluateDeps = {
     accountContextDeps,
+    topAccountContextDeps,
     paidScopeDeps,
-    rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix },
+    rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix, ownerModelActivity },
     alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
     resolveScopeDeps: {
       findUsersByIds,
@@ -200,6 +207,8 @@ function createFakes() {
     sumWindow,
     windowSeries,
     sourceMix,
+    ownerModelActivity,
+    topAccountContextDeps,
     findUsersByIds,
     setSourceTotals: (next: SpendSourceTotal[]) => {
       sourceTotals = next;
@@ -491,6 +500,51 @@ describe('evaluateSpend', () => {
       ([scopeType]) => scopeType === 'User' || scopeType === 'Organization'
     );
     expect(accountSums).toHaveLength(2);
+  });
+
+  describe('top account context', () => {
+    const setup = () => {
+      const fakes = createFakes();
+      const users = ['u1', 'u2'].flatMap((id, i) => windowBuckets('User', id, 10 + i));
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 5000), ...users]);
+      return fakes;
+    };
+
+    it('adds age, funding and activity to each top account with one batched read per source', async () => {
+      const fakes = setup();
+      vi.mocked(fakes.topAccountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({ id, createdAt: new Date('2025-01-01'), currentCredits: 1234 }))
+      );
+      fakes.ownerModelActivity.mockResolvedValue([
+        { scopeType: 'User', scopeId: 'u2', model: 'video-model', credits: 33, calls: 4 },
+      ]);
+
+      await run(fakes);
+
+      const text = JSON.stringify(fakes.posts[0]);
+      expect(text).toContain(
+        'u2@example.com: 33 - user, 1 y old, balance 1,234, free (granted credits only); video-model x4'
+      );
+      expect(text).toContain('u1@example.com: 30 - user, 1 y old, balance 1,234, free (granted credits only)');
+      expect(fakes.topAccountContextDeps.findUsers).toHaveBeenCalledTimes(1);
+      expect(fakes.topAccountContextDeps.findOrganizations).not.toHaveBeenCalled();
+      expect(fakes.ownerModelActivity).toHaveBeenCalledTimes(1);
+    });
+
+    it('still pages with the plain account lines when the lookup fails', async () => {
+      const fakes = setup();
+      fakes.ownerModelActivity.mockRejectedValue(new Error('mongo down'));
+
+      await run(fakes);
+
+      expect(fakes.posts).toHaveLength(1);
+      const text = JSON.stringify(fakes.posts[0]);
+      expect(text).toContain('u2@example.com: 33\\nu1@example.com: 30');
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith(
+        'spend-monitor-top-account-context-failed',
+        expect.objectContaining({ error: expect.any(Error) })
+      );
+    });
   });
 
   describe('folding api keys into their payer', () => {

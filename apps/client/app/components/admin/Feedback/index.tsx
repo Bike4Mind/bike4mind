@@ -1,21 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Button,
-  Chip,
-  Dropdown,
-  IconButton,
-  ListDivider,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Option,
-  Select,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Button, Chip, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
@@ -81,6 +66,7 @@ import {
 import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
 import { useFeedbackSelection } from './hooks/useFeedbackSelection';
 import FeedbackBulkActions from './FeedbackBulkActions';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 type FeedbackRow = IExtendedFeedbackDocument;
 
@@ -241,50 +227,34 @@ const FeedbackRowMenu = ({ row, onDelete }: { row: FeedbackRow; onDelete: (row: 
   const conversationPath = feedbackConversationPath(row);
   const reporterMailto = feedbackReporterMailto(row);
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for the report from ${reporterName(row)}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`feedback-row-actions-${row._id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+    <RowActionsMenu
+      testId={`feedback-row-actions-${row._id}`}
+      ariaLabel={`Actions for the report from ${reporterName(row)}`}
+    >
+      <MenuItem onClick={() => void copyFeedbackRecordLink(row._id)} data-testid={`feedback-row-copy-link-${row._id}`}>
+        Copy link to this report
+      </MenuItem>
+      {conversationPath && (
         <MenuItem
-          onClick={() => void copyFeedbackRecordLink(row._id)}
-          data-testid={`feedback-row-copy-link-${row._id}`}
+          component="a"
+          href={conversationPath}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`feedback-row-open-conversation-${row._id}`}
         >
-          Copy link to this report
+          {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
         </MenuItem>
-        {conversationPath && (
-          <MenuItem
-            component="a"
-            href={conversationPath}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid={`feedback-row-open-conversation-${row._id}`}
-          >
-            {row.questId ? 'Open the conversation at this turn' : 'Open the conversation'}
-          </MenuItem>
-        )}
-        {reporterMailto && (
-          <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
-            Email reporter
-          </MenuItem>
-        )}
-        <ListDivider />
-        <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
-          Delete feedback
+      )}
+      {reporterMailto && (
+        <MenuItem component="a" href={reporterMailto} data-testid={`feedback-row-email-reporter-${row._id}`}>
+          Email reporter
         </MenuItem>
-      </Menu>
-    </Dropdown>
+      )}
+      <ListDivider />
+      <MenuItem onClick={() => onDelete(row)} data-testid={`feedback-row-delete-${row._id}`}>
+        Delete feedback
+      </MenuItem>
+    </RowActionsMenu>
   );
 };
 

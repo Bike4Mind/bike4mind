@@ -103,7 +103,12 @@ describe('publishChatCompletedPush connection gating', () => {
 
   it('sends approval_needed instead of chat_completed for a turn parked on a Confirm card', async () => {
     const deps = makeDeps({
-      quest: { status: 'done', type: 'chat', reply: 'Preview ready.', pendingAction: { tool: 'github_create_issue' } },
+      quest: {
+        status: 'done',
+        type: 'chat',
+        reply: 'Preview ready.',
+        pendingAction: { tool: 'github_create_issue', ts: 456 },
+      },
     });
     await publishChatCompletedPush(turn, deps, logger);
     expect(deps.publish).toHaveBeenCalledExactlyOnceWith({
@@ -115,6 +120,7 @@ describe('publishChatCompletedPush connection gating', () => {
       collapseId: 'approval:quest-1',
       questId: 'quest-1',
       sessionId: 'session-1',
+      pendingActionTs: 456,
     });
   });
 

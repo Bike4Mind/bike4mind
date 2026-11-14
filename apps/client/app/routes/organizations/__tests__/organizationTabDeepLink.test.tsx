@@ -46,6 +46,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
@@ -64,6 +65,7 @@ vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () =
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
 const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
@@ -206,6 +208,24 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Usage' })).toBeNull();
+  });
+
+  it('opens the Domains tab for the owner', () => {
+    searchParams.current = { tab: 'domains' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Domains');
+  });
+
+  it('falls back to Overview on ?tab=domains for a member who is not a manager', () => {
+    searchParams.current = { tab: 'domains' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
   });
 
   // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
