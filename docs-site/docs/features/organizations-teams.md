@@ -42,11 +42,11 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Connectors, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Library, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, API keys, Audit, Settings). Everyone sees Overview, Members and Library; the other tabs appear only for people with the right access. The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner, Team managers and platform admins. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
 
 On the **Members** tab:
 
-- The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
+- The header shows how many seats are in use, for example "3 of 10 seats used". Pending invites hold a seat until they are accepted or cancelled.
 - The Team owner, Team managers and platform admins can invite people, cancel pending invites and remove members. Only the owner and platform admins can remove a Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
@@ -55,12 +55,12 @@ On the **Members** tab:
 
 ## Custom connector policy
 
-If you are the Team owner, a current Team manager or a platform admin, open **View Details > Connectors** to manage custom MCP connectors for the Team's members.
+If you are the Team owner, a current Team manager or a platform admin, open **View Details > Integrations > Connectors** to manage custom MCP connectors for the Team's members.
 
 - Turn **Custom connectors** off to block members' custom connector tools. Policy changes can take up to five minutes to reach every server handling requests. Members can still remove their connections.
 - Choose catalog connectors only, allowed hosts only, or any host. Blocked hosts apply in every mode. Enter host patterns one per line; `*.example.com` matches subdomains but does not match `example.com` itself.
 - Choose whether every tool call needs approval, whether tools without a read-only annotation are allowed, whether servers without sign-in are allowed, and the connection limit per member.
-- Click **Save policy** to apply your changes. **Use platform default** removes the Team's override and loads the deployment's default policy.
+- As soon as you change something, a bar at the bottom of the page shows how many changes are unsaved. Click **Save** (or press Cmd+S / Ctrl+S) to apply them, or **Discard** to drop them. Leaving the tab with unsaved changes asks you first. **Use platform default** removes the Team's override and loads the deployment's default policy.
 
 **Member connections** lists connections created under this Team by its current members, with their status under this Team's policy. Members manage their own connections. Older connections saved without a Team association do not appear here: membership alone cannot establish which Team a personal connection belongs to, so those connections are not automatically assigned or exposed to Team admins. The Team's policy still applies to its members.
 
@@ -91,7 +91,7 @@ Each member shows a role label on the Members tab.
 
 ## Billing tab (owner only)
 
-The Billing tab shows **Billing & Subscription**:
+The Billing tab shows:
 
 - Plan status: **Team Plan** with Active, Canceled or Payment issue, and the renewal or end date.
 - **Subscribe Now** if the Team has no subscription yet.

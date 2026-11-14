@@ -9,18 +9,20 @@ import OrganizationGroups from './OrganizationGroups';
 
 const fetchOrganizationGroups = vi.fn();
 const unassignGroupMember = vi.fn();
+const setOrganizationAdmins = vi.fn();
 const assignGroupMember = vi.fn();
 const renameOrganizationGroup = vi.fn();
 const toastSuccess = vi.hoisted(() => vi.fn());
 const toastError = vi.hoisted(() => vi.fn());
 const createStandardGroup = vi.fn();
 
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('@client/app/utils/groupsAPICalls', () => ({
   fetchOrganizationGroups: (...args: unknown[]) => fetchOrganizationGroups(...args),
   assignGroupMember: (...args: unknown[]) => assignGroupMember(...args),
   unassignGroupMember: (...args: unknown[]) => unassignGroupMember(...args),
   renameOrganizationGroup: (...args: unknown[]) => renameOrganizationGroup(...args),
-  setOrganizationAdmins: vi.fn(),
+  setOrganizationAdmins: (...args: unknown[]) => setOrganizationAdmins(...args),
   createStandardGroup: (...args: unknown[]) => createStandardGroup(...args),
 }));
 
@@ -83,6 +85,7 @@ describe('OrganizationGroups', () => {
     unassignGroupMember.mockReset();
     fetchOrganizationGroups.mockResolvedValue([]);
     unassignGroupMember.mockResolvedValue(undefined);
+    setOrganizationAdmins.mockReset().mockResolvedValue(undefined);
     assignGroupMember.mockReset().mockResolvedValue(undefined);
     renameOrganizationGroup
       .mockReset()
@@ -362,5 +365,55 @@ describe('OrganizationGroups', () => {
 
     await waitFor(() => expect(screen.getByTestId('org-admins-card')).toHaveTextContent('Bob'));
     expect(screen.getByTestId('org-admins-card')).not.toHaveTextContent('Alice');
+  });
+
+  const toggleManager = async (name: string) => {
+    const input = (await screen.findByTestId('org-admins-input')).querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    const option = await waitFor(() => {
+      const found = screen.getAllByRole('option').find(o => o.textContent === name);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    fireEvent.click(option);
+  };
+
+  describe('managers save bar', () => {
+    it('counts an added manager, and Discard restores the saved set', async () => {
+      renderGroups(org, true);
+      expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+
+      await toggleManager('Alice');
+      await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change'));
+
+      fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+      await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+      expect(screen.getByTestId('org-admins-card')).not.toHaveTextContent('Alice');
+      expect(setOrganizationAdmins).not.toHaveBeenCalled();
+    });
+
+    it('counts a removed manager, and Discard restores the chip', async () => {
+      renderGroups({ ...org, adminUserIds: ['u1'] } as typeof org, true);
+      await waitFor(() => expect(screen.getByTestId('org-admins-card')).toHaveTextContent('Alice'));
+
+      await toggleManager('Alice');
+      await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change'));
+
+      fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+      await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+      expect(screen.getByTestId('org-admins-card')).toHaveTextContent('Alice');
+    });
+
+    it('Save sends the full staged manager list', async () => {
+      renderGroups({ ...org, adminUserIds: ['u1'] } as typeof org, true);
+      await waitFor(() => expect(screen.getByTestId('org-admins-card')).toHaveTextContent('Alice'));
+
+      await toggleManager('Bob');
+      await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change'));
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+      await waitFor(() => expect(setOrganizationAdmins).toHaveBeenCalledWith('org1', ['u1', 'u2']));
+    });
   });
 });

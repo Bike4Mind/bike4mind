@@ -49,10 +49,6 @@ export default function OrganizationAuditSection({ organizationId }: { organizat
   };
   return (
     <Stack spacing={2} data-testid="organization-audit-section">
-      <Typography level="title-lg">Audit</Typography>
-      <Typography level="body-sm">
-        Organization activity recorded from the time audit logging was enabled. Dates use UTC.
-      </Typography>
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
         {[
           { label: 'Actor ID', value: actor, set: setActor, type: 'text', id: 'actor' },
