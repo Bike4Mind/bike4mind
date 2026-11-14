@@ -27,6 +27,8 @@ const notifications = vi.hoisted(() => ({
   deliverToSlack: vi.fn(),
   slackDeps: { marker: 'slack-delivery-deps' },
   notify: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
+  onTerminalHandled: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
+  announceGroupCompletion: vi.fn(),
   handlers: [] as { kind: string }[],
 }));
 
@@ -38,15 +40,30 @@ vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrT
 
 vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/generationJobs')>()),
+  announceGroupCompletion: notifications.announceGroupCompletion,
   GenerationJobEngine: class {
-    constructor(deps: { notify(job: IGenerationJobDocument): Promise<void>; handlers: { kind: string }[] }) {
+    constructor(deps: {
+      notify(job: IGenerationJobDocument): Promise<void>;
+      onTerminalHandled(job: IGenerationJobDocument): Promise<void>;
+      handlers: { kind: string }[];
+    }) {
       notifications.notify = deps.notify;
+      notifications.onTerminalHandled = deps.onTerminalHandled;
       notifications.handlers = deps.handlers;
     }
   },
 }));
 vi.mock('./slackJobDelivery', () => ({
   deliverJobToSlack: notifications.deliverToSlack,
+  imageGroupSlackSubscriber: vi.fn(() => ({ name: 'slack', wants: () => false, deliver: async () => {} })),
+}));
+vi.mock('./imageGroupPush', () => ({
+  imageGroupPushSubscriber: vi.fn(() => ({ name: 'push', wants: () => false, deliver: async () => {} })),
+}));
+vi.mock('../utils/pushNotifications', () => ({
+  appPathDeepLink: (path: string) => path,
+  appRootDeepLink: () => '/',
+  publishPushNotification: vi.fn(async () => undefined),
 }));
 vi.mock('./slackJobDeliveryDeps', () => ({ createSlackJobDeliveryDeps: () => notifications.slackDeps }));
 
@@ -134,6 +151,25 @@ const baseJob = {
   rawProviderError: { secret: 'internal' },
   payload: { providerId: 'test', request: { model: 'm' } },
 } as unknown as IGenerationJobDocument;
+
+describe('group completion wiring', () => {
+  it('announces a finished job through the Studio, push and Slack channels', async () => {
+    getGenerationJobEngine();
+    notifications.announceGroupCompletion.mockReset().mockResolvedValue('announced');
+    if (!notifications.onTerminalHandled) throw new Error('onTerminalHandled was not wired');
+    await notifications.onTerminalHandled(baseJob);
+    expect(notifications.announceGroupCompletion).toHaveBeenCalledExactlyOnceWith(
+      baseJob,
+      expect.objectContaining({
+        subscribers: [
+          expect.objectContaining({ name: 'studio_event' }),
+          expect.objectContaining({ name: 'push' }),
+          expect.objectContaining({ name: 'slack' }),
+        ],
+      })
+    );
+  });
+});
 
 describe('generation job notification wiring', () => {
   beforeEach(() => {
@@ -267,7 +303,7 @@ describe('music provider key selection', () => {
 });
 
 describe('image provider key selection', () => {
-  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key' } as never;
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key', bfl: 'b-key', imageGen: 'http://sd.local' } as never;
 
   it('maps each provider to the key the chat image paths use', () => {
     expect(selectImageProviderKey('openai', keys)).toBe('o-key');
@@ -275,6 +311,15 @@ describe('image provider key selection', () => {
     expect(selectImageProviderKey('bfl', keys)).toBe('b-key');
     expect(selectImageProviderKey('xai', keys)).toBe('x-key');
     expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
+  });
+
+  it('gives the test provider a fixed key without consulting stored keys', () => {
+    expect(selectImageProviderKey('test', {} as never)).toBe('test-key');
+  });
+
+  it('maps local to the self-hosted image server URL, and to nothing when it is unset', () => {
+    expect(selectImageProviderKey('local', keys)).toBe('http://sd.local');
+    expect(selectImageProviderKey('local', {} as never)).toBeUndefined();
   });
 
   it('throws for a provider id with no mapping', () => {
@@ -447,9 +492,31 @@ describe('buildProviders', () => {
 });
 
 describe('buildImageProviders', () => {
-  it('registers the OpenAI, Gemini, BFL and xAI adapters, which the catalog accepts', () => {
-    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai']);
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_IMAGE_PROVIDER;
+  });
+
+  it('registers the OpenAI, Gemini, BFL, xAI and local adapters, which the catalog accepts', () => {
+    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai', 'local']);
     expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_IMAGE_PROVIDER = 'true';
+    expect(buildImageProviders().map(provider => provider.id)).toEqual([
+      'openai',
+      'gemini',
+      'bfl',
+      'xai',
+      'local',
+      'test',
+    ]);
+    expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
+  });
+
+  it('does not add the test provider for any other value of the flag', () => {
+    process.env.ENABLE_TEST_IMAGE_PROVIDER = '1';
+    expect(buildImageProviders().map(provider => provider.id)).not.toContain('test');
   });
 });
 

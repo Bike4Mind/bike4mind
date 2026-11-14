@@ -625,8 +625,14 @@ describe('account data export worker', () => {
   it('atomically excludes the purge and concurrent exports, then releases only its own lease', async () => {
     await run();
     const [filter, update] = h.leaseClaim.mock.calls[0];
-    expect(filter).toMatchObject({ _id: USER_ID, 'deletion.purgeStartedAt': null });
+    expect(filter).toMatchObject({ _id: USER_ID, 'deletion.purgeStartedAt': null, 'accountFilePurge.startedAt': null });
     expect(filter.$and).toEqual([
+      {
+        $or: [
+          { 'accountFilePurge.leaseExpiresAt': null },
+          { 'accountFilePurge.leaseExpiresAt': { $lte: expect.any(Date) } },
+        ],
+      },
       {
         $or: [
           { 'accountDataExportLease.expiresAt': null },

@@ -77,9 +77,13 @@ describe('fab-file bucket notebook export lifecycle', () => {
 
   it('keeps organization metadata exports under the expiring prefix', () => {
     const source = read('packages/server-utils/src/utils/organizationDataExport.ts');
+    const prefixTemplate = source.match(/export const organizationExportPrefix = [^`]*`([^`]+)`/)?.[1];
     const keyTemplate = source.match(/export const organizationExportKey = [^`]*`([^`]+)`/)?.[1];
+    const legacyTemplate = source.match(/export const legacyOrganizationExportKey = [^`]*`([^`]+)`/)?.[1];
     expect(rulePrefix).toBeDefined();
-    expect(keyTemplate?.startsWith(rulePrefix!)).toBe(true);
+    expect(prefixTemplate?.startsWith(rulePrefix!)).toBe(true);
+    expect(keyTemplate?.startsWith('${organizationExportPrefix(userId)}')).toBe(true);
+    expect(legacyTemplate?.startsWith(rulePrefix!)).toBe(true);
     expect(source).toContain('ORGANIZATION_EXPORT_TTL_MS = 24 * 60 * 60 * 1000');
   });
 

@@ -9,17 +9,17 @@ import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import {
   organizationExportQuery,
+  organizationExportScope,
   requireOrganizationExportOwner,
 } from '@bike4mind/server-utils/utils/organizationDataExport';
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .get(async (req, res) => {
-    const { id } = organizationExportQuery.parse(req.query);
-    await requireOrganizationExportOwner(req.user, id);
+    const { id: requestedId } = organizationExportQuery.parse(req.query);
+    const { id } = await requireOrganizationExportOwner(req.user, requestedId);
     const latest = await OrganizationAuditEventModel.findOne({
-      organizationId: id,
-      actorUserId: req.user.id,
+      ...organizationExportScope(id, req.user.id),
       action: 'export.requested',
     })
       .sort({ _id: -1 })
@@ -28,8 +28,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     return res.json({ exportJobId: latest?.targetId ?? null });
   })
   .post(async (req, res) => {
-    const { id } = organizationExportQuery.parse(req.query);
-    await requireOrganizationExportOwner(req.user, id);
+    const { id: requestedId } = organizationExportQuery.parse(req.query);
+    const { id } = await requireOrganizationExportOwner(req.user, requestedId);
     const key = `rate-limit:organization-export:${id}`;
     const quota = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 1, 3600000);
     if (!quota.success) {

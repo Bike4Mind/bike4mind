@@ -69,6 +69,20 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
+  it('recounts the badge when a worker task finishes unaccepted, without a notice', async () => {
+    sessions = [
+      session('root'),
+      session('agent', 'root', {
+        workerTask: { state: { status: 'completed', accepted: false } },
+      } as Partial<ChatSessionSummary>),
+    ];
+    monitor.observe({ sessionId: 'agent', status: 'processing' });
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    expect(notices).toEqual([]);
+  });
+
   it('announces once per entry, and again after the session left needs-action', async () => {
     await enter('agent');
     await enter('agent');
@@ -134,12 +148,13 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toEqual([]);
   });
 
-  it('does not recount for a status change that neither enters nor leaves needs-action', async () => {
+  it('recounts the badge on a status change that neither enters nor leaves needs-action, without a notice', async () => {
     monitor.observe({ sessionId: 'agent', status: 'processing' });
     monitor.observe({ sessionId: 'agent', status: 'done' });
     await monitor.settled();
-    expect(deps.listSessions).not.toHaveBeenCalled();
-    expect(setBadge).not.toHaveBeenCalled();
+    expect(deps.listSessions).toHaveBeenCalled();
+    expect(setBadge).toHaveBeenLastCalledWith(0);
+    expect(notices).toEqual([]);
   });
 
   it('recounts when a session enters needs-action and again when it leaves', async () => {

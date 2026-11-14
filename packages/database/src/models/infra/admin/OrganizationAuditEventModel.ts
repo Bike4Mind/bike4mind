@@ -8,6 +8,8 @@ export const ORGANIZATION_AUDIT_ACTIONS = [
   'invite.created',
   'invite.revoked',
   'policy.updated',
+  'retention.deleted',
+  'retention.media_detached',
   'billing.updated',
   'api_key.created',
   'api_key.revoked',
@@ -43,6 +45,7 @@ const schema = new Schema<OrganizationAuditEvent>(
   { versionKey: false, strict: 'throw' }
 );
 
+schema.index({ actorUserId: 1, action: 1, _id: 1 }, { name: 'organization_export_erasure_locators' });
 schema.index({ organizationId: 1, occurredAt: -1, _id: -1 });
 schema.index({ organizationId: 1, _id: -1 });
 schema.index({ organizationId: 1, actorUserId: 1, occurredAt: -1, _id: -1 });

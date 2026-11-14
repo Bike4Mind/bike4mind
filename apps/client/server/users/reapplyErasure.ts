@@ -5,6 +5,7 @@ import {
   userRepository,
   withTransaction,
   deleteFeedbackAiForUser,
+  eraseOrganizationRetentionForUser,
   FeedbackNoteModel,
   type IErasureRecord,
 } from '@bike4mind/database';
@@ -44,12 +45,15 @@ export async function reapplyErasure(
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
   if (record.initiatedBy !== 'admin') {
-    const assertLease = async () => {}; // no purge lease: the account is already past its grace period
+    // File erasure acquires its own User lease and permanent export fence, including restored
+    // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
+    const assertLease = async () => {};
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
       await deleteFeedbackAiForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
@@ -57,6 +61,7 @@ export async function reapplyErasure(
   } else {
     await withTransaction(async session => {
       await deleteFeedbackAiForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();

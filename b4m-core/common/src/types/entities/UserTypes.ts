@@ -508,6 +508,16 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Private erasure retry state, including restored accounts with no deletion schedule. */
+  accountFilePurge?: {
+    startedAt?: Date;
+    leaseId?: string;
+    leaseExpiresAt?: Date;
+    initialized?: boolean;
+    throughAuditId?: string;
+    afterAuditId?: string;
+    complete?: boolean;
+  };
   /** Server-side lease preventing a data export from racing permanent account cleanup. */
   /** `jobId` names the export job holding it; leases taken before it was recorded have none. */
   accountDataExportLease?: { id: string; jobId?: string; expiresAt: Date };

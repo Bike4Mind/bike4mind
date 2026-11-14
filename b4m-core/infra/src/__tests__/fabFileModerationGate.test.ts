@@ -160,7 +160,7 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/pages/api/users/me/data-export/[jobId].ts':
     "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
   'packages/server-utils/src/utils/organizationDataExport.ts':
-    'signs only the organization metadata and CSV ZIP under exports/organizations/ after owner authorization; the archive contains no uploaded file bytes or images and has no FabFile row',
+    'signs only the organization metadata and CSV ZIP under the subject-addressable or validated historical exports/ key after owner authorization; the archive contains no uploaded file bytes or images and has no FabFile row',
   'apps/client/pages/api/admin/users/[userId]/data-export/[jobId].ts':
     'signs a data subject export zip under exports/ for an admin - not a FabFile row; the same worker as the self-serve export built it and left out files that are not isImageServeable',
 
@@ -208,7 +208,7 @@ const ALLOWLIST: Record<string, string> = {
     'text-only mime, never an image — throws BadRequestError for any mimeType outside a fixed text/code allowlist before ever minting a signed URL',
   'apps/client/pages/api/notebooks/download.ts':
     'text-only mime, never an image — downloads/converts only the curated-notebook document (markdown/html/txt), identified via session.curatedNotebookFileId',
-  'apps/client/pages/api/agents/create-from-context.ts':
+  'apps/client/server/agents/createAgentFromContext.ts':
     'images filtered out (mimeType.startsWith("image/")) before the shared getFileContent extractor is ever called on a file',
 
   'apps/client/pages/api/files/createFabFile.ts':

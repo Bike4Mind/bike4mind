@@ -49,20 +49,38 @@ import '../index';
 import '../[jobId]';
 const id = 'a'.repeat(24);
 const jobId = '7d0c1f5e-9a7b-4c1e-8f0a-2b3c4d5e6f70';
-function call(method: 'post' | 'get', route = 0, userId = 'owner') {
-  const { req, res } = createMocks({ method: method.toUpperCase(), query: { id, jobId } });
+function call(method: 'post' | 'get', route = 0, userId = 'owner', organizationId = id) {
+  const { req, res } = createMocks({ method: method.toUpperCase(), query: { id: organizationId, jobId } });
   Object.assign(req, { user: { id: userId } });
   return { res, promise: h.handlers[route][method]!(req, res) };
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  h.owner.mockResolvedValue({ userId: 'owner' });
+  h.owner.mockResolvedValue({ id, userId: 'owner' });
   h.quota.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 3600000) });
   h.audit.mockResolvedValue(undefined);
   h.send.mockResolvedValue(undefined);
   h.status.mockResolvedValue({ status: 'ready', url: 'https://example.test/export' });
 });
 describe('organization export routes', () => {
+  it('uses one hourly quota and canonical request payload for lower and upper id spellings', async () => {
+    const used = new Set<string>();
+    h.quota.mockImplementation(async (key: string) => {
+      const success = !used.has(key);
+      used.add(key);
+      return { success, expiresAt: new Date(Date.now() + 3600000) };
+    });
+    await call('post').promise;
+    await expect(call('post', 0, 'owner', id.toUpperCase()).promise).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.quota.mock.calls.map(([key]) => key)).toEqual([
+      `rate-limit:organization-export:${id}`,
+      `rate-limit:organization-export:${id}`,
+    ]);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.send).toHaveBeenCalledWith('queue', expect.objectContaining({ id, kind: 'organization' }));
+    expect(h.audit).toHaveBeenCalledWith(expect.objectContaining({ organizationId: id, action: 'export.requested' }));
+  });
+
   it('requires first-party sessions on both routes', () => {
     expect(h.handlers.map(route => route.options)).toEqual([{ auth: 'jwtOnly' }, { auth: 'jwtOnly' }]);
   });

@@ -8,11 +8,11 @@ The `frontend` Next.js function (`infra/web.ts`) is out of scope and stays attac
 
 A Lambda needs the VPC only to reach one of these:
 
-| Resource | Why it needs the VPC route | Where |
-|---|---|---|
-| MongoDB | The database is reached over the VPC's egress path. Deployments allow the cluster either by the NAT address or by VPC peering (`docs-site/docs/deployment/prerequisites.md`), and DocumentDB is VPC-only. A Lambda outside the VPC has neither. | `MONGODB_URI`, `connectDB` |
-| SearXNG | Private Cloud Map name; its security group admits callers from inside the VPC only. | `infra/searxng.ts` |
-| ChatCompletion `/process` | The load balancer admits the internal dispatch from the NAT address only. | `infra/chatCompletion.ts` |
+| Resource                  | Why it needs the VPC route                                                                                                                                                                                                                      | Where                      |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| MongoDB                   | The database is reached over the VPC's egress path. Deployments allow the cluster either by the NAT address or by VPC peering (`docs-site/docs/deployment/prerequisites.md`), and DocumentDB is VPC-only. A Lambda outside the VPC has neither. | `MONGODB_URI`, `connectDB` |
+| SearXNG                   | Private Cloud Map name; its security group admits callers from inside the VPC only.                                                                                                                                                             | `infra/searxng.ts`         |
+| ChatCompletion `/process` | The load balancer admits the internal dispatch from the NAT address only.                                                                                                                                                                       | `infra/chatCompletion.ts`  |
 
 S3, SQS, EventBridge, Bedrock, SES, CloudWatch, Secrets Manager, the API Gateway management endpoint and the external provider APIs are all public endpoints and need no VPC.
 
@@ -63,8 +63,9 @@ Not measured here; both need a deployed stage.
 
 The four handlers declared in `infra/queues.ts` whose source is generated outside this repository are not listed. They could not be traced and all stay attached.
 
+<!-- prettier-ignore -->
 | Handler | Declared in | Reaches | VPC required | Justification |
-|---|---|---|---|---|
+| --------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/workers/src/cron/adminMorningBrief.handler` | `infra/adminMorningBrief.ts` | MongoDB; linked: `allSecrets` | Yes | Reads and persists morning brief facts and delivery claims in MongoDB. |
 | `apps/client/server/websocket/agentExecute.func` | `infra/agentExecutor.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `agentExecutor` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentDisconnect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
@@ -119,6 +120,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/modelDiscovery.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscoveryStaleness.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/oauthAbuseAutoBlock.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/organizationRetention.handler` | `infra/organizationRetention.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `generatedImagesBucket`, `routerDistributionId` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/providerUsagePoll.handler` | `infra/cron.ts` | linked: `allSecrets` | No | Already outside the VPC. Provider usage APIs and CloudWatch only. |
 | `apps/workers/src/cron/questTimeoutSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `generationCallbackQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/realtimeConnectionSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |

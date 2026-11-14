@@ -704,6 +704,17 @@ const DLQ_REGISTRY = [
     describe: noEntity,
   },
   {
+    label: 'organization-retention',
+    displayName: 'Organization Retention',
+    application: 'Organization',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed organization retention sweep invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failed invocation before manual recovery.',
+    owner: 'Organizations',
+    describe: noEntity,
+  },
+  {
     label: 'fab-file-moderation',
     displayName: 'FabFile Moderation',
     application: 'FabFileProcessing',

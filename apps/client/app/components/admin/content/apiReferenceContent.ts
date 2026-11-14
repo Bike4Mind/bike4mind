@@ -132,7 +132,10 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
   \`/api/v1/artifacts/types\`
-- Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
+- Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
+  \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
+  and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,
+  \`generate-system-prompt\` and \`enhance-field\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
   \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
   \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
@@ -168,56 +171,6 @@ Image, video, music and chat work is asynchronous; the Async jobs section of the
 The sections below are still hand-written. Each row was checked against its route file, but
 treat the handler as authoritative.
 
-
----
-
-### Agents
-
-Custom AI agents with configurable personas, system prompts, and tool access.
-
-**Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, delete, and run the authoring assistants.
-
-#### List, Get, Create, Update, Delete, and Author Agents
-
-\`\`\`
-GET    /api/v1/agents
-GET    /api/v1/agents/[id]
-POST   /api/v1/agents
-PATCH  /api/v1/agents/[id]
-DELETE /api/v1/agents/[id]
-POST   /api/v1/agents/[id]/generate-avatar
-POST   /api/v1/agents/[id]/generate-description
-POST   /api/v1/agents/[id]/generate-system-prompt
-POST   /api/v1/agents/[id]/enhance-field
-\`\`\`
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, \`deleteAgent\`, \`generateAgentAvatar\`,
-> \`generateAgentDescription\`, \`generateAgentSystemPrompt\`, and \`enhanceAgentField\`.
-
-#### List Agents (existing app route)
-
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\`,
-\`updatedAt\`, or \`name\`) and \`orderDirection\`.
-
-#### Agent Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/agents | List agents (cursor-paginated) |
-| POST | /api/v1/agents | Create an agent |
-| GET | /api/v1/agents/[id] | Get agent details |
-| PATCH | /api/v1/agents/[id] | Update an agent |
-| DELETE | /api/v1/agents/[id] | Delete an agent |
-| GET | /api/agents | List agents (page-based pagination) |
-| POST | /api/agents | Create an agent |
-| GET | /api/agents/[id] | Get agent details |
-| PUT | /api/agents/[id] | Update agent |
-| DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
-| POST | /api/agents/create-from-context | Create agent from conversation context |
 
 ---
 
