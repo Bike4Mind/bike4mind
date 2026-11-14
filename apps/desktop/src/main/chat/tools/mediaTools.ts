@@ -45,14 +45,12 @@ import { realpathNearest } from './paths';
 import { resolveWritablePath, withPathLock } from './writeTools';
 
 /**
- * Why every one of these is gated behind the approval the shell tools use.
+ * Why every one of these declares the approval the shell tools use.
  *
- * The local tools are gated for SAFETY - a command runs code on the machine. These are gated
- * for COST: every one of them spends the user's credits at a provider, and unlike a bad file
- * read a bad generation cannot be undone by reading the right file next. The same dialog reads
- * correctly for both because what it actually asks is "do this thing on my behalf", and the
- * alternative - letting a model spend money unattended because the request happened to be
- * harmless to the filesystem - is the worse default.
+ * The local tools ask for SAFETY - a command runs code on the machine. These ask for COST: every
+ * one of them spends the user's credits at a provider, and a bad generation cannot be undone by
+ * reading the right file next. The card shows in "Ask for approval" only; Approve for me and Full
+ * access run these unasked, because the user chose a mode that does not stop for credits.
  *
  * `key` carries the full request, so "always in this chat" covers a retry of the identical
  * generation and nothing else. A different prompt is a different spend and asks again.

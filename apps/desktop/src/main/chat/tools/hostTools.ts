@@ -26,9 +26,9 @@ import {
  * start and remove conversations inside the calling session's own project and can address
  * nothing outside it. A Chat session has no project, so the family is not declared for one.
  *
- * Three of them change what the user sees and declare an approval. `session_spawn` is gated on
- * cost and autonomy together, asked in every mode including 'full' - starting a conversation
- * that calls models and tools with nobody typing is its own decision - and `session_delete` is
+ * Three of them change what the user sees and declare an approval. `session_spawn` asks only in
+ * "Ask for approval" - starting a conversation that calls models and tools with nobody typing is its
+ * own decision, which Approve for me and Full access leave to the user's mode - and `session_delete` is
  * gated as irreversible, which additionally means no "always" answer can ever cover it.
  *
  * With a user present, `session_spawn` does not start anything and so is not gated at all: it
