@@ -27,6 +27,8 @@ const notifications = vi.hoisted(() => ({
   deliverToSlack: vi.fn(),
   slackDeps: { marker: 'slack-delivery-deps' },
   notify: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
+  onTerminalHandled: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
+  announceGroupCompletion: vi.fn(),
   handlers: [] as { kind: string }[],
 }));
 
@@ -38,9 +40,15 @@ vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrT
 
 vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/generationJobs')>()),
+  announceGroupCompletion: notifications.announceGroupCompletion,
   GenerationJobEngine: class {
-    constructor(deps: { notify(job: IGenerationJobDocument): Promise<void>; handlers: { kind: string }[] }) {
+    constructor(deps: {
+      notify(job: IGenerationJobDocument): Promise<void>;
+      onTerminalHandled(job: IGenerationJobDocument): Promise<void>;
+      handlers: { kind: string }[];
+    }) {
       notifications.notify = deps.notify;
+      notifications.onTerminalHandled = deps.onTerminalHandled;
       notifications.handlers = deps.handlers;
     }
   },
@@ -143,6 +151,25 @@ const baseJob = {
   rawProviderError: { secret: 'internal' },
   payload: { providerId: 'test', request: { model: 'm' } },
 } as unknown as IGenerationJobDocument;
+
+describe('group completion wiring', () => {
+  it('announces a finished job through the Studio, push and Slack channels', async () => {
+    getGenerationJobEngine();
+    notifications.announceGroupCompletion.mockReset().mockResolvedValue('announced');
+    if (!notifications.onTerminalHandled) throw new Error('onTerminalHandled was not wired');
+    await notifications.onTerminalHandled(baseJob);
+    expect(notifications.announceGroupCompletion).toHaveBeenCalledExactlyOnceWith(
+      baseJob,
+      expect.objectContaining({
+        subscribers: [
+          expect.objectContaining({ name: 'studio_event' }),
+          expect.objectContaining({ name: 'push' }),
+          expect.objectContaining({ name: 'slack' }),
+        ],
+      })
+    );
+  });
+});
 
 describe('generation job notification wiring', () => {
   beforeEach(() => {
