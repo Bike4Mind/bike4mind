@@ -747,3 +747,42 @@ describe('MFAEnforcementWrapper - enrolling a passkey as the factor', () => {
     expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe('');
   });
 });
+
+describe('MFAEnforcementWrapper - a user the server exempts from enrollment', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the app and never starts setup when the status says enrollment is not required', async () => {
+    get.mockResolvedValue({ data: { enabled: false, required: false } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
+    // The hint tracks the factor only: an exemption must never mark the user enrolled.
+    expect(JSON.parse(localStorage.getItem(MFA_ENROLLMENT_HINT_KEY) ?? 'null')).toEqual({
+      userId: 'u1',
+      enrolled: false,
+    });
+  });
+
+  it('still blocks an unenrolled user whose status says enrollment is required', async () => {
+    get.mockResolvedValue({ data: { enabled: false, required: true } });
+
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+});

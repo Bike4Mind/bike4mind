@@ -5,14 +5,16 @@ import { cancelOwnGenerationJob } from '@server/generations/cancelOwnGenerationJ
 import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
+import { MUSIC_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const handler = nextRouteForContract(cancelMusicGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/music-generations/[id]/cancel'),
 }).post(async (req, res) => {
   const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'music');
   if (!job) throw new NotFoundError('Music generation not found');
-  return res.json(await toPublicMusicGeneration(await cancelOwnGenerationJob(job), mapperDeps));
+  return res.json(
+    await toPublicGenerationJob(await cancelOwnGenerationJob(job), mapperDeps, MUSIC_GENERATION_PROJECTION)
+  );
 });
 
 export const config = {

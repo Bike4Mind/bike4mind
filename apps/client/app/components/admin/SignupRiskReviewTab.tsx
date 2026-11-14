@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack, Tooltip, Typography } from '@mui/joy';
-import { MoreHorizontal } from 'lucide-react';
+import { Alert, Button, MenuItem, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   ADMIN_ACTION_REASON_MAX_LENGTH,
   MAX_SIGNUP_RISK_REVIEW_BATCH,
@@ -18,6 +17,7 @@ import {
   DataTable,
   EmptyState,
   FilterBar,
+  RowActionsMenu,
   StatusChip,
   relativeTime,
   useAdminListUrlState,
@@ -318,58 +318,50 @@ export const SignupRiskReviewTab: React.FC = () => {
   const rowActions = (row: SignupRiskReviewRow) => (
     <AdminPermissionAction requirement="users:moderate">
       {missing => (
-        <Dropdown>
-          <MenuButton
-            slots={{ root: IconButton }}
-            slotProps={{
-              root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.userId}` },
+        <RowActionsMenu
+          testId={`signup-risk-actions-${row.userId}`}
+          ariaLabel={`Actions for ${row.email ?? row.userId}`}
+          disabled={missing}
+        >
+          <MenuItem
+            disabled={!!approveMissing}
+            title={approveMissing ?? undefined}
+            data-testid={`signup-risk-approve-${row.userId}`}
+            onClick={() => {
+              decision.reset();
+              setOverriddenAssessmentId(null);
+              setApproving([row]);
             }}
-            disabled={missing}
-            data-testid={`signup-risk-actions-${row.userId}`}
           >
-            <MoreHorizontal size={16} />
-          </MenuButton>
-          <Menu placement="bottom-end">
+            Approve account
+          </MenuItem>
+          {isAssessmentOpen(row.advisory) && (
+            <MenuItem
+              data-testid={`signup-risk-accept-assessment-${row.userId}`}
+              disabled={acceptSuggestion.isPending}
+              onClick={() => acceptAssessment(row)}
+            >
+              Accept AI assessment
+            </MenuItem>
+          )}
+          {isAssessmentOpen(row.advisory) && (
             <MenuItem
               disabled={!!approveMissing}
               title={approveMissing ?? undefined}
-              data-testid={`signup-risk-approve-${row.userId}`}
-              onClick={() => {
-                decision.reset();
-                setOverriddenAssessmentId(null);
-                setApproving([row]);
-              }}
+              data-testid={`signup-risk-override-assessment-${row.userId}`}
+              onClick={() => overrideAssessment(row)}
             >
-              Approve account
+              Override: approve account
             </MenuItem>
-            {isAssessmentOpen(row.advisory) && (
-              <MenuItem
-                data-testid={`signup-risk-accept-assessment-${row.userId}`}
-                disabled={acceptSuggestion.isPending}
-                onClick={() => acceptAssessment(row)}
-              >
-                Accept AI assessment
-              </MenuItem>
-            )}
-            {isAssessmentOpen(row.advisory) && (
-              <MenuItem
-                disabled={!!approveMissing}
-                title={approveMissing ?? undefined}
-                data-testid={`signup-risk-override-assessment-${row.userId}`}
-                onClick={() => overrideAssessment(row)}
-              >
-                Override: approve account
-              </MenuItem>
-            )}
-            <MenuItem
-              color="danger"
-              data-testid={`signup-risk-suspend-${row.userId}`}
-              onClick={() => setSuspending([row.userId])}
-            >
-              Suspend account
-            </MenuItem>
-          </Menu>
-        </Dropdown>
+          )}
+          <MenuItem
+            color="danger"
+            data-testid={`signup-risk-suspend-${row.userId}`}
+            onClick={() => setSuspending([row.userId])}
+          >
+            Suspend account
+          </MenuItem>
+        </RowActionsMenu>
       )}
     </AdminPermissionAction>
   );

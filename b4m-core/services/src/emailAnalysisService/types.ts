@@ -55,28 +55,46 @@ export interface EmailAnalysisResult {
 }
 
 /**
+ * Models write `null` for a field they have nothing to say about, even when told to
+ * omit it. Optional fields accept null and normalize it to the field's default.
+ */
+const stringList = z
+  .array(z.string())
+  .nullish()
+  .transform(value => value ?? []);
+
+/**
  * Raw LLM response schema for parsing JSON output
  */
 export const llmAnalysisResponseSchema = z.object({
   summary: z.string().min(1, 'Summary cannot be empty'),
   entities: z.object({
-    companies: z.array(z.string()).prefault([]),
-    people: z.array(z.string()).prefault([]),
-    products: z.array(z.string()).prefault([]),
-    technologies: z.array(z.string()).prefault([]),
+    companies: stringList,
+    people: stringList,
+    products: stringList,
+    technologies: stringList,
   }),
   sentiment: z.enum(['positive', 'neutral', 'negative', 'urgent']),
   actionItems: z
     .array(
       z.object({
         description: z.string(),
-        deadline: z.string().optional(), // ISO date string from LLM
+        // ISO date string from the LLM
+        deadline: z
+          .string()
+          .nullish()
+          .transform(value => value ?? undefined)
+          .optional(),
       })
     )
-    .prefault([]),
+    .nullish()
+    .transform(value => value ?? []),
   privacyRecommendation: z.enum(['public', 'team', 'private']),
-  embargoDetected: z.boolean().prefault(false),
-  suggestedTags: z.array(z.string()).prefault([]),
+  embargoDetected: z
+    .boolean()
+    .nullish()
+    .transform(value => value ?? false),
+  suggestedTags: stringList,
 });
 
 export type LLMAnalysisResponse = z.infer<typeof llmAnalysisResponseSchema>;

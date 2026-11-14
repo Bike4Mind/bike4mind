@@ -43,6 +43,8 @@ export const IMAGE_PROVIDER_LABELS: Record<ImageProviderId, string> = {
   bfl: 'Black Forest Labs',
   xai: 'xAI',
   gemini: 'Google',
+  test: 'Test',
+  local: 'Local',
 };
 
 const hasImageProfile = (modelId: string): modelId is ImageModels => Object.hasOwn(IMAGE_MODEL_STRENGTHS, modelId);

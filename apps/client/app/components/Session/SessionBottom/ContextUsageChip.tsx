@@ -19,9 +19,15 @@ interface ContextUsageChipProps {
 const RING_R = 5;
 const RING_C = 2 * Math.PI * RING_R;
 
-/** A 14px ring filled to `pct`, in the text colour. */
-const Ring: FC<{ pct: number }> = ({ pct }) => (
-  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden style={{ flexShrink: 0, transform: 'rotate(-90deg)' }}>
+/** A 14px ring filled to `pct`, in `color` (defaults to the text colour). */
+const Ring: FC<{ pct: number; color?: string }> = ({ pct, color }) => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 14 14"
+    aria-hidden
+    style={{ flexShrink: 0, transform: 'rotate(-90deg)', color }}
+  >
     <circle cx="7" cy="7" r={RING_R} fill="none" stroke="currentColor" strokeOpacity={0.3} strokeWidth="2" />
     <circle
       cx="7"
@@ -145,7 +151,8 @@ const ContextUsageChip: FC<ContextUsageChipProps> = ({ usage, modelName, inputOv
           '&:hover, &:focus-visible': { backgroundColor: 'var(--joy-palette-neutral-plainHoverBg)' },
         }}
       >
-        <Ring pct={pct} />
+        {/* Grey state: the icon colour the other status-line chips' decorators get (text.icon). */}
+        <Ring pct={pct} color={band === 'normal' ? 'var(--joy-palette-text-icon)' : undefined} />
         {label}
         {/* Spoken without hovering: the file warning has to reach the user before they send. 'polite'
             so it waits for a pause instead of interrupting mid-compose. */}

@@ -1,4 +1,13 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -127,6 +136,26 @@ function ServerCredentialsRow() {
   );
 }
 
+const messageTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'always' });
+const messageTimeUnits = [
+  ['year', 365 * 24 * 60 * 60],
+  ['month', 30 * 24 * 60 * 60],
+  ['week', 7 * 24 * 60 * 60],
+  ['day', 24 * 60 * 60],
+  ['hour', 60 * 60],
+  ['minute', 60],
+] as const;
+
+function showMessageTime(event: MouseEvent<HTMLElement>, createdAt: string) {
+  const seconds = Math.max(0, (Date.now() - Date.parse(createdAt)) / 1000);
+  const unit = messageTimeUnits.find(([, length]) => seconds >= length);
+  event.currentTarget.title = Number.isNaN(seconds)
+    ? ''
+    : unit
+      ? messageTimeFormatter.format(-Math.floor(seconds / unit[1]), unit[0])
+      : 'just now';
+}
+
 /**
  * The user's own turn: a right-aligned bubble, narrower than the column so the alignment
  * reads as "mine" at a glance even when the text is long.
@@ -152,6 +181,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
         color="primary"
         sx={{ px: 2, py: 1.25, borderRadius: 'lg', maxWidth: '85%', minWidth: 0 }}
         data-testid="chat-message-user"
+        onMouseEnter={event => showMessageTime(event, message.createdAt)}
       >
         {/* Above the text, matching the composer: what was handed over, then what was asked
             about it. Not removable here - the turn has been sent. */}
@@ -337,6 +367,7 @@ const AssistantTurn = memo(function AssistantTurn({
         },
       }}
       data-testid="chat-message-assistant"
+      onMouseEnter={event => showMessageTime(event, message.createdAt)}
       // The orchestrator's "Read the report" scrolls to and highlights the one with its summary's id.
       data-assistant-reply
       data-message-id={message.id}
