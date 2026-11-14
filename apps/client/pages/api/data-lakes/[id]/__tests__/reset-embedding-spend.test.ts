@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   findOrganization: vi.fn(),
   assertUser: vi.fn(),
   assertOrganization: vi.fn(),
+  resolveCanManageLake: vi.fn(),
+  toMemberAccessContext: vi.fn(),
   insideTransactionAtAudit: undefined as boolean | undefined,
 }));
 
@@ -45,6 +47,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', () => ({
+  dataLakeAccessGrantRepository: { listByLake: vi.fn() },
   dataLakeRepository: { resetEmbeddingSpend: h.resetEmbeddingSpend, findById: h.findById },
   dataLakeSpendNotificationRepository: { deleteForLake: h.deleteForLake },
   organizationRepository: { findById: h.findOrganization },
@@ -62,6 +65,11 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
     h.insideTransactionAtAudit = h.inTransaction;
     return h.recordAdminAction(...args);
   },
+}));
+
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { resolveCanManageLake: h.resolveCanManageLake } }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
+  toMemberAccessContext: h.toMemberAccessContext,
 }));
 
 // The target rules themselves are covered by delegateTargets' own tests; here only that the route applies them.
@@ -96,6 +104,7 @@ const LAKE = {
 };
 
 const ORGANIZATION = { id: 'org-1', userId: 'org-owner-1' };
+const MEMBER_CONTEXT = { userId: 'admin-1', isAdmin: false, administeredOrgIds: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -103,6 +112,8 @@ beforeEach(() => {
   h.recordAdminAction.mockResolvedValue(null);
   h.insideTransactionAtAudit = undefined;
   h.findOrganization.mockResolvedValue(ORGANIZATION);
+  h.resolveCanManageLake.mockResolvedValue(false);
+  h.toMemberAccessContext.mockResolvedValue(MEMBER_CONTEXT);
 });
 
 describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
@@ -167,6 +178,29 @@ describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
     );
     expect(h.resetEmbeddingSpend).not.toHaveBeenCalled();
     expect(h.recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate who could manage the lake as a member (owner/curator grant, org admin)', async () => {
+    h.resolveCanManageLake.mockResolvedValue(true);
+    const req = makeReq(false, ['credits:adjust']);
+    await expect(handler(req, makeRes())).rejects.toThrow(
+      'You cannot reset embedding spend for a data lake you manage'
+    );
+
+    expect(h.toMemberAccessContext).toHaveBeenCalledWith(req);
+    expect(h.resolveCanManageLake).toHaveBeenCalledWith(LAKE, MEMBER_CONTEXT, expect.anything());
+    expect(h.resetEmbeddingSpend).not.toHaveBeenCalled();
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('skips the delegate target checks for a full admin', async () => {
+    h.resetEmbeddingSpend.mockResolvedValue(true);
+    h.resolveCanManageLake.mockResolvedValue(true);
+    await handler(makeReq(true), makeRes());
+
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.assertUser).not.toHaveBeenCalled();
+    expect(h.resetEmbeddingSpend).toHaveBeenCalledWith('lake-1');
   });
 
   it('skips the organization check for a lake with no organization', async () => {

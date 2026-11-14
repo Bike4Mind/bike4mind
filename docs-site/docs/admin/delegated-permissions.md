@@ -51,7 +51,7 @@ A page whose edits need `settings:manage` also opens to `settings:manage` alone 
 
 ## Credit and subscription access
 
-Credit, grant, and subscription reads accept either `support:read` or `credits:adjust`. This includes the Subscriptions tab's subscription list and summary stats. Writes require `credits:adjust`. Subscription actions and the Held signup grants release button are disabled when you hold only `support:read`. Revenue trend charts and the approvals queue still require `support:read`; credit permission alone does not open them.
+Credit, grant, and subscription reads accept either `support:read` or `credits:adjust`. Writes require `credits:adjust`. Subscription actions and the Held signup grants release button are disabled when you hold only `support:read`. Revenue trend charts and the approvals queue still require `support:read`; credit permission alone does not open them.
 
 As a credit delegate, you cannot change your own account, an account with admin access, or an organization you belong to. This includes organizations you own, administer, or have joined. Full administrators retain their existing action-specific self-target checks. Grants above the configured approval threshold require a different approver with `credits:adjust`.
 

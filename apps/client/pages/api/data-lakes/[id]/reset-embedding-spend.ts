@@ -1,15 +1,19 @@
 import { adminApi } from '@server/middlewares/adminApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isFullAdmin, type IDataLakeDocument } from '@bike4mind/common';
+import { dataLakeService } from '@bike4mind/services';
 import {
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   dataLakeSpendNotificationRepository,
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import {
   assertDelegateCanCreditOrganization,
   assertDelegateCanCreditUser,
@@ -27,8 +31,8 @@ import {
  *
  * Deliberately an admin permission rather than lake-owner: the meter enforces a platform cost control,
  * and letting an owner zero their own spend would let them mint unlimited budget. For the same
- * reason a credits:adjust delegate cannot reset a lake they created or one owned by an organization
- * they belong to.
+ * reason a credits:adjust delegate cannot reset a lake they could manage without the admin role (owner,
+ * curator, org admin or org grant), one they created, or one owned by an organization they belong to.
  */
 const handler = adminApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES, adminPermissions: { POST: 'credits:adjust' } })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -37,7 +41,7 @@ const handler = adminApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES, adminPermissi
     await withTransaction(async () => {
       const lake = await dataLakeRepository.findById(id);
       if (!lake) throw new NotFoundError('Data lake not found');
-      await assertDelegateCanReset(req.user, lake);
+      await assertDelegateCanReset(req, lake);
       const reset = await dataLakeRepository.resetEmbeddingSpend(id);
       if (!reset) throw new NotFoundError('Data lake not found');
 
@@ -65,9 +69,16 @@ const handler = adminApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES, adminPermissi
 const VERB = 'reset embedding spend for';
 
 async function assertDelegateCanReset(
-  actor: Request['user'],
-  lake: { createdByUserId?: string | null; organizationId?: string | null }
+  req: Request,
+  lake: Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>
 ): Promise<void> {
+  const actor = req.user;
+  if (isFullAdmin(actor)) return;
+  const member = await toMemberAccessContext(req);
+  const manages = await dataLakeService.resolveCanManageLake(lake, member, {
+    db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+  });
+  if (manages) throw new ForbiddenError(`You cannot ${VERB} a data lake you manage`);
   if (lake.createdByUserId) await assertDelegateCanCreditUser(actor, lake.createdByUserId, VERB);
   if (!lake.organizationId) return;
   const organization = await organizationRepository.findById(lake.organizationId);
