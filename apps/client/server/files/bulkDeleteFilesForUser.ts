@@ -20,13 +20,37 @@ import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
+import { buildRequestFileScope } from '@server/utils/userFileScope';
 import type { Request } from 'express';
 
 export interface BulkDeleteFilesResult {
   deleted: string[];
   unshared: string[];
   notFound: string[];
+  /**
+   * Files that exist but whose access is only through a group, data lake, or other non-direct
+   * share: the caller can see them in the browser but cannot delete or unshare them individually.
+   * Kept separate from `notFound` on the internal endpoint so the SPA can surface a specific
+   * message rather than silently leaving these files stuck in the user's browser.
+   * The public v1 route folds `denied` into its published `not_found` bucket.
+   */
+  denied: string[];
   failed: { id: string; error: string }[];
+}
+
+async function canReadFileForRemoval(req: Request, fileId: string): Promise<boolean> {
+  const scope = buildRequestFileScope(req, req.user);
+  try {
+    const readable = await fabFileRepository.findAccessibleInIds(
+      [fileId],
+      { userId: req.user.id, userGroups: scope.userGroups },
+      { dataLakeTags: scope.dataLakeTags }
+    );
+    return readable.some(file => file.id === fileId);
+  } catch (error) {
+    req.logger.warn('Could not verify file read access during bulk removal', { error });
+    return false;
+  }
 }
 
 /**
@@ -46,7 +70,7 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
     fileIds,
   });
 
-  const results: BulkDeleteFilesResult = { deleted: [], unshared: [], notFound: [], failed: [] };
+  const results: BulkDeleteFilesResult = { deleted: [], unshared: [], notFound: [], denied: [], failed: [] };
 
   // Per owner: a batch can span personal files and files owned by an org.
   const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
@@ -127,7 +151,10 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
             { ability: req.ability, session }
           );
           results.unshared.push(fileId);
-        } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
+        } else if (result.action === 'denied') {
+          const readable = await canReadFileForRemoval(req, fileId);
+          (readable ? results.denied : results.notFound).push(fileId);
+        } else if (result.action === 'not_found') {
           results.notFound.push(fileId);
         }
         return result.references;

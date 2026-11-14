@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   // deleteFabFile runs for real over these, so 'deleted' vs 'unshared' comes from the service.
   findByIdAndUserId: vi.fn(),
   findById: vi.fn(),
+  findAccessibleInIds: vi.fn(),
   update: vi.fn(),
   updateUserShares: vi.fn(),
   deleteManyByFabFileId: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,
     findById: h.findById,
+    findAccessibleInIds: h.findAccessibleInIds,
     update: h.update,
     computeDataLakeStats: h.computeDataLakeStats,
     shareable: { updateUserShares: h.updateUserShares },
@@ -83,6 +85,8 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 
 import handler from '../bulk-delete';
+import { ApiKeyScope, DATA_LAKES } from '@bike4mind/common';
+beforeEach(() => h.findAccessibleInIds.mockReset().mockResolvedValue([]));
 
 const OWNER = 'u1';
 const LAKE = {
@@ -306,7 +310,11 @@ describe('bulk-delete - not-found reporting', () => {
 
     const body = json.mock.calls[0][0];
     expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
-    expect(body.results).not.toHaveProperty('denied');
+    expect(body.results.denied).toEqual([]);
+    h.findById.mockResolvedValue(null);
+    const missing = makeRes();
+    await run(['507f1f77bcf86cd799439011'], missing.res);
+    expect(body).toEqual(missing.json.mock.calls[0][0]);
     expect(body.message).toBe('1 file(s) not found');
   });
 
@@ -481,5 +489,60 @@ describe('bulk-delete - storage refunds per owner', () => {
 describe('bulk-delete - scope gate', () => {
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('bulk-delete - readable files that cannot be removed', () => {
+  const lake = DATA_LAKES.find(entry => entry.requiredUserTag);
+  if (!lake?.requiredUserTag) throw new Error('A tag-gated registry lake is required by this test');
+  const grantingTag = lake.requiredUserTag;
+  const grantedLakeTag = lake.datalakeTag;
+  const id = '507f1f77bcf86cd799439011';
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findById.mockResolvedValue({ ...memberFile(id, 'other-owner'), users: [] });
+    h.findByIdAndUserId.mockResolvedValue(null);
+  });
+  it.each([
+    ['group', { groups: ['group-1'] }, undefined, ['group-1'], []],
+    ['lake', { tags: [grantingTag] }, undefined, [], [grantedLakeTag]],
+    ['global', {}, undefined, [], []],
+    [
+      'lake scoped key',
+      { tags: [grantingTag] },
+      { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_READ] },
+      [],
+      [grantedLakeTag],
+    ],
+  ])('classifies readable %s metadata with trusted request scope', async (_label, user, apiKeyInfo, groups, tags) => {
+    h.findAccessibleInIds.mockResolvedValue([{ id }]);
+    const { res, json } = makeRes();
+    await run([id], res, { user: { id: OWNER, ...user }, apiKeyInfo });
+    expect(h.findAccessibleInIds).toHaveBeenCalledWith(
+      [id],
+      { userId: OWNER, userGroups: groups },
+      { dataLakeTags: tags }
+    );
+    expect(json.mock.calls[0][0].results).toMatchObject({ denied: [id], notFound: [], deleted: [], unshared: [] });
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.storageDelete).not.toHaveBeenCalled();
+  });
+  it('removes the lake arm for a key without lake read scope', async () => {
+    const { res, json } = makeRes();
+    await run([id], res, {
+      user: { id: OWNER, tags: [grantingTag] },
+      apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.WRITE_FILES] },
+    });
+    expect(h.findAccessibleInIds).toHaveBeenCalledWith([id], { userId: OWNER, userGroups: [] }, { dataLakeTags: [] });
+    expect(json.mock.calls[0][0].results).toMatchObject({ denied: [], notFound: [id] });
+  });
+  it('keeps failed read verification in the same notFound bucket', async () => {
+    h.findAccessibleInIds.mockRejectedValueOnce(new Error('Read lookup unavailable'));
+    const { res, json } = makeRes();
+    await run([id], res);
+    expect(json.mock.calls[0][0].results).toMatchObject({ denied: [], notFound: [id], failed: [] });
+    expect(logger.warn).toHaveBeenCalledWith('Could not verify file read access during bulk removal', {
+      error: expect.any(Error),
+    });
   });
 });

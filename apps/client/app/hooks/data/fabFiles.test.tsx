@@ -186,6 +186,31 @@ describe('useBulkDeleteFiles', () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])('shows one warning for retained shared files when removed=%s', async removed => {
+    apiDelete.mockResolvedValue({
+      data: {
+        message: '1 file(s) could not be removed',
+        results: { deleted: removed ? ['owned'] : [], unshared: [], notFound: [], denied: ['shared'], failed: [] },
+      },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBulkDeleteFiles(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(['owned', 'shared']);
+    });
+    expect(toastWarning).toHaveBeenCalledOnce();
+    expect(toastWarning).toHaveBeenCalledWith(expect.stringContaining('Shared or read-only files remain visible'), {
+      duration: 8000,
+    });
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['file-tags'] });
+  });
+
   it('shows a success toast when the batch actually removed something', async () => {
     apiDelete.mockResolvedValue({
       data: { message: 'Deleted 1 file(s)', results: { deleted: ['f1'], unshared: [], notFound: [], failed: [] } },
