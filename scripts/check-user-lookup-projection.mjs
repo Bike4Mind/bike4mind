@@ -19,7 +19,7 @@
 //  - the `password: 0` check runs over the whole file, not just projection blocks.
 // Tighten to an AST scope if these edge cases start hiding real regressions.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -106,4 +106,5 @@ function main() {
   console.log('\u2705 All user $lookups project safe fields (or are allowlisted).');
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+const invoked = process.argv[1];
+if (invoked && realpathSync(invoked) === fileURLToPath(import.meta.url)) main();
