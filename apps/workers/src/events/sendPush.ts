@@ -13,6 +13,7 @@ import {
   pushTokenRepository,
   userRepository,
   type PushTokenEnvironment,
+  type PushTokenPlatform,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { withEventContext } from '@workers/utils/eventContext';
@@ -25,9 +26,19 @@ import {
   type ApnsConfig,
   type ApnsTransport,
 } from './sendPush.apns';
+import {
+  createHttpFcmTransport,
+  fcmSigningKeyError,
+  readFcmSenderConfig,
+  type FcmConfig,
+  type FcmMessage,
+  type FcmResponse,
+  type FcmTransport,
+} from './sendPush.fcm';
 
 /**
- * `notification.push` consumer: delivers to the user's device tokens over APNs.
+ * `notification.push` consumer: delivers to the user's device tokens, over APNs for iOS tokens and FCM for
+ * Android tokens (each provider is optional; see resolveProviders).
  *
  * Delivery rules, in order: the user must have device tokens; the category must not be switched off
  * in `preferences.pushNotifications`; the user's active organization's `redactPushContent` swaps title and
@@ -98,7 +109,9 @@ export type SendPushDeps = {
     findByUser(
       userId: string,
       kind: 'device'
-    ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
+    ): Promise<
+      ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment; platform: PushTokenPlatform }>
+    >;
     /** `sid` is the read-time session: a token re-registered under another session meanwhile is kept. */
     removeByToken(token: string, options: { sid: string }): Promise<boolean>;
     removeBySids(sids: readonly string[]): Promise<number>;
@@ -107,8 +120,11 @@ export type SendPushDeps = {
     findLiveSids(sids: readonly string[]): Promise<ReadonlySet<string>>;
   };
   loadRecipient(userId: string): Promise<PushRecipient | null>;
-  transport: ApnsTransport;
-  topic: string;
+  /** APNs, for `ios` tokens. Absent when APNs is not configured: those tokens are skipped, not pruned. */
+  transport?: ApnsTransport;
+  topic?: string;
+  /** FCM, for `android` tokens. Absent when FCM is not configured: those tokens are skipped, not pruned. */
+  fcm?: FcmTransport;
   /** Resolves a path-only deepLink (see sessionDeepLink in packages/server-utils/src/utils/pushNotifications.ts). */
   appUrl?: string;
 };
@@ -139,25 +155,48 @@ export async function deliverPush(
     return { status: 'skipped', reason: 'category_disabled' };
   }
 
-  const headers = {
-    'apns-topic': deps.topic,
-    'apns-push-type': 'alert',
-    'apns-priority': '10',
-    'apns-collapse-id': collapseIdFor(event),
-  };
-  const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
+  const collapseId = collapseIdFor(event);
+  const iosTokens = tokens.filter(token => token.platform === 'ios');
+  const androidTokens = tokens.filter(token => token.platform === 'android');
+  const outcomes: DeliveryTally[] = [];
 
-  const outcome = await sendToTokens(tokens, headers, payload, deps, logger, event.category);
-  const { delivered, failed, retryable } = outcome;
-  const pruned = orphansPruned + outcome.pruned;
+  if (iosTokens.length > 0) {
+    if (deps.transport && deps.topic) {
+      const headers = {
+        'apns-topic': deps.topic,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        'apns-collapse-id': collapseId,
+      };
+      const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
+      outcomes.push(
+        await sendToTokens(iosTokens, headers, payload, { ...deps, transport: deps.transport }, logger, event.category)
+      );
+    } else {
+      logger.warn('[Push] APNs is not configured; skipping iOS device tokens', { skipped: iosTokens.length });
+    }
+  }
+  if (androidTokens.length > 0) {
+    if (deps.fcm) {
+      const message = buildFcmMessage(event, recipient.redactContent, deps.appUrl, collapseId);
+      outcomes.push(await sendToFcmTokens(androidTokens, message, { ...deps, fcm: deps.fcm }, logger, event.category));
+    } else {
+      logger.warn('[Push] FCM is not configured; skipping Android device tokens', { skipped: androidTokens.length });
+    }
+  }
+
+  const total = sumTallies(outcomes);
+  const { delivered, failed, retryable } = total;
+  const pruned = orphansPruned + total.pruned;
 
   logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
   // Retry (and finally dead-letter) when nothing landed and at least one device may still be
   // reachable: pruned, config-error and permanently rejected tokens fail the same way on redelivery and
   // must not mask a transient failure. A partial success is not retried: collapse-id would absorb the
-  // repeat, but APNs would still bill the quota and the user's other devices would re-alert.
+  // repeat, but the provider would still bill the quota and the user's other devices would re-alert.
+  // The rule spans both providers: one platform's success is a partial success for the other.
   if (delivered === 0 && retryable > 0) {
-    throw new Error(`APNs delivery failed transiently for ${retryable} of ${failed} device(s)`);
+    throw new Error(`Push delivery failed transiently for ${retryable} of ${failed} device(s)`);
   }
   return { status: 'sent', delivered, pruned, failed };
 }
@@ -345,6 +384,130 @@ async function sendToTokens(
   return { delivered, pruned, failed, retryable };
 }
 
+function sumTallies(tallies: readonly DeliveryTally[]): DeliveryTally {
+  return tallies.reduce(
+    (total, tally) => ({
+      delivered: total.delivered + tally.delivered,
+      pruned: total.pruned + tally.pruned,
+      failed: total.failed + tally.failed,
+      retryable: total.retryable + tally.retryable,
+    }),
+    { delivered: 0, pruned: 0, failed: 0, retryable: 0 }
+  );
+}
+
+/**
+ * Only FCM's UNREGISTERED means the token will never work again (the counterpart of APNs 410/Unregistered);
+ * it is the one response that deletes a row. A 404 NOT_FOUND is deliberately not one: it is also what a wrong
+ * project id returns, and pruning on it would wipe every Android token on one bad deploy.
+ */
+const isFcmUnregistered = (response: FcmResponse) => response.errorStatus === 'UNREGISTERED';
+
+/**
+ * Rejections caused by this server's FCM configuration rather than by the device token. Like the APNs
+ * CONFIG_ERROR_HINTS they are logged at error, consumed (no retry) and never prune.
+ */
+const FCM_AUTH_HINT =
+  'Google rejected the FCM_SERVICE_ACCOUNT credentials; check the service account JSON and the server clock';
+const FCM_CONFIG_ERROR_HINTS: Record<string, string> = {
+  SENDER_ID_MISMATCH:
+    'the device tokens were issued for a different Firebase project than FCM_SERVICE_ACCOUNT belongs to',
+  PERMISSION_DENIED:
+    'the service account may not send FCM messages; enable the Firebase Cloud Messaging API and grant it the FCM Admin role',
+  UNAUTHENTICATED: FCM_AUTH_HINT,
+  NOT_FOUND: 'the Firebase project in FCM_SERVICE_ACCOUNT was not found',
+};
+
+function fcmConfigErrorHint(response: FcmResponse): string | undefined {
+  // The OAuth exchange failing with a 4xx (invalid_grant, invalid_client) is the credentials, never a device.
+  if (response.stage === 'auth') {
+    return response.status >= 400 && response.status < 500 && response.status !== 429 ? FCM_AUTH_HINT : undefined;
+  }
+  if (response.errorStatus && FCM_CONFIG_ERROR_HINTS[response.errorStatus]) {
+    return FCM_CONFIG_ERROR_HINTS[response.errorStatus];
+  }
+  if (response.status === 401 || response.status === 403) return FCM_AUTH_HINT;
+  return undefined;
+}
+
+/**
+ * One FCM request per token, mirroring sendToTokens: prune on UNREGISTERED only, keep tokens on
+ * INVALID_ARGUMENT (a malformed token and a malformed payload look alike), count 429/5xx and transport
+ * errors as `retryable`, and report configuration rejections once per invocation without retrying or pruning.
+ */
+async function sendToFcmTokens(
+  tokens: ReadonlyArray<{ token: string; sid: string }>,
+  message: FcmMessage,
+  deps: { fcm: FcmTransport; tokens: Pick<SendPushDeps['tokens'], 'removeByToken'> },
+  logger: Pick<Logger, 'warn' | 'error'>,
+  category?: string
+): Promise<DeliveryTally> {
+  let delivered = 0;
+  let pruned = 0;
+  let failed = 0;
+  let retryable = 0;
+  const configErrors = new Map<string, { status: number; hint: string }>();
+  let next = 0;
+  const worker = async () => {
+    while (next < tokens.length) {
+      const { token, sid } = tokens[next++];
+      try {
+        const response = await deps.fcm.send({ deviceToken: token, message });
+        if (response.status === 200) {
+          delivered++;
+          continue;
+        }
+        failed++;
+        const hint = fcmConfigErrorHint(response);
+        if (hint) {
+          configErrors.set(response.errorStatus ?? String(response.status), { status: response.status, hint });
+          continue;
+        }
+        if (isFcmUnregistered(response)) {
+          try {
+            if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          } catch (pruneError) {
+            logger.warn('[Push] failed to prune an unregistered FCM device token', {
+              error: pruneError instanceof Error ? pruneError.message : String(pruneError),
+            });
+          }
+          continue;
+        }
+        if (response.errorStatus === 'INVALID_ARGUMENT') {
+          logger.error(
+            '[Push] FCM reported INVALID_ARGUMENT; keeping the token (the token or the payload is malformed)',
+            {
+              detail: response.errorDetail,
+            }
+          );
+          continue;
+        }
+        if (response.status === 429 || response.status >= 500) retryable++;
+        logger.warn('[Push] FCM rejected the notification', {
+          status: response.status,
+          errorStatus: response.errorStatus,
+          stage: response.stage,
+        });
+      } catch (error) {
+        failed++;
+        retryable++;
+        logger.warn('[Push] FCM request failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SENDS, tokens.length) }, worker));
+
+  for (const [reason, { status, hint }] of configErrors) {
+    logger.error('[Push] FCM rejected the server configuration; Android push delivery is not working', {
+      status,
+      reason,
+      likelyCause: hint,
+      category,
+    });
+  }
+  return { delivered, pruned, failed, retryable };
+}
+
 /**
  * Revokes prune tokens eagerly (AuthSessionRepository.revokeBySid), but an expired session is deleted
  * by the TTL index on AuthSession.expiresAt (AuthSessionModel.ts) with no hook, so its tokens would
@@ -397,6 +560,34 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
   };
 }
 
+/** The FCM counterpart of buildPayload: same copy, redaction and deep link, with the metadata as string `data`. */
+function buildFcmMessage(
+  event: PushNotificationEvent,
+  redact: boolean,
+  appUrl: string | undefined,
+  collapseId: string
+): FcmMessage {
+  const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  return {
+    notification: {
+      title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
+      body: truncateForPush(copy.body, MAX_BODY_LENGTH),
+    },
+    data: {
+      category: event.category,
+      deepLink: resolveDeepLink(event.deepLink, appUrl),
+      ...(event.questId && { questId: event.questId }),
+      ...(event.sessionId && { sessionId: event.sessionId }),
+    },
+    android: {
+      priority: 'HIGH',
+      collapse_key: collapseId,
+      // The tag makes a redelivery or a second terminal site replace the tray entry instead of stacking.
+      notification: { tag: collapseId },
+    },
+  };
+}
+
 function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {
   if (!deepLink.startsWith('/') || !appUrl) return deepLink;
   return `${appUrl.replace(/\/+$/, '')}${deepLink}`;
@@ -438,13 +629,62 @@ function transportFor(config: ApnsConfig): ApnsTransport {
   return shared.transport;
 }
 
+// Held across warm invocations so the FCM OAuth access token is reused until it nears expiry.
+let sharedFcm: { config: FcmConfig; transport: FcmTransport } | undefined;
+
+function fcmTransportFor(config: FcmConfig): FcmTransport {
+  const held = sharedFcm;
+  if (
+    held &&
+    held.config.projectId === config.projectId &&
+    held.config.clientEmail === config.clientEmail &&
+    held.config.privateKey === config.privateKey
+  ) {
+    return held.transport;
+  }
+  sharedFcm = { config, transport: createHttpFcmTransport(config) };
+  return sharedFcm.transport;
+}
+
+type PushProviders = { apns: ApnsConfig | null; fcm: FcmConfig | null; configErrors: string[] };
+
+/**
+ * Which providers can deliver. An unset provider is silent (preview, self-host without push); a set but
+ * unusable one (a malformed .p8 or service account) is reported in `configErrors` and treated as off, so
+ * a bad secret for one platform never blocks the other.
+ */
+function resolveProviders(): PushProviders {
+  const configErrors: string[] = [];
+  let apns = readApnsConfig();
+  if (apns) {
+    const keyError = apnsSigningKeyError(apns.key);
+    if (keyError) {
+      configErrors.push(`APNS_KEY is not a usable .p8 signing key (server configuration error): ${keyError}`);
+      apns = null;
+    }
+  }
+  let fcm: FcmConfig | null = null;
+  const fcmResult = readFcmSenderConfig();
+  if (fcmResult.status === 'invalid') {
+    configErrors.push(`${fcmResult.error} (server configuration error)`);
+  } else if (fcmResult.status === 'ok') {
+    const keyError = fcmSigningKeyError(fcmResult.credentials.privateKey);
+    if (keyError) {
+      configErrors.push(`FCM_SERVICE_ACCOUNT private_key is not a usable RSA signing key: ${keyError}`);
+    } else {
+      fcm = fcmResult.credentials;
+    }
+  }
+  return { apns, fcm, configErrors };
+}
+
 const LIVE_ACTIVITY_DETAIL_TYPE = 'notification.liveActivity';
 
 const handleWithContext = withEventContext(async (event, logger) => {
-  const config = readApnsConfig();
-  if (!config) return;
-  const transport = transportFor(config);
+  const { apns, fcm } = resolveProviders();
   if (event.event === LIVE_ACTIVITY_DETAIL_TYPE) {
+    // Live Activities exist on iOS only.
+    if (!apns) return;
     const payload = NotificationEvents.LiveActivity.schema.parse(event.properties);
     logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, questId: payload.questId });
     await deliverLiveActivityPush(
@@ -453,8 +693,8 @@ const handleWithContext = withEventContext(async (event, logger) => {
         tokens: pushTokenRepository,
         sessions: authSessionRepository,
         loadRecipient: loadPushRecipient,
-        transport,
-        topic: config.topic,
+        transport: transportFor(apns),
+        topic: apns.topic,
       },
       logger
     );
@@ -469,8 +709,8 @@ const handleWithContext = withEventContext(async (event, logger) => {
       tokens: pushTokenRepository,
       sessions: authSessionRepository,
       loadRecipient: loadPushRecipient,
-      transport,
-      topic: config.topic,
+      ...(apns && { transport: transportFor(apns), topic: apns.topic }),
+      ...(fcm && { fcm: fcmTransportFor(fcm) }),
       appUrl: process.env.APP_URL,
     },
     logger
@@ -479,21 +719,17 @@ const handleWithContext = withEventContext(async (event, logger) => {
 
 /**
  * Checked before withEventContext so an unconfigured or misconfigured deployment (preview, self-host,
- * a malformed APNS_KEY) consumes the event without opening a database connection.
+ * a malformed APNS_KEY or FCM_SERVICE_ACCOUNT) consumes the event without opening a database connection.
  */
 export const handler = async (event: EventBridgeEvent<string, unknown>): Promise<void> => {
-  const config = readApnsConfig();
-  if (!config) {
-    new Logger({ metadata: { handler: 'sendPush' } }).info('[Push] APNs is not configured; skipping');
-    return;
-  }
-  const keyError = apnsSigningKeyError(config.key);
-  if (keyError) {
+  const { apns, fcm, configErrors } = resolveProviders();
+  const logger = new Logger({ metadata: { handler: 'sendPush' } });
+  for (const error of configErrors) {
     // Consumed rather than thrown: a retry cannot fix a bad secret, and would only fill the DLQ.
-    new Logger({ metadata: { handler: 'sendPush' } }).error(
-      '[Push] APNS_KEY is not a usable .p8 signing key (server configuration error); push delivery is disabled',
-      { error: keyError }
-    );
+    logger.error(`[Push] ${error}; delivery for that platform is disabled`);
+  }
+  if (!apns && !fcm) {
+    if (configErrors.length === 0) logger.info('[Push] no push provider (APNs, FCM) is configured; skipping');
     return;
   }
   await handleWithContext(event);

@@ -20,7 +20,8 @@ export const registerPushTokenContract = defineEndpoint({
     'Registers a push token for the signed-in device so the server can notify it. Idempotent: ' +
     're-registering the same token refreshes it and rebinds it to the calling user and session, ' +
     'which is how a token moves when a different account signs in on the same device. The token ' +
-    'is removed automatically when the registering session ends. ' +
+    'is removed automatically when the registering session ends. `platform` selects the delivery ' +
+    'service: `ios` (APNs) or `android` (FCM; send `production` as the environment). ' +
     JWT_ONLY_NOTE +
     'A token with no session claim (legacy access token) is refused with `401`; sign in again.',
   tags: ['Account'],

@@ -45,7 +45,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'session.context_summarize': sessionContextSummarizationHandler,
   'session.tag': sessionTaggingHandler,
   'notebook.curation.start': notebookCurationHandler,
-  // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
+  // No-ops unless all four APNS_* values or FCM_SERVICE_ACCOUNT are set (see pushDelivery in server-utils).
   'notification.push': sendPushHandler,
   'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
   'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,

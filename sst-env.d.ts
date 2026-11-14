@@ -30,6 +30,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "FCM_SERVICE_ACCOUNT": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "AgentExecutor": {
       "name": string
       "type": "sst.aws.Function"

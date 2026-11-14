@@ -70,7 +70,8 @@ import {
   type SendLiveActivityDeps,
   type SendPushDeps,
 } from './sendPush';
-import type { ApnsRequest, ApnsResponse } from './sendPush.apns';
+import type { ApnsRequest, ApnsResponse, ApnsTransport } from './sendPush.apns';
+import type { FcmRequest, FcmResponse } from './sendPush.fcm';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -85,7 +86,12 @@ const EVENT: PushNotificationEvent = {
   sessionId: 'session-1',
 };
 
-type Token = { token: string; environment: 'sandbox' | 'production'; sid?: string };
+type Token = {
+  token: string;
+  environment: 'sandbox' | 'production';
+  sid?: string;
+  platform?: 'ios' | 'android';
+};
 
 function makeDeps(
   tokens: Token[],
@@ -98,8 +104,8 @@ function makeDeps(
   const removed: string[] = [];
   const removedSids: string[] = [];
   const endedSids = new Set(overrides.endedSids ?? []);
-  const stored = tokens.map(token => ({ sid: 'sid-live', ...token }));
-  const deps: SendPushDeps = {
+  const stored = tokens.map(token => ({ sid: 'sid-live', platform: 'ios' as const, ...token }));
+  const deps: SendPushDeps & { transport: ApnsTransport } = {
     tokens: {
       findByUser: vi.fn(async () => stored),
       removeByToken: vi.fn(async (token: string) => {
@@ -570,6 +576,68 @@ describe('handler', () => {
     expect(h.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
   });
 
+  describe('FCM_SERVICE_ACCOUNT', () => {
+    const RSA_KEY_PEM = generateKeyPairSync('rsa', { modulusLength: 2048 })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+    const serviceAccount = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        project_id: 'demo-project',
+        client_email: 'push@demo-project.iam.gserviceaccount.com',
+        private_key: RSA_KEY_PEM,
+        ...overrides,
+      });
+
+    afterEach(() => {
+      delete process.env.FCM_SERVICE_ACCOUNT;
+    });
+
+    it('consumes the event as a no-op when neither provider is configured', async () => {
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+    });
+
+    it('consumes the event without retrying or reading the database when the JSON is malformed', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = '{not json';
+
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+      expect(h.findByUser).not.toHaveBeenCalled();
+    });
+
+    it('consumes the event when the private key is not a usable RSA key', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = serviceAccount({ private_key: 'not-a-key' });
+
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+    });
+
+    it('delivers through FCM alone, without APNs configured', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = serviceAccount();
+      h.findByUser.mockResolvedValue([]);
+
+      await handler(bridgeEvent);
+
+      expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
+      expect(h.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
+    });
+
+    it('keeps APNs delivery working when the FCM secret is broken', async () => {
+      Object.assign(process.env, {
+        APNS_KEY_ID: 'K',
+        APNS_TEAM_ID: 'T',
+        APNS_KEY: VALID_KEY_PEM,
+        APNS_TOPIC: 'com.example.client',
+        FCM_SERVICE_ACCOUNT: '{not json',
+      });
+      h.findByUser.mockResolvedValue([]);
+
+      await handler(bridgeEvent);
+
+      expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('shared transport', () => {
     const OTHER_KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
       .privateKey.export({ type: 'pkcs8', format: 'pem' })
@@ -602,6 +670,188 @@ describe('handler', () => {
       expect(h.createTransport).toHaveBeenCalledTimes(2);
       expect(first.close).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('deliverPush over FCM', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const androidToken = (token: string, sid?: string): Token => ({
+    token,
+    environment: 'production',
+    platform: 'android',
+    ...(sid && { sid }),
+  });
+
+  function makeFcmDeps(
+    tokens: Token[],
+    options: { respond?: (request: FcmRequest) => FcmResponse; withApns?: boolean } = {}
+  ) {
+    const sentFcm: FcmRequest[] = [];
+    const { deps, removed, sent } = makeDeps(tokens);
+    const fcm = {
+      send: vi.fn(async (request: FcmRequest) => {
+        sentFcm.push(request);
+        return options.respond?.(request) ?? { status: 200 };
+      }),
+    };
+    const { transport, topic, ...withoutApns } = deps;
+    const fcmDeps: SendPushDeps = options.withApns ? { ...deps, fcm } : { ...withoutApns, fcm };
+    return { deps: fcmDeps, fcm, sentFcm, removed, sentApns: sent, apnsTransport: transport, topic };
+  }
+
+  it('sends an Android token one FCM message with copy, string data, and collapse metadata', async () => {
+    const { deps, sentFcm } = makeFcmDeps([androidToken('fcm-a')]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sentFcm).toHaveLength(1);
+    expect(sentFcm[0].deviceToken).toBe('fcm-a');
+    expect(sentFcm[0].message).toEqual({
+      notification: { title: EVENT.title, body: EVENT.body },
+      data: {
+        category: 'agent_completed',
+        deepLink: 'https://app.example.test/notebooks/session-1',
+        questId: 'quest-1',
+        sessionId: 'session-1',
+      },
+      android: {
+        priority: 'HIGH',
+        collapse_key: 'agent-run:exec-1',
+        notification: { tag: 'agent-run:exec-1' },
+      },
+    });
+  });
+
+  it('redacts title and body for an organization that redacts push content', async () => {
+    const { deps, sentFcm } = makeFcmDeps([androidToken('fcm-a')]);
+    deps.loadRecipient = vi.fn(async () => ({ preferences: undefined, redactContent: true }));
+
+    await deliverPush(EVENT, deps, logger);
+
+    expect(sentFcm[0].message.notification).toEqual(REDACTED_PUSH_COPY.agent_completed);
+    expect(JSON.stringify(sentFcm[0].message)).not.toContain('Q3 plan');
+  });
+
+  it('routes each platform to its own provider', async () => {
+    const { deps, sentFcm, sentApns } = makeFcmDeps(
+      [androidToken('fcm-a'), { token: 'apns-a', environment: 'production' }],
+      {
+        withApns: true,
+      }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 2, failed: 0 });
+    expect(sentFcm.map(request => request.deviceToken)).toEqual(['fcm-a']);
+    expect(sentApns.map(request => request.deviceToken)).toEqual(['apns-a']);
+  });
+
+  it('skips, without pruning, tokens of a platform whose provider is not configured', async () => {
+    const { deps, removed, sentFcm } = makeFcmDeps([
+      androidToken('fcm-a'),
+      { token: 'apns-a', environment: 'production' },
+    ]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sentFcm).toHaveLength(1);
+    expect(removed).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('APNs is not configured'), { skipped: 1 });
+  });
+
+  it('prunes a token FCM reports UNREGISTERED under its read-time sid and does not retry', async () => {
+    const { deps, removed } = makeFcmDeps([androidToken('dead', 'sid-dead'), androidToken('live')], {
+      respond: request =>
+        request.deviceToken === 'dead' ? { status: 404, errorStatus: 'UNREGISTERED' } : { status: 200 },
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 1,
+      failed: 1,
+    });
+    expect(removed).toEqual(['dead']);
+    expect(deps.tokens.removeByToken).toHaveBeenCalledExactlyOnceWith('dead', { sid: 'sid-dead' });
+  });
+
+  it.each([
+    ['a bare 404 NOT_FOUND (also what a wrong project id returns)', { status: 404, errorStatus: 'NOT_FOUND' }],
+    ['SENDER_ID_MISMATCH', { status: 403, errorStatus: 'SENDER_ID_MISMATCH' }],
+    ['INVALID_ARGUMENT', { status: 400, errorStatus: 'INVALID_ARGUMENT' }],
+  ])('never prunes on %s', async (_label, response) => {
+    const { deps, removed } = makeFcmDeps([androidToken('tok')], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 1 });
+    expect(removed).toEqual([]);
+  });
+
+  it('reports a configuration rejection once at error, without retrying or pruning', async () => {
+    const { deps, removed } = makeFcmDeps([androidToken('a'), androidToken('b')], {
+      respond: () => ({ status: 403, errorStatus: 'PERMISSION_DENIED' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 2 });
+    expect(removed).toEqual([]);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('FCM rejected the server configuration'),
+      expect.objectContaining({ reason: 'PERMISSION_DENIED' })
+    );
+  });
+
+  it('treats a rejected OAuth exchange as a configuration error, not a retryable failure', async () => {
+    const { deps } = makeFcmDeps([androidToken('a')], {
+      respond: () => ({ status: 400, errorStatus: 'invalid_grant', stage: 'auth' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, failed: 1 });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('FCM rejected the server configuration'),
+      expect.objectContaining({ reason: 'invalid_grant' })
+    );
+  });
+
+  it.each([
+    ['429 QUOTA_EXCEEDED', { status: 429, errorStatus: 'QUOTA_EXCEEDED' }],
+    ['503 UNAVAILABLE', { status: 503, errorStatus: 'UNAVAILABLE' }],
+    ['a failing OAuth exchange (503)', { status: 503, stage: 'auth' as const }],
+  ])('throws for an EventBridge retry when every device failed with %s', async (_label, response) => {
+    const { deps } = makeFcmDeps([androidToken('a')], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently for 1 of 1/);
+  });
+
+  it('throws for a retry when the transport itself throws', async () => {
+    const { deps, fcm } = makeFcmDeps([androidToken('a')]);
+    fcm.send.mockRejectedValue(new Error('socket hang up'));
+
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently/);
+  });
+
+  it('does not retry a partial success, even across providers', async () => {
+    const { deps } = makeFcmDeps([androidToken('fcm-a'), { token: 'apns-a', environment: 'production' }], {
+      withApns: true,
+      respond: () => ({ status: 503, errorStatus: 'UNAVAILABLE' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
+  });
+
+  it('does not retry when the only failure is a pruned token', async () => {
+    const { deps } = makeFcmDeps([androidToken('a')], {
+      respond: () => ({ status: 404, errorStatus: 'UNREGISTERED' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 1, failed: 1 });
   });
 });
 

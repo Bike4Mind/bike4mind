@@ -1,8 +1,9 @@
+import { z } from 'zod';
 import { Config } from './config';
 
 /**
- * Whether APNs push delivery to first-party native clients is configured, and its credentials.
- * Shared by the publishers (./pushNotifications.ts and the workers that call
+ * Whether push delivery to first-party native clients (APNs for iOS, FCM for Android) is configured, and
+ * its credentials. Shared by the publishers (./pushNotifications.ts and the workers that call
  * it) and the consumer (apps/workers/src/events/sendPush.apns.ts), so both sides agree on "off".
  */
 
@@ -45,7 +46,58 @@ export function readApnsCredentials(
   return { keyId, teamId, key, topic };
 }
 
-/** Publisher-side gate: with push unconfigured, no event is built, read for, or published. */
+const FcmServiceAccountSchema = z.object({
+  project_id: z.string().min(1),
+  client_email: z.string().min(1),
+  private_key: z.string().min(1),
+});
+
+export type FcmCredentials = {
+  /** The Firebase project the Android client's google-services.json belongs to. */
+  projectId: string;
+  /** The service account that signs the OAuth assertion for the FCM HTTP v1 API. */
+  clientEmail: string;
+  /** PKCS#8 PEM (RSA) from the service account JSON. */
+  privateKey: string;
+};
+
+/** `unset` disables Android push quietly; `invalid` is a deployment mistake the sender reports at error. */
+export type FcmConfigResult =
+  { status: 'unset' } | { status: 'invalid'; error: string } | { status: 'ok'; credentials: FcmCredentials };
+
+/**
+ * FCM credentials come from one secret, FCM_SERVICE_ACCOUNT: the service account JSON downloaded from the
+ * Firebase console, verbatim. Read from the linked secret first, then plain env (self-host); blank and the
+ * 'not-configured' placeholder count as unset.
+ */
+export function readFcmConfig(
+  secrets: { FCM_SERVICE_ACCOUNT?: string | undefined } = Config,
+  env: Readonly<Record<string, string | undefined>> = process.env
+): FcmConfigResult {
+  const raw = configuredValue(secrets.FCM_SERVICE_ACCOUNT) ?? configuredValue(env.FCM_SERVICE_ACCOUNT);
+  if (!raw) return { status: 'unset' };
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    return { status: 'invalid', error: 'FCM_SERVICE_ACCOUNT is not valid JSON' };
+  }
+  const parsed = FcmServiceAccountSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    const missing = parsed.error.issues.map(issue => issue.path.join('.')).join(', ');
+    return { status: 'invalid', error: `FCM_SERVICE_ACCOUNT lacks usable ${missing}` };
+  }
+  return {
+    status: 'ok',
+    credentials: {
+      projectId: parsed.data.project_id,
+      clientEmail: parsed.data.client_email,
+      privateKey: parsed.data.private_key,
+    },
+  };
+}
+
+/** Publisher-side gate: with no push provider configured, no event is built, read for, or published. */
 export function isPushDeliveryConfigured(): boolean {
-  return readApnsCredentials() !== null;
+  return readApnsCredentials() !== null || readFcmConfig().status === 'ok';
 }
