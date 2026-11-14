@@ -116,6 +116,26 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     return toJob(await this.jobModel.findOne({ ownerType, ownerId, idempotencyKey: key }));
   }
 
+  /**
+   * The user's own-credit job holds created since `since` that have neither settled nor been released, for the
+   * new-account spend cap (newAccountSpendCapAdapters.ts). A settled hold is excluded because its ledger row
+   * already counts it. Served by the { ownerType, ownerId, createdAt } index.
+   */
+  async findOutstandingHoldsForUser(userId: string, since: Date): Promise<Array<{ at: Date; credits: number }>> {
+    const docs = await this.jobModel
+      .find({
+        ownerType: CreditHolderType.User,
+        ownerId: userId,
+        createdAt: { $gte: since },
+        creditHold: { $ne: null },
+        settledCredits: { $exists: false },
+        terminalHandledAt: null,
+      })
+      .select({ creditHold: 1, createdAt: 1 })
+      .lean<Array<{ creditHold: { reservedCredits: number }; createdAt: Date }>>();
+    return docs.map(doc => ({ at: doc.createdAt, credits: doc.creditHold.reservedCredits }));
+  }
+
   // Leasable: unleased (or lease expired) and either still in flight or terminal with handling not done.
   // That includes claimed-but-unhandled terminal jobs: leasing them lets the engine alarm on them,
   // but the claim stays held so settle/release are never re-run.
