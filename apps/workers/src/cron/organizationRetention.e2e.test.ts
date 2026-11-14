@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { Organization } from '@bike4mind/database';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -18,6 +19,7 @@ let database: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

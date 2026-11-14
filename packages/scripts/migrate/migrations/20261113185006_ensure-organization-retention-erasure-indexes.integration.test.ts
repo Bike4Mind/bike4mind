@@ -8,7 +8,11 @@ import {
   OrganizationRetentionEstimate,
   Session,
 } from '@bike4mind/database';
-import { createMongoReplSet, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../database/src/__test__/createMongoServer';
 import migration from './20261113185006_ensure-organization-retention-erasure-indexes';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -16,6 +20,7 @@ let database: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

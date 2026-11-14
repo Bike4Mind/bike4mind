@@ -3,7 +3,11 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { FabFileSourceType } from '@bike4mind/common';
 import { FabFile, Session } from '@bike4mind/database';
-import { createMongoReplSet, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../database/src/__test__/createMongoServer';
 import { retentionFileFilter, retentionSessionIdPages } from './retentionPolicy';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -28,6 +32,7 @@ let database: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   for (const name of ['retention_files_present', 'retention_generated_files_present']) {
     const definition = FabFile.schema.indexes().find(([, options]) => options.name === name);
     if (!definition) throw new Error(`Missing production index ${name}`);
