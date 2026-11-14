@@ -11,6 +11,7 @@ import OrganizationLibrarySection from '@client/app/components/organizations/Org
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationAvatar from '@client/app/components/organizations/OrganizationAvatar';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
@@ -36,7 +37,6 @@ import {
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
-  Avatar,
   Alert,
   Box,
   Button,
@@ -497,7 +497,6 @@ const OrganizationHeader: FC<{
 }> = ({ organization, onSettingsClick }) => {
   const { t } = useTranslation();
   const { name, description } = organization;
-  const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
@@ -517,9 +516,7 @@ const OrganizationHeader: FC<{
   return (
     <Card variant="outlined" sx={{ mx: 3, p: 3 }}>
       <Stack direction="row" spacing={3} alignItems="center">
-        <Avatar size="lg" sx={{ '--Avatar-size': '64px' }}>
-          {initial}
-        </Avatar>
+        <OrganizationAvatar organization={organization} size="lg" sx={{ '--Avatar-size': '64px' }} />
         <Stack spacing={1} flex={1}>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
             <Typography level="h3">{name}</Typography>

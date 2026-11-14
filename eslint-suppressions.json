@@ -3854,7 +3854,7 @@
   },
   "b4m-core/services/src/organizationService/groupMembership.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "b4m-core/services/src/organizationService/leave.test.ts": {
