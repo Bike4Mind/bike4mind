@@ -277,6 +277,7 @@ async function assertOwnerAccountUsable(info: ApiKeyInfo) {
     billingOwnerType: info.billingOwnerType,
     organizationId: info.organizationId,
     createdByUserId: info.createdByUserId,
+    oauthExchangeClientId: info.oauthExchangeClientId,
   });
   if (!accessAllowed) {
     Logger.globalInstance.warn('API key rejected: apiKeyAccess setting denies this owner', {

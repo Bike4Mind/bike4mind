@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { configKey, configTrue, gitListed, prettyShowsSignatures, settingsOn, type GitWord } from './gitTable';
+import {
+  configKey,
+  configTrue,
+  formatShowsSignatures,
+  gitListed,
+  prettyShowsSignatures,
+  settingsOn,
+  type GitWord,
+} from './gitTable';
 
 // A word holding `$` is filled from there at run time (`$$` also splits into more words); `*` starts a glob.
 const words = (line: string): GitWord[] =>
@@ -575,7 +583,7 @@ describe('gitListed', () => {
     ['status', []],
     ['diff', []],
     ['stash', []],
-    ['stash list', []],
+    ['stash list', LOG],
     ['shortlog -s', []],
     ['format-patch -1', []],
     ['branch -v', []],
@@ -717,7 +725,7 @@ describe('git config values', () => {
     ],
     [
       [
-        { key: 'format.pretty', value: 'FANCY' },
+        { key: 'format.pretty', value: 'fancy' },
         { key: 'pretty.fancy', value: 'format:%h' },
       ],
       false,
@@ -746,7 +754,7 @@ describe('git config values', () => {
     ],
     [
       [
-        { key: 'format.pretty', value: 'ZS' },
+        { key: 'format.pretty', value: 'zs' },
         { key: 'pretty.zsig', value: 'format:%h %G?' },
       ],
       true,
@@ -770,7 +778,7 @@ describe('git config values', () => {
     [
       [
         { key: 'format.pretty', value: 'a' },
-        { key: 'pretty.abc', value: 'BC' },
+        { key: 'pretty.abc', value: 'bc' },
         { key: 'pretty.bcd', value: '%G?' },
       ],
       true,
@@ -791,11 +799,59 @@ describe('git config values', () => {
       ],
       false,
     ],
-    [[{ key: 'format.pretty', value: 'constructor' }], false],
-    [[{ key: 'format.pretty', value: '__proto__' }], false],
+    [[{ key: 'format.pretty', value: 'constructor' }], true],
+    [[{ key: 'format.pretty', value: '__proto__' }], true],
     [[{ key: 'user.name', value: 'x' }], true],
   ])('reads the pretty entries %j as printing signatures: %s', (entries, expected) => {
     expect(prettyShowsSignatures(entries)).toBe(expected);
+  });
+
+  it.each([
+    ['%G?', 'pretty', true],
+    ['%+G?', 'pretty', true],
+    ['%-GS', 'pretty', true],
+    ['% G?', 'pretty', true],
+    ['%Gx', 'pretty', true],
+    ['%%G?', 'pretty', false],
+    ['%%%G?', 'pretty', true],
+    ['%%%%G?', 'pretty', false],
+    ['%x25G?', 'pretty', false],
+    ['%(signature:grade)', 'ref', true],
+    ['%(*signature:grade)', 'ref', true],
+    ['%%(*signature:grade)', 'ref', false],
+    ['%(contents:signature)', 'ref', false],
+  ] as const)('detects verifier input %s (%s)', (format, kind, expected) => {
+    expect(formatShowsSignatures(format, kind)).toBe(expected);
+  });
+
+  it.each([
+    ['log --pretty=%G? --format=%h --oneline', 'oneline'],
+    ['log --format=%h --pretty=%G? --format=%s', '%s'],
+    ['log --pretty=%G? --pretty HEAD', 'medium'],
+    ['log --pretty=', ''],
+    ['log --format=', ''],
+  ])('keeps the last output selector in %s', (command, expected) => {
+    const listing = gitListed(words(command));
+    expect(listing.listed && listing.signatureFormat?.value?.text).toBe(expected);
+  });
+
+  it.each([
+    ['oneline', [{ key: 'pretty.oneline', value: '%G?' }], false],
+    ['s', [{ key: 'pretty.sig', value: '%G?' }], true],
+    ['safe', [{ key: 'pretty.safe', value: 'format:%%G?' }], false],
+    [
+      'sig',
+      [
+        { key: 'pretty.sig', value: 'other' },
+        { key: 'pretty.other', value: '%+G?' },
+      ],
+      true,
+    ],
+    ['oneline', [{ key: 'format.pretty', value: '%G?' }], false],
+    ['format:%h', [{ key: 'format.pretty', value: '%G?' }], false],
+    ['missing', [], true],
+  ] as const)('resolves selected pretty format %s', (selected, entries, expected) => {
+    expect(prettyShowsSignatures(entries, selected)).toBe(expected);
   });
 
   it('reads no key absent from the entries, Object.prototype names included', () => {

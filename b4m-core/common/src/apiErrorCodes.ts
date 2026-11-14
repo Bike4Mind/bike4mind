@@ -13,6 +13,9 @@ export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
+export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
+export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
+export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -69,6 +72,12 @@ export const API_ERROR_CODES = [
   UPGRADE_REQUIRED_ERROR_CODE,
   /** A 404: the completion's `run` was not created by this user and billing owner (or does not exist); mint one with POST /api/v1/completion-runs. */
   RUN_NOT_FOUND_ERROR_CODE,
+  /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
+  MCP_ACTION_REPLACED_ERROR_CODE,
+  /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */
+  PENDING_ACTION_EXPIRED_ERROR_CODE,
+  /** A 409: the pending action was already approved, denied or cleared (including by a replayed request). */
+  PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

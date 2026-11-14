@@ -8,6 +8,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   userRepository,
+  orgDomainClaimRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
@@ -21,6 +22,7 @@ import {
   MAX_STORAGE_LIMIT_MB,
   toSafeOrganization,
   OrganizationSharingPolicySchema,
+  orgDomainPathIdSchema,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -155,15 +157,17 @@ const handler = baseApi()
     // grants and can hand lakes to the billing owner. No-ops for a session caller.
     assertDataLakeShareScope(req);
 
-    const id = req.query.id;
+    const parsedId = orgDomainPathIdSchema.safeParse(req.query.id);
+    if (!parsedId.success) throw new BadRequestError('Invalid organization id');
+    const id = parsedId.data;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
     // soft-deletes, the members' lake-grant lapse, the user organizationId reset, and the org delete
     // must commit together, or a partial failure leaves dangling group or lake access or an org that
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(() =>
-      organizationService.deleteOrganization(
+    await withTransaction(async () => {
+      await organizationService.deleteOrganization(
         req.user!,
         { id },
         {
@@ -190,8 +194,9 @@ const handler = baseApi()
             },
           },
         }
-      )
-    );
+      );
+      await orgDomainClaimRepository.deleteByOrganization(id);
+    });
 
     await clearDeletedOrganizationReferences(id, req.logger);
 

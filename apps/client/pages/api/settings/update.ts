@@ -26,6 +26,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -243,6 +244,12 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
 
     const updatedSetting = await withTransaction(async () => {
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
+      // Every signup receives these tags (register.ts). Compared against the row read in this
+      // transaction, so a concurrent edit conflicts rather than slipping a managed tag past the check.
+      if (key === 'defaultTags') {
+        const splitTags = (raw: unknown) => (typeof raw === 'string' ? raw.split(',') : []);
+        assertCanChangeManagedTags(req.user, splitTags(existing?.settingValue), splitTags(value));
+      }
       const written = await AdminSettings.findOneAndUpdate(
         { settingName: key },
         { $set: { settingValue: settingValueToStore } },

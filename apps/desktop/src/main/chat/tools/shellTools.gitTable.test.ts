@@ -7,7 +7,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -179,8 +179,8 @@ const ROWS: [string, string, string][] = [
   ['git worktree add ../wt -b wt', '', 'rrrr'],
   ['git worktree remove ../wt', '', 'rrrr'],
   ['git init newrepo', '', 'rrrr'],
-  ['git config user.email t@example.com', '', 'rrar'],
-  ['git apply changes.patch', '', 'rrar'],
+  ['git config user.email t@example.com', '', 'rrrr'],
+  ['git apply changes.patch', '', 'rrrr'],
   ['git format-patch -1 HEAD', '', 'rrrr'],
   ['git fetch', '', 'rrrr'],
   ['git fetch origin', '', 'rrrr'],
@@ -193,24 +193,24 @@ const ROWS: [string, string, string][] = [
   ['git push', '', 'rrrr'],
   ['git push origin HEAD', '', 'rrrr'],
   ['git push -u origin topic', '', 'rrrr'],
-  ['git push --force-with-lease', '', 'raar'],
-  ['git push origin --delete topic', '', 'raar'],
+  ['git push --force-with-lease', '', 'rrrr'],
+  ['git push origin --delete topic', '', 'rrrr'],
   ['git push --tags', '', 'rrrr'],
   ['git ls-remote origin', '', 'rrrr'],
   ['git clone https://example.com/acme/proj.git cl1', '', 'raar'],
   ['git clone --depth 1 https://example.com/acme/proj.git cl2', '', 'raar'],
-  ['git remote add fork git@example.com:acme/fork.git', '', 'raar'],
-  ['git remote set-url origin https://example.com/acme/proj2.git', '', 'raar'],
+  ['git remote add fork git@example.com:acme/fork.git', '', 'rrrr'],
+  ['git remote set-url origin https://example.com/acme/proj2.git', '', 'rrrr'],
   ['git submodule update --init --recursive', '', 'rrrr'],
   ['git submodule status', '', 'rrrr'],
   ['git fetch && git status', '', 'rrrr'],
   ["git add -A && git commit -m 'x' && git push", '', 'rrrr'],
   ['git ls-tree --name-only $(git merge-base origin/main HEAD)', '', 'rrrr'],
-  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
+  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'aaaa'],
   ['git diff $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
-  ['git log --oneline "$(cat msg.txt)"', '', 'rrrr'],
-  ['git log --$X', '', 'rrrr'],
-  ['git branch -D "$(cat msg.txt)"', '', 'rrrr'],
+  ['git log --oneline "$(cat msg.txt)"', '', 'aaaa'],
+  ['git log --$X', '', 'aaaa'],
+  ['git branch -D "$(cat msg.txt)"', '', 'aaaa'],
   ['git filter-branch --tree-filter true HEAD', '', 'aaaa'],
   ['git filter-repo --path src', '', 'aaaa'],
   ['git instaweb --httpd=./x.sh', '', 'aaaa'],
@@ -321,8 +321,8 @@ describe('shell approval of common agent git commands', () => {
     const covered = subject !== null && rules.evaluate(subject).decision === 'allow';
     return [
       covered,
-      !prompt.askInAuto,
-      !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
+      runsCheckedInAuto(prompt),
+      runsCheckedInAuto(withSession) && (withSession.always?.directories ?? []).length === 0,
       runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))
@@ -342,7 +342,7 @@ describe('shell approval of common agent git commands', () => {
     expect(await cells(command, '')).toBe('aaaa');
   });
 
-  it('names the git form the safe table does not list, and asks about that part alone', async () => {
+  it('names an unlisted Git form and holds the whole command', async () => {
     const context = {
       roots: [proj],
       workingDirectory: proj,
@@ -352,7 +352,10 @@ describe('shell approval of common agent git commands', () => {
     } as ToolContext;
     const prompt = await shellApproval('bash_execute', { command: 'git log -1 && git frobnicate', cwd: proj }, context);
     expect(prompt.detail).toContain('Runs git in a form Desktop does not list as safe (git frobnicate).');
-    expect(prompt.always?.commands.map(part => part.ask?.kinds ?? [])).toEqual([[], ['gitUnlisted']]);
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.always?.commands.at(-1)?.coverable).toBe(false);
   });
 
   // GIT_CELLS=<file> appends every row's current cells to that file, to compare two versions of the scan.

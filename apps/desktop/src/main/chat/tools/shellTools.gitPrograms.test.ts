@@ -18,7 +18,7 @@ import { permissionProtectedLocations } from '../protectedLocations';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
-import { runsCheckedInFull } from './shellApproval.testHelper';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { isAbsoluteGitPath } from './shellScan';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
@@ -101,7 +101,7 @@ const ROWS: [string, string, string][] = [
   ['cp -r tpl/.git . && git st', '', 'aaaa'],
   ['cp -r lrepo dist && git -C dist/lrepo st', '', 'aaaa'],
   ['cp -r tpl/. src && git -C src st', '', 'aaaa'],
-  ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrar'],
+  ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
   ['rsync -a --exclude=.git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
   ['rsync -a --exclude=.git/ lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ["rsync -a --exclude='.git' lrepo/ dist3/ && git -C dist3 st", '', 'rrrr'],
@@ -172,15 +172,15 @@ const ROWS: [string, string, string][] = [
   ['git fetch origin', '', 'rrrr'],
   ['git pull', '', 'rrrr'],
   ['git pull origin main', '', 'rrrr'],
-  ['git push', '', 'raar'],
-  ['git push origin main', '', 'raar'],
-  ['git push -u origin main', '', 'raar'],
+  ['git push', '', 'rrrr'],
+  ['git push origin main', '', 'rrrr'],
+  ['git push -u origin main', '', 'rrrr'],
   ['git st', '', 'rrrr'],
   ['git lg -3', '', 'rrrr'],
   ['git co other', '', 'rrrr'],
-  ['git p', '', 'raar'],
+  ['git p', '', 'rrrr'],
   ['git st && git lg', '', 'rrrr'],
-  ['git add -A && git commit -m x && git p', '', 'raar'],
+  ['git add -A && git commit -m x && git p', '', 'rrrr'],
   ['git commit -am x && git st', '', 'rrrr'],
   ['git switch other && git st', '', 'rrrr'],
   ['git co other && git st', '', 'rrrr'],
@@ -230,7 +230,7 @@ const ROWS: [string, string, string][] = [
   ['mkdir x && cd x && git st', '', 'rrrr'],
   ['mkdir -p tmp/a && cd tmp/a && git status', '', 'rrrr'],
   ['git status && pnpm test && git st', '', 'rrrr'],
-  ['pnpm build && git add -A && git commit -m build && git p', '', 'raar'],
+  ['pnpm build && git add -A && git commit -m build && git p', '', 'rrrr'],
   ['git fetch && git rebase origin/main && pnpm test && git p', '', 'aaaa'],
   ['cd lrepo && git st && cd ..', '', 'rrrr'],
   ['git -C lrepo st', '', 'rrrr'],
@@ -360,10 +360,10 @@ const ROWS: [string, string, string][] = [
   ['npm x git status', '', 'rrrr'],
   ['npm -w a exec -- git status', '', 'arrr'],
   ['npm --prefix . exec -- git status', '', 'aaaa'],
-  ['git branch --unset-upstream "$B"', '', 'rrrr'],
-  ['git log --grep=unset "$X"', '', 'rrrr'],
+  ['git branch --unset-upstream "$B"', '', 'aaaa'],
+  ['git log --grep=unset "$X"', '', 'aaaa'],
   ['export GIT_EXTERNAL_DIFF=./x.sh; git log -1 -p "$X"', '', 'aaaa'],
-  ['git log --format="%H unset $x"', '', 'rrrr'],
+  ['git log --format="%H unset $x"', '', 'aaaa'],
   ['unset -v GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['unset GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git log', '', 'aaaa'],
   ['unset "$X"; git log', '', 'aaaa'],
@@ -455,7 +455,7 @@ const ROWS: [string, string, string][] = [
   ['git -C rem/pushdefault push', '', 'aaaa'],
   ['git -C rem/tracked fetch', '', 'rrrr'],
   ['git -C rem/tracked pull', '', 'rrrr'],
-  ['git -C rem/tracked push', '', 'raar'],
+  ['git -C rem/tracked push', '', 'rrrr'],
   ['echo foo::x | xargs git fetch', '', 'aaaa'],
   ['git -c remote.origin.url=foo::x fetch origin', '', 'aaaa'],
   ['git config url.foo::x.insteadOf https://example.com/ && git fetch https://example.com/r.git', '', 'aaaa'],
@@ -717,8 +717,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     const covered = subject !== null && rules.evaluate(subject).decision === 'allow';
     return [
       covered,
-      !prompt.askInAuto,
-      !withSession.askInAuto && (withSession.always?.directories ?? []).length === 0,
+      runsCheckedInAuto(prompt),
+      runsCheckedInAuto(withSession) && (withSession.always?.directories ?? []).length === 0,
       runsCheckedInFull(prompt),
     ]
       .map(run => (run ? 'r' : 'a'))
@@ -999,6 +999,53 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       command: string,
       env: Record<string, string> = {}
     ): Promise<string> => withConfigs(configs, env, () => cells(command, ''));
+
+    it.each([
+      ['git stash list', '[log]\nshowSignature = true\n'],
+      ["git log --format='%+G?'", '[log]\nshowSignature = false\n[gpg]\nprogram = /test-only-verifier\n'],
+      ["git for-each-ref --format='%(*signature:grade)'", ''],
+      ['git log --pretty=SIG.foo', '[pretty "SIG"]\nfoo = format:%G?\n[pretty "sig"]\nfoo = format:%h\n'],
+      ['git log --pretty=alias', '[pretty]\nalias = other\nother = format:%-GS\n'],
+    ])('requires a real whole-script signing approval for %s', async (command, config) => {
+      await withConfigs({ repo: config }, {}, async () => {
+        const context = { roots: [proj], workingDirectory: proj, signal: new AbortController().signal };
+        const prompt = await shellApproval('bash_execute', { command, cwd: proj }, context);
+        expect(prompt.askInAuto).toBe(true);
+        expect(prompt.askInFull).toBe(true);
+        expect(prompt.byPart).not.toBe(true);
+        expect(prompt.allowOnce).toBe(true);
+        const subject = await resolveSubject(
+          permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
+        );
+        expect(rules.evaluate(subject).decision).not.toBe('allow');
+      });
+    });
+
+    it.each([
+      'git log --pretty=oneline',
+      'git log --format=%h',
+      'git log --pretty=%G? --format=%h',
+      "git log --format='%%G?'",
+      "git log --format='%%%%G?'",
+      "git log --format='%x25G?'",
+      "git for-each-ref --format='%%(*signature:grade)'",
+      "git for-each-ref --format='%(contents:signature)'",
+      'git stash list',
+    ])('keeps an explicit literal or built-in safe format available: %s', async command => {
+      await withConfigs(
+        { repo: '[log]\nshowSignature = false\n[format]\npretty = %G?\n[pretty]\noneline = format:%G?\n' },
+        {},
+        async () => {
+          const prompt = await shellApproval(
+            'bash_execute',
+            { command, cwd: proj },
+            { roots: [proj], workingDirectory: proj, signal: new AbortController().signal }
+          );
+          expect(prompt.askInFull).not.toBe(true);
+          expect(prompt.allowOnce).not.toBe(true);
+        }
+      );
+    });
 
     const SIGN = '[commit]\n\tgpgsign = true\n';
     const UNSIGN = '[commit]\n\tgpgsign = false\n';
@@ -2007,7 +2054,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         ['[format]\n\tpretty = ZS\n[pretty]\n\tzsig = format:%h %G?\n', 'git log -1', 'aaaa'],
         ['[format]\n\tpretty = zs\n[pretty]\n\tZSig = format:%h %G?\n', 'git show HEAD', 'aaaa'],
         ['[format]\n\tpretty = zs\n[pretty]\n\tzsig = format:%h\n', 'git log -1', 'rrrr'],
-        ['[format]\n\tpretty = zs\n[pretty]\n\tyzsig = format:%h %G?\n', 'git log -1', 'rrrr'],
+        ['[format]\n\tpretty = zs\n[pretty]\n\tyzsig = format:%h %G?\n', 'git log -1', 'aaaa'],
         ['[format]\n\tpretty = z\n[pretty]\n\tza = format:%h\n\tzb = format:%G?\n', 'git log -1', 'aaaa'],
         ['[format]\n\tpretty = a\n[pretty]\n\tabc = bc\n\tbcd = %G?\n', 'git show HEAD', 'aaaa'],
         ['[format]\n\tpretty = a\n[pretty]\n\tabc = BC\n\tBCD = %G?\n', 'git log -1', 'aaaa'],

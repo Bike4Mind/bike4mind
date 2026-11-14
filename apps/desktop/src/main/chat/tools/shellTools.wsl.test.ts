@@ -141,7 +141,7 @@ describe('a shell command the scan could not read', () => {
     scanned.unreadable = false;
   });
 
-  it('in a Windows-drive project that names no distro, stays rememberable as before', async () => {
+  it('in a Windows-drive project that names no distro, asks in auto and full mode even without visible distro text', async () => {
     scanned.unreadable = true;
 
     const prompt = await shellApproval('bash_execute', { command: 'cat ~/x' }, context);

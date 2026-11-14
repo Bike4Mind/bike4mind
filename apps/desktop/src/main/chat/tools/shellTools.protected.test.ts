@@ -195,7 +195,8 @@ describe('shell commands that reach a protected location', () => {
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
     ).catch(() => null);
     return {
-      auto: !prompt.askInAuto && (prompt.always?.directories ?? []).length === 0,
+      // Like `runsCheckedInFull`: a listed git form after a ref change runs unchecked in both modes.
+      auto: !prompt.askInAuto && !prompt.unchecked && (prompt.always?.directories ?? []).length === 0,
       full: runsCheckedInFull(prompt),
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
@@ -238,7 +239,7 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
-    it('asks before an opaque write to the project settings in full access, marked unchecked', async () => {
+    it('asks for an opaque write even when its words do not name the settings', async () => {
       const prompt = await shellApproval(
         'bash_execute',
         { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
@@ -248,6 +249,18 @@ describe('shell commands that reach a protected location', () => {
         askInAuto: true,
         askInFull: true,
         unchecked: true,
+      });
+    });
+
+    it('asks in auto and full access before an unchecked write whose words name the settings', async () => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command: 'D=.claude; cp evil.json "$D/settings.json"', cwd: proj },
+        { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
+      );
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull }).toEqual({
+        askInAuto: true,
+        askInFull: true,
       });
     });
 

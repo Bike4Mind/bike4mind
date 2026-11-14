@@ -14,6 +14,8 @@ export interface GitWord {
   glob?: boolean;
 }
 
+type SignatureFormat = { kind: 'pretty' | 'ref'; value?: GitWord };
+
 /** The options a call gives, each with the values it took. */
 type Given = ReadonlyMap<string, readonly GitWord[]>;
 
@@ -36,6 +38,7 @@ export type GitListing =
       programs: readonly string[];
       /** Config keys (lowercased) under any of which, set true, the call may sign or verify with gpg.program. */
       signs: readonly string[];
+      signatureFormat?: SignatureFormat;
     }
   | { listed: false; reason: string };
 
@@ -43,6 +46,7 @@ interface Call {
   given: Given;
   operands: readonly GitWord[];
   open: boolean;
+  signatureFormat?: SignatureFormat;
 }
 
 type Kind = 'flag' | 'valued' | 'optional' | 'lastArg';
@@ -65,6 +69,9 @@ interface FormSpec {
   /** The remotes the call contacts: those `remotes` gives, every one, or none (null). */
   contacts?: (operands: readonly GitWord[], given: Given) => readonly GitWord[] | 'all' | null;
   push?: boolean;
+  signatureFormat?: 'pretty' | 'ref';
+  /** Read format.pretty when no output selector was supplied. */
+  readsDefaultPretty?: boolean;
   programs?: (call: Call) => readonly string[];
   signs?: (given: Given, operands: readonly GitWord[]) => readonly string[];
   check?: (operands: readonly GitWord[], given: Given) => string | null;
@@ -169,11 +176,30 @@ const firstOperand = (operands: readonly GitWord[]): readonly GitWord[] => opera
 const firstOrDefault = (operands: readonly GitWord[]): readonly GitWord[] | 'all' =>
   operands.length === 0 ? 'all' : firstOperand(operands);
 
-/** What git verifies signatures with, for a format that shows one (`%G?`, `%(signature)`) or an option bash fills in. */
-function signaturePrograms({ given, open }: Call): readonly string[] {
-  const formats = ['--format', '--pretty'].flatMap(name => given.get(name) ?? []);
-  const shown = formats.some(value => !value.whole || /%G|%\(signature/.test(value.text));
-  return open || shown ? ['gpg', 'gpgsm', 'ssh-keygen'] : [];
+/** Whether formatting input can trigger verification; escaped percent signs are never rescanned. */
+export function formatShowsSignatures(value: string, kind: 'pretty' | 'ref'): boolean {
+  for (let at = 0; at < value.length; at++) {
+    if (value[at] !== '%') continue;
+    at++;
+    if (value[at] === '%') continue;
+    if (kind === 'pretty') {
+      if (value[at] === '+' || value[at] === '-' || value[at] === ' ') at++;
+      // Git checks the signature before it validates the character following G.
+      if (value[at] === 'G') return true;
+    } else if (value[at] === '(') {
+      const start = at + (value[at + 1] === '*' ? 2 : 1);
+      const end = value[start + 'signature'.length];
+      if (value.startsWith('signature', start) && (end === ':' || end === ')')) return true;
+    }
+  }
+  return false;
+}
+
+function signaturePrograms({ signatureFormat, open }: Call): readonly string[] {
+  const shown = signatureFormat?.value;
+  return open || (shown && (!shown.whole || formatShowsSignatures(shown.text, signatureFormat.kind)))
+    ? ['gpg', 'gpgsm', 'ssh-keygen']
+    : [];
 }
 
 /** The settings under which a call that may make commits signs them, or verifies what it merges, less those it turns off. */
@@ -273,7 +299,14 @@ const STASH_PUSH: FormSpec = {
   options:
     '-quakS -m: --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged --message= --pathspec-file-nul',
 };
-const REFLOG_SHOW: FormSpec = { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures };
+const REFLOG_SHOW: FormSpec = {
+  readsDefaultPretty: true,
+  options: LOG_DIFF,
+  open: 'any',
+  signatureFormat: 'pretty',
+  programs: signaturePrograms,
+  signs: showsSignatures,
+};
 const SUBMODULE_STATUS: FormSpec = { options: '-q --quiet --cached --recursive' };
 
 const FORMS: Readonly<Record<string, FormSpec>> = {
@@ -284,11 +317,26 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
     open: 'any',
   },
   diff: { options: `${DIFF_SHORT} ${DIFF_LONG} --cached --staged --no-index`, open: 'any' },
-  log: { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures },
-  show: { options: LOG_DIFF, open: 'any', programs: signaturePrograms, signs: showsSignatures },
+  log: {
+    readsDefaultPretty: true,
+    options: LOG_DIFF,
+    open: 'any',
+    signatureFormat: 'pretty',
+    programs: signaturePrograms,
+    signs: showsSignatures,
+  },
+  show: {
+    readsDefaultPretty: true,
+    options: LOG_DIFF,
+    open: 'any',
+    signatureFormat: 'pretty',
+    programs: signaturePrograms,
+    signs: showsSignatures,
+  },
   shortlog: {
     options: `-iEFPg -L: -nsec -w? ${LOG_LONG} --(no-)numbered --(no-)summary --(no-)email --(no-)committer --group=`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'range-diff': {
@@ -301,6 +349,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
   'diff-tree': {
     options: `${LOG_DIFF} -v --root --no-commit-id --always`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'rev-parse': {
@@ -317,6 +366,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --object-names --disk-usage[=] --quiet --bisect-vars --bisect-all --timestamp --header --unpacked --missing=
       --filter= --no-filter --filter-print-omitted --indexed-objects --exclude-promisor-objects --use-bitmap-index`,
     open: 'any',
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'merge-base': { options: '-a --all --octopus --independent --is-ancestor --fork-point', open: 'any' },
@@ -350,6 +400,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --color[=] --no-color --exclude= --sort= --points-at= --merged=? --no-merged=? --contains=? --no-contains=?
       --(no-)ignore-case --(no-)include-root-refs`,
     open: 'any',
+    signatureFormat: 'ref',
     programs: signaturePrograms,
   },
   'show-ref': {
@@ -463,12 +514,14 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --(no-)create-reflog --(no-)force --column[=] --no-column --sort= --points-at= --(no-)ignore-case
       --(no-)recurse-submodules --format=`,
     open: 'any',
+    signatureFormat: 'ref',
     programs: signaturePrograms,
   },
   tag: {
     options: `-ldafi -n? -m: -F: --list --delete --(no-)annotate --message= --file= --trailer= --cleanup= --(no-)force
       --(no-)create-reflog --column[=] --no-column --contains=? --no-contains=? --merged=? --no-merged=?
       --(no-)omit-empty --sort= --points-at= --format= --color[=] --no-color --(no-)ignore-case`,
+    signatureFormat: 'ref',
     programs: signaturePrograms,
     signs: tagSigning,
   },
@@ -478,8 +531,19 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       save: { options: '-quakS --quiet --include-untracked --no-include-untracked --all --(no-)keep-index --staged' },
       pop: { options: '-q --quiet --index', maxOperands: 1 },
       apply: { options: '-q --quiet --index', maxOperands: 1 },
-      list: { options: LOG, open: 'any', programs: signaturePrograms },
-      show: { options: `${LOG_DIFF} --include-untracked --only-untracked`, open: 'any', programs: signaturePrograms },
+      list: {
+        options: LOG,
+        open: 'any',
+        signatureFormat: 'pretty',
+        programs: signaturePrograms,
+        signs: showsSignatures,
+      },
+      show: {
+        options: `${LOG_DIFF} --include-untracked --only-untracked`,
+        open: 'any',
+        signatureFormat: 'pretty',
+        programs: signaturePrograms,
+      },
       drop: { options: '-q --quiet', maxOperands: 1 },
       clear: { maxOperands: 0 },
       branch: { maxOperands: 2 },
@@ -526,6 +590,7 @@ const FORMS: Readonly<Record<string, FormSpec>> = {
       --no-cc --from[=] --no-from --in-reply-to= --attach[=] --no-attach --inline[=] --thread[=] --no-thread
       --signature= --no-signature --base= --signature-file= --(no-)quiet --(no-)progress --interdiff= --range-diff=
       --creation-factor= --(no-)force-in-body-from`,
+    signatureFormat: 'pretty',
     programs: signaturePrograms,
   },
   'send-email': {
@@ -752,13 +817,15 @@ function readOption(
   words: readonly GitWord[],
   at: number,
   given: Map<string, GitWord[]>,
-  label: string
+  label: string,
+  selectFormat: (name: string, value?: GitWord) => void
 ): number | 'open' | 'exits' | Miss {
   const word = words[at] as GitWord;
   const { text, whole } = word;
   const known = form.options;
   const take = (name: string, value?: GitWord): void => {
     given.set(name, [...(given.get(name) ?? []), ...(value ? [value] : [])]);
+    selectFormat(name, value);
   };
   if (known.numeric && /^-\d+$/.test(text)) {
     if (!whole) return 'open';
@@ -845,6 +912,12 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     return plainListing(label, new Map([['-h', []]]));
   }
   if (form.verbs) return readVerb(form, words, label);
+  let selectedFormat: GitWord | undefined;
+  const selectFormat = (name: string, value?: GitWord): void => {
+    if (name === '--oneline') selectedFormat = { text: 'oneline', whole: true, splits: false };
+    else if (name === '--pretty') selectedFormat = value ?? { text: 'medium', whole: true, splits: false };
+    else if (name === '--format') selectedFormat = value ?? { text: '', whole: false, splits: false };
+  };
   const operands: GitWord[] = [];
   let reading = true;
   let open = false;
@@ -860,7 +933,7 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
     }
     // A lone `-` is a word of its own; `-$x` may become any option.
     const option = !isOpen(word) && word.text.startsWith('-') && (word.text !== '-' || !word.whole);
-    const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label) : at;
+    const read = isOpen(word) ? 'open' : option ? readOption(form, words, at, given, label, selectFormat) : at;
     if (typeof read === 'object') return read;
     if (read === 'exits') return plainListing(label, given);
     if (read === 'open') {
@@ -900,9 +973,27 @@ function readForm(form: Form, words: readonly GitWord[], label: string): GitList
           push: form.push === true,
         }
       : undefined;
-  const programs = form.programs?.({ given, operands, open }) ?? [];
+  const signatureFormat: SignatureFormat | undefined = form.signatureFormat
+    ? {
+        kind: form.signatureFormat,
+        value: open
+          ? { text: '', whole: false, splits: false }
+          : (selectedFormat ?? (form.readsDefaultPretty ? undefined : { text: 'format:', whole: true, splits: false })),
+      }
+    : undefined;
+  const programs = form.programs?.({ given, operands, open, signatureFormat }) ?? [];
   const signs = form.signs?.(given, operands) ?? [];
-  return { listed: true, form: label, given, operands, open, ...(contacts ? { contacts } : {}), programs, signs };
+  return {
+    listed: true,
+    form: label,
+    given,
+    operands,
+    open,
+    ...(contacts ? { contacts } : {}),
+    programs,
+    signs,
+    ...(signatureFormat ? { signatureFormat } : {}),
+  };
 }
 
 /** A config entry as `git config --get-regexp` prints it; a null value for a key set without `=`. */
@@ -932,27 +1023,38 @@ export function settingsOn(entries: readonly ConfigEntry[], keys: readonly strin
 }
 
 /** The `format.pretty` and `pretty.<alias>` entries a log form reads, and whether they may make it print signatures. */
-export function prettyShowsSignatures(entries: readonly ConfigEntry[]): boolean {
+export function prettyShowsSignatures(entries: readonly ConfigEntry[], selected?: string): boolean {
+  const builtins = ['raw', 'medium', 'short', 'email', 'mboxrd', 'fuller', 'full', 'oneline', 'reference'];
   const aliases = new Map<string, string | null>();
-  let chosen: string | null | undefined;
+  let chosen: string | null = selected ?? 'medium';
   for (const { key, value } of entries) {
-    const name = key.toLowerCase();
-    if (name === 'format.pretty') chosen = value;
-    else if (name.startsWith('pretty.') && name.length > 7) aliases.set(name.slice(7), value);
+    const name = configKey(key);
+    if (name === 'format.pretty') {
+      if (selected === undefined) chosen = value;
+    } else if (name.startsWith('pretty.') && name.length > 7) aliases.set(name.slice(7), value);
     else return true;
   }
-  // git takes any alias whose name starts with the value, ignoring case, so every such alias is followed.
-  let sought: Set<string | null> = new Set(chosen === undefined ? [] : [chosen]);
-  for (let step = 0; sought.size > 0; step++) {
-    const next = new Set<string | null>();
-    for (const value of sought) {
-      if (value === null || step > 8 || value.includes('%G')) return true;
-      const prefix = value.toLowerCase();
-      for (const [name, alias] of aliases) if (name.startsWith(prefix)) next.add(alias);
+  const visited = new Set<string>();
+  for (let step = 0; step < 16; step++) {
+    if (chosen === null) return true;
+    if (chosen === '' || chosen.startsWith('format:') || chosen.startsWith('tformat:') || chosen.includes('%')) {
+      return formatShowsSignatures(chosen, 'pretty');
     }
-    sought = next;
+    const prefix = chosen;
+    // Exact builtins cannot be replaced by pretty.<name>.
+    if (builtins.includes(prefix)) return false;
+    if (visited.has(prefix)) return true;
+    visited.add(prefix);
+    // Git selects the shortest matching name. Ambiguous matches stay conservative.
+    const names = [...builtins, ...aliases.keys()].filter(name => name.startsWith(prefix));
+    const shortest = Math.min(...names.map(name => name.length));
+    const matches = names.filter(name => name.length === shortest);
+    if (matches.length !== 1) return true;
+    const name = matches[0] as string;
+    if (builtins.includes(name)) return false;
+    chosen = aliases.get(name) ?? null;
   }
-  return false;
+  return true;
 }
 
 /** The setting a `-c` or `--config-env` word names, and whether its value passes: null when the key is not fixed. */

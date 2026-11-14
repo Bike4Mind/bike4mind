@@ -1,4 +1,5 @@
 import { assignPersonas } from './agentPersona';
+import { deriveTaskAgentState } from './agentState';
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
 import { descendantsOf } from './spawnTree';
 import { describeToolInput } from './toolDetail';
@@ -44,15 +45,18 @@ export function alertableSessions(sessions: readonly ChatSessionSummary[]): Read
   return alertable;
 }
 
-/** Alertable sessions waiting on the user; deleted ones are not listed, so they never count. */
+/**
+ * Alertable sessions waiting on the user, by deriveTaskAgentState's rule: a live approval or question,
+ * or a worker task waiting on a decision. Deleted sessions are not listed, so they never count.
+ */
 export function needsYouCount(
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   sessions: readonly ChatSessionSummary[]
 ): number {
   const alertable = alertableSessions(sessions);
-  let count = 0;
-  for (const [sessionId, status] of statuses) if (status === 'needs-action' && alertable.has(sessionId)) count += 1;
-  return count;
+  return sessions.filter(
+    session => alertable.has(session.id) && deriveTaskAgentState(session, statuses.get(session.id)) === 'needs-you'
+  ).length;
 }
 
 /** The top of `sessionId`'s spawn chain among the listed sessions; itself when it was not spawned. */

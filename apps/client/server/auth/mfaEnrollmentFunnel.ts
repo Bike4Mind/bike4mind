@@ -22,7 +22,9 @@ export async function forcedEnrollmentSurface(
   user: IUserDocument,
   credential: RequestCredential
 ): Promise<MfaEnrollmentSurface | null> {
-  if (credential.impersonatedBy || mfaService.userHasMFAConfigured(user)) return null;
+  if (credential.impersonatedBy || mfaService.isMfaEnforcementExempt(user) || mfaService.userHasMFAConfigured(user)) {
+    return null;
+  }
   if (credential.mfaPending) return 'signin';
   return (await readEnforceMfa({ skipCache: false })) ? 'session' : null;
 }
