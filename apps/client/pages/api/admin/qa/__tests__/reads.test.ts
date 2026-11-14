@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const { reads } = vi.hoisted(() => ({
@@ -58,6 +58,10 @@ beforeEach(() => {
   for (const fn of Object.values(reads)) fn.mockReset().mockResolvedValue({ ok: true });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('admin QA read routes', () => {
   it('403s a non-admin on every route', async () => {
     for (const route of [facets, overview, runs, runDetail, tests]) {
@@ -70,13 +74,28 @@ describe('admin QA read routes', () => {
   });
 
   it('passes parsed filters to the overview', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-14T12:00:00.000Z'));
     const { status } = await call(overview, { product: 'product-a', env: 'staging', range: '30d' });
     expect(status).toBe(200);
     expect(reads.getQaOverview).toHaveBeenCalledWith({
       product: 'product-a',
       env: 'staging',
       branch: 'main',
-      rangeDays: 30,
+      from: new Date('2026-10-15T12:00:00.000Z'),
+      to: new Date('2026-11-14T12:00:00.000Z'),
+    });
+  });
+
+  it('forwards explicit maximum local-day bounds across fallback instead of the legacy range', async () => {
+    const from = '2024-11-02T04:00:00.000Z';
+    const to = '2025-11-03T05:00:00.000Z';
+    expect((await call(overview, { product: 'product-a', from, to, range: '30d' })).status).toBe(200);
+    expect(reads.getQaOverview).toHaveBeenCalledWith({
+      product: 'product-a',
+      branch: 'main',
+      from: new Date(from),
+      to: new Date(to),
     });
   });
 
