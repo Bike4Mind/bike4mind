@@ -145,7 +145,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(62);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {

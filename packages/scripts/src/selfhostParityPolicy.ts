@@ -62,7 +62,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:organizationRetention',
-      fingerprint: '85a57745503979861a7145d26e370eb375d25a579181f4a7c5711e3b9cdc5226',
+      fingerprint: '1dc721baf9b1be1893bd44dac7cd6bafbfa5103ed42825f3db10f38cf4ac74ba',
     }
   ),
   broker(
