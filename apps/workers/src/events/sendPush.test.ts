@@ -273,6 +273,22 @@ describe('deliverPush', () => {
     expect(payloadOf(sent[1]).aps).not.toHaveProperty('category');
   });
 
+  it('adds no approval actions for another category or for an approval push without a quest', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, pendingActionTs: 5 }, deps, logger);
+    await deliverPush(
+      { ...EVENT, category: 'approval_needed' as const, questId: undefined, pendingActionTs: 5 },
+      deps,
+      logger
+    );
+
+    for (const call of sent) {
+      expect(payloadOf(call)).not.toHaveProperty('approval');
+      expect(payloadOf(call).aps).not.toHaveProperty('category');
+    }
+  });
+
   it('keeps an absolute deepLink as published', async () => {
     const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
     await deliverPush({ ...EVENT, deepLink: 'https://elsewhere.test/notebooks/s' }, deps, logger);
