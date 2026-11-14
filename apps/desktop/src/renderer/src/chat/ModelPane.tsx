@@ -46,8 +46,9 @@ import {
 } from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelClips } from './model3d/ModelClips';
-import { ModelJoints } from './model3d/ModelJoints';
-import { canExplode, renderPartCloseup } from './model3d/modelScene';
+import { nudgeStep, softClamp } from './model3d/jointDrag';
+import { jointReadout, ModelJoints } from './model3d/ModelJoints';
+import { canExplode, drivingJointName, renderPartCloseup } from './model3d/modelScene';
 import {
   ModelViewport,
   type ModelViewportHandle,
@@ -137,7 +138,7 @@ export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: 
   { lighting: 'night', label: 'Night' },
 ];
 const KEY_HELP =
-  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
+  'Arrow keys orbit (or move a picked moving part), plus and minus zoom, 0 to 4 pick a view, F fits the model, W wireframe, G grid, E explode, L lighting, N night, [ and ] pick a part, Enter edits it.';
 
 function nextLighting(lighting: ModelLighting): ModelLighting {
   const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
@@ -252,6 +253,21 @@ export function ModelPane({
 
   const { state, status, error, object, summary, parts, params, unsaved, joints, jointAngles, clips } = engine;
   const explodable = useMemo(() => object !== null && canExplode(object), [object]);
+  const [jointsPlaying, setJointsPlaying] = useState(false);
+  // What the last arrow-key nudge set a joint to, for the joints' own live region.
+  const [jointAnnouncement, setJointAnnouncement] = useState('');
+  const jointAnglesRef = useRef(jointAngles);
+  jointAnglesRef.current = jointAngles;
+  // A drag reports one joint at a time; merged with the latest angles, not the render's.
+  const { setJointAngles } = engine;
+  const setJointAngle = useCallback(
+    (name: string, value: number) => {
+      jointAnglesRef.current = { ...jointAnglesRef.current, [name]: value };
+      setJointAngles(jointAnglesRef.current);
+    },
+    [setJointAngles]
+  );
+  const stopJointsPlaying = useCallback(() => setJointsPlaying(false), []);
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
   const [lighting, setLighting] = useState<ModelLighting>('studio');
@@ -403,17 +419,35 @@ export function ModelPane({
     }
   };
 
+  // With one movable part picked, arrows move its joint (Right and Up open it) instead of orbiting.
+  const nudgePickedJoint = (direction: 1 | -1, big: boolean): boolean => {
+    if (!object || pickedNames.length !== 1) return false;
+    const name = drivingJointName(object, pickedNames[0]);
+    const joint = name === null ? undefined : joints.find(entry => entry.name === name);
+    if (!joint) return false;
+    const value = softClamp(
+      (jointAngles[joint.name] ?? 0) + direction * nudgeStep(joint.motion, joint.range, big),
+      joint.range,
+      0
+    ).value;
+    setJointsPlaying(false);
+    setJointAngle(joint.name, value);
+    setJointAnnouncement(`${joint.name} ${jointReadout(joint, value, summary?.units ?? 'mm')}`);
+    return true;
+  };
+
   // Shortcuts act only while the view itself has focus, so they never steal a letter from a field.
   const onViewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || !object || recording) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const handle = viewportHandle.current;
     const preset = MODEL_VIEW_PRESETS.find(entry => entry.key === event.key);
+    const big = event.shiftKey;
     const actions: Record<string, () => void> = {
-      ArrowLeft: () => handle?.orbit(-ORBIT_STEP, 0),
-      ArrowRight: () => handle?.orbit(ORBIT_STEP, 0),
-      ArrowUp: () => handle?.orbit(0, -ORBIT_STEP),
-      ArrowDown: () => handle?.orbit(0, ORBIT_STEP),
+      ArrowLeft: () => nudgePickedJoint(-1, big) || handle?.orbit(-ORBIT_STEP, 0),
+      ArrowRight: () => nudgePickedJoint(1, big) || handle?.orbit(ORBIT_STEP, 0),
+      ArrowUp: () => nudgePickedJoint(1, big) || handle?.orbit(0, -ORBIT_STEP),
+      ArrowDown: () => nudgePickedJoint(-1, big) || handle?.orbit(0, ORBIT_STEP),
       '+': () => handle?.zoom(ZOOM_STEP),
       '=': () => handle?.zoom(ZOOM_STEP),
       '-': () => handle?.zoom(1 / ZOOM_STEP),
@@ -511,6 +545,15 @@ export function ModelPane({
       <Box component="span" role="status" aria-live="polite" sx={VISUALLY_HIDDEN} data-testid="model-pane-announcer">
         {buildAnnouncement(status, error)}
       </Box>
+      <Box
+        component="span"
+        role="status"
+        aria-live="polite"
+        sx={VISUALLY_HIDDEN}
+        data-testid="model-pane-joint-announcer"
+      >
+        {jointAnnouncement}
+      </Box>
 
       {error && (
         <Alert
@@ -569,6 +612,8 @@ export function ModelPane({
               exploded={exploded && explodable}
               picked={pickedNames}
               onPick={pickPart}
+              onPoseChange={setJointAngle}
+              onJointDragStart={stopJointsPlaying}
               editing={editingNames}
               onEditSettled={onEditSettled}
               clip={playingClip}
@@ -905,7 +950,9 @@ export function ModelPane({
           joints={joints}
           units={summary?.units ?? 'mm'}
           angles={jointAngles}
-          onChange={engine.setJointAngles}
+          onChange={setJointAngles}
+          playing={jointsPlaying}
+          onPlayingChange={setJointsPlaying}
         />
       )}
 

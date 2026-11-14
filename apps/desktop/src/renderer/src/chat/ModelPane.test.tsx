@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MODEL_STATE } from '@shared/model3d';
 import type { ModelEngine } from './model3d/useModelEngine';
 import type { ModelViewportHandle } from './model3d/ModelViewport';
+import { buildModelObject } from './model3d/modelScene';
 import { MODEL_EXAMPLE_PROMPTS, ModelPane, type PartEditTurn } from './ModelPane';
 
 const handle = vi.hoisted(() => ({
@@ -34,6 +35,8 @@ vi.mock('./model3d/ModelViewport', () => ({
     picked,
     editing,
     onPick,
+    onPoseChange,
+    onJointDragStart,
     clip,
     exploded,
     onCroppedChange,
@@ -45,6 +48,8 @@ vi.mock('./model3d/ModelViewport', () => ({
     picked: readonly string[];
     editing: readonly string[];
     onPick: (pick: { name: string | null; additive: boolean; point: { x: number; y: number } }) => void;
+    onPoseChange?: (name: string, value: number) => void;
+    onJointDragStart?: () => void;
     clip: string | null;
     exploded: boolean;
     onCroppedChange?: (cropped: boolean) => void;
@@ -69,6 +74,13 @@ vi.mock('./model3d/ModelViewport', () => ({
         <button
           data-testid="pick-body"
           onClick={event => onPick({ name: 'body', additive: event.shiftKey, point: { x: 20, y: 30 } })}
+        />
+        <button
+          data-testid="drag-lid"
+          onClick={() => {
+            onJointDragStart?.();
+            onPoseChange?.('lid', 55);
+          }}
         />
         <button data-testid="report-cropped" onClick={() => onCroppedChange?.(true)} />
         <button data-testid="report-in-view" onClick={() => onCroppedChange?.(false)} />
@@ -280,6 +292,79 @@ describe('ModelPane', () => {
     });
     expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 75 });
     expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+  });
+
+  describe('moving a joint from the view', () => {
+    const lidJoint = {
+      name: 'lid',
+      motion: 'turn' as const,
+      axis: [-1, 0, 0] as [number, number, number],
+      range: [0, 90] as [number, number],
+    };
+    /** A body with a lid hinged on it and a fixed handle on the lid, as the engine builds them. */
+    const hinged = () => {
+      const cube = (name: string) => ({
+        name,
+        color: '#8b5a2b',
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        indices: new Uint32Array([0, 1, 2]),
+      });
+      return buildModelObject(
+        [
+          cube('body'),
+          { ...cube('lid'), pivot: [0, 1, 1], parent: 'body', axis: lidJoint.axis, range: lidJoint.range },
+          { ...cube('handle'), parent: 'lid' },
+        ],
+        'mm'
+      );
+    };
+    const pressKey = (key: string, shiftKey = false) =>
+      act(() => {
+        byTestId('model-pane-stage')?.dispatchEvent(
+          new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })
+        );
+      });
+
+    it('nudges a picked moving part with the arrows and announces the value', () => {
+      handle.orbit.mockClear();
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 40 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowRight');
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 41 });
+      expect(byTestId('model-pane-joint-announcer')?.textContent).toBe('lid 41\u00b0');
+      pressKey('ArrowDown', true);
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 25 });
+      expect(handle.orbit).not.toHaveBeenCalled();
+    });
+
+    it('holds a nudge at the end of the range', () => {
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 89.5 }, setJointAngles }));
+      act(() => byTestId('pick-lid')?.click());
+      pressKey('ArrowUp', true);
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 90 });
+    });
+
+    it('still orbits with a fixed part picked', () => {
+      handle.orbit.mockClear();
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], setJointAngles }));
+      act(() => byTestId('pick-body')?.click());
+      pressKey('ArrowLeft');
+      expect(handle.orbit).toHaveBeenCalledWith(-Math.PI / 12, 0);
+      expect(setJointAngles).not.toHaveBeenCalled();
+    });
+
+    it('moves the sliders with a drag and stops playback', () => {
+      const setJointAngles = vi.fn();
+      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 10 }, setJointAngles }));
+      act(() => byTestId('model-pane-joints-play-btn')?.click());
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
+      act(() => byTestId('drag-lid')?.click());
+      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55 });
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+    });
   });
 
   const LANTERN_PARTS: ModelEngine['parts'] = [

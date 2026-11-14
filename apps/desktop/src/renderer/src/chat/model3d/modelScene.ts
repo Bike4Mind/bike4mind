@@ -13,6 +13,7 @@ import {
   type ModelUnits,
   type ModelView,
 } from '@shared/model3d';
+import type { JointDragFrame } from './jointDrag';
 import { enableShadows, ModelComposer, ModelStage } from './modelStage';
 import { applyTexture, boxProjectUvs } from './proceduralTextures';
 
@@ -214,6 +215,48 @@ export function poseJoints(root: THREE.Object3D, angles: Record<string, number>)
       node.position.copy(jointPosition(joint, amount)).add(explodeShift(node));
     } else node.quaternion.copy(jointRotation(joint, amount));
   }
+}
+
+/**
+ * The joint node a press on `object` drives: its own joint, else its nearest jointed ancestor, so
+ * grabbing a lid's handle opens the lid. Null for a part that nothing moves.
+ */
+export function drivingJoint(object: THREE.Object3D): THREE.Object3D | null {
+  for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+    if (node.userData.joint) return node;
+  }
+  return null;
+}
+
+/** The joint a part's arrow-key nudge moves (see drivingJoint), by name; null for a fixed or unknown part. */
+export function drivingJointName(root: THREE.Object3D, partName: string): string | null {
+  let part: THREE.Object3D | null = null;
+  root.traverse(node => {
+    if (!part && node instanceof THREE.Mesh && node.name === partName) part = node;
+  });
+  return part ? (drivingJoint(part)?.name ?? null) : null;
+}
+
+/**
+ * A joint node's motion in world space as it is posed now, for dragging it (jointDrag.ts). The
+ * axis is stored in the parent's frame, so a posed parent carries a child's hinge with it.
+ */
+export function jointDragFrame(node: THREE.Object3D): JointDragFrame {
+  const joint = node.userData.joint as JointData | undefined;
+  if (!joint) throw new Error(`${node.name} is not a joint.`);
+  node.updateWorldMatrix(true, false);
+  const parentMatrix = node.parent?.matrixWorld ?? new THREE.Matrix4();
+  const axis = new THREE.Vector3(...joint.axis)
+    .normalize()
+    .applyMatrix3(new THREE.Matrix3().setFromMatrix4(parentMatrix));
+  const scale = axis.length();
+  return {
+    motion: joint.motion,
+    pivot: node.getWorldPosition(new THREE.Vector3()),
+    axis: axis.normalize(),
+    range: joint.range,
+    scale,
+  };
 }
 
 /** The node's current exploded-view shift (zero when the view is assembled). */

@@ -2,7 +2,7 @@ import Button from '@mui/joy/Button';
 import Slider from '@mui/joy/Slider';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ModelJoint } from '@shared/model3d';
 
 /** One open-and-close swing, in ms: as long as the GLB's clip takes each way, twice. */
@@ -29,11 +29,13 @@ type Props = {
   units: string;
   angles: Record<string, number>;
   onChange(angles: Record<string, number>): void;
+  /** The play loop; held by the pane so a drag or nudge in the view can stop it. */
+  playing: boolean;
+  onPlayingChange(playing: boolean): void;
 };
 
 /** Sliders that pose the viewer's joints, and a play button that moves them all open and shut. */
-export function ModelJoints({ joints, units, angles, onChange }: Props) {
-  const [playing, setPlaying] = useState(false);
+export function ModelJoints({ joints, units, angles, onChange, playing, onPlayingChange }: Props) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -57,7 +59,7 @@ export function ModelJoints({ joints, units, angles, onChange }: Props) {
           size="sm"
           variant={playing ? 'soft' : 'plain'}
           color="neutral"
-          onClick={() => setPlaying(value => !value)}
+          onClick={() => onPlayingChange(!playing)}
           aria-label={playing ? 'Stop the joints' : 'Play the joints open and shut'}
           aria-pressed={playing}
           data-testid="model-pane-joints-play-btn"
@@ -86,7 +88,7 @@ export function ModelJoints({ joints, units, angles, onChange }: Props) {
               value={angle}
               onChange={(_event, value) => {
                 if (typeof value !== 'number') return;
-                setPlaying(false);
+                onPlayingChange(false);
                 onChange({ ...angles, [name]: value });
               }}
               getAriaValueText={value => jointReadout(joint, value, units)}

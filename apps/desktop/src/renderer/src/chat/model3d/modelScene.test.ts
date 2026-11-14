@@ -16,7 +16,9 @@ import {
   summarizeObject,
   summarizeParts,
   canExplode,
+  drivingJoint,
   explodeModel,
+  jointDragFrame,
   extendsPastView,
   frameBox,
 } from './modelScene';
@@ -518,5 +520,50 @@ describe('explodeModel', () => {
 
   it('has nothing to pull apart in a single part', () => {
     expect(canExplode(buildModelObject([box('solo', 10, 10, 10)], 'mm'))).toBe(false);
+  });
+});
+
+describe('drivingJoint / jointDragFrame', () => {
+  /** A body, a lid hinged on it, a fixed handle on the lid and a flap hinged on the lid about model Z. */
+  const assembly = () => {
+    const root = buildModelObject(
+      [
+        box('body', 60, 40, 30),
+        { ...box('lid', 60, 40, 10), pivot: [0, 40, 30], parent: 'body', axis: [-1, 0, 0], range: [0, 90] },
+        { ...box('handle', 10, 4, 4), parent: 'lid' },
+        { ...box('flap', 10, 10, 2), pivot: [30, 0, 40], parent: 'lid', axis: [0, 0, 1], range: [0, 45] },
+      ],
+      'mm'
+    );
+    // Model space as world space, so the expected axes read in model terms.
+    root.getObjectByName('model')!.rotation.set(0, 0, 0);
+    return root;
+  };
+
+  it('finds the part itself, its jointed parent, or nothing', () => {
+    const root = assembly();
+    expect(drivingJoint(root.getObjectByName('lid')!)?.name).toBe('lid');
+    expect(drivingJoint(root.getObjectByName('handle')!)?.name).toBe('lid');
+    expect(drivingJoint(root.getObjectByName('flap')!)?.name).toBe('flap');
+    expect(drivingJoint(root.getObjectByName('body')!)).toBeNull();
+  });
+
+  it('reads the hinge at its pivot, along its axis', () => {
+    const frame = jointDragFrame(assembly().getObjectByName('lid')!);
+    expect(frame.motion).toBe('turn');
+    expect(frame.pivot.toArray()).toEqual([0, 40, 30]);
+    expect(frame.axis.toArray()).toEqual([-1, 0, 0]);
+    expect(frame.range).toEqual([0, 90]);
+    expect(frame.scale).toBeCloseTo(1, 10);
+  });
+
+  it("carries a child's axis round with its posed parent", () => {
+    const root = assembly();
+    poseJoints(root, { lid: 90 });
+    const { axis } = jointDragFrame(root.getObjectByName('flap')!);
+    // A quarter turn about -X takes model Z to model Y.
+    expect(axis.x).toBeCloseTo(0, 6);
+    expect(axis.y).toBeCloseTo(1, 6);
+    expect(axis.z).toBeCloseTo(0, 6);
   });
 });
