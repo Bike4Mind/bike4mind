@@ -82,6 +82,7 @@ export function toOAuthClientView(doc: IOAuthClientDocument): OAuthClientView {
           },
         }
       : {}),
+    ...(doc.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: doc.unpaidAccountsAllowed } : {}),
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt).toISOString() : null,
   };
@@ -121,6 +122,7 @@ export async function createOAuthClient(input: CreateOAuthClientInput): Promise<
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
     ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
   });
 
   return { client: toOAuthClientView(doc), clientSecret };
@@ -207,6 +209,7 @@ export async function updateOAuthClient(
     ...(federatedIdp ? { federatedIdp } : {}),
     ...(data.overwatchProductId ? { overwatchProductId: data.overwatchProductId } : {}),
     ...(data.rateLimit ? { rateLimit: data.rateLimit } : {}),
+    ...(data.unpaidAccountsAllowed !== undefined ? { unpaidAccountsAllowed: data.unpaidAccountsAllowed } : {}),
   };
   const $unset: Record<string, ''> = {
     ...(data.federatedIdp === null ? { federatedIdp: '' } : {}),

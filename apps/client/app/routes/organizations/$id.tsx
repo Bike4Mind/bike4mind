@@ -18,6 +18,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
@@ -65,10 +66,12 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import {
   canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -148,6 +151,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
+  const canManageDomains = useMemo(() => canManageOrgDomains(currentUser, organization), [currentUser, organization]);
+
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
@@ -170,6 +175,7 @@ const OrganizationPage: FC = () => {
     canManageGroups,
     canViewBilling,
     canManageConnectors,
+    canManageDomains,
   });
 
   // One list feeds both the desktop rail and the phone select, so the two can never offer
@@ -254,6 +260,16 @@ const OrganizationPage: FC = () => {
             icon: <HubOutlinedIcon sx={{ fontSize: 16 }} />,
           },
           { value: OrganizationTabs.ApiKeys, label: 'API Keys', icon: <KeyOutlinedIcon sx={{ fontSize: 16 }} /> },
+        ]
+      : []),
+    ...(canManageDomains
+      ? [
+          {
+            value: OrganizationTabs.Domains,
+            label: 'Domains',
+            icon: <LanguageOutlinedIcon sx={{ fontSize: 16 }} />,
+            testId: 'org-tab-domains',
+          },
         ]
       : []),
     ...(canManageOrg
@@ -530,6 +546,14 @@ const OrganizationPage: FC = () => {
                   {t('organization.headings.connectors')}
                 </Typography>
                 <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
+              </TabPanel>
+            )}
+            {canManageDomains && (
+              <TabPanel value={OrganizationTabs.Domains} {...panelAccessibility(OrganizationTabs.Domains)}>
+                <Typography level="title-lg" startDecorator={<LanguageOutlinedIcon />} sx={{ mb: 3 }}>
+                  Email Domains
+                </Typography>
+                <OrgDomainsTab key={organization.id} organizationId={organization.id} />
               </TabPanel>
             )}
             {canManageConnectors && (

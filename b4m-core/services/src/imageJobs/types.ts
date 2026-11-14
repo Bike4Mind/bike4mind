@@ -13,6 +13,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { OutputModerationVerdict } from '../generationJobs/storeOutput';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 // Stamped on the job as deadlineAt at create; covers the queue wait plus one provider call, or an async provider's
@@ -28,7 +29,7 @@ export const IMAGE_JOB_OUTPUT_BYTES_ESTIMATE = 16 * 1024 * 1024;
 export type ImageJob = IGenerationJobDocumentOf<'image'>;
 
 /** What our own scan decided about a generated image. */
-export type ImageModerationVerdict = { blocked: false } | { blocked: true; reason: string };
+export type ImageModerationVerdict = OutputModerationVerdict;
 
 export type ImageJobDeps = {
   repository: IGenerationJobRepository;

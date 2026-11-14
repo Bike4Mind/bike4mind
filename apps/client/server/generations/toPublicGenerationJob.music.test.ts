@@ -6,8 +6,11 @@ import {
   type IGenerationJobDocumentOf,
   type MusicJobPublicErrorCode,
 } from '@bike4mind/common';
-import { OUTPUT_URL_TTL_SECONDS } from '@bike4mind/server-utils/generations/signedOutput';
-import { toPublicMusicGeneration } from './toPublicMusicGeneration';
+import { OUTPUT_URL_TTL_SECONDS, type JobMapperDeps } from '@bike4mind/server-utils/generations/signedOutput';
+import { MUSIC_GENERATION_PROJECTION, toPublicGenerationJob } from './toPublicGenerationJob';
+
+const toPublicMusicGeneration = (job: IGenerationJobDocumentOf<'music'>, deps: JobMapperDeps) =>
+  toPublicGenerationJob(job, deps, MUSIC_GENERATION_PROJECTION);
 
 // Pinned here so a swapped entry in the mapper's own table cannot pass the round-trip below.
 const PUBLIC_ERROR_MESSAGES: Record<MusicJobPublicErrorCode, string> = {
@@ -73,7 +76,7 @@ const succeeded = (location: 'files' | 'generated', lyrics?: string) =>
     },
   });
 
-describe('toPublicMusicGeneration', () => {
+describe('toPublicGenerationJob (music)', () => {
   const now = () => new Date('2026-10-06T00:02:00Z');
 
   it('renders an in-flight job without output and validates against the published schema', async () => {
