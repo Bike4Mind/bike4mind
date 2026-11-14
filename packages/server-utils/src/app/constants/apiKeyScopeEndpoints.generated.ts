@@ -64,6 +64,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/files/tags/counts',
     'GET /api/v1/files',
     'GET /api/v1/files/:id',
+    'GET /api/v1/files/:id/lineage',
     'GET /api/v1/files/by-ids',
     'GET /api/v1/files/search',
   ],

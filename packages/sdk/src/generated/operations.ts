@@ -225,6 +225,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/{id}',
   },
+  getFileLineage: {
+    method: 'GET',
+    path: '/api/v1/files/{id}/lineage',
+  },
   getFilesByIds: {
     method: 'GET',
     path: '/api/v1/files/by-ids',

@@ -137,7 +137,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
   \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
-  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`,
+  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,

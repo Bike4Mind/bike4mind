@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { GENERATED_ASSET_LINEAGE_ROLES } from '../../generatedAsset';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   BulkDeleteFilesRequestSchema,
@@ -8,6 +9,7 @@ import {
   CreateFileUploadRequestSchema,
   CreateFileUploadResponseSchema,
   FileIdParamSchema,
+  FileLineageResponseSchema,
   FileResponseSchema,
   FilesByIdsQuerySchema,
   FilesByIdsResponseSchema,
@@ -412,4 +414,75 @@ export const bulkDeleteFilesContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: BULK_DELETE_EXAMPLE },
+});
+
+export const getFileLineageContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/files/{id}/lineage',
+  operationId: 'getFileLineage',
+  summary: 'Get what a generated file was made from and into',
+  description:
+    'Returns the trail around a file: `ancestors` (the file itself first, then what it was made from, ' +
+    'walked up to 8 generations and 32 files) and `children` (up to 24 readable files made directly from it, ' +
+    'newest first), with one `edges` entry per link naming the `role` the parent played (' +
+    GENERATED_ASSET_LINEAGE_ROLES.map(role => `\`${role}\``).join(', ') +
+    '). An ancestor you ' +
+    'cannot read is returned `redacted` with only its id and depth, and its own inputs are not followed. ' +
+    '`request` on a node is the stored generation request, for re-running it with different settings. ' +
+    'Safe (GET) requests are exempt from the per-day API-key quota; only the per-minute burst limit applies. ' +
+    'Authenticate with an API key (`b4m_live_`) carrying `files:read`, or a JWT.',
+  tags: ['Files'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.READ_FILES],
+  pathParams: FileIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: {
+      description: 'The trail around the file.',
+      schema: FileLineageResponseSchema,
+      example: {
+        file_id: '<fileId>',
+        ancestors: [
+          {
+            file_id: '<fileId>',
+            depth: 0,
+            redacted: false,
+            file_name: 'fox-animated.mp4',
+            mime_type: 'video/mp4',
+            generator: 'video',
+            model_id: 'veo-3',
+            prompt: 'The fox trots through snow',
+            download_url: 'https://<cdn>/<key>?Signature=...',
+            created_at: '2026-09-29T12:00:00.000Z',
+            request: { aspectRatio: '16:9' },
+          },
+          {
+            file_id: '<parentFileId>',
+            depth: 1,
+            redacted: true,
+            file_name: null,
+            mime_type: null,
+            generator: null,
+            model_id: null,
+            prompt: null,
+            download_url: null,
+            created_at: null,
+            request: null,
+          },
+        ],
+        children: [],
+        edges: [{ parent_id: '<parentFileId>', child_id: '<fileId>', role: 'first_frame' }],
+        truncated: false,
+      },
+    },
+    403: { description: READ_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No file with that id is visible to you. A file that does not exist, one you cannot read and a ' +
+        'malformed id are all reported as 404.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
 });
