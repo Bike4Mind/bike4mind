@@ -68,4 +68,23 @@ describe('organization retention', () => {
     expect(screen.queryByTestId('organization-retention-estimate')).toBeNull();
     expect(h.put).not.toHaveBeenCalled();
   });
+  it('shows the error and no estimate when the estimate request fails', async () => {
+    h.post.mockRejectedValue(new Error('boom'));
+    panel();
+    fireEvent.change(screen.getByTestId('organization-retention-chats-input'), { target: { value: '30' } });
+    fireEvent.click(screen.getByTestId('organization-retention-save-btn'));
+    await screen.findByTestId('organization-retention-error');
+    expect(screen.queryByTestId('organization-retention-estimate')).toBeNull();
+    expect(h.put).not.toHaveBeenCalled();
+  });
+  it('shows the error and clears the estimate when saving fails', async () => {
+    h.put.mockRejectedValue(new Error('conflict'));
+    panel();
+    fireEvent.change(screen.getByTestId('organization-retention-chats-input'), { target: { value: '30' } });
+    fireEvent.click(screen.getByTestId('organization-retention-save-btn'));
+    await screen.findByTestId('organization-retention-estimate');
+    fireEvent.click(screen.getByTestId('organization-retention-save-btn'));
+    await screen.findByTestId('organization-retention-error');
+    expect(screen.queryByTestId('organization-retention-estimate')).toBeNull();
+  });
 });

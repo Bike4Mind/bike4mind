@@ -95,7 +95,11 @@ export default function OrganizationRetentionSection({ organization }: { organiz
             enables automatic deletion; this cannot be undone.
           </Alert>
         )}
-        {error && <Alert color="danger">{error}</Alert>}
+        {error && (
+          <Alert color="danger" data-testid="organization-retention-error">
+            {error}
+          </Alert>
+        )}
         {canEdit && (
           <Button
             data-testid="organization-retention-save-btn"

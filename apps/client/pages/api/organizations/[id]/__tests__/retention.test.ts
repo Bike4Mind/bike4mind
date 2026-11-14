@@ -39,6 +39,7 @@ vi.mock('@bike4mind/server-utils/organizations/retentionPolicy', () => ({
   createRetentionEstimate: h.estimate,
   saveRetentionPolicy: h.save,
 }));
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/organizations/[id]/retention';
 
 async function call(method: string, body?: unknown) {
@@ -71,5 +72,42 @@ describe('retention route authorization', () => {
   it('forwards only a validated policy and server actor', async () => {
     await call('PUT', { policy: { chats: 1, files: null, media: null }, version: 2 });
     expect(h.save).toHaveBeenCalledWith('org', 'actor', { chats: 1, files: null, media: null }, 2, undefined);
+  });
+  it.each([
+    ['zero days', { chats: 0, files: null, media: null }],
+    ['string days', { chats: '30', files: null, media: null }],
+    ['an unknown policy key', { chats: 1, files: null, media: null, extra: 1 }],
+  ])('rejects a policy with %s', async (_name, policy) => {
+    await expect(call('PUT', { policy, version: 2 })).rejects.toThrow();
+    await expect(call('POST', { policy, version: 2 })).rejects.toThrow();
+    expect(h.estimate).not.toHaveBeenCalled();
+    expect(h.save).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['an extra key', { extra: true }],
+    ['a non-uuid token', { confirmationToken: 'not-a-uuid' }],
+    ['a negative version', { version: -1 }],
+  ])('rejects a body with %s', async (_name, patch) => {
+    const body = { policy: { chats: 1, files: null, media: null }, version: 2, ...patch };
+    await expect(call('PUT', body)).rejects.toThrow();
+    expect(h.save).not.toHaveBeenCalled();
+  });
+  it.each(['POST', 'PUT'])('keeps %s not-found and forbidden failures distinct', async method => {
+    const body = { policy: { chats: 1, files: null, media: null }, version: 2 };
+    h.access.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+    await expect(call(method, body)).rejects.toBeInstanceOf(NotFoundError);
+    h.access.mockRejectedValueOnce(new ForbiddenError('Forbidden'));
+    await expect(call(method, body)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+  it('rejects estimating a personal organization', async () => {
+    h.access.mockResolvedValue({ personal: true, retentionVersion: 0 });
+    await expect(call('POST', { policy: { chats: 1, files: null, media: null }, version: 0 })).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    expect(h.estimate).not.toHaveBeenCalled();
+  });
+  it('rejects a non-member GET without returning the policy', async () => {
+    h.member.mockRejectedValue(new NotFoundError('Organization not found'));
+    await expect(call('GET')).rejects.toBeInstanceOf(NotFoundError);
   });
 });
