@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,4 +52,25 @@ describe('scratch directory', () => {
       expect(await ensureScratchDirectory('session-2')).toBeNull();
     }
   );
+
+  it.skipIf(process.platform === 'win32')('gives no folder when the session folder is a link', async () => {
+    const elsewhere = await mkdtemp(join(temp, 'elsewhere-'));
+    const path = scratchDirectory('session-3') as string;
+    await mkdir(dirname(path), { recursive: true });
+    await symlink(elsewhere, path);
+    expect(await ensureScratchDirectory('session-3')).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('gives no folder when the scratch parent cannot be made', async () => {
+    await writeFile(join(await realpath(temp), 'b4m-scratch'), 'not a folder');
+    expect(await ensureScratchDirectory('session-4')).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('removes nothing through a link at the scratch parent', async () => {
+    const elsewhere = await mkdtemp(join(temp, 'elsewhere-'));
+    await mkdir(join(elsewhere, 'session-5'));
+    await symlink(elsewhere, dirname(scratchDirectory('session-5') as string));
+    await removeScratchDirectory('session-5');
+    await expect(stat(join(elsewhere, 'session-5'))).resolves.toBeDefined();
+  });
 });
