@@ -165,6 +165,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/tools',
   },
+  fetchWebPage: {
+    method: 'POST',
+    path: '/api/v1/tools/web-fetch',
+  },
   generateAgentAvatar: {
     method: 'POST',
     path: '/api/v1/agents/{id}/generate-avatar',
@@ -224,6 +228,10 @@ export const operations = {
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
+  },
+  getCurrentWeather: {
+    method: 'POST',
+    path: '/api/v1/tools/weather',
   },
   getDataLake: {
     method: 'GET',
@@ -456,6 +464,10 @@ export const operations = {
   searchSessions: {
     method: 'POST',
     path: '/api/v1/sessions/semantic-search',
+  },
+  searchWeb: {
+    method: 'POST',
+    path: '/api/v1/tools/web-search',
   },
   sendChatMessage: {
     method: 'POST',

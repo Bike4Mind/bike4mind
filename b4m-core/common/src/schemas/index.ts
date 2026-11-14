@@ -5,6 +5,7 @@ export * from './chat';
 export * from './cliCompletions';
 export * from './modelId';
 export * from './tools';
+export * from './webTools';
 export * from './decisionMaker';
 export * from './file';
 export * from './openai';

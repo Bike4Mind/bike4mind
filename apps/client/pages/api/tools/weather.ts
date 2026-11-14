@@ -1,72 +1,16 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, WeatherToolRequestSchema } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
-import { runAuditedTool } from '@server/cli/runAuditedTool';
-import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { apiKeyService } from '@bike4mind/services';
-import { z } from 'zod';
+import { runWeatherTool } from '@server/tools/webToolRoutes';
 
-const WeatherBodySchema = z.object({
-  lat: z.number(),
-  lon: z.number(),
-  units: z.enum(['imperial', 'metric']).optional(),
-});
-
-// One hourly budget shared across the three /api/tools/* routes (see toolRoutesRateLimit). Embed
-// (confined) keys hold neither scope, so they are refused.
+// The SPA-internal door (voice modal, desktop app). Its public twin is POST /api/v1/tools/weather; both
+// share runWeatherTool, this scope gate and one hourly budget (see toolRoutesRateLimit). Embed (confined) keys
+// hold neither scope, so they are refused.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
   .use(toolRoutesRateLimit())
   .post(outboundActionGate(), async (req, res) =>
-    runAuditedTool('weather_info', req.user!.id, req.logger, async () => {
-      const { lat, lon, units = 'imperial' } = WeatherBodySchema.parse(req.body);
-
-      const dbAdapters = {
-        db: {
-          apiKeys: apiKeyRepository,
-          adminSettings: adminSettingsRepository,
-        },
-      };
-
-      const openWeatherKey = await apiKeyService.getOpenWeatherKey(dbAdapters);
-      if (!openWeatherKey) {
-        throw new Error('OpenWeather API key is not configured.');
-      }
-
-      // Add timeout protection for external API call
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-      let response: Response;
-      try {
-        response = await fetch(
-          `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${openWeatherKey}&units=${units}`,
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-          throw new Error('Weather API request timed out after 10s');
-        }
-        throw fetchError;
-      }
-
-      if (!response.ok) {
-        throw new Error(`OpenWeather error: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      const temp = data?.main?.temp;
-      const cityName = data?.name;
-      const description = data?.weather?.[0]?.description;
-
-      const result = `Right now it's ${temp}\u00b0 in ${cityName}, with ${description}.`;
-
-      return res.json({
-        result,
-      });
-    })
+    res.json(await runWeatherTool(req, WeatherToolRequestSchema.parse(req.body)))
   );
 
 export default handler;

@@ -72,6 +72,9 @@ const ALLOWED_CONTRACTS = new Set([
   'endVoiceSession',
   'createTranscriptionUpload',
   'createTranscription',
+  'searchWeb',
+  'fetchWebPage',
+  'getCurrentWeather',
 ]);
 
 // Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
@@ -123,6 +126,9 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/v1/music-generations/:id/cancel',
   'POST /api/v1/sessions',
   'POST /api/v1/text-refinements',
+  'POST /api/v1/tools/weather',
+  'POST /api/v1/tools/web-fetch',
+  'POST /api/v1/tools/web-search',
   'POST /api/v1/transcriptions',
   'POST /api/v1/transcriptions/uploads',
   'POST /api/v1/video-generations/:id/cancel',
