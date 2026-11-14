@@ -23,7 +23,7 @@ import {
   type EvalSetRun,
   type EvalSetRunResponse,
 } from '@client/app/utils/verdictEvalSets';
-import { abuseProbabilityOf, type CalibratedAssessment } from './calibration';
+import { renormalisedAbuseProbability, type CalibratedAssessment } from './calibration';
 import { cohortsOf } from './cohorts';
 import {
   campaignKeys,
@@ -332,7 +332,7 @@ async function loadPredictions(set: AbuseEvalSetItem, deps: VerdictEvalDeps, now
     assessments: assessments.map<CalibratedAssessment>(row => ({
       detectionId: row.detectionId,
       result: row.result,
-      abuseProbability: abuseProbabilityOf(row.probabilities ?? []),
+      abuseProbability: renormalisedAbuseProbability(row.probabilities ?? []),
       confidence: row.confidence ?? null,
       model: row.decisionModel,
       assessedAt: row.assessedAt,

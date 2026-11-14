@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abuseProbabilityOf,
+  renormalisedAbuseProbability,
   calibrate,
   calibrationProbability,
   type CalibratedAssessment,
@@ -10,10 +10,10 @@ import {
 const points = (predicted: number, total: number, abuse: number): CalibrationPoint[] =>
   Array.from({ length: total }, (_, index) => ({ predicted, abuse: index < abuse }));
 
-describe('abuseProbabilityOf', () => {
+describe('renormalisedAbuseProbability', () => {
   it('reads the abuse entry of the distribution', () => {
     expect(
-      abuseProbabilityOf([
+      renormalisedAbuseProbability([
         { value: 'legitimate_automation', probability: 0.2 },
         { value: 'abuse', probability: 0.7 },
         { value: 'insufficient_evidence', probability: 0.1 },
@@ -23,7 +23,7 @@ describe('abuseProbabilityOf', () => {
 
   it('renormalises by the stored entries when they do not sum to 1', () => {
     expect(
-      abuseProbabilityOf([
+      renormalisedAbuseProbability([
         { value: 'legitimate_automation', probability: 0.3 },
         { value: 'abuse', probability: 0.6 },
         { value: 'insufficient_evidence', probability: 0.3 },
@@ -31,13 +31,28 @@ describe('abuseProbabilityOf', () => {
     ).toBe(0.5);
   });
 
-  it('is null without an abuse entry, a positive sum, or a result inside [0, 1]', () => {
-    expect(abuseProbabilityOf([])).toBeNull();
-    expect(abuseProbabilityOf([{ value: 'legitimate_automation', probability: 1 }])).toBeNull();
-    expect(abuseProbabilityOf([{ value: 'abuse', probability: 0 }])).toBeNull();
-    expect(abuseProbabilityOf([{ value: 'abuse', probability: Number.NaN }])).toBeNull();
+  it('is 0 for an abuse entry of 0 and null for a negative one', () => {
     expect(
-      abuseProbabilityOf([
+      renormalisedAbuseProbability([
+        { value: 'abuse', probability: 0 },
+        { value: 'legitimate_automation', probability: 1 },
+      ])
+    ).toBe(0);
+    expect(
+      renormalisedAbuseProbability([
+        { value: 'abuse', probability: -0.1 },
+        { value: 'legitimate_automation', probability: 1 },
+      ])
+    ).toBeNull();
+  });
+
+  it('is null without an abuse entry, a positive sum, or a result inside [0, 1]', () => {
+    expect(renormalisedAbuseProbability([])).toBeNull();
+    expect(renormalisedAbuseProbability([{ value: 'legitimate_automation', probability: 1 }])).toBeNull();
+    expect(renormalisedAbuseProbability([{ value: 'abuse', probability: 0 }])).toBeNull();
+    expect(renormalisedAbuseProbability([{ value: 'abuse', probability: Number.NaN }])).toBeNull();
+    expect(
+      renormalisedAbuseProbability([
         { value: 'abuse', probability: 1.2 },
         { value: 'legitimate_automation', probability: -0.5 },
       ])

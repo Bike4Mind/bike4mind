@@ -22,9 +22,11 @@ export type CalibratedAssessment = EvalAssessment & {
 /**
  * The `abuse` probability of a stored distribution, renormalised by the stored entries' sum (the
  * raw probabilities need not sum to exactly 1, see common/src/decisions/normalize.ts). Null when
- * there is no abuse entry, the sum is not positive, or the result falls outside [0, 1].
+ * there is no abuse entry, the sum is not positive, or the result falls outside [0, 1]. The admin
+ * advisories list (server-utils aiAbuseAdvisories.ts abuseProbabilityOf) shows the raw entry, so a
+ * distribution that sums below 1 reads higher here than there.
  */
-export function abuseProbabilityOf(probabilities: readonly { value: string; probability: number }[]): number | null {
+export function renormalisedAbuseProbability(probabilities: readonly { value: string; probability: number }[]): number | null {
   const entry = probabilities.find(candidate => candidate.value === 'abuse');
   if (!entry) return null;
   const total = probabilities.reduce((sum, candidate) => sum + candidate.probability, 0);
