@@ -227,6 +227,21 @@ describe('skills in a Code draft before its first send', () => {
     expect(document.querySelector('[data-testid="skill-picker-empty-text"]')).toBeNull();
   });
 
+  it('keeps the filtered-empty explanation when the draft also needs project trust', async () => {
+    listSkills.mockResolvedValue({
+      skills: [MY_REVIEW, MY_PLAN],
+      projectDirectory: null,
+      untrustedProject: PROJECT.directory,
+    });
+    await mount();
+    await clickNewInProject();
+    type('/zzz');
+    await act(async () => undefined);
+    expect(el('skill-picker-trust').textContent).toContain(PROJECT.directory);
+    expect(el('skill-picker-no-match-text').textContent).toBe('No skills match /zzz.');
+    expect(el('skill-picker-market-btn')).not.toBeNull();
+  });
+
   it('runs a skill picked in the draft as the first turn of the created session', async () => {
     await mount();
     await clickNewInProject();

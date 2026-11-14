@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
 import {
@@ -148,7 +149,7 @@ export class BFLImageService extends AIImageService {
     prompt: string,
     {
       n: _n,
-      user = 'user',
+      user,
       model = ImageModels.FLUX_PRO_1_1,
       safety_tolerance = BFL_SAFETY_TOLERANCE.DEFAULT,
       prompt_upsampling = false,
@@ -185,7 +186,7 @@ export class BFLImageService extends AIImageService {
           ...(supportsBflSeed(model) ? { seed } : {}),
           ...(supportsBflOutputFormat(model) ? { output_format: output_format || 'jpeg' } : {}),
           ...referenceFields,
-          user,
+          user: toProviderEndUserId(user) ?? 'user',
         }
       : {
           prompt,
@@ -195,7 +196,7 @@ export class BFLImageService extends AIImageService {
           ...modelSpecificOptions,
           ...referenceFields,
           ...promptUpsamplingBodyFields(model, prompt_upsampling),
-          user,
+          user: toProviderEndUserId(user) ?? 'user',
         };
 
     if (isBflUltraImageModel(model)) {

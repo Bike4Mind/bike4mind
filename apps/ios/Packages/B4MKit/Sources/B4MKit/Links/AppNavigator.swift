@@ -16,6 +16,8 @@ public final class AppNavigator {
   public private(set) var composeRequest: ComposeRequest?
   /// A Safari fallback the view layer should open, then clear with `consumeExternalURL()`.
   public private(set) var externalURL: URL?
+  /// The hands-free voice conversation on screen, presented over the whole stack.
+  public private(set) var voiceRequest: VoiceRequest?
 
   /// A route that arrived before the user was signed in (cold-start notification tap). Applied by
   /// `releasePendingRoute()` once the shell is on screen.
@@ -48,7 +50,24 @@ public final class AppNavigator {
     isDrawerOpen = false
     composeRequest = nil
     externalURL = nil
+    voiceRequest = nil
     openingTurns = [:]
+  }
+
+  /// Opens the voice conversation over the current screen. A request from the drawer lands on home first so
+  /// a new conversation has somewhere to go when it ends.
+  public func startVoiceConversation(_ target: ChatSendRequest.Target) {
+    isDrawerOpen = false
+    if target == .newConversation, !isShowing(.home) { sessionPath = [] }
+    voiceRequest = VoiceRequest(target: target)
+  }
+
+  /// Closes the voice conversation. One that started a new session continues in that session's screen.
+  public func endVoiceConversation(startedSessionID: String?) {
+    let request = voiceRequest
+    voiceRequest = nil
+    guard request?.target == .newConversation, let startedSessionID else { return }
+    openNewConversation(sessionID: startedSessionID, firstTurn: nil)
   }
 
   /// Opens a conversation this device just started, handing its screen the first turn.
@@ -169,5 +188,15 @@ extension SessionSummary {
   /// an empty name (see `SessionLookup.name`).
   static func placeholder(id: String, name: String = "") -> SessionSummary {
     SessionSummary(id: id, name: name, lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
+  }
+}
+
+/// A request to show the voice conversation. Identifiable so SwiftUI presents each one fresh.
+public struct VoiceRequest: Identifiable, Hashable, Sendable {
+  public let id = UUID()
+  public let target: ChatSendRequest.Target
+
+  public init(target: ChatSendRequest.Target) {
+    self.target = target
   }
 }

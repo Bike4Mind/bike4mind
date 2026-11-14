@@ -2284,10 +2284,16 @@ export class ChatService {
    * be bound as a project, so there is no path that can trust a directory the user has not
    * chosen for a conversation.
    */
-  async setProjectSkillsTrusted(scope: SkillsScope, trusted: boolean): Promise<SkillsState> {
+  async setProjectSkillsTrusted(
+    scope: SkillsScope,
+    trusted: boolean,
+    expectedProjectDirectory: string
+  ): Promise<SkillsState> {
     if (!this.deps.skills) return NO_SKILLS;
     const root = await this.skillsRoot(scope);
-    if (!root) return this.listSkills(scope);
+    // A saved session can change its project without changing its id. Never trust that new root
+    // using a button which still displayed the old one.
+    if (!root || resolve(root) !== expectedProjectDirectory) return this.listSkills(scope);
     if ('draftDirectory' in scope && (await this.workspaceBindingReason(root))) return this.listSkills(scope);
     await this.deps.skills.setTrusted(root, trusted);
     if (this.deps.capabilities) {
@@ -7076,6 +7082,8 @@ export class ChatService {
     };
     if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
 
+    // What an "Allow in this chat" is filed, looked up and revoked under.
+    const allowanceKey = prompt.chatKey ?? prompt.key;
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -7109,7 +7117,7 @@ export class ChatService {
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
-        prompt.key,
+        allowanceKey,
         runnable.map(option => option.id)
       );
       // Over a tainted reply only an answer given knowing about the taint, or one for a tool
@@ -7209,7 +7217,7 @@ export class ChatService {
     const forProject = projectRoot ? projectRules(everywhere) : [];
     const answer = await gate.request(
       sessionId,
-      prompt.key,
+      allowanceKey,
       signal,
       approvalId => {
         requestedAt = new Date().toISOString();
@@ -7332,9 +7340,9 @@ export class ChatService {
       await this.deps.capabilities
         .grant({
           subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
-          capability: capabilityFor(call.name, prompt.key),
-          scope: capabilityScope(call.name, prompt.key),
-          approvalKey: prompt.key,
+          capability: capabilityFor(call.name, allowanceKey),
+          scope: capabilityScope(call.name, allowanceKey),
+          approvalKey: allowanceKey,
           source: 'approval',
         })
         .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
@@ -7717,10 +7725,12 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
-   * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
-   * project the user has not allowed.
+   * repeat of the last two calls, a read of a `.env` file, a write the scan sees, or a command's
+   * own words name, reach permission settings, an outbound call after the reply read untrusted
+   * content (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path
+   * outside the project the user has not allowed. Over a clean reply, a command the scan cannot
+   * follow or parse, one that can send data out, or one that runs code written in this
+   * conversation runs like any other.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -9018,8 +9028,8 @@ interface PartDecision {
 
 /** Whether the conversation's mode runs this part unasked. */
 function modeCovers(mode: ChatApprovalMode, part: ApprovalPart): boolean {
-  if (mode === 'full') return part.ask?.mode !== 'full';
-  return mode === 'auto' && part.ask === undefined;
+  if (mode === 'full') return true;
+  return mode === 'auto' && (part.ask === undefined || part.ask.mode === 'ask');
 }
 
 /**
@@ -9082,7 +9092,6 @@ function narrowToParts(prompt: ApprovalPrompt, subject: PermissionSubject, parts
   return {
     prompt: {
       ...rest,
-      ...(parts.uncovered.some(part => part.ask?.mode === 'full') ? { askInFull: true as const } : {}),
       always: { ...always, commands: parts.uncovered, directories: parts.directories },
     },
     subject: subject.shell

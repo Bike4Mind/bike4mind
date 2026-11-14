@@ -185,6 +185,37 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
   });
 
+  it('does not trust a saved session rebound to a different project than the picker displayed', async () => {
+    const id = await session();
+    const displayed = await service.listSkills({ sessionId: id });
+    expect(displayed.untrustedProject).toBe(project);
+    const other = join(project, '..', 'other');
+    await mkdir(other);
+    await skill(other, 'other-skill', ['---', 'description: Other project.', '---', '', 'Other.']);
+    expect(
+      await service.updateProject({ sessionId: id, directory: other, branch: '', workspace: false })
+    ).toMatchObject({ ok: true });
+
+    const refreshed = await service.setProjectSkillsTrusted({ sessionId: id }, true, displayed.untrustedProject!);
+    expect(refreshed.untrustedProject).toBe(other);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect((await catalog.state(other)).untrustedProject).toBe(other);
+    const trusted = await service.setProjectSkillsTrusted({ sessionId: id }, true, other);
+    expect(trusted.untrustedProject).toBeNull();
+    expect(trusted.skills.some(entry => entry.name === 'other-skill')).toBe(true);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('requires the displayed draft root for trust and still supports revocation', async () => {
+    const scope = { draftDirectory: project };
+    expect((await service.setProjectSkillsTrusted(scope, true, join(project, 'wrong'))).untrustedProject).toBe(project);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect((await service.setProjectSkillsTrusted(scope, true, project)).untrustedProject).toBeNull();
+    expect((await service.setProjectSkillsTrusted(scope, false, project)).untrustedProject).toBe(project);
+    expect(post).not.toHaveBeenCalled();
+  });
+
   /** Runs `skill`, then `next`, in one reply, and returns the call that stopped to ask, if any. */
   async function afterSkill(skillName: string, next: { name: string; input: Record<string, unknown> }) {
     const id = await session();

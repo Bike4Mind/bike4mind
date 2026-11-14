@@ -145,7 +145,7 @@ import {
   retireSessionApprovals,
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
-import { parseSkillsScope } from './skills/scope';
+import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
@@ -628,6 +628,7 @@ export function registerChat(
   // service only through `chat`, which is first called long after both exist.
   const pullRequests = registerPullRequests({
     path: join(userData, 'pull-requests.json'),
+    autoFixAttemptsPath: join(userData, 'auto-fix-attempts.json'),
     chat: () => service,
     store,
     logger,
@@ -853,10 +854,16 @@ export function registerChat(
   });
   // Coerced rather than trusted, like the approval mode above: this is the only door to project
   // trust, so anything that is not an explicit `true` has to land as "not trusted".
-  ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, raw: unknown, trusted: boolean) => {
-    const scope = parseSkillsScope(raw);
-    return scope ? service.setProjectSkillsTrusted(scope, trusted === true) : NO_SKILLS;
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.chatSetProjectSkillsTrusted,
+    (_event, raw: unknown, trusted: boolean, expectedProjectDirectory: unknown) => {
+      const scope = parseSkillsScope(raw);
+      const target = skillsTrustTargetSchema.safeParse(expectedProjectDirectory);
+      return scope && target.success
+        ? service.setProjectSkillsTrusted(scope, trusted === true, target.data)
+        : NO_SKILLS;
+    }
+  );
   ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
     skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
   );

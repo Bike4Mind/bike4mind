@@ -1556,6 +1556,7 @@ export function ChatShell({
               </Box>
               <OrchestrateToggle
                 states={spawnedStates}
+                parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                 // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
                 surface={orchestrating ? 'orchestrate' : 'chat'}
                 onSurfaceChange={orchestratorPrefs.setSurface}

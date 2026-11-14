@@ -16,6 +16,9 @@ Allowed actions:
 - `policy.updated`, `billing.updated`
 - `api_key.created`, `api_key.revoked`
 - `connector.connected`, `connector.disconnected`
+- `library.published`, `library.pinned`, `library.unpinned`, `library.removed`
+
+Library events target the library item ID, never the personal source or snapshot content. Pinning to the existing state is a no-op and creates no event.
 
 Policy siblings (MFA and sharing defaults) use `policy.updated`; service-key siblings use `api_key.created` and `api_key.revoked`. `targetId` can identify a policy or key, but must never contain a credential. Those branches must integrate this writer before their routes compile and must test their own transactional event writes. This foundation does not implement their policy features.
 

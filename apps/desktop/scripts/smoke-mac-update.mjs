@@ -1,10 +1,11 @@
 // Packages a test-identity build at two versions, signs both with one throwaway self-signed
 // certificate, and updates the older to the newer through the app's own update path (electron-updater, then
-// Squirrel.Mac) from a loopback feed. A newer build signed by a second throwaway certificate must
-// be refused. Needs no secrets. Run from the repository root: node apps/desktop/scripts/smoke-mac-update.mjs
+// Squirrel.Mac) from a loopback feed whose manifest is signed with a throwaway update key. A newer build
+// signed by a second throwaway certificate must be refused. Needs no secrets.
+// Run from the repository root: node apps/desktop/scripts/smoke-mac-update.mjs
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { createHash, randomBytes, X509Certificate } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, X509Certificate } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -14,6 +15,7 @@ import { tmpdir, userInfo } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { checkMacSignature, designatedRequirement } from './check-mac-signature.mjs';
+import { signManifest } from './sign-update-manifests.mjs';
 
 assert.equal(process.platform, 'darwin', 'The Squirrel.Mac update check runs on macOS only');
 
@@ -22,9 +24,13 @@ assert.equal(process.platform, 'darwin', 'The Squirrel.Mac update check runs on 
 const TEST_ID = 'com.bike4mind.desktop.updatetest';
 const TEST_PRODUCT = 'B4MUpdateTest';
 const TEST_NAME = 'b4m-update-test';
-// Versions follow the release line users run: this build's version, else the latest release tag.
-const OLD = (/\d+\.\d+\.\d+/.exec(process.env.DESKTOP_VERSION || latestReleaseTag()) ?? ['0.0.1'])[0];
-const NEW = OLD.replace(/\d+$/, patch => String(Number(patch) + 1));
+// Versions take the form scripts/package-local.cjs gives a local build, <release>-local.<revision>,
+// on this build's release line (else the latest release tag), with the next patch as the update.
+const RELEASE = (/\d+\.\d+\.\d+/.exec(process.env.DESKTOP_VERSION || git('describe', '--tags', '--abbrev=0', '--match', 'desktop-v*')) ?? ['0.0.1'])[0];
+// An all-digit revision could start with 0, which SemVer rejects in a prerelease identifier.
+const REVISION = git('rev-parse', '--short=12', 'HEAD').replace(/^(?=\d+$)/, 'g');
+const OLD = `${RELEASE}-local.${REVISION}`;
+const NEW = `${RELEASE.replace(/\d+$/, patch => String(Number(patch) + 1))}-local.${REVISION}`;
 const SHIPIT_JOB = `${TEST_ID}.ShipIt`;
 
 const desktop = resolve('apps/desktop');
@@ -104,13 +110,13 @@ async function makeCertificate(label) {
   return { label, sha1 };
 }
 
+function git(...args) {
+  return (spawnSync('git', args, { encoding: 'utf8' }).stdout ?? '').trim();
+}
+
 // Some macOS versions let codesign use an identity from --keychain alone; others resolve it only
 // through the user search list. The list is changed only where the probe says it has to be, and
 // the finally block puts it back.
-function latestReleaseTag() {
-  return spawnSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'desktop-v*'], { encoding: 'utf8' }).stdout ?? '';
-}
-
 async function exposeSigningKeychain(sha1) {
   const probe = join(root, 'probe');
   await copyFile('/usr/bin/true', probe);
@@ -292,6 +298,10 @@ async function main() {
   run('security', ['set-key-partition-list', '-S', 'apple-tool:,apple:', '-s', '-k', password, keychain]);
   await exposeSigningKeychain(certificate.sha1);
 
+  // The builds trust this key alone, whatever B4M_UPDATE_PUBLIC_KEYS the caller has set: a build that
+  // carries update keys takes only a signed manifest, and the release key cannot sign this feed.
+  const updateKey = generateKeyPairSync('ed25519');
+  const updatePublicKey = updateKey.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
   const feed = new Map();
   server = createServer((request, response) => {
     const entry = feed.get(new URL(request.url, 'http://127.0.0.1').pathname);
@@ -312,11 +322,14 @@ async function main() {
     const url = `${feedUrl}${basename(build.zip)}`;
     feed.clear();
     feed.set(`/${basename(build.zip)}`, { file: build.zip, size: payload.length });
-    feed.set('/latest-mac.yml', { text: [`version: ${build.version}`, 'files:', `  - url: ${url}`, `    sha512: '${sha512}'`,
-      `    size: ${payload.length}`, `path: ${url}`, `sha512: '${sha512}'`, `releaseDate: '${new Date().toISOString()}'`, ''].join('\n') });
+    const manifest = [`version: ${build.version}`, 'files:', `  - url: ${url}`, `    sha512: '${sha512}'`,
+      `    size: ${payload.length}`, `path: ${url}`, `sha512: '${sha512}'`, `releaseDate: '${new Date().toISOString()}'`, ''].join('\n');
+    feed.set('/latest-mac.yml', { text: manifest });
+    feed.set('/latest-mac.yml.sig', { text: signManifest('latest-mac.yml', Buffer.from(manifest), updateKey.privateKey) });
   };
 
-  const built = spawnSync('pnpm', ['build'], { cwd: desktop, env: { ...process.env, B4M_UPDATE_FEED_URL: feedUrl },
+  const built = spawnSync('pnpm', ['build'], { cwd: desktop,
+    env: { ...process.env, B4M_UPDATE_FEED_URL: feedUrl, B4M_UPDATE_PUBLIC_KEYS: updatePublicKey },
     encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   if (built.status !== 0) throw new Error(`electron-vite build failed:\n${`${built.stdout}${built.stderr}`.slice(-4000)}`);
   // A zip target, as in a release: electron-builder writes app-update.yml only when it builds one.

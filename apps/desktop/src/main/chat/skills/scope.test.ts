@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSkillsScope } from './scope';
+import { parseSkillsScope, skillsTrustTargetSchema } from './scope';
 
 describe('parseSkillsScope', () => {
   it('keeps a session id and an absolute draft folder', () => {
@@ -19,5 +19,13 @@ describe('parseSkillsScope', () => {
       { draftDirectory: 3 },
     ])
       expect(parseSkillsScope(raw)).toBeNull();
+  });
+});
+
+describe('skills trust target', () => {
+  it('requires an explicit absolute displayed root and normalizes it', () => {
+    expect(skillsTrustTargetSchema.parse('/repo/./app')).toBe('/repo/app');
+    for (const raw of [undefined, null, '', 'relative', 42, {}])
+      expect(skillsTrustTargetSchema.safeParse(raw).success).toBe(false);
   });
 });

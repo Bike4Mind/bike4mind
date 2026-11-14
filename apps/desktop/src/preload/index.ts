@@ -332,8 +332,8 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSessionSummary, handler);
     },
     listSkills: scope => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, scope),
-    setProjectSkillsTrusted: (scope, trusted) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, scope, trusted),
+    setProjectSkillsTrusted: (scope, trusted, expectedProjectDirectory) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, scope, trusted, expectedProjectDirectory),
   },
   skillMarket: {
     browse: (filters, page) => ipcRenderer.invoke(IPC_CHANNELS.skillMarketBrowse, filters, page),
@@ -516,6 +516,8 @@ const api: DesktopApi = {
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
     setOption: (sessionId: string, option: PrOption, enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.prSetOption, sessionId, option, enabled),
+    getAutoFixAttempts: () => ipcRenderer.invoke(IPC_CHANNELS.prGetAutoFixAttempts),
+    setAutoFixAttempts: (attempts: number) => ipcRenderer.invoke(IPC_CHANNELS.prSetAutoFixAttempts, attempts),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: PrBarState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.prStateChanged, handler);

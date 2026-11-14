@@ -68,15 +68,7 @@ export function SkillPicker({
     return (
       <Box sx={{ ...contentColumnSx, pt: 1 }}>
         <Sheet variant="outlined" sx={{ borderRadius: 'md', px: 2, py: 1.25 }} data-testid="skill-picker">
-          {installedCount > 0 ? (
-            <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-picker-no-match-text">
-              No skills match /{query}.
-            </Typography>
-          ) : (
-            <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-picker-empty-text">
-              No skills found. Put one in ~/.claude/skills/&lt;name&gt;/SKILL.md and type / again.
-            </Typography>
-          )}
+          <EmptySkillsMessage installedCount={installedCount} query={query} />
           {onBrowseMarket && <BrowseMarketLink onBrowse={onBrowseMarket} />}
         </Sheet>
       </Box>
@@ -110,6 +102,12 @@ export function SkillPicker({
               Trust
             </Button>
           </Stack>
+        )}
+
+        {skills.length === 0 && commands.length === 0 && (
+          <Box sx={{ px: 1.5, py: 1 }}>
+            <EmptySkillsMessage installedCount={installedCount} query={query} />
+          </Box>
         )}
 
         <List size="sm" sx={{ '--ListItem-paddingY': '6px' }}>
@@ -195,6 +193,18 @@ export function SkillPicker({
         )}
       </Sheet>
     </Box>
+  );
+}
+
+function EmptySkillsMessage({ installedCount, query }: { installedCount: number; query: string }) {
+  return installedCount > 0 ? (
+    <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-picker-no-match-text">
+      No skills match /{query}.
+    </Typography>
+  ) : (
+    <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-picker-empty-text">
+      No skills found. Put one in ~/.claude/skills/&lt;name&gt;/SKILL.md and type / again.
+    </Typography>
   );
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ImageModels } from '../models';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
 import { getImageModelCatalogEntry } from './catalog';
 import { imageFailureReason, type ImageFailureDetail } from './reasons';
 import { IMAGE_VALIDATION_ERROR_CODES, validateImageRequest, type ImageCapabilityRequest } from './validate';
@@ -11,6 +12,7 @@ const fill = getImageModelCatalogEntry(ImageModels.FLUX_PRO_FILL);
 const kontext = getImageModelCatalogEntry(ImageModels.FLUX_KONTEXT_PRO);
 const ultra = getImageModelCatalogEntry(ImageModels.FLUX_PRO_ULTRA);
 const gemini = getImageModelCatalogEntry(ImageModels.GEMINI_3_PRO_IMAGE);
+const flux3 = getImageModelCatalogEntry(ImageModels.FLUX_3_IMAGE);
 const grok = getImageModelCatalogEntry(ImageModels.GROK_IMAGINE_IMAGE_QUALITY);
 
 const codesOf = (result: ReturnType<typeof validateImageRequest>) =>
@@ -353,6 +355,7 @@ describe('validateImageRequest', () => {
       unsupported_output_count: { code: 'unsupported_output_count', mode: 'edit', requested: 2, max: 1 },
       unsupported_transparent_background: { code: 'unsupported_transparent_background' },
       unsupported_seed: { code: 'unsupported_seed' },
+      unsupported_edit_regions: { code: 'unsupported_edit_regions', mode: 'edit', requested: 9, max: 8 },
     } satisfies { [C in ImageFailureDetail['code']]: Extract<ImageFailureDetail, { code: C }> };
 
     it.each(IMAGE_VALIDATION_ERROR_CODES)('has a short ASCII reason for %s', code => {
@@ -377,5 +380,41 @@ describe('validateImageRequest', () => {
         'This model makes one image per request when editing; you asked for 2'
       );
     });
+  });
+});
+
+describe('validateImageRequest edit regions', () => {
+  const regions = (count: number) => Array.from({ length: count }, () => ({}));
+  const edit = { mode: 'edit', inputs: [{ role: 'edit_source' }] } as const;
+
+  it('accepts regions up to the maximum on a FLUX 3 edit', () => {
+    const request: ImageCapabilityRequest = { ...edit, editRegions: regions(MAX_BFL_EDIT_REGIONS) };
+    expect(validateImageRequest(request, flux3).ok).toBe(true);
+  });
+
+  it('rejects more regions than the maximum, with a reason naming both counts', () => {
+    const result = validateImageRequest({ ...edit, editRegions: regions(MAX_BFL_EDIT_REGIONS + 1) }, flux3);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+    if (result.ok) return;
+    expect(result.failures[0].field).toBe('editRegions');
+    expect(result.failures[0].reason).toBe(
+      `This model takes up to ${MAX_BFL_EDIT_REGIONS} regions when editing; you marked ${MAX_BFL_EDIT_REGIONS + 1}`
+    );
+  });
+
+  it('rejects regions when generating', () => {
+    const result = validateImageRequest({ mode: 'generate', editRegions: regions(1) }, flux3);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+  });
+
+  it('rejects regions on an edit with a model that takes none', () => {
+    const result = validateImageRequest({ ...edit, editRegions: regions(1) }, kontext);
+    expect(codesOf(result)).toEqual(['unsupported_edit_regions']);
+  });
+
+  it('words the no-regions case without a count', () => {
+    expect(imageFailureReason({ code: 'unsupported_edit_regions', mode: 'edit', requested: 1, max: 0 })).toBe(
+      'This model cannot target regions when editing'
+    );
   });
 });

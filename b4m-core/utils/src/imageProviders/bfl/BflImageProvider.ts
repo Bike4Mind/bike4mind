@@ -5,7 +5,7 @@ import {
   parseSizeEdges,
   takesBflInputImageList,
   type BFLImageModel,
-  type ImageModels,
+  type ImageJobModelId,
   type StoredImageRequest,
 } from '@bike4mind/common';
 import {
@@ -37,8 +37,8 @@ const isBflHostUrl = (value: string): boolean => {
   }
 };
 
-const isBflModel = (model: ImageModels): model is BFLImageModel =>
-  (BFL_IMAGE_MODELS as readonly ImageModels[]).includes(model);
+const isBflModel = (model: ImageJobModelId): model is BFLImageModel =>
+  (BFL_IMAGE_MODELS as readonly ImageJobModelId[]).includes(model);
 
 // BFL takes input images as bare base64, as the chat edit path sends them.
 const toBase64 = (image: ResolvedImageInput): string => image.bytes.toString('base64');
@@ -67,7 +67,7 @@ const taskOf = (handle: BflHandle): BflTask | null => {
  * budget. Role-tagged inputs map onto BFL's fields:
  * - generate: references become `image_prompt` (FLUX.1 Pro, 1.1, Ultra) or the input-image list (FLUX.2, FLUX 3).
  * - edit: the edit_source is Kontext's `input_image`, Fill's `image` (with the required mask), or FLUX.2's first
- *   input image (references follow it).
+ *   input image (references follow it). FLUX 3 edit regions ride in the prompt as BFL's bounding-box layout.
  */
 export class BflImageProvider implements AsyncImageProvider {
   readonly mode = 'async' as const;
@@ -195,6 +195,7 @@ export class BflImageProvider implements AsyncImageProvider {
       ...(outputFormat && { output_format: outputFormat }),
       ...(mask && { mask: toBase64(mask) }),
       ...(references.length > 0 && { referenceImages: references }),
+      ...(request.editRegions && { edit_regions: request.editRegions }),
     });
   }
 }

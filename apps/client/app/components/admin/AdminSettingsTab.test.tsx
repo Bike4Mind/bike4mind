@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -32,8 +32,20 @@ vi.mock('./AdminRecommendedModelsSetting', () => ({
   AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
 }));
 vi.mock('./AdminSettingInputField', () => ({
-  default: ({ setting, defaultValue }: { setting: { key: SettingKey }; defaultValue: unknown }) => (
-    <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
+  default: ({
+    setting,
+    defaultValue,
+    lockedNote,
+  }: {
+    setting: { key: SettingKey };
+    defaultValue: unknown;
+    lockedNote?: string;
+  }) => (
+    <div
+      data-testid={`generic-setting-${setting.key}`}
+      data-default-value={JSON.stringify(defaultValue)}
+      data-locked-note={lockedNote}
+    />
   ),
 }));
 vi.mock('./AdminStringListSettingField', () => ({
@@ -58,6 +70,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { useUser } from '@client/app/contexts/UserContext';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -353,6 +366,29 @@ describe('AdminSettingsTab field default value', () => {
     renderAiTab();
 
     expect(passedDefault('forcedRetrievalSpreadFloorPct')).toBe(settingsMap.forcedRetrievalSpreadFloorPct.defaultValue);
+  });
+});
+
+describe('AdminSettingsTab full-admin-only settings', () => {
+  const lockedNote = (key: SettingKey) => screen.getByTestId(`generic-setting-${key}`).getAttribute('data-locked-note');
+  const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
+    useUser.setState({ currentUser: user as unknown as ReturnType<typeof useUser.getState>['currentUser'] });
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('locks a setting that constrains delegates for a settings:manage delegate, and only that one', () => {
+    signInAs({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBe('Only full administrators can change this setting.');
+    expect(lockedNote('turnstileEnabled')).toBeNull();
+  });
+
+  it('leaves it editable for a full admin', () => {
+    signInAs({ isAdmin: true });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBeNull();
   });
 });
 

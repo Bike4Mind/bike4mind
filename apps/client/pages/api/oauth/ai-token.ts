@@ -212,7 +212,7 @@ const handler = baseApi({ auth: false })
     }
 
     // 6.5. The admin paid-only switch; the same gate re-runs on every use of the key.
-    if (!(await isApiKeyAccessAllowed(user, undefined, req))) {
+    if (!(await isApiKeyAccessAllowed(user, { oauthExchangeClientId: client_id }, req))) {
       logError(SUBSCRIPTION_REQUIRED_ERROR, 403);
       return res
         .status(403)

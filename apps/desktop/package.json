@@ -44,6 +44,7 @@
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/cli": "workspace:*",
+    "@bike4mind/design-tokens": "workspace:*",
     "@bike4mind/local-models": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
     "@bike4mind/utils": "workspace:*",

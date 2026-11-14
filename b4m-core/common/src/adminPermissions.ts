@@ -48,6 +48,25 @@ export const MODERATION_PAGE_READ = ['support:read', 'users:moderate'] as const 
 /** The same for credits: the credit, grant and subscription reads a `credits:adjust` delegate needs beside its writes. */
 export const CREDITS_PAGE_READ = ['support:read', 'credits:adjust'] as const satisfies readonly AdminPermissionId[];
 
+/**
+ * Settings that constrain delegated admins themselves, so `settings:manage` alone must not loosen them:
+ * only a full admin may change them. Enforced by `pages/api/settings/update.ts`; the admin settings page
+ * locks the same fields for delegates.
+ */
+export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'AdminApprovalsEnabled',
+  'AdminApprovalBulkUserThreshold',
+  'AdminApprovalCreditThreshold',
+  'AdminApprovalExpiryHours',
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
+  'SlackSecurityAlertsWebhookUrl',
+  'enforceMFA',
+  'allowTrustedDevices',
+  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
+  'signupGrantUnprotectedMaxCredits',
+]);
+
 type AdminIdentity = {
   isAdmin?: boolean | null;
   adminPermissions?: readonly string[] | null;

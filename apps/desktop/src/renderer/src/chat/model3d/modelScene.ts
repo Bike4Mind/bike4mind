@@ -417,6 +417,24 @@ function scaleThickness(root: THREE.Object3D, factor: number): void {
 }
 
 /**
+ * GLTFExporter merges a separate roughness and metalness map with canvas drawImage, which cannot
+ * draw a DataTexture's raw pixels, so a textured part failed to export. The procedural roughness
+ * maps are already packed the glTF way (roughness in G, B at full so the metalness factor applies
+ * as is; see textureBytes in proceduralTextures.ts), so the exporter gets that one map for both and
+ * writes it unchanged. Materials are shared with the viewer's object by clone(), so each is copied.
+ */
+export function shareMetalRoughMaps(root: THREE.Object3D): void {
+  root.traverse(node => {
+    if (!(node instanceof THREE.Mesh) || !(node.material instanceof THREE.MeshStandardMaterial)) return;
+    const { roughnessMap, metalnessMap } = node.material;
+    if (!(roughnessMap instanceof THREE.DataTexture) || metalnessMap) return;
+    const material = node.material.clone();
+    material.metalnessMap = roughnessMap;
+    node.material = material;
+  });
+}
+
+/**
  * GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. Always
  * in the modelled pose, whatever the pane's joint sliders show, plus one animation clip per joint.
  */
@@ -428,6 +446,7 @@ export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
     copy.scale.setScalar(0.001);
     scaleThickness(copy, 0.001);
   }
+  shareMetalRoughMaps(copy);
   bakeTopTransforms(copy);
   scene.add(copy);
   // TRS rather than a matrix: glTF forbids `matrix` on a node an animation targets, and these
@@ -504,6 +523,29 @@ export function frameCamera(
 ): THREE.Vector3 {
   root.updateMatrixWorld(true);
   return frameBox(camera, new THREE.Box3().setFromObject(root), direction);
+}
+
+/** How close to the view's edge, as a share of its half-width, a model may reach before it counts as cropped. */
+export const VIEW_EDGE_MARGIN = 0.02;
+
+/**
+ * Whether some corner of `box` lies past the camera's view, or within `margin` of its edge, or behind
+ * it: a rebuild that grew the model out of frame. Reads the camera's current matrices.
+ */
+export function extendsPastView(camera: THREE.PerspectiveCamera, box: THREE.Box3, margin = VIEW_EDGE_MARGIN): boolean {
+  if (box.isEmpty()) return false;
+  camera.updateMatrixWorld();
+  camera.updateProjectionMatrix();
+  const limit = 1 - margin;
+  const corner = new THREE.Vector3();
+  for (let index = 0; index < 8; index += 1) {
+    corner.set(index & 1 ? box.max.x : box.min.x, index & 2 ? box.max.y : box.min.y, index & 4 ? box.max.z : box.min.z);
+    corner.applyMatrix4(camera.matrixWorldInverse);
+    if (corner.z > -camera.near) return true;
+    corner.applyMatrix4(camera.projectionMatrix);
+    if (Math.abs(corner.x) > limit || Math.abs(corner.y) > limit) return true;
+  }
+  return false;
 }
 
 /** frameCamera for a box rather than a whole object: what a close-up of some parts frames. */

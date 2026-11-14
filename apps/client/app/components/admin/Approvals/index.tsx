@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Button, FormControl, FormLabel, Input, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, FormControl, FormLabel, Input, MenuItem, Option, Select, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
@@ -8,6 +8,7 @@ import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHe
 import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyles';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
+import { RowActionsMenu } from '@client/app/components/admin/shared/RowActionsMenu';
 import { StatusChip } from '@client/app/components/admin/shared/StatusChip';
 import { AdminUsersBulkResultSchema } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { useUsersBulkResult } from '../Users/List/useUsersBulkResult';
@@ -61,6 +62,16 @@ const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a 
 
 const decideHint = (row: AdminApprovalRow) =>
   row.own ? 'Another admin must approve your own request.' : 'You do not have the permission this request needs.';
+
+const DecisionLabel = ({ label, hint }: { label: string; hint?: string }) =>
+  hint ? (
+    <Stack>
+      <span>{label}</span>
+      <Typography level="body-xs">{hint}</Typography>
+    </Stack>
+  ) : (
+    <>{label}</>
+  );
 
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
@@ -203,6 +214,7 @@ const Approvals: React.FC = () => {
     {
       id: 'summary',
       label: 'Request',
+      wrap: true,
       render: row => (
         <Stack spacing={0.25}>
           <Typography level="body-sm" fontWeight={500}>
@@ -230,84 +242,52 @@ const Approvals: React.FC = () => {
     },
   ];
 
-  const detailsButton = (row: AdminApprovalRow) =>
-    hasParams(row) || row.result !== undefined || row.error ? (
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        onClick={() => setInspecting(row)}
-        data-testid="admin-approval-details-btn"
-      >
-        Details
-      </Button>
-    ) : null;
-
   const rowActions = (row: AdminApprovalRow) => {
-    const decisionActions = decisionActionsOf(row);
-    const details = detailsButton(row);
-    if (!details) return decisionActions;
-    return (
-      <Stack direction="row" spacing={0.5}>
-        {details}
-        {decisionActions}
-      </Stack>
-    );
-  };
-
-  const decisionActionsOf = (row: AdminApprovalRow) => {
-    if (
+    const showDetails = hasParams(row) || row.result !== undefined || !!row.error;
+    const canStartImpersonation =
       row.status === 'approved' &&
       row.action === 'user.impersonate_admin' &&
       !!row.requestedBy &&
-      row.requestedBy.id === currentUser?.id
-    ) {
-      return (
-        <Button
-          size="sm"
-          variant="outlined"
-          onClick={() => setImpersonating(row)}
-          data-testid="admin-approval-start-impersonation-btn"
-        >
-          Start impersonation
-        </Button>
-      );
-    }
-    if (row.status !== 'pending') return null;
+      row.requestedBy.id === currentUser?.id;
+    const isPending = row.status === 'pending';
+    if (!showDetails && !canStartImpersonation && !isPending) return null;
     const isRequester = !!row.own;
-    const hint = row.canDecide ? '' : decideHint(row);
+    const hint = decideHint(row);
     return (
-      <Stack direction="row" spacing={0.5}>
-        <Tooltip title={hint} disableHoverListener={row.canDecide}>
-          <span>
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
-              disabled={!row.canDecide || approve.isPending}
-              onClick={() => void onApprove(row)}
-              data-testid="admin-approve-btn"
-            >
-              Approve
-            </Button>
-          </span>
-        </Tooltip>
+      <RowActionsMenu testId={`admin-approval-actions-${row.id}`} ariaLabel={`Actions for ${summaryOf(row)}`}>
+        {showDetails && (
+          <MenuItem onClick={() => setInspecting(row)} data-testid="admin-approval-details-btn">
+            Details
+          </MenuItem>
+        )}
+        {canStartImpersonation && (
+          <MenuItem onClick={() => setImpersonating(row)} data-testid="admin-approval-start-impersonation-btn">
+            Start impersonation
+          </MenuItem>
+        )}
+        {isPending && (
+          <MenuItem
+            disabled={!row.canDecide || approve.isPending}
+            onClick={() => void onApprove(row)}
+            data-testid="admin-approve-btn"
+          >
+            <DecisionLabel label="Approve" hint={row.canDecide ? undefined : hint} />
+          </MenuItem>
+        )}
         {/* The server lets the requester withdraw, and otherwise rejects on the same check as approve. */}
-        <Tooltip title={hint} disableHoverListener={isRequester || row.canDecide}>
-          <span>
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
-              disabled={!isRequester && !row.canDecide}
-              onClick={() => setRejecting(row)}
-              data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
-            >
-              {isRequester ? 'Withdraw' : 'Reject'}
-            </Button>
-          </span>
-        </Tooltip>
-      </Stack>
+        {isPending && (
+          <MenuItem
+            disabled={!isRequester && !row.canDecide}
+            onClick={() => setRejecting(row)}
+            data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
+          >
+            <DecisionLabel
+              label={isRequester ? 'Withdraw' : 'Reject'}
+              hint={isRequester || row.canDecide ? undefined : hint}
+            />
+          </MenuItem>
+        )}
+      </RowActionsMenu>
     );
   };
 
