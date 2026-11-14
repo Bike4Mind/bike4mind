@@ -1,0 +1,477 @@
+import {
+  agentRepository,
+  agentOpsSettingsRepository,
+  apiKeyRepository,
+  adminSettingsRepository,
+  sessionRepository,
+  questRepository,
+  projectRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
+import {
+  IAgent,
+  IChatHistoryItemDocument,
+  IFabFileDocument,
+  ISessionDocument,
+  IUserDocument,
+  Permission,
+  isImageAttachment,
+} from '@bike4mind/common';
+import { BadRequestError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
+import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { Logger } from '@bike4mind/observability';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { createAttachmentLakeAccess } from '@bike4mind/server-utils/dataLakes/attachmentLakeAccess';
+import { v4 as uuidv4 } from 'uuid';
+
+// Maximum characters of file content to include in the agent generation prompt.
+// ~30k chars is about 8.5k tokens, leaving room for conversation context + output.
+const MAX_FILE_CONTENT_CHARS = 30_000;
+const MAX_PER_FILE_CHARS = 10_000;
+// Minimum remaining budget (chars) worth including a partial file section.
+const MIN_REMAINING_CHARS = 200;
+
+/**
+ * Collects all file IDs associated with a session: session-level knowledge files
+ * plus files attached to individual chat messages.
+ */
+async function collectSessionFileIds(sessionId: string, messages: IChatHistoryItemDocument[]): Promise<string[]> {
+  const session = await sessionRepository.findById(sessionId);
+  const knowledgeIds = session?.knowledgeIds ?? [];
+  const messageFileIds = messages.flatMap(msg => msg.fabFileIds ?? []);
+  return [...new Set([...knowledgeIds, ...messageFileIds])];
+}
+
+async function extractFileContents(fabFiles: IFabFileDocument[], logger: Logger): Promise<string> {
+  if (fabFiles.length === 0) return '';
+
+  const textFiles = fabFiles.filter(f => {
+    if (isImageAttachment(f.mimeType)) {
+      logger.info(`Skipping image file: ${f.fileName}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (textFiles.length === 0) return '';
+
+  // Fetch file contents in parallel
+  const results = await Promise.allSettled(
+    textFiles.map(async fabFile => {
+      const content = await getFileContent(fabFile, {
+        storage: getFilesStorage(),
+        logger,
+      });
+      return { fileName: fabFile.fileName, content };
+    })
+  );
+
+  const fileContents: Array<{ fileName: string; content: string }> = [];
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      logger.warn('Failed to extract content from file:', result.reason);
+      continue;
+    }
+    const { fileName, content } = result.value;
+    if (content && content.trim().length > 0) {
+      const truncated =
+        content.length > MAX_PER_FILE_CHARS ? content.substring(0, MAX_PER_FILE_CHARS) + '\n...[truncated]' : content;
+      fileContents.push({ fileName, content: truncated });
+    }
+  }
+
+  if (fileContents.length === 0) return '';
+
+  let totalChars = 0;
+  const sections: string[] = [];
+
+  for (const { fileName, content } of fileContents) {
+    const section = `--- File: ${fileName} ---\n${content}`;
+    if (totalChars + section.length > MAX_FILE_CONTENT_CHARS) {
+      const remaining = MAX_FILE_CONTENT_CHARS - totalChars;
+      if (remaining > MIN_REMAINING_CHARS) {
+        sections.push(section.substring(0, remaining) + '\n...[truncated]');
+      }
+      break;
+    }
+    sections.push(section);
+    totalChars += section.length;
+  }
+
+  return '\nFile Contents:\n' + sections.join('\n\n');
+}
+
+/**
+ * Generates comprehensive agent data from session context
+ * This includes personality traits, system prompt, and all metadata
+ */
+type GeneratedAgentProfile = {
+  description?: string;
+  triggerWords?: string[];
+  personality?: Record<string, string | undefined>;
+  capabilities?: { responseStyle?: string; specialBehaviors?: string[] };
+  systemPrompt?: string;
+};
+
+async function generateAgentFromContext(
+  req: Parameters<typeof createRequestCompletionMeter>[0],
+  agentName: string,
+  messages: IChatHistoryItemDocument[],
+  fabFiles: IFabFileDocument[],
+  userId: string,
+  logger: Logger
+): Promise<Partial<IAgent>> {
+  // Get API keys and available models
+  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
+    db: {
+      adminSettings: adminSettingsRepository,
+      apiKeys: apiKeyRepository,
+    },
+    getSettingsByNames,
+  });
+
+  const models = await getAvailableModels(apiKeyTable);
+
+  // Get the configured model from settings
+  const settings = await agentOpsSettingsRepository.getSettings();
+  const preferredModelId = settings?.generationLlmModel;
+
+  // Priority order for model selection:
+  // 1. User's configured preferred model (if available)
+  // 2. Any OpenAI model (more likely to have user keys)
+  // 3. Any Anthropic model (non-Bedrock)
+  // 4. Any available model
+  // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+  let modelInfo = preferredModelId ? models.find(m => m.id === preferredModelId && !m.disabled) : null;
+
+  if (!modelInfo) {
+    // Try OpenAI models first (users more likely to have OpenAI keys)
+    modelInfo = models.find(m => m.id.includes('gpt-4') || m.id.includes('gpt-3'));
+  }
+
+  if (!modelInfo) {
+    // Try Anthropic models (non-Bedrock versions)
+    modelInfo = models.find(m => m.id.includes('claude') && !m.id.includes('bedrock') && !m.id.includes(':0'));
+  }
+
+  if (!modelInfo) {
+    // Fallback to any available model
+    modelInfo = models[0];
+  }
+
+  if (!modelInfo) {
+    throw new Error('No available LLM model found for agent generation. Please configure your API keys in Settings.');
+  }
+
+  logger.info(`Using model ${modelInfo.id} for agent generation`);
+
+  const llmBackend = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: userId });
+  if (!llmBackend) {
+    throw new Error('Failed to initialize LLM backend for agent generation. Please check your API key configuration.');
+  }
+  // The platform picks the model (admin setting or catalog fallback), so picker access rules do not apply.
+  const llm = meterCompletionBackend(
+    llmBackend,
+    createRequestCompletionMeter(req, 'agent generation from context', { systemModel: true }),
+    modelInfo
+  );
+
+  // Prepare context from messages and files
+  // Use all messages - let the LLM's context window be the limit
+  const conversationContext = messages
+    .map(msg => {
+      // Extract the main content from the message
+      const userPrompt = msg.prompt || '';
+      const assistantReply =
+        msg.reply ||
+        (msg.replies && Array.isArray(msg.replies) && msg.replies.length > 0
+          ? typeof msg.replies[0] === 'string'
+            ? msg.replies[0]
+            : (msg.replies[0] as Record<string, unknown>).content || ''
+          : '') ||
+        '';
+      if (userPrompt) return `user: ${userPrompt}`;
+      if (assistantReply) return `assistant: ${stripToolOutputMarker(String(assistantReply))}`;
+      return '';
+    })
+    .filter(line => line)
+    .join('\n\n');
+
+  const fileContext = await extractFileContents(fabFiles, logger);
+
+  // Create the comprehensive prompt for agent generation
+  const generationPrompt = `Based on the following conversation context and files, create a comprehensive AI agent personality named "${agentName}".
+
+CONVERSATION CONTEXT:
+${conversationContext}
+
+${fileContext}
+
+Create an agent profile with personality based on the conversation above. Generate ONLY valid JSON (no markdown, no code blocks, no extra text):
+
+{
+  "description": "2-3 sentences about the agent",
+  "triggerWords": ["lowercase", "trigger", "words"],
+  "personality": {
+    "majorMotivation": "main driving force",
+    "minorMotivation": "secondary motivation",
+    "flaw": "character flaw",
+    "quirk": "unique quirk",
+    "description": "personality overview"
+  },
+  "capabilities": {
+    "responseStyle": "friendly",
+    "specialBehaviors": ["behavior1", "behavior2"]
+  },
+  "systemPrompt": "You are ${agentName}. [200-300 word description of personality, communication style, knowledge from conversation context, and behavioral traits]"
+}`;
+
+  let generatedData = '';
+
+  // Generate the agent data with instructions for clean JSON
+  const enhancedPrompt = `${generationPrompt}
+
+IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formatting, and no code blocks. Ensure all quotes are properly escaped and there are no trailing commas.`;
+
+  await llm.complete(
+    modelInfo.id,
+    [
+      {
+        role: 'user' as const,
+        content: enhancedPrompt,
+      },
+    ],
+    {
+      temperature: 0.7, // Lower temperature for more consistent JSON
+      maxTokens: 4000,
+      stream: false,
+    },
+    async (texts: (string | null | undefined)[]) => {
+      if (texts[0]) {
+        generatedData += texts[0];
+      }
+    }
+  );
+
+  // Parse the generated JSON
+  let agentProfile: GeneratedAgentProfile;
+  try {
+    // Log the raw response for debugging
+    logger.info('Generated data length:', generatedData.length);
+
+    // Try to extract JSON from the response
+    // First, try to find a JSON object between curly braces
+    let jsonString = generatedData;
+
+    // Remove any markdown code blocks if present
+    jsonString = jsonString.replace(/```json\s*/gi, '').replace(/```\s*/gi, '');
+
+    // Find the first { and last } to extract just the JSON
+    const firstBrace = jsonString.indexOf('{');
+    const lastBrace = jsonString.lastIndexOf('}');
+
+    if (firstBrace === -1 || lastBrace === -1 || firstBrace >= lastBrace) {
+      throw new Error('No valid JSON structure found in response');
+    }
+
+    jsonString = jsonString.substring(firstBrace, lastBrace + 1);
+
+    // Clean up common issues
+    // Remove trailing commas before closing braces/brackets
+    jsonString = jsonString.replace(/,\s*([\]}])/g, '$1');
+    // Fix unescaped quotes in values (basic attempt)
+    jsonString = jsonString.replace(/(: *"[^"]*)(")/g, (match, p1, p2) => {
+      // Don't replace the closing quote
+      if (match.endsWith('""')) {
+        return p1 + '\\"';
+      }
+      return match;
+    });
+
+    // Try to parse
+    agentProfile = JSON.parse(jsonString);
+
+    // Validate required fields
+    if (!agentProfile.description || !agentProfile.systemPrompt) {
+      throw new Error('Generated profile missing required fields');
+    }
+  } catch (error) {
+    logger.error('Failed to parse generated agent data:', error);
+    logger.error('Generated agent data could not be parsed', { generatedDataLength: generatedData.length });
+
+    // Fallback: Create a basic agent profile
+    logger.info('Using fallback agent profile due to parse error');
+    agentProfile = {
+      description: `${agentName} is an AI agent created from your conversation context.`,
+      triggerWords: [agentName.toLowerCase(), `@${agentName.toLowerCase()}`],
+      personality: {
+        majorMotivation: 'To assist based on the conversation context',
+        minorMotivation: 'To learn and adapt from interactions',
+        flaw: 'Sometimes overly eager to help',
+        quirk: 'Has a unique perspective shaped by your conversations',
+        description: 'An AI assistant with personality traits derived from your chat history',
+      },
+      capabilities: {
+        responseStyle: 'friendly',
+        specialBehaviors: ['contextual awareness', 'adaptive responses'],
+      },
+      systemPrompt: `You are ${agentName}, an AI agent created from a specific conversation context. You embody the themes, knowledge, and interaction style observed in the conversation that led to your creation. Be helpful, contextually aware, and maintain consistency with the personality that emerged from that conversation.`,
+    };
+  }
+
+  // Create the agent object (projectId will be set when saving)
+  const agent: Partial<IAgent> = {
+    id: uuidv4(),
+    userId,
+    name: agentName,
+    description: agentProfile.description || `An AI agent created from conversation context`,
+    triggerWords: agentProfile.triggerWords || [agentName.toLowerCase()],
+    isPublic: false,
+    useOwnCredits: false,
+    personality: {
+      majorMotivation: agentProfile.personality?.majorMotivation || '',
+      minorMotivation: agentProfile.personality?.minorMotivation || '',
+      flaw: agentProfile.personality?.flaw || '',
+      quirk: agentProfile.personality?.quirk || '',
+      description: agentProfile.personality?.description || '',
+      emotionalIntelligence: agentProfile.personality?.emotionalIntelligence || '',
+      communicationPattern: agentProfile.personality?.communicationPattern || '',
+      memoryStyle: agentProfile.personality?.memoryStyle || '',
+      culturalFlavor: agentProfile.personality?.culturalFlavor || '',
+      energyLevel: agentProfile.personality?.energyLevel || '',
+      humorStyle: agentProfile.personality?.humorStyle || '',
+      backstoryElement: agentProfile.personality?.backstoryElement || '',
+      problemSolvingApproach: agentProfile.personality?.problemSolvingApproach || '',
+      personalMission: agentProfile.personality?.personalMission || '',
+      activeProject: agentProfile.personality?.activeProject || '',
+      secretAmbition: agentProfile.personality?.secretAmbition || '',
+      coreValues: agentProfile.personality?.coreValues || '',
+      legacyAspiration: agentProfile.personality?.legacyAspiration || '',
+      growthChallenge: agentProfile.personality?.growthChallenge || '',
+      personalityComplexity: 'complex' as const,
+      generationTimestamp: new Date().toISOString(),
+      uniqueId: uuidv4(),
+    },
+    capabilities: [
+      JSON.stringify({
+        responseStyle: agentProfile.capabilities?.responseStyle || 'friendly',
+        specialBehaviors: agentProfile.capabilities?.specialBehaviors || [],
+      }),
+    ],
+    systemPrompt: agentProfile.systemPrompt || '',
+    visual: {
+      portraitUrl: '', // Will be generated later if needed
+      style: 'modern' as const,
+      generationPrompt: `A portrait of ${agentName}, an AI agent with the following traits: ${agentProfile.personality?.description || 'intelligent and helpful'}`,
+    },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  return agent;
+}
+
+/** Whether `userId` may create an agent from this session: its owner, a global-write session, or a `create` sharee. */
+export function canCreateAgentInSession(session: ISessionDocument, userId: string): boolean {
+  const hasSharedCreateAccess =
+    session.users?.some(share => share.userId === userId && share.permissions.includes(Permission.create)) ?? false;
+  return session.userId === userId || session.isGlobalWrite === true || hasSharedCreateAccess;
+}
+
+type CreateAgentFromContextParams = {
+  req: Parameters<typeof createRequestCompletionMeter>[0];
+  user: IUserDocument;
+  logger: Logger;
+  agentName: string;
+  sessionId: string;
+};
+
+/**
+ * Generates an agent from a session's conversation and files, gives it a dedicated project, and
+ * saves it. The caller has already checked the session access (canCreateAgentInSession) and the
+ * tier's agent cap (assertAgentLimit, which must stay outside any catch-all around this call).
+ */
+export async function createAgentFromContext({
+  req,
+  user,
+  logger,
+  agentName,
+  sessionId,
+}: CreateAgentFromContextParams): Promise<IAgent> {
+  const userId = user.id;
+  logger.info(`Creating agent "${agentName}" from context for user ${userId}`);
+
+  const settings = await agentOpsSettingsRepository.getSettings();
+  if (settings && !settings.isEnabled) {
+    throw new BadRequestError('Agent generation is currently disabled');
+  }
+
+  const messages = await questRepository.findAllBySessionId(sessionId);
+
+  // Derive file IDs from session data (knowledgeIds + message fabFileIds) instead of trusting
+  // client-provided file IDs.
+  const fileIds = await collectSessionFileIds(sessionId, messages);
+  // Access-scoped: both id lists are client-written, and file contents go into the generated
+  // agent's prompt. Same arms as the attachment door; a lake resolution failure leaves
+  // ownership-only arms, so a lake file drops out of the context rather than widening it.
+  const fabFiles =
+    fileIds.length > 0
+      ? await fabFileRepository.findAccessibleInIds(
+          fileIds,
+          { userId, userGroups: user.groups ?? undefined },
+          await createAttachmentLakeAccess(user, logger)()
+        )
+      : [];
+
+  const agentData = await generateAgentFromContext(req, agentName, messages, fabFiles, userId, logger);
+
+  // Always create a dedicated project for this agent. Per-user project names are unique
+  // (userId_1_name_1), so a second agent with the same name would trip code 11000; disambiguate
+  // with a short suffix rather than failing the whole creation.
+  const makeAgentProjectDoc = (name: string) =>
+    ({
+      name,
+      description: `Project automatically created for the ${agentName} agent`,
+      userId,
+      users: [{ userId, permissions: ['read', 'create', 'update', 'delete', 'share'] }],
+      groups: [],
+      isGlobalRead: false,
+      isGlobalWrite: false,
+    }) as never; // projectRepository.create() expects the full document type but we provide a partial
+
+  let agentProject;
+  try {
+    agentProject = await projectRepository.create(makeAgentProjectDoc(`${agentName} Agent Project`));
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+    agentProject = await projectRepository.create(
+      makeAgentProjectDoc(`${agentName} Agent Project (${uuidv4().slice(0, 8)})`)
+    );
+  }
+  if (!agentProject) {
+    throw new Error('Failed to create project for agent');
+  }
+
+  const projectId = agentProject.id;
+  logger.info(`Created dedicated project ${projectId} for agent "${agentName}"`);
+
+  const agentToSave = {
+    ...agentData,
+    projectId,
+    groups: [],
+    isGlobalRead: false,
+    isGlobalWrite: false,
+    users: [{ userId, permissions: ['read', 'create', 'update', 'delete', 'share'] }],
+  };
+  const savedAgent = await agentRepository.create(agentToSave as never); // partial: create() expects the full document type
+  if (!savedAgent) {
+    throw new Error('Failed to save agent to database');
+  }
+
+  logger.info(`Successfully created agent "${agentName}" with ID ${savedAgent.id}`);
+  return savedAgent;
+}
