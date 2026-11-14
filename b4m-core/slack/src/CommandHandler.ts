@@ -11,7 +11,7 @@ import { parseCommand, selectAgent, type ParsedAgentCommand, type AgentPersona }
 import { customAgentToPersona } from './custom-agent-adapter';
 import { SlackEvent, type SlackEventData } from './SlackEvent';
 import { validateSlackFileForIngest } from './slackFileValidation';
-import { Types } from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import { notebookNew } from './tools/notebookNew';
@@ -22,6 +22,10 @@ import {
   BadRequestError,
   isStorageLimitError,
   type IAdminSettingsRepository,
+  type IAgentDocument,
+  type IFabFileDocument,
+  type IOrganizationDocument,
+  type ISlackChannelConfigDocument,
 } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
@@ -113,12 +117,14 @@ export class CommandHandler {
     }
 
     try {
-      const { Agent } = getSlackDb();
-      const agent = await (Agent as any).findOne({
+      // DI exposes models as unknown; the bound implementations are the database Mongoose models.
+      const Agent = getSlackDb().Agent as mongoose.Model<IAgentDocument>;
+      const agent = await Agent.findOne({
         _id: customAgentId,
         $or: [{ userId: this.user.id }, { 'users.userId': this.user.id }],
         deletedAt: { $exists: false },
       });
+      this.logger.info('[TEMP-PR7289] T12 custom agent', { found: !!agent });
 
       if (agent) {
         this.customAgent = customAgentToPersona(agent);
@@ -146,16 +152,19 @@ export class CommandHandler {
     let channelConfig = null;
     let orgDoc = null;
     try {
-      const { SlackChannelConfig, Organization } = getSlackDb();
+      const db = getSlackDb();
+      const SlackChannelConfig = db.SlackChannelConfig as mongoose.Model<ISlackChannelConfigDocument>;
+      const Organization = db.Organization as mongoose.Model<IOrganizationDocument>;
       [channelConfig, orgDoc] = await Promise.all([
-        (SlackChannelConfig as any).findOne({ channelId: this.slackEvent.channel }).lean(),
+        SlackChannelConfig.findOne({ channelId: this.slackEvent.channel }).lean(),
         this.user.organizationId
-          ? (Organization as any)
-              .findById(this.user.organizationId)
-              .select('preferredModel temperature maxTokens')
-              .lean()
+          ? Organization.findById(this.user.organizationId).select('preferredModel temperature maxTokens').lean()
           : null,
       ]);
+      this.logger.info('[TEMP-PR7289] T6 resolveModelConfig lookups', {
+        channelConfig: !!channelConfig,
+        orgDoc: !!orgDoc,
+      });
     } catch (error) {
       this.logger.error('[Slack] Failed to fetch model config from database, using system defaults', {
         error,
@@ -200,6 +209,7 @@ export class CommandHandler {
             ? 'org'
             : 'system';
 
+    this.logger.info('[TEMP-PR7289] T6 resolveModelConfig source', { source: modelSource });
     this.logger.info('[Slack] Model config resolved', {
       channelId: this.slackEvent.channel,
       modelId,
@@ -293,6 +303,7 @@ export class CommandHandler {
     if (this.slackEvent.threadTs) {
       // This is a reply in a thread - fetch thread messages
       contextMessages = await this.slackClient.fetchThreadHistory(this.slackEvent.channel, this.slackEvent.threadTs);
+      this.logger.info('[TEMP-PR7289] T8 thread context', { messages: contextMessages.length });
     } else {
       // Regular channel message - fetch recent channel history
       contextMessages = await this.slackClient.fetchChannelHistory(this.slackEvent.channel, 20);
@@ -338,8 +349,9 @@ export class CommandHandler {
     additionalTools: string[] = []
   ): Promise<string | null> {
     try {
-      const { User } = getSlackDb();
-      const user = await (User as any).findById(this.user.id);
+      const User = getSlackDb().User as mongoose.Model<IUserDocument>;
+      const user = await User.findById(this.user.id);
+      this.logger.info('[TEMP-PR7289] T6 user', { found: !!user });
       if (!user) throw new Error('User not found');
 
       this.logger.info('[Legacy Path] triggerAIResponseWithContext started', {
@@ -359,7 +371,7 @@ export class CommandHandler {
       if (statusCallback) await statusCallback(`${createLoadingBar(40)} Getting AI response...`);
 
       const { chatCompletionDefaults, eventBus } = getSlackDeps();
-      // any: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime
+      // unknown: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime
       const chatCompletion = new ChatCompletionInvoke({
         ...chatCompletionDefaults.defaultChatCompletionOptions,
         queue: new SQSService(), // Create per-request for fresh credentials
@@ -374,7 +386,8 @@ export class CommandHandler {
 
           Logger.globalInstance.log('🌍 [SERVER] CommandHandler invokeLambda end:', new Date().toISOString());
         },
-      } as any);
+      } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+      this.logger.info('[TEMP-PR7289] T6 chatCompletion constructed');
 
       // Resolve model config: channel -> agent -> org -> system fallback
       const { modelId, temperature: agentTemperature, maxTokens: agentMaxTokens } = await this.resolveModelConfig();
@@ -527,18 +540,18 @@ export class CommandHandler {
     // attachment - the admin setting cannot change mid-call.
     // These attachments are personal (no lake, so no organizationId stamp on the FabFile), so
     // the uploader's own quota applies, not the selected org's.
-    const { adminSettingsRepository, FabFile } = getSlackDb();
+    const db = getSlackDb();
+    const { adminSettingsRepository } = db;
+    const FabFile = db.FabFile as mongoose.Model<IFabFileDocument>;
     const { storage } = getSlackDeps();
     // Resolved outside the per-file try/catch below, so a lookup failure here is caught on its
     // own (mirroring resolveModelConfig's DB-failure fallback above) instead of propagating out
     // of processSlackFiles entirely - this method never threw before #1685 added this check.
     let maxFileSizeBytes: number | undefined;
     try {
-      // any: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
+      // unknown: ISlackDatabaseDependencies types repositories as `unknown` at the DI boundary;
       // the bound implementation (slackPackageInit.ts) is the real IAdminSettingsRepository.
-      const maxFileSizeMB = await (adminSettingsRepository as any as IAdminSettingsRepository).getSettingsValue(
-        'MaxFileSize'
-      );
+      const maxFileSizeMB = await (adminSettingsRepository as IAdminSettingsRepository).getSettingsValue('MaxFileSize');
       maxFileSizeBytes = typeof maxFileSizeMB === 'number' ? maxFileSizeMB * 1024 * 1024 : undefined;
     } catch (settingsError) {
       // Fails open (no MaxFileSize limit for this call) rather than blocking every attachment -
@@ -547,6 +560,7 @@ export class CommandHandler {
         error: settingsError,
       });
     }
+    this.logger.info('[TEMP-PR7289] T9 maxFileSizeBytes', { maxFileSizeBytes });
     // `this.user.currentStorageSize` is a snapshot taken once for this whole
     // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
     // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
@@ -583,6 +597,7 @@ export class CommandHandler {
           // Warning sign, escaped so this source file stays ASCII.
           const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
+          this.logger.info('[TEMP-PR7289] T9 file rejected', { reason: 'size' });
           errors.push(error);
           continue;
         }
@@ -600,6 +615,7 @@ export class CommandHandler {
           // Warning sign, escaped so this source file stays ASCII.
           const error = `\u26a0\ufe0f File "${file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit. Skipping.`;
           this.logger.warn(error);
+          this.logger.info('[TEMP-PR7289] T9 file rejected', { reason: 'size' });
           errors.push(error);
           continue;
         }
@@ -644,7 +660,7 @@ export class CommandHandler {
 
         // Create FAB file record in database
         const { KnowledgeType, FabFileSourceType } = await import('@bike4mind/common');
-        const fabFile = await (FabFile as any).create({
+        const fabFile = await FabFile.create({
           userId: this.user.id,
           fileName: file.name,
           // Persist what the checks above actually verified, not the client's claim: the
@@ -662,6 +678,7 @@ export class CommandHandler {
           // `channel` is '' on an event that carries none; the field is Mixed, so it round-trips.
           sourceMetadata: { channel: this.slackEvent.channel, messageTs: this.slackEvent.ts },
         });
+        this.logger.info('[TEMP-PR7289] T9 fabFile created', { id: String(fabFile._id) });
 
         // Only charged against quota once the file is actually persisted - a file that fails
         // upload or create must not eat into the headroom the next attachment in this same

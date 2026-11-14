@@ -4179,16 +4179,6 @@
       "count": 2
     }
   },
-  "b4m-core/slack/src/CommandHandler.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 7
-    }
-  },
-  "b4m-core/slack/src/SlackClient.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 7
-    }
-  },
   "b4m-core/slack/src/SlackEvent.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -4247,11 +4237,6 @@
   "b4m-core/slack/src/handlers/channel-manager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "b4m-core/slack/src/handlers/modelConfigHandlers.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
     }
   },
   "b4m-core/slack/src/handlers/notebook-messaging.ts": {

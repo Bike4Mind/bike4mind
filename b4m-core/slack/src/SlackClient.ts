@@ -7,8 +7,18 @@ import {
   Block,
   ChatPostEphemeralArguments,
   MessageAttachment,
+  MessageMetadata,
+  FilesUploadV2Arguments,
 } from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
+
+type TruncatableText = { text?: string };
+type TruncatableBlock = {
+  type?: string;
+  text?: string | TruncatableText;
+  fields?: TruncatableText[];
+  elements?: Array<{ text?: string | TruncatableText }>;
+};
 
 /**
  * Slack message metadata for app-to-app communication
@@ -220,7 +230,10 @@ export class SlackClient {
       const endpoint = url || 'unknown';
       this.logger.warn(`[Slack] Rate limited on ${endpoint}, retry after ${retrySec}s`);
 
-      const { rateLimitSnapshotRepository } = getSlackDb() as any;
+      // DI exposes repositories as unknown; the bound implementation is the database rate limit snapshot repository.
+      const rateLimitSnapshotRepository = getSlackDb().rateLimitSnapshotRepository as {
+        create(data: Record<string, unknown>): Promise<unknown>;
+      };
       const { cloudwatch } = getSlackDeps();
 
       // Fire-and-forget: persist to MongoDB
@@ -296,18 +309,23 @@ export class SlackClient {
       MARKDOWN: 11900, // Limit: 12000
     };
 
-    return blocks.map(block => {
-      // any: Slack Block Kit types are a union of many block shapes with deeply nested optional
-      // fields. Proper narrowing for every variant adds significant complexity for a simple
-      // truncation pass - using Record<string, any> lets us inspect/mutate fields generically.
-      const newBlock = { ...block } as unknown as Record<string, any>;
+    const truncated = { header: 0, sectionText: 0, sectionFields: 0, markdown: 0, context: 0 };
+    const trunc = (text: string, limit: number, key: keyof typeof truncated): string => {
+      const out = this.safeTruncate(text, limit);
+      if (out.length < text.length) truncated[key]++;
+      return out;
+    };
+
+    const out = blocks.map(block => {
+      // Block Kit is a wide union; only the text-bearing fields matter for truncation, so view it through a narrow shape.
+      const newBlock = { ...block } as unknown as TruncatableBlock;
 
       // 1. Header Blocks
       if (newBlock.type === 'header') {
         if (newBlock.text && typeof newBlock.text === 'object' && newBlock.text.text) {
           newBlock.text = {
             ...newBlock.text,
-            text: this.safeTruncate(newBlock.text.text, LIMITS.HEADER),
+            text: trunc(newBlock.text.text, LIMITS.HEADER, 'header'),
           };
         }
         return newBlock as KnownBlock | Block;
@@ -319,17 +337,17 @@ export class SlackClient {
         if (newBlock.text && typeof newBlock.text === 'object' && newBlock.text.text) {
           newBlock.text = {
             ...newBlock.text,
-            text: this.safeTruncate(newBlock.text.text, LIMITS.SECTION_TEXT),
+            text: trunc(newBlock.text.text, LIMITS.SECTION_TEXT, 'sectionText'),
           };
         }
 
         // Fields
         if (newBlock.fields && Array.isArray(newBlock.fields)) {
-          newBlock.fields = newBlock.fields.map((field: any) => {
+          newBlock.fields = newBlock.fields.map(field => {
             if (field.text) {
               return {
                 ...field,
-                text: this.safeTruncate(field.text, LIMITS.SECTION_FIELD),
+                text: trunc(field.text, LIMITS.SECTION_FIELD, 'sectionFields'),
               };
             }
             return field;
@@ -341,25 +359,25 @@ export class SlackClient {
       // 3. Markdown Blocks
       if (newBlock.type === 'markdown') {
         if (typeof newBlock.text === 'string') {
-          newBlock.text = this.safeTruncate(newBlock.text, LIMITS.MARKDOWN);
+          newBlock.text = trunc(newBlock.text, LIMITS.MARKDOWN, 'markdown');
         }
         return newBlock as KnownBlock | Block;
       }
 
       // 4. Context Blocks
       if (newBlock.type === 'context' && newBlock.elements && Array.isArray(newBlock.elements)) {
-        newBlock.elements = newBlock.elements.map((element: any) => {
+        newBlock.elements = newBlock.elements.map(element => {
           // Context elements: image or mrkdwn/plain_text
           if (element.text) {
             if (typeof element.text === 'string') {
-              return { ...element, text: this.safeTruncate(element.text, LIMITS.CONTEXT) };
+              return { ...element, text: trunc(element.text, LIMITS.CONTEXT, 'context') };
             }
             if (typeof element.text === 'object' && element.text.text) {
               return {
                 ...element,
                 text: {
                   ...element.text,
-                  text: this.safeTruncate(element.text.text, LIMITS.CONTEXT),
+                  text: trunc(element.text.text, LIMITS.CONTEXT, 'context'),
                 },
               };
             }
@@ -371,6 +389,12 @@ export class SlackClient {
 
       return newBlock as KnownBlock | Block;
     });
+    this.logger.info('[TEMP-PR7289] T7 truncateBlocks', {
+      in: blocks.length,
+      types: blocks.map(b => b.type),
+      truncated,
+    });
+    return out;
   }
 
   /**
@@ -406,12 +430,13 @@ export class SlackClient {
         hasMetadata: !!metadata,
       });
 
+      this.logger.info('[TEMP-PR7289] T6 sendMessage', { blocks: blocks?.length ?? 0, hasMetadata: !!metadata });
       const result = await this.client.chat.postMessage({
         channel,
         text: truncatedText,
         thread_ts: threadTs,
         blocks: blocks && blocks.length > 0 ? this.truncateBlocks(blocks) : undefined,
-        metadata: metadata as any, // Slack SDK types may be outdated
+        metadata: metadata as MessageMetadata | undefined,
       });
 
       if (result.ok && result.ts) {
@@ -905,7 +930,11 @@ export class SlackClient {
         channel,
         ts: threadTs,
         include_all_metadata: includeMetadata,
-      } as unknown as any); // include_all_metadata may not be in SDK types yet
+      });
+      this.logger.info('[TEMP-PR7289] T8 fetchThreadHistory', {
+        includeMetadata,
+        messages: result.messages?.length ?? 0,
+      });
 
       if (!result.ok) {
         this.logger.error('Failed to fetch Slack thread history');
@@ -1041,19 +1070,16 @@ export class SlackClient {
     });
 
     try {
-      // Use type assertion to handle optional thread_ts
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const uploadArgs: any = {
+      const baseArgs = {
         channel_id: channel,
         filename,
         file: content,
         initial_comment: initialComment,
       };
-      if (threadTs) {
-        uploadArgs.thread_ts = threadTs;
-      }
+      const uploadArgs: FilesUploadV2Arguments = threadTs ? { ...baseArgs, thread_ts: threadTs } : baseArgs;
 
       const result = await this.client.files.uploadV2(uploadArgs);
+      this.logger.info('[TEMP-PR7289] T10/T11 uploadFile', { threadTs: !!threadTs, ok: result.ok });
 
       // files.uploadV2 returns { ok: boolean, files: Array<{ id, name, ... }> }
       const fileResult = result as { ok: boolean; files?: Array<{ id?: string }> };
@@ -1406,7 +1432,7 @@ export class SlackClient {
     try {
       await this.client.workflows.stepCompleted({
         workflow_step_execute_id: workflowStepExecuteId,
-        outputs: outputs as unknown as any,
+        outputs,
       });
       this.logger.info('Successfully reported workflow step completion');
     } catch (err) {
