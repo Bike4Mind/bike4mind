@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import FormControl from '@mui/joy/FormControl';
+import FormLabel from '@mui/joy/FormLabel';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import StudioModelPicker from './StudioModelPicker';
@@ -111,10 +113,41 @@ describe('StudioModelPicker', () => {
     expect(optionIds()).toEqual(['g', 'h']);
   });
 
+  it('names the provider filter "Provider" even inside a labelled FormControl', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <FormControl>
+          <FormLabel>Model</FormLabel>
+          <StudioModelPicker testIdPrefix="pick" cards={CARDS} selectedId="a" onSelect={vi.fn()} />
+        </FormControl>
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('pick-model-change-btn'));
+    fireEvent.click(screen.getByTestId('pick-model-show-all-btn'));
+    expect(screen.getByTestId('pick-model-provider-select')).toHaveAccessibleName('Provider');
+  });
+
   it('offers no "Show all" when the shortlist already holds every model', () => {
     renderPicker('a', CARDS.slice(0, 3));
     fireEvent.click(screen.getByTestId('pick-model-change-btn'));
     expect(optionIds()).toEqual(['a', 'b', 'c']);
     expect(screen.queryByTestId('pick-model-show-all-btn')).not.toBeInTheDocument();
+  });
+  it('carries its own token scope and names the row as the model control', () => {
+    renderPicker();
+    expect(screen.getByTestId('pick-model-scope')).toHaveAttribute('data-inline', 'true');
+    const change = screen.getByTestId('pick-model-change-btn');
+    expect(change).toHaveAccessibleName('Change model');
+    expect(change).toHaveAccessibleDescription(/Model A/);
+  });
+
+  it('shows each cost in mono credits and dims a model that cannot run', () => {
+    renderPicker();
+    fireEvent.click(screen.getByTestId('pick-model-change-btn'));
+    expect(screen.getByTestId('pick-model-option-a-cost')).toHaveTextContent('10 cr');
+    expect(screen.getByRole('radiogroup', { name: 'Models for this request' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pick-model-show-all-btn'));
+    expect(screen.getByTestId('pick-model-option-h')).toHaveAttribute('data-unavailable', 'true');
+    expect(screen.getByTestId('pick-model-option-a')).toHaveAttribute('data-unavailable', 'false');
   });
 });

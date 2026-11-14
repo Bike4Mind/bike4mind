@@ -54,6 +54,8 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
 
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('@client/app/components/Studio/v2/StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
   useVideoModels: () => h.models,
@@ -226,7 +228,7 @@ describe('StudioPage with Create v2 off', () => {
     renderPage();
     expect(screen.getByTestId('studio-tabs')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-tab-image')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('studio-area-tabs')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-area-nav')).not.toBeInTheDocument();
     expect(screen.queryByTestId('studio-medium-rail')).not.toBeInTheDocument();
   });
 
@@ -254,7 +256,7 @@ describe('StudioPage with Create v2 on', () => {
     h.models = { data: [rangeModel], isPending: false, isError: false };
     renderPage();
     expect(screen.queryByTestId('studio-tabs')).not.toBeInTheDocument();
-    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-area-library')).toBeInTheDocument();
     expect(screen.queryByTestId('studio-area-productions')).not.toBeInTheDocument();
     expect(screen.getByTestId('studio-rail-video')).toHaveAttribute('aria-current', 'page');

@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
@@ -36,7 +38,7 @@ describe('Studio Productions', () => {
   it('is a coming-soon placeholder under the Productions area', () => {
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-productions-page')).toBeInTheDocument();
-    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
   });
 
@@ -56,7 +58,7 @@ describe('Studio Productions', () => {
 describe('Studio Library', () => {
   it('mounts the Studio Library under the Library area', () => {
     render(<StudioLibraryPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-library-page')).toContainElement(screen.getByTestId('studio-library'));
   });
 });
