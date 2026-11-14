@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 import { adminBulkBarZIndex, adminPageFrame, adminSaveBarZIndex } from './adminStyles';
 
 describe('sticky bar stacking', () => {
   it('puts the bars above a DataTable sticky header and below Joy popups', () => {
-    const theme = extendTheme();
+    const theme = extendTheme({ ...getThemeConfig() });
     const { table, popup } = theme.zIndex;
     const bulk = adminBulkBarZIndex(theme);
     const save = adminSaveBarZIndex(theme);

@@ -10,6 +10,11 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 );
 
 describe('SaveBar', () => {
+  it('stacks above the DataTable sticky header', () => {
+    render(<SaveBar count={1} onSave={vi.fn()} onDiscard={vi.fn()} />, { wrapper });
+    expect(getComputedStyle(screen.getByTestId('admin-save-bar')).zIndex).toBe(String(theme.zIndex.table + 2));
+  });
+
   it('shows the dirty count and supports discard, save and both save shortcuts', () => {
     const onSave = vi.fn();
     const onDiscard = vi.fn();
