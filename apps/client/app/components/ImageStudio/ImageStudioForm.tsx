@@ -18,7 +18,7 @@ import {
 } from './imageModelOptions';
 
 type ImageStudioFormProps = {
-  // The user's runnable image models, as /api/models lists them.
+  // The user's runnable image models, as /api/v1/image-models lists them.
   models: NonEmptyList<{ id: string; name: string }>;
   isSubmitting: boolean;
   onSubmit: (body: CreateStudioImageJobsBody) => void;

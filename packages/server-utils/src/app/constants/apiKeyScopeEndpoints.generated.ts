@@ -116,6 +116,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/embeddings',
     'POST /api/v1/image-edits',
     'POST /api/v1/image-generations',
+    'GET /api/v1/image-models',
     'GET /api/v1/models',
     'GET|POST /api/v1/music-generations',
     'GET /api/v1/music-generations/:id',

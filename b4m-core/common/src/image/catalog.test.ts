@@ -10,6 +10,7 @@ import {
   supportsImageEditEndpoint,
   takesBflInputImageList,
 } from '../utils/modelHelpers';
+import { MODEL_TIERS } from '../generation/modelRanking';
 import { getImageModelCatalogEntry } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
 
@@ -121,5 +122,20 @@ describe('FLUX 3 edit mode', () => {
     expect(edit?.inputs.edit_source).toEqual({ max: 1 });
     expect(edit?.inputs.mask).toBeUndefined();
     expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
+  });
+});
+
+// rankImageModels orders by these, so a model without them would rank by accident.
+describe('IMAGE_MODEL_CATALOG standing', () => {
+  it.each(IMAGE_MODELS)('declares a tier, a real release date and a preview flag for %s', model => {
+    const { tier, releasedAt, preview } = getImageModelCatalogEntry(model);
+    expect(MODEL_TIERS).toContain(tier);
+    expect(releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(new Date(`${releasedAt}T00:00:00Z`).toISOString().slice(0, 10)).toBe(releasedAt);
+    expect(typeof preview).toBe('boolean');
+  });
+
+  it.each(IMAGE_MODELS)('marks %s preview exactly when its provider id says so', model => {
+    expect(getImageModelCatalogEntry(model).preview).toBe(model.endsWith('-preview'));
   });
 });

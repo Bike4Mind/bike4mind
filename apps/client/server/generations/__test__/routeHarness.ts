@@ -22,6 +22,8 @@ export const h = {
   requestCancel: vi.fn(),
   sign: vi.fn(),
   listUsableVideoModels: vi.fn(),
+  listUsableImageModels: vi.fn(),
+  getCallerModelList: vi.fn(),
   listUsableMusicModels: vi.fn(),
   hasUsableKey: vi.fn(),
   providersGet: vi.fn(),
@@ -106,6 +108,7 @@ export const databaseMock = async (orig: ImportOriginal) => {
 export const wiringMock = () => ({
   getCreateVideoJobDeps: () => ({ providers: { get: (...a: unknown[]) => h.providersGet(...a) } }),
   getVideoJobDeps: () => ({}),
+  getImageJobDeps: () => ({}),
   getCreateMusicJobDeps: () => ({}),
   getMusicJobDeps: () => ({}),
   getGenerationJobEngine: () => ({ requestCancel: (...a: unknown[]) => h.requestCancel(...a) }),
@@ -117,6 +120,11 @@ export const listUsableVideoModelsMock = async (orig: ImportOriginal) => ({
   ...(await orig<ModuleExports>()),
   listUsableVideoModels: (...a: unknown[]) => h.listUsableVideoModels(...a),
   hasUsableKey: (...a: unknown[]) => h.hasUsableKey(...a),
+});
+
+export const listUsableImageModelsMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
+  listUsableImageModels: (...a: unknown[]) => h.listUsableImageModels(...a),
 });
 
 export const listUsableMusicModelsMock = async (orig: ImportOriginal) => ({

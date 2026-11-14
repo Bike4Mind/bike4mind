@@ -1,5 +1,6 @@
 import type { ImageOutputFormat, OpenAIImageQuality, OpenAIImageStyle } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
+import type { ModelStanding } from '../generation/modelRanking';
 
 // `edit` starts from an edit_source image (optionally masked); `generate` starts from the prompt.
 export const IMAGE_MODES = ['generate', 'edit'] as const;
@@ -42,7 +43,7 @@ export type ImageModeCapabilities = {
  * Must stay in sync with the request path (modelHelpers predicates, IMAGE_SIZE_CONSTRAINTS and the
  * provider services) - catalog.test.ts pins the overlap with getImageModelCapabilities.
  */
-export type ImageModelCatalogEntry = {
+export type ImageModelCatalogEntry = ModelStanding & {
   provider: ImageProviderId;
   // A mode is offered exactly when it has an entry.
   modes: Partial<Record<ImageMode, ImageModeCapabilities>>;

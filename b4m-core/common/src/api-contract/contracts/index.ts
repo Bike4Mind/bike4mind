@@ -69,6 +69,7 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import { listImageModelsContract } from './imageModels.contract';
 import {
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -197,6 +198,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
   getVideoGenerationContract,

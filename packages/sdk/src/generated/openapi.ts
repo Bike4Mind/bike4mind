@@ -916,6 +916,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/image-models': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the image models you can use
+     * @description Returns the image models that are offered to the caller, served by this deployment and backed by a usable provider key, best first, with their capabilities per mode and an indicative credit price. The capabilities and prices are those of image jobs, which refuse an unsupported size, aspect ratio, quality or input image rather than adjust it. `POST /api/v1/image-generations` and `POST /api/v1/image-edits` do not run as image jobs yet and may adapt a request to the model, for example by rendering a transparent background on a model that supports it.
+     */
+    get: operations['listImageModels'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/video-generations/{id}/cancel': {
     parameters: {
       query?: never;
@@ -6000,6 +6020,158 @@ export interface components {
       /** @default 0 */
       min_score?: number;
       tags?: string[];
+    };
+    listImageModelsResponse200: {
+      /** @description Best first for a plain text-to-image request: generally available before preview, then flagship tier first, then newest release first. */
+      models: {
+        id: string;
+        /** @enum {string} */
+        object: 'image_model';
+        display_name: string;
+        provider: string;
+        /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`). Display text. */
+        provider_label: string;
+        /** @description One line on what the model is best at. Display text; may change. */
+        blurb: string;
+        /**
+         * @description The model's quality class within its provider's line-up, best first. Not a price band.
+         * @enum {string}
+         */
+        tier: 'flagship' | 'standard' | 'fast';
+        /** @description The provider's release date, `YYYY-MM-DD`. */
+        released_at: string;
+        /** @description Labelled preview by its provider: may change or be retired at short notice. */
+        preview: boolean;
+        /** @description What the model honours in each mode; a mode is offered exactly when it has an entry. */
+        modes: {
+          generate?: {
+            /** @description The input image roles this mode accepts, the most of each, and whether one is required. Roles today: edit_source, mask, reference; ignore any you do not know. */
+            input_roles: {
+              role: string;
+              max: number;
+              required: boolean;
+            }[];
+            /** @description The most images one request renders in this mode. */
+            max_outputs: number;
+            /** @description null when the mode takes no `aspect_ratio`. */
+            aspect_ratios:
+              | {
+                  /** @enum {string} */
+                  kind: 'discrete';
+                  values: string[];
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'range';
+                  /** @description The tallest `W:H` ratio accepted. */
+                  tallest: string;
+                  /** @description The widest `W:H` ratio accepted; every ratio between the two is accepted. */
+                  widest: string;
+                }
+              | null;
+            /** @description Accepted output formats; empty when none can be chosen and the provider default comes back. */
+            output_formats: string[];
+          };
+          edit?: {
+            /** @description The input image roles this mode accepts, the most of each, and whether one is required. Roles today: edit_source, mask, reference; ignore any you do not know. */
+            input_roles: {
+              role: string;
+              max: number;
+              required: boolean;
+            }[];
+            /** @description The most images one request renders in this mode. */
+            max_outputs: number;
+            /** @description null when the mode takes no `aspect_ratio`. */
+            aspect_ratios:
+              | {
+                  /** @enum {string} */
+                  kind: 'discrete';
+                  values: string[];
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'range';
+                  /** @description The tallest `W:H` ratio accepted. */
+                  tallest: string;
+                  /** @description The widest `W:H` ratio accepted; every ratio between the two is accepted. */
+                  widest: string;
+                }
+              | null;
+            /** @description Accepted output formats; empty when none can be chosen and the provider default comes back. */
+            output_formats: string[];
+          };
+        };
+        sizing:
+          | {
+              /** @enum {string} */
+              kind: 'presets';
+              /** @description Accepted `size` values, as `WxH`. */
+              presets: string[];
+              default_size: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'constrained';
+              /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+              presets: string[];
+              default_size: string;
+              /** @description The `size` value that lets the provider choose. */
+              auto_size: string;
+              constraints: {
+                max_edge: number;
+                min_total_pixels: number;
+                max_total_pixels: number;
+                /** @description Both edges must be a multiple of this. */
+                edge_multiple: number;
+                /** @description Longest edge divided by shortest edge. */
+                max_aspect_ratio: number;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'dimensions';
+              presets: string[];
+              default_size: string;
+              min_width: number;
+              max_width: number;
+              min_height: number;
+              max_height: number;
+              /** @description `width` and `height` are rounded to the nearest multiple of this. */
+              step: number;
+            }
+          | {
+              /**
+               * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+               * @enum {string}
+               */
+              kind: 'aspect_ratio';
+            }
+          | {
+              /**
+               * @description Sized by the input image; takes no `size`.
+               * @enum {string}
+               */
+              kind: 'input_image';
+              /** @description Whether an `aspect_ratio` override is honoured. */
+              aspect_ratio: boolean;
+            }
+          | {
+              /**
+               * @description The provider takes no size at all.
+               * @enum {string}
+               */
+              kind: 'fixed';
+            };
+        /** @description Accepted `quality` tiers; empty when it takes none. */
+        qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+        /** @description Whether `background: 'transparent'` yields real alpha. */
+        transparent_background: boolean;
+        seed: boolean;
+        /** @description Credits for one image at the model's default quality and size with no input images; null when unpriced. Quality, size and input images change the price. */
+        credits_per_image: number | null;
+        /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+        deprecation_date: string | null;
+      }[];
     };
     /**
      * @example {
@@ -18783,6 +18955,133 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['searchDataLakeResponse503'];
+        };
+      };
+    };
+  };
+  listImageModels: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The usable models, best first. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listImageModelsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

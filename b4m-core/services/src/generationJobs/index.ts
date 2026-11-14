@@ -6,3 +6,4 @@ export * from './createJob';
 export * from './settlement';
 export * from './studioJobCompletion';
 export * from './storeOutput';
+export * from './apiKey';

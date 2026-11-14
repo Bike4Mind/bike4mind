@@ -1,21 +1,24 @@
 import { useMemo } from 'react';
 import StudioModelsGate from '@client/app/components/Studio/StudioModelsGate';
-import { useCreateStudioImageJobs } from '@client/app/hooks/data/studioImageJobs';
-import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useCreateStudioImageJobs, useImageModels } from '@client/app/hooks/data/studioImageJobs';
 import ImageStudioForm from './ImageStudioForm';
 import { isCatalogImageModel } from './imageModelOptions';
 
 /** Image's Create workspace: the form, once the user has an image model the capability catalog knows. */
 const ImageStudioWorkspace = ({ testId }: { testId: string }) => {
-  const modelInfo = useModelInfo();
+  const imageModelList = useImageModels();
   const create = useCreateStudioImageJobs();
+  // A model this bundle's catalog does not know (a newer server) cannot be validated here, so it is not offered.
   const imageModels = useMemo(
-    () => modelInfo.data?.filter(model => model.type === 'image' && !model.disabled && isCatalogImageModel(model.id)),
-    [modelInfo.data]
+    () =>
+      imageModelList.data
+        ?.filter(model => isCatalogImageModel(model.id))
+        .map(model => ({ id: model.id, name: model.display_name })),
+    [imageModelList.data]
   );
 
   return (
-    <StudioModelsGate testId={testId} noun="image" models={{ isPending: modelInfo.isPending, data: imageModels }}>
+    <StudioModelsGate testId={testId} noun="image" models={{ isPending: imageModelList.isPending, data: imageModels }}>
       {usable => (
         <ImageStudioForm models={usable} isSubmitting={create.isPending} onSubmit={body => create.mutate(body)} />
       )}

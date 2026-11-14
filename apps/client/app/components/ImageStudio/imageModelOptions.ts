@@ -14,7 +14,6 @@ import {
   usdToCredits,
   validateImageRequest,
   type ImageCapabilityRequest,
-  type ImageProviderId,
   type ImageRequestField,
   type OpenAIImageQuality,
 } from '@bike4mind/common';
@@ -37,10 +36,6 @@ export const EMPTY_IMAGE_INTENT: ImageIntent = { references: [] };
 
 // Offered on a model that takes any ratio within a range; the validator keeps the ones inside it.
 const COMMON_ASPECT_RATIOS = ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const;
-
-// The providers whose image job adapter is wired; the job route answers model_unavailable for the others. Add a
-// provider here when its adapter lands.
-const STUDIO_IMAGE_JOB_PROVIDERS: readonly ImageProviderId[] = ['openai', 'gemini'];
 
 export const isCatalogImageModel = (id: string): id is ImageModels => Object.hasOwn(IMAGE_MODEL_CATALOG, id);
 
@@ -70,11 +65,7 @@ export const imageModelUnavailableReason = (model: ImageModels): string | null =
   // The job route serves a retired id under its successor only, so the retired id itself never runs.
   if (resolveLegacyImageModel(model) !== model) return 'Retired. Pick its successor instead.';
   const generateOnly = failuresOf(model, EMPTY_IMAGE_INTENT);
-  if (generateOnly.length > 0) return generateOnly.map(failure => failure.reason).join(' ');
-  if (!STUDIO_IMAGE_JOB_PROVIDERS.includes(getImageModelCatalogEntry(model).provider)) {
-    return 'Temporarily unavailable in Studio.';
-  }
-  return null;
+  return generateOnly.length > 0 ? generateOnly.map(failure => failure.reason).join(' ') : null;
 };
 
 export type ImageProblemField = 'size' | 'aspect' | 'quality' | 'references';
@@ -149,8 +140,8 @@ export const imageCreditsPerImage = (model: ImageModels, intent: ImageIntent): n
 };
 
 /**
- * A card per catalog model the user can run (from /api/models), in rankImageModels order for `intent`: the ones that
- * can make it first, each with why it was picked; the rest sink with the validator's why-not reason.
+ * A card per catalog model the user can run (from /api/v1/image-models), in rankImageModels order for `intent`:
+ * the ones that can make it first, each with why it was picked; the rest sink with the validator's why-not reason.
  */
 export const imageModelCards = (
   available: readonly { id: string; name: string }[],
