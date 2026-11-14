@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { InviteType, Permission } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/common';
 import { acceptInvite } from './accept';
+import { setOrgEventObserver, type OrgEvent } from '../organizationService/orgEventObserver';
 
 const shares = () => ({ updateUserShares: vi.fn(async () => ({})) });
 const acceptRecipientMock = () => vi.fn(async (id: string) => ({ id }));
@@ -458,6 +459,54 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(NotFoundError);
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+  describe('org admin alerts', () => {
+    const events: OrgEvent[] = [];
+    beforeEach(() => {
+      events.length = 0;
+      setOrgEventObserver(event => {
+        events.push(event);
+      });
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+        makeUser(id === 'minter' ? { id: 'minter' } : {})
+      );
+      mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    });
+    afterEach(() => setOrgEventObserver(null));
+
+    it('announces the join with the inviter as actor, after the invite is consumed', async () => {
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+
+      await acceptInvite(userId, { id: inviteId }, asAdapters());
+
+      expect(events).toEqual([{ type: 'member_joined', organizationId, userId, actorUserId: 'minter' }]);
+    });
+
+    it('announces nothing when the invite has no remaining slot', async () => {
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+      mockAdapters.db.invites.acceptRecipient.mockResolvedValue(null);
+
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(UnprocessableEntityError);
+      expect(events).toEqual([]);
+    });
+
+    it('announces nothing for an existing member', async () => {
+      mockAdapters.db.organization.findById.mockResolvedValue(
+        makeOrganization({ users: [{ userId, permissions: [Permission.read] }] })
+      );
+
+      await acceptInvite(userId, { id: inviteId }, asAdapters());
+
+      expect(events).toEqual([]);
+    });
+
+    it('raises seat_limit before refusing a full organization', async () => {
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ seats: 3 }));
+      mockAdapters.db.organization.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow('Organization is full');
+      expect(events).toEqual([{ type: 'seat_limit', organizationId, seats: 3 }]);
+    });
   });
 });
 

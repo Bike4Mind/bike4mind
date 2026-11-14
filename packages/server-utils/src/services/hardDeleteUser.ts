@@ -1,5 +1,6 @@
 import {
   deleteFeedbackAiForUser,
+  deleteOrgAlertsForUser,
   eraseOrganizationRetentionForUser,
   FeedbackNoteModel,
   erasureRecordRepository,
@@ -115,6 +116,7 @@ export async function hardDeleteUser<T>(
           result = await withTransaction(async session => {
             await context.assertInTransaction?.();
             await deleteFeedbackAiForUser(id, { session });
+            await deleteOrgAlertsForUser(id, { session });
             await eraseOrganizationRetentionForUser(id, { session });
             const deleted = await userRepository.delete(id);
             await FeedbackNoteModel.deleteMany({ userId: id.toLowerCase() });

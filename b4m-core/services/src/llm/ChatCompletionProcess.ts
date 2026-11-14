@@ -212,6 +212,7 @@ import {
 } from './chatCreditCap';
 import { buildChatRequestMeta } from './chatRequestMeta';
 import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -5024,6 +5025,12 @@ export class ChatCompletionProcess {
             await this.recordLimitEvent(logger, 'insufficient_credits', chargedModelInfo.id, {
               reason: 'member_cap',
               requiredCredits: capCheckCredits,
+            });
+            await notifyOrgEvent({
+              type: 'member_cap_check',
+              organizationId: organization.id,
+              userId: this.user.id,
+              refused: true,
             });
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({

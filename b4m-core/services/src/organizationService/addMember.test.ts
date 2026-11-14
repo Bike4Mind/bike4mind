@@ -1,8 +1,9 @@
 import { addMember } from './addMember';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { IUserDocument, Permission } from '@bike4mind/common';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import cloneDeep from 'lodash/cloneDeep';
+import { setOrgEventObserver, type OrgEvent } from './orgEventObserver';
 
 describe('addMember', () => {
   const mockOwnerUser = {
@@ -421,6 +422,65 @@ describe('addMember', () => {
         email: 'test@example.com',
         name: 'Test User',
       });
+    });
+  });
+  describe('org admin alerts', () => {
+    const events: OrgEvent[] = [];
+    beforeEach(() => {
+      events.length = 0;
+      setOrgEventObserver(event => {
+        events.push(event);
+      });
+    });
+    afterEach(() => setOrgEventObserver(null));
+
+    it('raises seat_limit with the seat count before refusing a full organization', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        ...mockOrganization,
+        seats: 2,
+        users: [{ userId: 'user-1' }, { userId: 'user-2' }],
+      });
+
+      await expect(
+        addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters)
+      ).rejects.toThrow(UnprocessableEntityError);
+      expect(events).toEqual([{ type: 'seat_limit', organizationId: 'org-id', seats: 2 }]);
+    });
+
+    it('raises member_joined with the acting admin for a new member', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue({ ...cloneDeep(mockOrganization), users: [] });
+
+      await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      expect(events).toEqual([
+        { type: 'member_joined', organizationId: 'org-id', userId: 'user-id', actorUserId: 'owner-id' },
+      ]);
+    });
+
+    it('raises nothing when the user was already a member', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        users: [{ userId: 'user-id', permissions: [] }],
+      });
+
+      await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      expect(events).toEqual([]);
+    });
+
+    it('still adds the member when the observer throws', async () => {
+      setOrgEventObserver(() => {
+        throw new Error('boom');
+      });
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue(cloneDeep(mockOrganization));
+
+      const result = await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      expect(result.user).toBe(mockUser);
     });
   });
 });

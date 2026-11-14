@@ -3,6 +3,9 @@ import { Logger } from '@bike4mind/observability';
 import { connectDB } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { EventBridgeEvent } from 'aws-lambda';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /**
  * Wraps an EventBridge event handler with structured logging and DB connection.

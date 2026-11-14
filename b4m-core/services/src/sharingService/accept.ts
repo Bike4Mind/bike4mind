@@ -30,6 +30,7 @@ import {
 import { z } from 'zod';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
 
 const acceptInviteSchema = z.object({
@@ -280,6 +281,16 @@ export const acceptInvite = async (
   const accepted = await db.invites.acceptRecipient(invite.id, user.email);
   if (!accepted) throw new UnprocessableEntityError('Invite has no remaining users');
 
+  // After the last write of the join, so an accept refused above announces nothing.
+  if (invite.type === InviteType.Organization && outcome === 'accepted') {
+    await notifyOrgEvent({
+      type: 'member_joined',
+      organizationId: invite.documentId,
+      userId: user.id,
+      ...(isLinkOnlyInvite(invite) ? {} : invite.inviterId ? { actorUserId: invite.inviterId } : {}),
+    });
+  }
+
   return { invite: accepted, outcome };
 };
 
@@ -359,6 +370,7 @@ const acceptOrganization = async (
       }
       return 'already-member';
     }
+    await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: current.seats });
     throw new ForbiddenError('Organization is full');
   }
 

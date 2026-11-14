@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, MockedObject } from 'vitest';
 import {
   subtractCredits,
   subtractCreditsWithLedgerRow,
@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 describe('creditService - subtractCredits', () => {
   // Mock credit holder responses
@@ -853,6 +854,60 @@ describe('creditService - subtractCredits', () => {
         'music_generation_usage',
         expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: -200 })
       );
+    });
+  });
+
+  describe('org debit alerts', () => {
+    const observer = vi.fn();
+    const deduct = (ownerType: CreditHolderType, ownerId: string): SubtractCreditsParameters => ({
+      type: 'generic_deduct',
+      ownerId,
+      ownerType,
+      credits: 50,
+      reason: 'refund_adjustment',
+    });
+
+    beforeEach(() => setOrgEventObserver(observer));
+    afterEach(() => setOrgEventObserver(null));
+
+    it('reports the post-debit pool balance for an org owner', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
+
+      await subtractCredits(deduct(CreditHolderType.Organization, 'org1'), mockAdapters);
+
+      expect(observer).toHaveBeenCalledWith({ type: 'credit_debit', organizationId: 'org1', balanceAfter: 450 });
+    });
+
+    it('reports the reconciled holder when the balance was already moved', async () => {
+      await subtractCredits(deduct(CreditHolderType.Organization, 'org1'), {
+        ...mockAdapters,
+        skipBalanceUpdate: true,
+        currentCreditHolder: { id: 'org1', currentCredits: 120 } as ICreditHolder,
+      });
+
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+      expect(observer).toHaveBeenCalledWith({ type: 'credit_debit', organizationId: 'org1', balanceAfter: 120 });
+    });
+
+    it('does not report a user debit', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(deduct(CreditHolderType.User, 'user1'), mockAdapters);
+
+      expect(observer).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])('still completes the debit when the observer throws (skipBalanceUpdate=%s)', async skip => {
+      observer.mockRejectedValue(new Error('alert down'));
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
+
+      const result = await subtractCreditsWithLedgerRow(deduct(CreditHolderType.Organization, 'org1'), {
+        ...mockAdapters,
+        ...(skip ? { skipBalanceUpdate: true, currentCreditHolder: mockOrganization } : {}),
+      });
+
+      expect(result.creditHolder).toEqual(mockOrganization);
+      expect(observer).toHaveBeenCalledOnce();
     });
   });
 });

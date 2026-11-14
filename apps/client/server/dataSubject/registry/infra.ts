@@ -96,6 +96,15 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'openBursts.actorUserId', matchBy: 'userId', action: 'pullFromArray' }],
   },
+  OrgAdminNotificationPref: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Per-period alert dedup rows; only an alert about one person names them, and its scope repeats the id.
+  OrgAlertNotification: {
+    kind: 'holder',
+    references: [{ path: 'subjectUserId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   OrganizationAuditEvent: {
     kind: 'holder',
     references: [

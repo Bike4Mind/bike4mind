@@ -5,6 +5,7 @@ import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
@@ -37,6 +38,10 @@ import { createTaskProtection } from './taskProtection';
 // Desktop). The cloud container pins PORT=8080 via the Dockerfile ENV, and the ALB
 // forwards 80->8080, so production is unaffected by this default.
 const PORT = Number(process.env.PORT) || 8788;
+
+// Chat settles org credits here, and this server loads neither baseApi nor queueHandlers/utils.
+registerOrgAlertObserver();
+
 const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
 // How long SIGTERM lets in-flight work finish before the process exits: ~10s under the ECS task

@@ -27,6 +27,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { organizationService, userService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { isSelfHost } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 
 export const TXT_RECORD_PREFIX = '_b4m-verify';
@@ -262,11 +263,15 @@ async function addMemberViaClaim(
       await repairDomainMembership(user, organizationId);
       return { joined: false, reason: 'already-member' };
     }
+    await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: fresh.seats });
     return { joined: false, reason: 'at-capacity', organizationId, seats: fresh.seats };
   }
 
   await userRepository.update({ id: user.id, organizationId });
   await seedDomainMemberDetails(user, organizationId);
+  // Only a genuine addition raises an event; repairing old membership stays quiet.
+  // The host observer defers successful events until commit when a caller owns a transaction.
+  await notifyOrgEvent({ type: 'member_joined', organizationId, userId: user.id });
   return { joined: true, organizationId };
 }
 

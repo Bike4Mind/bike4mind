@@ -40,6 +40,7 @@ import {
 } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
@@ -897,6 +898,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       if (await notifyPaymentFailed(updated, invoice, req.logger)) {
         recordHints.data = { dunningNoticeSent: true };
+        // Gated on the owner's notice claim, so a redelivered or non-renewal failure alerts nobody.
+        if (updated.ownerType === SubscriptionOwnerType.Organization && invoice.id) {
+          await notifyOrgEvent({ type: 'payment_failed', organizationId: updated.ownerId, invoiceId: invoice.id });
+        }
       }
 
       // Each failed attempt is its own event: the row comes back on every retry, so the attempt
