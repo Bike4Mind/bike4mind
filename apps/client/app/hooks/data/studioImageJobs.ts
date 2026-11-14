@@ -22,6 +22,8 @@ export const STUDIO_IMAGE_COUNT_MAX = 4;
 export type StudioImageJob = {
   id: string;
   groupId: string | null;
+  // 'cutout': a background removal of a reference (useCreateStudioImageCutout); null for a plain render.
+  purpose: 'cutout' | null;
   state: GenerationJobState;
   request: ImageJobRequest;
   error: { code: string; message: string } | null;
@@ -153,5 +155,30 @@ export function useCreateStudioImageJobs() {
       toast.success(jobs.length === 1 ? 'Image generation started' : `${jobs.length} images started`);
     },
     onError: error => toast.error(describeStudioImageJobError(error)),
+  });
+}
+
+/**
+ * The refusal text for a cutout: the route's own message for a source it cannot cut out (its format or size), else
+ * the shared image-job message for the code.
+ */
+export function describeStudioImageCutoutError(error: unknown): string {
+  if (isAxiosError<{ error?: unknown; message?: unknown }>(error) && error.response?.status === 422) {
+    const { error: code, message } = error.response.data ?? {};
+    if (code === 'unsupported_input_image' && typeof message === 'string') return message;
+  }
+  return describeStudioImageJobError(error);
+}
+
+/** Starts a background removal of one of the caller's images; the job joins the gallery list like any image job. */
+export function useCreateStudioImageCutout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fileId: string) =>
+      (await api.post<{ job: StudioImageJob }>(`${STUDIO_IMAGE_JOBS_URL}/cutouts`, { fileId })).data.job,
+    onSuccess: job => {
+      prependStudioImageJobs(queryClient, [job]);
+      void invalidateGenerationCreditBalances(queryClient);
+    },
   });
 }

@@ -28,6 +28,7 @@ import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
 import { storeGeneratedOutput, type StoreOutputResult } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
+import { finishCutout, prepareCutoutInputs, type PreparedCutout } from './cutout';
 import { estimateImageJobUsd } from './imageJobCost';
 import type { ImageJob, ImageJobDeps } from './types';
 
@@ -36,7 +37,7 @@ const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
 
 type ImageStepResult = StepResult<'image'>;
 type UnsuccessfulResult = Exclude<ProviderTerminalResult, { status: 'succeeded' }>;
-type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext };
+type PreparedSubmit = { provider: ImageProvider; inputs: ImageInputs; ctx: ProviderContext; cutout?: PreparedCutout };
 
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): ImageStepResult => ({
   next: 'failed',
@@ -113,7 +114,12 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     }
     const inputs = await loadInputs(job);
     if ('next' in inputs) return inputs;
-    return { provider, inputs, ctx };
+    if (job.payload.purpose !== 'cutout') return { provider, inputs, ctx };
+    // storeOutput composites the matte only on the sync path; an async store would keep the raw render.
+    if (provider.mode !== 'sync') return fail('provider_error', 'a cutout job needs a sync provider');
+    const cutout = await prepareCutoutInputs(request, inputs);
+    if ('error' in cutout) return fail('provider_error', `cutout source could not be prepared: ${cutout.error}`);
+    return { provider, inputs: cutout.inputs, ctx, cutout };
   };
 
   const saveOutput = async (
@@ -157,7 +163,9 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     provider: ImageProvider,
     ctx: ProviderContext,
     providerOutput: ProviderOutput,
-    context: GenerationJobStepContext
+    context: GenerationJobStepContext,
+    // Only a sync job carries one: the cutout model (CUTOUT_MODEL) is a sync provider.
+    cutout?: PreparedCutout
   ): Promise<ImageStepResult> => {
     let bytes: Buffer;
     try {
@@ -172,7 +180,13 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
     // A delivery URL carries no type, so the bytes say what they are; anything that is not an image is refused.
     const declared = providerOutput.contentType ?? sniffImageFormat(bytes)?.mimeType;
     if (!declared) return fail('provider_error', 'The provider returned something that is not an image');
-    const contentType = normalizeContentType(declared);
+    let contentType = normalizeContentType(declared);
+    if (cutout) {
+      // Before the save (which moderates), so what is moderated is exactly what is stored.
+      const finished = await finishCutout(cutout, bytes);
+      if ('error' in finished) return fail('provider_error', `cutout matte did not line up: ${finished.error}`);
+      ({ bytes, contentType } = finished);
+    }
     const stored = await saveOutput(job, { bytes, contentType }, context);
     if (!stored.stored) {
       return {
@@ -205,13 +219,13 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
 
   const submitSync = async (
     job: ImageJob,
-    { provider, inputs, ctx }: PreparedSubmit & { provider: SyncImageProvider },
+    { provider, inputs, ctx, cutout }: PreparedSubmit & { provider: SyncImageProvider },
     context: GenerationJobStepContext
   ): Promise<ImageStepResult> => {
     // Not caught: a throw is an unknown outcome (the image may exist and be billed). See SyncGenerationProvider.
     const result = await provider.generate(job.payload.request, inputs, ctx);
     if (result.status !== 'succeeded') return unsuccessfulStep(job, result);
-    return storeOutput(job, provider, ctx, result.output, context);
+    return storeOutput(job, provider, ctx, result.output, context, cutout);
   };
 
   const submitAsync = async (

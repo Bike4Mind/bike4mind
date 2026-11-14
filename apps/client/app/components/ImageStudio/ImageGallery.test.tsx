@@ -8,6 +8,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({
   jobs: [] as unknown[],
   files: {} as Record<string, { fileUrl?: string } | undefined>,
+  fileOptions: {} as Record<string, unknown>,
 }));
 
 vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
@@ -21,7 +22,10 @@ vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/fabFileQueries', () => ({
-  useGetFabFile: (id: string) => ({ data: h.files[id] }),
+  useGetFabFile: (id: string, options?: unknown) => {
+    h.fileOptions[id] = options;
+    return { data: h.files[id] };
+  },
 }));
 
 vi.mock('@client/app/hooks/data/fileLineage', () => ({
@@ -53,6 +57,7 @@ const job = (overrides: Partial<StudioImageJob>): StudioImageJob => ({
 beforeEach(() => {
   h.jobs = [];
   h.files = {};
+  h.fileOptions = {};
 });
 
 describe('ImageGallery', () => {
@@ -87,6 +92,37 @@ describe('ImageGallery', () => {
     ];
     render(<ImageGallery />, { wrapper: TestWrapper });
     expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
+  });
+
+  it('keeps polling a saved image until its signed URL appears', () => {
+    const fileId = 'b'.repeat(24);
+    h.jobs = [job({ id: 'done', state: 'succeeded', output: { fileId, contentType: 'image/png', bytes: 1 } })];
+    render(<ImageGallery />, { wrapper: TestWrapper });
+    expect(h.fileOptions[fileId]).toEqual({ pollUntilViewable: true });
+  });
+
+  it('fits a cutout whole and crops a regular render to fill, on the image itself', () => {
+    const cutoutId = 'c'.repeat(24);
+    const renderId = 'd'.repeat(24);
+    h.jobs = [
+      job({
+        id: 'cutout',
+        purpose: 'cutout',
+        state: 'succeeded',
+        output: { fileId: cutoutId, contentType: 'image/png', bytes: 1 },
+      }),
+      job({ id: 'render', state: 'succeeded', output: { fileId: renderId, contentType: 'image/png', bytes: 1 } }),
+    ];
+    h.files = {
+      [cutoutId]: { fileUrl: 'https://files.example/cut.png' },
+      [renderId]: { fileUrl: 'https://files.example/r.png' },
+    };
+    render(<ImageGallery />, { wrapper: TestWrapper });
+
+    const [cutout, regular] = screen.getAllByTestId('image-job-image');
+    expect(cutout).toHaveAttribute('src', 'https://files.example/cut.png');
+    expect(cutout).toHaveStyle({ objectFit: 'contain', width: '100%', height: '100%' });
+    expect(regular).toHaveStyle({ objectFit: 'cover', width: '100%', height: '100%' });
   });
 
   it('keeps a row the socket marked finished on Saving until its output arrives', () => {

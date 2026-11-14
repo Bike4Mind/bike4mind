@@ -13,6 +13,7 @@ import {
   type CapabilityField,
   type CapabilityOption,
   type ChipsField,
+  type ReferenceCutout,
 } from '@client/app/components/Studio/capabilityFields';
 import { STUDIO_IMAGE_COUNT_MAX } from '@client/app/hooks/data/studioImageJobs';
 import {
@@ -23,6 +24,7 @@ import {
   imageSizeOptions,
   type ImageIntent,
 } from './imageModelOptions';
+import { referenceCutoutProblem } from './referenceCutouts';
 
 export type ImageFormState = { prompt: string; count: number; intent: ImageIntent };
 
@@ -30,6 +32,9 @@ export type ImageFieldActions = {
   update: (patch: Partial<ImageFormState>) => void;
   updateIntent: (patch: Partial<ImageIntent>) => void;
   pickReference: () => void;
+  // Background removal per reference (useReferenceCutouts); without these the chips offer no cutout.
+  cutoutOf?: (fileId: string) => ReferenceCutout | undefined;
+  toggleCutout?: (fileId: string, on: boolean) => void;
 };
 
 // The option value for "leave it to the model"; the intent then omits the setting.
@@ -122,15 +127,23 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
 
   if (referenceMax > 0 || intent.references.length > 0) {
     const kept = intent.references.slice(0, referenceMax);
+    const { cutoutOf, toggleCutout } = actions;
+    const files = intent.references.map(file => {
+      const cutout = cutoutOf?.(file.fileId);
+      return cutout ? { ...file, cutout } : file;
+    });
+    const cutoutProblem = toggleCutout ? referenceCutoutProblem(files, toggleCutout) : null;
     fields.push({
       kind: 'references',
       id: 'references',
       label: 'Reference images',
-      files: intent.references,
+      files,
       max: Math.max(referenceMax, intent.references.length),
       onAdd: actions.pickReference,
-      onRemove: fileId =>
-        actions.updateIntent({ references: intent.references.filter(file => file.fileId !== fileId) }),
+      onRemove: fileId => {
+        toggleCutout?.(fileId, false);
+        actions.updateIntent({ references: intent.references.filter(file => file.fileId !== fileId) });
+      },
       ...(problems.references && {
         invalidReason: problems.references,
         fix: {
@@ -138,6 +151,8 @@ const settingFields = (model: ImageModels, intent: ImageIntent, actions: ImageFi
           apply: () => actions.updateIntent({ references: kept }),
         },
       }),
+      ...(toggleCutout && { onToggleCutout: toggleCutout }),
+      ...(!problems.references && cutoutProblem),
     });
   }
 

@@ -5,6 +5,7 @@ import type {
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
+  ImageJobPurpose,
   ImageProviderId,
   ImageValidationFailure,
   StorageLimitErrorInfo,
@@ -94,6 +95,8 @@ export type CreateImageJobsInput = {
   delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */
   idempotencyKey?: string;
+  /** Server-chosen only (see createCutoutJob); never read from a client body. */
+  purpose?: ImageJobPurpose;
 };
 
 export type CreateImageJobsErrorCode =

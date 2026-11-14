@@ -6,7 +6,6 @@ import {
   Chip,
   FormControl,
   FormLabel,
-  IconButton,
   Option,
   Select,
   Slider,
@@ -17,7 +16,6 @@ import {
   Typography,
 } from '@mui/joy';
 import { formatCredits } from '@client/app/utils/formatUsd';
-import CloseIcon from '@mui/icons-material/Close';
 import {
   hasInvalidField,
   type AspectField,
@@ -29,6 +27,7 @@ import {
   type TextField,
 } from './capabilityFields';
 import { insertSnippet } from './insertSnippet';
+import ReferenceChip from './ReferenceChip';
 import StudioModelPicker from './StudioModelPicker';
 import type { StudioModelCard } from './studioModelCard';
 
@@ -167,32 +166,28 @@ const AspectControl = ({ field, testId }: { field: AspectField; testId: string }
   </FormControl>
 );
 
+// A labelled group, not a FormControl: Joy wires a FormControl's label and error state into every input inside it,
+// so a chip's Remove background switch would take the label's click and the field's danger color.
 const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: string }) => (
-  <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
-    <FormLabel>
+  <Stack role="group" aria-labelledby={`${testId}-label`} gap={0.75}>
+    <Typography
+      id={`${testId}-label`}
+      level="title-sm"
+      color={field.invalidReason !== undefined ? 'danger' : undefined}
+      sx={{ opacity: field.disabled ? 0.6 : 1 }}
+    >
       {field.label} ({field.files.length}/{field.max})
-    </FormLabel>
+    </Typography>
     <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
       {field.files.map(file => (
-        <Chip
+        <ReferenceChip
           key={file.fileId}
-          variant="soft"
-          data-testid={`${testId}-file-${file.fileId}`}
-          endDecorator={
-            <IconButton
-              size="sm"
-              variant="plain"
-              aria-label={`Remove ${file.fileName}`}
-              disabled={field.disabled}
-              onClick={() => field.onRemove(file.fileId)}
-              data-testid={`${testId}-remove-${file.fileId}-btn`}
-            >
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          }
-        >
-          {file.fileName}
-        </Chip>
+          file={file}
+          disabled={field.disabled}
+          testId={testId}
+          onRemove={field.onRemove}
+          onToggleCutout={field.onToggleCutout}
+        />
       ))}
       {field.files.length < field.max && (
         <Button
@@ -206,7 +201,7 @@ const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: 
         </Button>
       )}
     </Stack>
-  </FormControl>
+  </Stack>
 );
 
 // Diameter of a chip's swatch dot, in px.

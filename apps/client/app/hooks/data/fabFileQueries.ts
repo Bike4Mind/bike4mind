@@ -115,16 +115,43 @@ export function isFabFileProcessingTerminal(
   return !!(file.error || file.chunkStallReason || file.noExtractableTextAt || file.chunkEmbeddingModelStampedAt);
 }
 
-export function useGetFabFile(id: string | null, options: { pollWhileProcessing?: boolean } = {}) {
+const FAB_FILE_VIEWABLE_POLL_MS = 2000;
+// About a minute of polling: upload moderation normally clears in seconds.
+const FAB_FILE_VIEWABLE_MAX_FETCHES = 30;
+
+/**
+ * Whether polling for a file's signed URL is over: it has one, moderation blocked it (it never will), or the bounded
+ * attempts ran out. A freshly saved file has no `fileUrl` until moderation clears.
+ */
+export function isFabFileViewableSettled(
+  file: Pick<IFabFileDocument, 'fileUrl' | 'moderationStatus'>,
+  fetches: number
+) {
+  return !!file.fileUrl || file.moderationStatus === 'blocked' || fetches >= FAB_FILE_VIEWABLE_MAX_FETCHES;
+}
+
+type UseGetFabFileOptions = {
+  /** Poll until the chunk/vector pipeline is terminal. */
+  pollWhileProcessing?: boolean;
+  /** Poll (bounded) until the file has a signed `fileUrl` to display. */
+  pollUntilViewable?: boolean;
+};
+
+export function useGetFabFile(id: string | null, options: UseGetFabFileOptions = {}) {
   return useQuery({
     queryKey: fabFileKeys.doc(id),
     queryFn: () => getFabFileByIdFromServer(id!),
     staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
     enabled: !!id,
-    refetchInterval: options.pollWhileProcessing
-      ? query =>
-          query.state.data && !isFabFileProcessingTerminal(query.state.data) ? FAB_FILE_PROCESSING_POLL_MS : false
-      : undefined,
+    refetchInterval: query => {
+      const { data, dataUpdateCount } = query.state;
+      if (!data) return false;
+      if (options.pollUntilViewable && !isFabFileViewableSettled(data, dataUpdateCount)) {
+        return FAB_FILE_VIEWABLE_POLL_MS;
+      }
+      if (options.pollWhileProcessing && !isFabFileProcessingTerminal(data)) return FAB_FILE_PROCESSING_POLL_MS;
+      return false;
+    },
   });
 }
 

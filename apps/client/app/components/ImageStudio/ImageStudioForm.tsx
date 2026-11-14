@@ -3,10 +3,13 @@ import { Typography } from '@mui/joy';
 import type { ImageModels } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
+import type { ReferenceCutout } from '@client/app/components/Studio/capabilityFields';
 import type { NonEmptyList } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import type { CreateStudioImageJobsBody } from '@client/app/hooks/data/studioImageJobs';
 import { imageCapabilityFields, type ImageFormState } from './imageFields';
+import { referenceFileIdToSend } from './referenceCutouts';
+import { useReferenceCutouts } from './useReferenceCutouts';
 import {
   EMPTY_IMAGE_INTENT,
   imageCreditsPerImage,
@@ -26,7 +29,12 @@ type ImageStudioFormProps = {
 
 const INITIAL_FORM: ImageFormState = { prompt: '', count: 1, intent: EMPTY_IMAGE_INTENT };
 
-const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormState): CreateStudioImageJobsBody => ({
+// A reference whose background was removed is sent as its cutout.
+const toCreateBody = (
+  model: ImageModels,
+  { prompt, count, intent }: ImageFormState,
+  cutoutOf: (fileId: string) => ReferenceCutout | undefined
+): CreateStudioImageJobsBody => ({
   count,
   request: {
     model,
@@ -36,7 +44,10 @@ const toCreateBody = (model: ImageModels, { prompt, count, intent }: ImageFormSt
     ...(intent.aspectRatio && { aspectRatio: intent.aspectRatio }),
     ...(intent.quality && { quality: intent.quality }),
     ...(intent.references.length > 0 && {
-      inputs: intent.references.map(file => ({ role: 'reference' as const, fileId: file.fileId })),
+      inputs: intent.references.map(file => ({
+        role: 'reference' as const,
+        fileId: referenceFileIdToSend({ ...file, cutout: cutoutOf(file.fileId) }),
+      })),
     }),
   },
 });
@@ -51,6 +62,7 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
   const [form, setForm] = useState<ImageFormState>(INITIAL_FORM);
   const [pickedModel, setPickedModel] = useState<ImageModels | undefined>();
   const imageBrowser = useImageBrowser();
+  const cutouts = useReferenceCutouts();
   const cards = useMemo(() => imageModelCards(models, form.intent), [models, form.intent]);
   // The user's pick stands while its card can be picked; until then, and if a models refetch drops it, the default.
   const model = cards.some(card => card.id === pickedModel && card.unavailableReason === null)
@@ -93,12 +105,14 @@ const ImageStudioForm = ({ models, isSubmitting, onSubmit }: ImageStudioFormProp
         update,
         updateIntent,
         pickReference: () => imageBrowser.openImageBrowser(),
+        cutoutOf: cutouts.cutoutOf,
+        toggleCutout: cutouts.toggleCutout,
       })}
       estimateCredits={perImage === null ? null : perImage * form.count}
       submitLabel={form.count === 1 ? 'Generate image' : `Generate ${form.count} images`}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
-      onSubmit={() => onSubmit(toCreateBody(model, form))}
+      onSubmit={() => onSubmit(toCreateBody(model, form, cutouts.cutoutOf))}
     >
       <ImageBrowserModal
         isOpen={imageBrowser.isImageBrowserOpen}
