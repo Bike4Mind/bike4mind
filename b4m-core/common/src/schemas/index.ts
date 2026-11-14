@@ -12,6 +12,7 @@ export * from './password';
 export * from './username';
 export * from './oauthClient';
 export * from './partnerSignupRule';
+export * from './orgDomainClaim';
 export * from './query';
 export * from './subscriptionQueryFilter';
 export * from './quest';
