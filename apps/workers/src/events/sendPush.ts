@@ -1,6 +1,7 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import {
   isPushCategoryEnabled,
+  PENDING_ACTION_DECISIONS,
   type LiveActivityContentState,
   type LiveActivityPushEvent,
   type PushNotificationCategory,
@@ -544,6 +545,8 @@ function collapseIdFor(event: PushNotificationEvent): string {
 
 function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: string | undefined) {
   const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  // Identifiers only, so redaction leaves them: the server re-authorizes the user on every answer.
+  const approval = approvalActionsFor(event);
   return {
     aps: {
       alert: {
@@ -552,11 +555,14 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
       },
       sound: 'default',
       ...(event.sessionId && { 'thread-id': event.sessionId }),
+      // Selects the client's registered notification category, whose buttons are PENDING_ACTION_DECISIONS.
+      ...(approval && { category: event.category }),
     },
     category: event.category,
     deepLink: resolveDeepLink(event.deepLink, appUrl),
     ...(event.questId && { questId: event.questId }),
     ...(event.sessionId && { sessionId: event.sessionId }),
+    ...(approval && { approval }),
   };
 }
 
@@ -586,6 +592,11 @@ function buildFcmMessage(
       notification: { tag: collapseId },
     },
   };
+}
+
+function approvalActionsFor(event: PushNotificationEvent) {
+  if (event.category !== 'approval_needed' || !event.questId || !event.pendingActionTs) return undefined;
+  return { questId: event.questId, pendingActionTs: event.pendingActionTs, actions: PENDING_ACTION_DECISIONS };
 }
 
 function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {

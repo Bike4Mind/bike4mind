@@ -2036,11 +2036,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/mcp/confirm.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    }
-  },
   "apps/client/pages/api/mcp/delete-attachment.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3015,6 +3010,11 @@
   "apps/client/server/managers/regInviteManager.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
+    }
+  },
+  "apps/client/server/mcp/resolveMcpPendingAction.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
     }
   },
   "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {

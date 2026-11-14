@@ -248,6 +248,53 @@ describe('deliverPush', () => {
     });
   });
 
+  it('adds the approve and deny actions to an approval_needed push that names its pending action', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    const event = {
+      ...EVENT,
+      category: 'approval_needed' as const,
+      collapseId: 'approval:quest-1',
+      pendingActionTs: 1767225600000,
+    };
+
+    await deliverPush(event, deps, logger);
+
+    expect(payloadOf(sent[0])).toMatchObject({
+      aps: { category: 'approval_needed' },
+      approval: { questId: 'quest-1', pendingActionTs: 1767225600000, actions: ['approve', 'deny'] },
+    });
+  });
+
+  it('keeps the approval actions when content is redacted, and omits them without a pending action', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+    const approval = { ...EVENT, category: 'approval_needed' as const, pendingActionTs: 5 };
+
+    await deliverPush(approval, deps, logger);
+    await deliverPush({ ...approval, pendingActionTs: undefined }, deps, logger);
+
+    expect(payloadOf(sent[0]).approval).toMatchObject({ pendingActionTs: 5 });
+    expect(payloadOf(sent[1])).not.toHaveProperty('approval');
+    expect(payloadOf(sent[1]).aps).not.toHaveProperty('category');
+  });
+
+  it('adds no approval actions for another category or for an approval push without a quest', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, pendingActionTs: 5 }, deps, logger);
+    await deliverPush(
+      { ...EVENT, category: 'approval_needed' as const, questId: undefined, pendingActionTs: 5 },
+      deps,
+      logger
+    );
+
+    for (const call of sent) {
+      expect(payloadOf(call)).not.toHaveProperty('approval');
+      expect(payloadOf(call).aps).not.toHaveProperty('category');
+    }
+  });
+
   it('keeps an absolute deepLink as published', async () => {
     const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
     await deliverPush({ ...EVENT, deepLink: 'https://elsewhere.test/notebooks/s' }, deps, logger);
