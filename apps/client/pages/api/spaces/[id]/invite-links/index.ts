@@ -1,5 +1,5 @@
 // GET/POST /api/spaces/:id/invite-links - list and mint Space join links. Managers only.
-// A link names nobody and admits whoever holds it as a Viewer-role member, capped and expiring.
+// A link names nobody and admits whoever holds it as a plain member, capped and expiring.
 
 import { InviteType } from '@bike4mind/common';
 import { inviteRepository } from '@bike4mind/database';
