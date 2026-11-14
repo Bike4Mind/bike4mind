@@ -70,6 +70,7 @@ describe('checkBatchSpendCap', () => {
   it('returns null for a batch with no credits to cap', async () => {
     const { deps } = makeDeps(400);
     expect(await checkBatchSpendCap({ enforceCredits: true, user, totalCredits: 0 }, deps)).toBeNull();
+    expect(deps.credits.users.findById).not.toHaveBeenCalled();
   });
 
   it('returns null without refusing when the user no longer exists', async () => {
