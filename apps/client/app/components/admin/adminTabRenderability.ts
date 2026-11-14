@@ -16,6 +16,8 @@ export interface AdminTabVisibility {
 export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility): boolean {
   // A retired tab id has no panel.
   if (AdminTab[tab] === undefined) return false;
+  // Model lifecycle moved into the Models tab; its member stays only so its slug and palette entry keep resolving.
+  if (tab === AdminTab.ModelLifecycle) return false;
   if (!canOpenAdminTab(visibility.user, tab)) return false;
   if (tab === AdminTab.Migrate) return !!visibility.enableUserMigration;
   // Keep a deep link that arrived before the visibility query answered.

@@ -34,13 +34,18 @@ export const isAdminUserProfilePath = (pathname: string) => pathname.startsWith(
 /** Subscription detail pages (including the by-stripe resolver) belong to the Subscriptions tab. */
 export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.startsWith('/admin/subscriptions/');
 
+/** Model detail and discovery run pages belong to the Models tab. */
+export const isAdminModelsDetailPath = (pathname: string) => pathname.startsWith('/admin/models/');
+
 /** The tab a detail page belongs to, or undefined off a detail page. */
 const detailPageTabFor = (pathname: string): AdminTab | undefined =>
   isAdminUserProfilePath(pathname)
     ? AdminTab.Users
     : isAdminSubscriptionDetailPath(pathname)
       ? AdminTab.Subscriptions
-      : undefined;
+      : isAdminModelsDetailPath(pathname)
+        ? AdminTab.Models
+        : undefined;
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -137,7 +142,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
             data-testid="admin-layout-content"
             sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {isAdminSubscriptionDetailPath(pathname) && (
+            {(isAdminSubscriptionDetailPath(pathname) || isAdminModelsDetailPath(pathname)) && (
               <AdminCommandPalette enableEntitySearch={isAdmin} canOpenTab={canOpenTab} onNavigate={selectTab} />
             )}
             <Box

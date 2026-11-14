@@ -116,5 +116,5 @@ Changes take effect immediately -- adding or removing a file updates all subsequ
 ## Related Articles
 
 - [Admin Settings](./admin-settings.md)
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)
 - [Agent Operations](./agent-operations.md)

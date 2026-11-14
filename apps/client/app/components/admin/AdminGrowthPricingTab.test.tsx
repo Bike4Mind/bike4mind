@@ -43,7 +43,6 @@ import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { REWARD_KEYS } from './settingHomes';
-import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import AdminGrowthPricingTab, {
   describeDerivedValue,
   GROWTH_PRICING_LINKS,
@@ -77,7 +76,6 @@ beforeEach(() => {
   mocks.useBlocker.mockClear();
   useAdminModal.getState().setTabChangeGuard(null);
   fakeAdminRouter.reset({ tab: 'growth-pricing' });
-  useCreditAnalysisStore.setState({ activeTab: 'users' });
   useAdminModal.setState({ activeTab: AdminTab.GrowthPricing });
 });
 
@@ -277,7 +275,7 @@ describe('AdminGrowthPricingTab', () => {
     expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 
-  it('links to the model pricing catalog, the tier rate-limit settings and the Invite Center rewards', () => {
+  it('links to model prices, the tier rate-limit settings and the Invite Center rewards', () => {
     renderTab();
 
     for (const link of GROWTH_PRICING_LINKS) {
@@ -332,12 +330,11 @@ describe('AdminGrowthPricingTab', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('opens Credit Analytics on its Model Pricing tab', () => {
+  it('opens Models > Prices', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('admin-growth-pricing-link-model-pricing'));
 
-    expect(useCreditAnalysisStore.getState().activeTab).toBe('pricing');
-    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+    expect(fakeAdminRouter.search).toEqual({ tab: 'models', modelsSection: 'prices' });
   });
 
   it('opens the Invite Center on its Rewards section', () => {

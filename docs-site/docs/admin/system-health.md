@@ -154,4 +154,4 @@ The bottom of the page includes a help card with general troubleshooting tips:
 ## Related Articles
 
 - [Admin Settings](./admin-settings.md)
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)

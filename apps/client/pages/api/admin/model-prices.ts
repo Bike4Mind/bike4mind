@@ -29,7 +29,8 @@ import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
  * the published uniform markup, so this endpoint manages COGS data, never
  * markup. Append-only throughout: a reprice or revert is a NEW row.
  *
- * GET                       -> { rows } in force
+ * GET                       -> { rows } in force, and { seeded }: the
+ *   (modelId, unit) pairs revert-to-seed has rates for
  * GET ?history=<modelId>    -> { history } (audit trail, newest first)
  * POST { modelId, unit, pricing, note, confirm? } -> operator reprice, or a
  *   first price for a known text model (per_token only; 422 for other types)
@@ -243,7 +244,16 @@ const handler = adminApi({
     if (typeof history === 'string' && history.length > 0) {
       return res.json({ history: await modelPriceRepository.historyForModel(history) });
     }
-    return res.json({ rows: await modelPriceRepository.rowsInForce() });
+    // The seed only decides where Revert is offered, so a failed seed read must not hide the prices in force.
+    const [rows, seed] = await Promise.allSettled([modelPriceRepository.rowsInForce(), generateModelPriceSeed()]);
+    if (rows.status === 'rejected') throw rows.reason;
+    if (seed.status === 'rejected') {
+      req.logger.warn('[model-prices] seed read failed; no row offers Revert', {
+        error: seed.reason instanceof Error ? seed.reason.message : String(seed.reason),
+      });
+    }
+    const seeded = seed.status === 'fulfilled' ? seed.value.map(({ modelId, unit }) => ({ modelId, unit })) : [];
+    return res.json({ rows: rows.value, seeded });
   })
   .post(async (req, res) => {
     requireFullAdmin(req);

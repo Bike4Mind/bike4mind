@@ -15,17 +15,22 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import HistoryIcon from '@mui/icons-material/History';
 import ReplayIcon from '@mui/icons-material/Replay';
 // getPriceMargin is read-only here: markup is applied when calls settle, so it
 // informs the editor's derived line and never reaches a stored rate.
-import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
+import {
+  PRICE_ROW_BILLED_MODEL_TYPES,
+  billableRealtimeVoiceTier,
+  getPriceMargin,
+  type IModelPriceTier,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useCreditAnalysisStore } from '../store';
-import { AdminDialog, AdminPageHeader, DataTable, FilterBar } from '../../shared';
+import { useModelIndex } from '../../Models/Discovery/useModelIndex';
+import { ModelWriteAction } from '../../Models/ModelWriteAction';
+import { AdminDialog, AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar, UpdatingBar } from '../../shared';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -57,21 +62,17 @@ type Provenance = 'seed' | 'discovery' | 'operator';
 const provenanceOf = (row: PriceRow): Provenance =>
   isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : 'operator';
 
-// Seed reads muted in the catalog but highlighted in the audit trail, so the
-// two chips keep separate color maps.
-const SOURCE_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
-  seed: 'neutral',
-  discovery: 'warning',
-  operator: 'primary',
-};
-const HISTORY_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
-  seed: 'primary',
-  discovery: 'warning',
-  operator: 'neutral',
+// Where a price came from is not a status, so its chip stays neutral.
+export const PROVENANCE_COPY: Record<Provenance, { label: string; meaning: string }> = {
+  seed: { label: 'Default', meaning: 'Value shipped in code or a seed row' },
+  discovery: { label: 'Discovered', meaning: 'Value read from a provider feed' },
+  operator: { label: 'Set by admin', meaning: 'Value an admin saved here' },
 };
 
+const seedKey = (modelId: string, unit: string) => `${modelId}|${unit}`;
+
 /** Every rate field a tier can carry, in display order. */
-const RATE_FIELDS = [
+export const RATE_FIELDS = [
   'input',
   'output',
   'cache_read',
@@ -80,8 +81,8 @@ const RATE_FIELDS = [
   'audio_cache_read',
   'audio_output',
 ] as const;
-type RateField = (typeof RATE_FIELDS)[number];
-const RATE_LABELS: Record<RateField, string> = {
+export type RateField = (typeof RATE_FIELDS)[number];
+export const RATE_LABELS: Record<RateField, string> = {
   input: 'Input',
   output: 'Output',
   cache_read: 'Cache read',
@@ -91,6 +92,21 @@ const RATE_LABELS: Record<RateField, string> = {
   audio_output: 'Audio out',
 };
 
+/** Rates a realtime voice price needs above 0 on its lowest tier; without them voice settlement skips the row. */
+export const VOICE_REQUIRED_FIELDS: readonly RateField[] = ['input', 'output', 'audio_input', 'audio_output'];
+
+/** Why the API would refuse this realtime voice pricing (mirrors its billableRealtimeVoiceTier check), or null. */
+export const voiceRateProblem = (pricing: Record<string, Partial<IModelPriceTier>>): string | null => {
+  const tiers = Object.fromEntries(
+    Object.entries(pricing).map(([threshold, tier]) => [threshold, { input: 0, output: 0, ...tier }])
+  );
+  return billableRealtimeVoiceTier(tiers)
+    ? null
+    : 'A realtime voice price needs input, output, audio in and audio out rates above 0 on its lowest tier.';
+};
+
+const lowestThreshold = (thresholds: string[]) => [...thresholds].sort((a, b) => Number(a) - Number(b))[0];
+
 const UNIT_SUFFIX: Record<string, string> = {
   per_token: 'per 1M tokens',
   per_minute: 'per minute',
@@ -98,7 +114,7 @@ const UNIT_SUFFIX: Record<string, string> = {
 };
 
 /** Compact form for the narrow editor inputs; the modal states the full unit. */
-const UNIT_FIELD_SUFFIX: Record<string, string> = {
+export const UNIT_FIELD_SUFFIX: Record<string, string> = {
   per_token: '$/M',
   per_minute: '$/min',
   per_image: '$/img',
@@ -109,12 +125,15 @@ const UNIT_FIELD_SUFFIX: Record<string, string> = {
 // other is a 1e6 mispricing that takes effect the instant the row is appended.
 const TOKENS_PER_MILLION = 1_000_000;
 
+const formatUsd = (value: number) =>
+  `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+
 // per_token rates are USD per single token and read best scaled to 1M; other
 // units are already human-scale and must NOT be inflated.
 const formatRate = (unit: string, value: number | undefined) => {
   if (value === undefined) return '-';
   const scaled = unit === 'per_token' ? value * TOKENS_PER_MILLION : value;
-  return `$${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  return formatUsd(scaled);
 };
 
 // Both directions trim to 10 significant digits: the 1e6 round trip leaves
@@ -129,7 +148,7 @@ const toDisplayedRate = (unit: string, stored: number) =>
   trimRoundTripNoise(unit === 'per_token' ? stored * TOKENS_PER_MILLION : stored);
 
 /** Inverse of toDisplayedRate: the edited value back to the stored wire rate. */
-const toStoredRate = (unit: string, displayed: number) =>
+export const toStoredRate = (unit: string, displayed: number) =>
   trimRoundTripNoise(unit === 'per_token' ? displayed / TOKENS_PER_MILLION : displayed);
 
 /**
@@ -137,10 +156,10 @@ const toStoredRate = (unit: string, displayed: number) =>
  * is applied when calls settle (usdToCredits), so it must never reach the wire
  * or the catalog would carry cost times markup and be marked up again on read.
  */
-const markedUpRate = (displayed: string | undefined) => {
+export const markedUpRate = (displayed: string | undefined) => {
   const value = Number(displayed);
   if (displayed === undefined || !Number.isFinite(value)) return '-';
-  return `$${(value * getPriceMargin()).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  return formatUsd(value * getPriceMargin());
 };
 
 const firstTier = (row: PriceRow): IModelPriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
@@ -151,7 +170,7 @@ const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 // err.message is the useless generic 'Request failed with status code 400'.
 // The envelope names it 'error' (server/middlewares/errorHandler.ts); 'message'
 // stays as a fallback for endpoints that answer outside that envelope.
-const apiErrorMessage = (err: unknown, fallback: string) => {
+export const apiErrorMessage = (err: unknown, fallback: string) => {
   const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
   return e?.response?.data?.error || e?.response?.data?.message || e?.message || fallback;
 };
@@ -168,7 +187,7 @@ const BAND_ERROR_CODE = 'manual-reprice-over-band';
  * it from the resubmitted draft, so it can only ever waive the exact values
  * this rejection enumerated.
  */
-const bandConfirmToken = (err: unknown): string | null => {
+export const bandConfirmToken = (err: unknown): string | null => {
   const data = (err as { response?: { data?: { code?: string; confirmToken?: string } } })?.response?.data;
   return data?.code === BAND_ERROR_CODE && typeof data.confirmToken === 'string' ? data.confirmToken : null;
 };
@@ -180,14 +199,39 @@ const bandConfirmToken = (err: unknown): string | null => {
  * here writes markup.
  * All writes are append-only rows via /api/admin/model-prices.
  */
-export const ModelPricingCatalog: React.FC = () => {
-  const [rows, setRows] = useState<PriceRow[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState('');
+export type ModelPricingCatalogProps = {
+  /** Controlled model filter; without it the catalog keeps its own. */
+  modelFilter?: string;
+  onModelFilterChange?: (value: string) => void;
+  /** For a host page that already titles this view: no section header, and the actions sit beside the search. */
+  hideHeading?: boolean;
+  /** Rendered beside the refresh button. */
+  toolbarActions?: React.ReactNode;
+  /** Changing this refetches the rows, for a write made outside the table. */
+  refreshKey?: number;
+  /** Called after a reprice or revert lands. */
+  onPricesChanged?: () => void;
+};
 
-  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
-  const clearPricingModelId = useCreditAnalysisStore(state => state.clearPricingModelId);
+export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
+  modelFilter,
+  onModelFilterChange,
+  hideHeading = false,
+  toolbarActions,
+  refreshKey = 0,
+  onPricesChanged,
+}) => {
+  const [rows, setRows] = useState<PriceRow[]>([]);
+  // Revert to seed is refused for a pair with no seed entry, so it is only offered for these.
+  const [seeded, setSeeded] = useState<ReadonlySet<string>>(new Set());
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Held apart from `error` so a failed write shows in its dialog and never replaces the table.
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const modelIndex = useModelIndex();
+  const [localFilter, setLocalFilter] = useState('');
+  const filter = modelFilter ?? localFilter;
+  const setFilter = onModelFilterChange ?? setLocalFilter;
 
   const [repriceTarget, setRepriceTarget] = useState<PriceRow | null>(null);
   const [draftRates, setDraftRates] = useState<Record<string, Record<string, string>>>({});
@@ -201,34 +245,43 @@ export const ModelPricingCatalog: React.FC = () => {
   const [revertTarget, setRevertTarget] = useState<PriceRow | null>(null);
   const [historyModel, setHistoryModel] = useState<string | null>(null);
   const [history, setHistory] = useState<PriceRow[] | null>(null);
-  // Latest requested history model; a slower earlier response must not
-  // overwrite the drawer for the model currently displayed.
-  const historyRequestRef = useRef<string | null>(null);
+  // Held apart from `error` so a failed history load shows in its drawer and never replaces the table.
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  // Counts history requests; a slower earlier response must not overwrite the drawer for the latest one.
+  const historyRequestRef = useRef(0);
+
+  // Loads overlap (refresh, post-write reload, a finished discovery run); only the latest may land.
+  const latestFetchRef = useRef(0);
 
   const fetchRows = useCallback(async () => {
+    const fetchId = ++latestFetchRef.current;
     setIsLoading(true);
     setError(null);
     try {
-      const res = await api.get<{ rows: PriceRow[] }>('/api/admin/model-prices');
+      const res = await api.get<{ rows: PriceRow[]; seeded?: { modelId: string; unit: string }[] }>(
+        '/api/admin/model-prices'
+      );
+      if (fetchId !== latestFetchRef.current) return;
       setRows([...res.data.rows].sort((a, b) => a.modelId.localeCompare(b.modelId)));
+      setSeeded(new Set((res.data.seeded ?? []).map(entry => seedKey(entry.modelId, entry.unit))));
     } catch (err) {
+      if (fetchId !== latestFetchRef.current) return;
       setError(apiErrorMessage(err, 'Failed to load the price catalog'));
     } finally {
-      setIsLoading(false);
+      if (fetchId === latestFetchRef.current) setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void fetchRows();
-  }, [fetchRows]);
+  }, [fetchRows, refreshKey]);
 
-  // A cross-surface jump (a discovery price flag) names one model out of ~110
-  // rows. Consumed once so a later manual visit does not open still filtered.
-  useEffect(() => {
-    if (!pricingModelId) return;
-    setFilter(pricingModelId);
-    clearPricingModelId();
-  }, [pricingModelId, clearPricingModelId]);
+  // An id the model list does not know keeps its writes: the server refuses only known types it does not bill by row.
+  const canWritePrice = (modelId: string) => {
+    const type = modelIndex.data?.byId.get(modelId)?.type;
+    return type === undefined || PRICE_ROW_BILLED_MODEL_TYPES.has(type);
+  };
+  const isVoice = (modelId: string) => modelIndex.data?.byId.get(modelId)?.type === 'realtime-voice';
 
   // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
   // editor shows always matches the table it was opened from.
@@ -241,11 +294,20 @@ export const ModelPricingCatalog: React.FC = () => {
         if (value !== undefined) drafts[threshold][field] = String(toDisplayedRate(row.unit, value));
       }
     }
+    if (isVoice(row.modelId)) {
+      const lowest = drafts[lowestThreshold(Object.keys(drafts))];
+      for (const field of VOICE_REQUIRED_FIELDS) if (lowest && lowest[field] === undefined) lowest[field] = '';
+    }
     setDraftRates(drafts);
     setNote('');
-    setError(null);
+    setWriteError(null);
     setConfirmToken(null);
     setRepriceTarget(row);
+  };
+
+  const openRevert = (row: PriceRow) => {
+    setWriteError(null);
+    setRevertTarget(row);
   };
 
   const editRate = (threshold: string, field: string, value: string) => {
@@ -253,30 +315,44 @@ export const ModelPricingCatalog: React.FC = () => {
     setDraftRates(prev => ({ ...prev, [threshold]: { ...prev[threshold], [field]: value } }));
   };
 
+  const repriceUnit = repriceTarget?.unit ?? '';
+  const repriceUnitLabel = UNIT_SUFFIX[repriceUnit] ?? repriceUnit;
+
+  const draftPricing = useMemo(() => {
+    const pricing: Record<string, Record<string, number>> = {};
+    for (const [threshold, fields] of Object.entries(draftRates)) {
+      pricing[threshold] = {};
+      for (const [field, raw] of Object.entries(fields))
+        pricing[threshold][field] = toStoredRate(repriceUnit, Number(raw));
+    }
+    return pricing;
+  }, [draftRates, repriceUnit]);
+  const repriceVoice = repriceTarget !== null && isVoice(repriceTarget.modelId);
+  const voiceProblem = repriceVoice ? voiceRateProblem(draftPricing) : null;
+  const draftInvalid =
+    voiceProblem !== null ||
+    Object.values(draftRates).some(fields =>
+      Object.values(fields).some(raw => raw.trim() === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0)
+    );
+
   const submitReprice = async (waiver?: string) => {
     if (!repriceTarget) return;
     setIsSaving(true);
-    setError(null);
+    setWriteError(null);
     try {
-      const pricing: Record<string, Record<string, number>> = {};
-      for (const [threshold, fields] of Object.entries(draftRates)) {
-        pricing[threshold] = {};
-        for (const [field, raw] of Object.entries(fields)) {
-          pricing[threshold][field] = toStoredRate(repriceTarget.unit, Number(raw));
-        }
-      }
       await api.post('/api/admin/model-prices', {
         modelId: repriceTarget.modelId,
         unit: repriceTarget.unit,
-        pricing,
+        pricing: draftPricing,
         note: note.trim(),
         ...(waiver ? { confirm: waiver } : {}),
       });
       setRepriceTarget(null);
       setConfirmToken(null);
+      onPricesChanged?.();
       await fetchRows();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Reprice failed'));
+      setWriteError(apiErrorMessage(err, 'Reprice failed'));
       setConfirmToken(bandConfirmToken(err));
     } finally {
       setIsSaving(false);
@@ -286,7 +362,7 @@ export const ModelPricingCatalog: React.FC = () => {
   const submitRevert = async () => {
     if (!revertTarget) return;
     setIsSaving(true);
-    setError(null);
+    setWriteError(null);
     try {
       await api.post('/api/admin/model-prices', {
         modelId: revertTarget.modelId,
@@ -294,183 +370,248 @@ export const ModelPricingCatalog: React.FC = () => {
         action: 'revert-to-seed',
       });
       setRevertTarget(null);
+      onPricesChanged?.();
       await fetchRows();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Revert failed'));
+      setWriteError(apiErrorMessage(err, 'Revert failed'));
     } finally {
       setIsSaving(false);
     }
   };
 
   const openHistory = async (modelId: string) => {
-    historyRequestRef.current = modelId;
+    const requestId = ++historyRequestRef.current;
     setHistoryModel(modelId);
     setHistory(null);
+    setHistoryError(null);
     try {
       const res = await api.get<{ history: PriceRow[] }>(
         `/api/admin/model-prices?history=${encodeURIComponent(modelId)}`
       );
-      if (historyRequestRef.current !== modelId) return;
+      if (requestId !== historyRequestRef.current) return;
       setHistory(res.data.history);
     } catch (err) {
-      if (historyRequestRef.current !== modelId) return;
-      setError(apiErrorMessage(err, 'Failed to load history'));
-      setHistoryModel(null);
+      if (requestId !== historyRequestRef.current) return;
+      setHistoryError(apiErrorMessage(err, 'Failed to load history'));
     }
   };
 
-  const repriceUnit = repriceTarget?.unit ?? '';
-  const repriceUnitLabel = UNIT_SUFFIX[repriceUnit] ?? repriceUnit;
+  const closeHistory = () => {
+    historyRequestRef.current++;
+    setHistoryModel(null);
+    setHistoryError(null);
+  };
 
   const visibleRows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    return needle ? rows.filter(row => row.modelId.toLowerCase().includes(needle)) : rows;
+    if (!needle) return rows;
+    // A full id narrows to that model alone, so a deep link to gpt-4 does not also list gpt-4o.
+    const exact = rows.filter(row => row.modelId.toLowerCase() === needle);
+    return exact.length > 0 ? exact : rows.filter(row => row.modelId.toLowerCase().includes(needle));
   }, [rows, filter]);
 
-  const draftInvalid = useMemo(
-    () =>
-      Object.values(draftRates).some(fields =>
-        Object.values(fields).some(raw => raw.trim() === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0)
-      ),
-    [draftRates]
+  const refreshButton = (
+    <IconButton
+      size="sm"
+      onClick={() => void fetchRows()}
+      disabled={isLoading}
+      aria-label="Refresh the price catalog"
+      data-testid="model-pricing-refresh-btn"
+    >
+      <RefreshIcon />
+    </IconButton>
+  );
+  const filterBar = (
+    <FilterBar
+      state={{ query: filter, view: '', filters: {} }}
+      searchLabel="Filter by model id"
+      onChange={patch => {
+        if (patch.query !== undefined) setFilter(patch.query);
+      }}
+    />
   );
 
   return (
-    <Box data-testid="model-pricing-catalog">
-      <Stack gap={2}>
-        <AdminPageHeader
-          level="section"
-          title="Model pricing"
-          count={visibleRows.length}
-          description="Provider cost in USD; token rates per 1M. Changes append versioned rows and preserve history."
-          actions={
-            <IconButton
-              size="sm"
-              onClick={fetchRows}
-              disabled={isLoading}
-              aria-label="Refresh the price catalog"
-              data-testid="model-pricing-refresh-btn"
-            >
-              <RefreshIcon />
-            </IconButton>
-          }
-        />
-        <FilterBar
-          state={{ query: filter, view: '', filters: {} }}
-          searchLabel="Filter by model id"
-          onChange={patch => {
-            if (patch.query !== undefined) setFilter(patch.query);
-          }}
-        />
-      </Stack>
-
-      {error && (repriceTarget || revertTarget || historyModel) && (
-        <Alert color="danger" sx={{ mb: 1 }} data-testid="model-pricing-error">
-          {error}
-        </Alert>
+    <Stack gap={2} data-testid="model-pricing-catalog">
+      {hideHeading ? (
+        <Stack gap={1}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Users pay this cost times the published uniform markup. Changes append versioned rows; history is never
+            edited.
+          </Typography>
+          <Stack direction="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" gap={1}>
+            <Box sx={{ flex: '1 1 16rem', minWidth: 0 }}>{filterBar}</Box>
+            <Stack direction="row" gap={1} alignItems="center" data-testid="model-pricing-toolbar-actions">
+              {refreshButton}
+              {toolbarActions}
+            </Stack>
+          </Stack>
+        </Stack>
+      ) : (
+        <>
+          <AdminPageHeader
+            level="section"
+            title="Model pricing"
+            count={visibleRows.length}
+            description="Provider cost in USD; token rates per 1M. Changes append versioned rows and preserve history."
+            actions={
+              <>
+                {refreshButton}
+                {toolbarActions}
+              </>
+            }
+          />
+          {filterBar}
+        </>
       )}
 
-      <DataTable
-        label="Model pricing"
-        testId="model-pricing-table"
-        rows={visibleRows}
-        getRowId={row => `${row.modelId}|${row.unit}`}
-        rowTestId={row => `model-pricing-row-${row.modelId}-${row.unit}`}
-        loading={isLoading}
-        error={!repriceTarget && !revertTarget && !historyModel ? (error ?? undefined) : undefined}
-        onRetry={() => void fetchRows()}
-        pagination={false}
-        minWidth="68.5rem"
-        maxHeight="calc(100vh - 240px)"
-        empty={
-          filter ? (
-            <Typography data-testid="model-pricing-filter-empty">No model id matches &quot;{filter}&quot;.</Typography>
-          ) : undefined
-        }
-        columns={[
-          {
-            id: 'model',
-            label: 'Model',
-            render: row => (
-              <>
-                {row.modelId}
-                {Object.keys(row.pricing).length > 1 && (
-                  <Typography level="body-xs" color="neutral">
-                    {Object.keys(row.pricing).length} tiers
-                  </Typography>
-                )}
-              </>
-            ),
-          },
-          { id: 'unit', label: 'Unit', render: row => UNIT_SUFFIX[row.unit] ?? row.unit },
-          { id: 'input', label: 'Input', numeric: true, render: row => formatRate(row.unit, firstTier(row).input) },
-          { id: 'output', label: 'Output', numeric: true, render: row => formatRate(row.unit, firstTier(row).output) },
-          {
-            id: 'audio-in',
-            label: 'Audio in',
-            numeric: true,
-            render: row => formatRate(row.unit, firstTier(row).audio_input),
-          },
-          {
-            id: 'audio-out',
-            label: 'Audio out',
-            numeric: true,
-            render: row => formatRate(row.unit, firstTier(row).audio_output),
-          },
-          { id: 'effective', label: 'Effective from', render: row => new Date(row.effectiveFrom).toLocaleDateString() },
-          {
-            id: 'source',
-            label: 'Source',
-            render: row => (
-              <Chip
-                size="sm"
-                color={SOURCE_CHIP_COLOR[provenanceOf(row)]}
-                variant="soft"
-                title={discoverySource(row) ? `priced by ${discoverySource(row)}` : undefined}
-                data-provenance={provenanceOf(row)}
-                data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
-              >
-                {provenanceOf(row)}
-              </Chip>
-            ),
-          },
-        ]}
-        // Reprice, History and Revert: three icon buttons.
-        actionsWidth="8rem"
-        rowActions={row => (
-          <>
-            <IconButton
-              size="sm"
-              title="Reprice"
-              aria-label={`Reprice ${row.modelId}`}
-              onClick={() => openReprice(row)}
-              data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
-            >
-              <EditIcon fontSize="small" />
-            </IconButton>
-            <IconButton
-              size="sm"
-              title="History"
-              aria-label={`Price history for ${row.modelId}`}
-              onClick={() => void openHistory(row.modelId)}
-              data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
-            >
-              <HistoryIcon fontSize="small" />
-            </IconButton>
-            {!isSeedRow(row) && (
+      <Stack gap={1}>
+        <UpdatingBar active={isLoading && rows.length > 0} testId="model-pricing-updating" />
+        {error && rows.length > 0 && (
+          <Alert color="danger" data-testid="model-pricing-error">
+            {error}
+          </Alert>
+        )}
+        <DataTable
+          label="Model pricing"
+          testId="model-pricing-table"
+          rows={visibleRows}
+          getRowId={row => seedKey(row.modelId, row.unit)}
+          rowTestId={row => `model-pricing-row-${row.modelId}-${row.unit}`}
+          loading={isLoading && rows.length === 0}
+          error={error && rows.length === 0 ? error : undefined}
+          onRetry={() => void fetchRows()}
+          pagination={false}
+          minWidth="68.5rem"
+          maxHeight="calc(100vh - 240px)"
+          empty={
+            filter.trim() ? (
+              <Box data-testid="model-pricing-filter-empty">
+                <EmptyState
+                  title="No prices match these filters"
+                  action={
+                    <Button
+                      variant="outlined"
+                      onClick={() => setFilter('')}
+                      data-testid="model-pricing-clear-filters-btn"
+                    >
+                      Clear filters
+                    </Button>
+                  }
+                />
+              </Box>
+            ) : undefined
+          }
+          columns={[
+            {
+              id: 'model',
+              label: 'Model',
+              render: row => (
+                <>
+                  {row.modelId}
+                  {Object.keys(row.pricing).length > 1 && (
+                    <Typography level="body-xs" color="neutral">
+                      {Object.keys(row.pricing).length} tiers
+                    </Typography>
+                  )}
+                </>
+              ),
+            },
+            { id: 'unit', label: 'Unit', render: row => UNIT_SUFFIX[row.unit] ?? row.unit },
+            { id: 'input', label: 'Input', numeric: true, render: row => formatRate(row.unit, firstTier(row).input) },
+            {
+              id: 'output',
+              label: 'Output',
+              numeric: true,
+              render: row => formatRate(row.unit, firstTier(row).output),
+            },
+            {
+              id: 'audio-in',
+              label: 'Audio in',
+              numeric: true,
+              render: row => formatRate(row.unit, firstTier(row).audio_input),
+            },
+            {
+              id: 'audio-out',
+              label: 'Audio out',
+              numeric: true,
+              render: row => formatRate(row.unit, firstTier(row).audio_output),
+            },
+            {
+              id: 'effective',
+              label: 'Effective from',
+              render: row => new Date(row.effectiveFrom).toLocaleDateString(),
+            },
+            {
+              id: 'source',
+              label: 'Source',
+              render: row => {
+                const provenance = provenanceOf(row);
+                const source = discoverySource(row);
+                return (
+                  <Chip
+                    size="sm"
+                    color="neutral"
+                    variant="soft"
+                    title={`${PROVENANCE_COPY[provenance].meaning}${source ? ` (${source})` : ''}`}
+                    data-provenance={provenance}
+                    data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
+                  >
+                    {PROVENANCE_COPY[provenance].label}
+                  </Chip>
+                );
+              },
+            },
+          ]}
+          // Reprice, History and Revert: three icon buttons.
+          actionsWidth="8rem"
+          rowActions={row => (
+            <>
+              {canWritePrice(row.modelId) && (
+                <ModelWriteAction>
+                  {disabled => (
+                    <IconButton
+                      size="sm"
+                      title="Reprice"
+                      aria-label={`Reprice ${row.modelId}`}
+                      disabled={disabled}
+                      onClick={() => openReprice(row)}
+                      data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </ModelWriteAction>
+              )}
               <IconButton
                 size="sm"
-                title="Revert to seed pricing"
-                aria-label={`Revert ${row.modelId} to seed pricing`}
-                onClick={() => setRevertTarget(row)}
-                data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
+                title="History"
+                aria-label={`Price history for ${row.modelId}`}
+                onClick={() => void openHistory(row.modelId)}
+                data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
               >
-                <ReplayIcon fontSize="small" />
+                <HistoryIcon fontSize="small" />
               </IconButton>
-            )}
-          </>
-        )}
-      />
+              {!isSeedRow(row) && seeded.has(seedKey(row.modelId, row.unit)) && canWritePrice(row.modelId) && (
+                <ModelWriteAction>
+                  {disabled => (
+                    <IconButton
+                      size="sm"
+                      title="Revert to seed pricing"
+                      aria-label={`Revert ${row.modelId} to seed pricing`}
+                      disabled={disabled}
+                      onClick={() => openRevert(row)}
+                      data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
+                    >
+                      <ReplayIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </ModelWriteAction>
+              )}
+            </>
+          )}
+        />
+      </Stack>
 
       <AdminDialog
         open={repriceTarget !== null}
@@ -479,11 +620,11 @@ export const ModelPricingCatalog: React.FC = () => {
         width={500}
         data-testid="reprice-modal"
       >
-        {error && (
+        {writeError && (
           // pre-line: a guardrail rejection enumerates one violation per
           // line, and every line has to be readable before "Apply anyway".
           <Alert color="danger" size="sm" sx={{ whiteSpace: 'pre-line' }} data-testid="reprice-modal-error">
-            {error}
+            {writeError}
           </Alert>
         )}
         <Typography level="body-sm" color="neutral" data-testid="reprice-unit-help">
@@ -500,7 +641,15 @@ export const ModelPricingCatalog: React.FC = () => {
               )}
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 {Object.entries(fields).map(([field, raw]) => (
-                  <FormControl key={field} sx={{ width: 130 }}>
+                  <FormControl
+                    key={field}
+                    required={
+                      repriceVoice &&
+                      threshold === lowestThreshold(Object.keys(draftRates)) &&
+                      VOICE_REQUIRED_FIELDS.includes(field as RateField)
+                    }
+                    sx={{ width: 130 }}
+                  >
                     <FormLabel>
                       {RATE_LABELS[field as RateField]} {UNIT_FIELD_SUFFIX[repriceUnit] ?? repriceUnit}
                     </FormLabel>
@@ -519,6 +668,11 @@ export const ModelPricingCatalog: React.FC = () => {
               </Typography>
             </Box>
           ))}
+          {voiceProblem && (
+            <Typography level="body-xs" color="danger" data-testid="reprice-voice-problem">
+              {voiceProblem}
+            </Typography>
+          )}
           <FormControl required>
             <FormLabel>Note (audit trail: where does this price come from?)</FormLabel>
             <Textarea
@@ -561,9 +715,9 @@ export const ModelPricingCatalog: React.FC = () => {
         title={`Revert ${revertTarget?.modelId ?? ''} to seed pricing?`}
         data-testid="revert-modal"
       >
-        {error && (
+        {writeError && (
           <Alert color="danger" size="sm" data-testid="revert-modal-error">
-            {error}
+            {writeError}
           </Alert>
         )}
         <Typography level="body-sm" color="neutral">
@@ -580,12 +734,16 @@ export const ModelPricingCatalog: React.FC = () => {
         </Stack>
       </AdminDialog>
 
-      <Drawer anchor="right" open={historyModel !== null} onClose={() => setHistoryModel(null)} size="md">
+      <Drawer anchor="right" open={historyModel !== null} onClose={closeHistory} size="md">
         <Box sx={{ p: 2 }} data-testid="history-drawer">
           <Typography level="title-md" sx={{ mb: 1 }}>
             Price history: {historyModel}
           </Typography>
-          {history === null ? (
+          {historyError ? (
+            <Box data-testid="model-pricing-history-error">
+              <ErrorState message={historyError} onRetry={() => historyModel && void openHistory(historyModel)} />
+            </Box>
+          ) : history === null ? (
             <CircularProgress size="sm" />
           ) : (
             <Stack spacing={1}>
@@ -614,12 +772,13 @@ export const ModelPricingCatalog: React.FC = () => {
                       <Typography level="body-sm">{new Date(row.effectiveFrom).toLocaleString()}</Typography>
                       <Chip
                         size="sm"
-                        color={HISTORY_CHIP_COLOR[provenanceOf(row)]}
+                        color="neutral"
                         variant="soft"
+                        title={PROVENANCE_COPY[provenanceOf(row)].meaning}
                         data-provenance={provenanceOf(row)}
                         data-testid="history-who"
                       >
-                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : '-')}
+                        {row.repricedBy ?? PROVENANCE_COPY[provenanceOf(row)].label}
                       </Chip>
                     </Stack>
                     <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>
@@ -663,6 +822,6 @@ export const ModelPricingCatalog: React.FC = () => {
           )}
         </Box>
       </Drawer>
-    </Box>
+    </Stack>
   );
 };

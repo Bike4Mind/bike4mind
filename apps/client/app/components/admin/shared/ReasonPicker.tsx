@@ -2,7 +2,7 @@ import React, { useId } from 'react';
 import { Chip, FormControl, FormHelperText, FormLabel, Stack, Textarea } from '@mui/joy';
 import { adminFocusScope } from './adminStyles';
 import {
-  ADMIN_REASON_HINT,
+  adminReasonHint,
   type AdminReasonDraft,
   composeAdminReason,
   isAdminReasonComplete,
@@ -22,6 +22,9 @@ type ReasonPickerProps = {
    * reason is not stored instead of promising an audit entry.
    */
   audited?: boolean;
+  /** See isAdminReasonComplete; ActionDialog passes its `reasonMinLength` through. */
+  minLength?: number;
+  disabled?: boolean;
 };
 
 export const UNSTORED_REASON_NOTE = 'Not stored yet: the audit entry for this action has no reason field.';
@@ -38,15 +41,20 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
   label = 'Reason',
   autoFocus,
   audited = true,
+  minLength,
+  disabled = false,
 }) => {
   const labelId = useId();
   const composed = composeAdminReason(value);
-  const showInvalid = value.note.length > 0 && !isAdminReasonComplete(value);
+  const complete = isAdminReasonComplete(value, minLength);
+  const hint = adminReasonHint(minLength);
+  const showInvalid = value.note.length > 0 && !complete;
 
-  const togglePreset = (preset: string) => onChange({ ...value, preset: value.preset === preset ? null : preset });
+  const togglePreset = (preset: string) =>
+    !disabled && onChange({ ...value, preset: value.preset === preset ? null : preset });
 
   return (
-    <FormControl required error={showInvalid} sx={adminFocusScope}>
+    <FormControl required disabled={disabled} error={showInvalid} sx={adminFocusScope}>
       <FormLabel id={labelId}>{label}</FormLabel>
       {presets.length > 0 && (
         <Stack role="group" aria-labelledby={labelId} direction="row" flexWrap="wrap" gap={0.75} sx={{ mb: 1 }}>
@@ -55,6 +63,7 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
             return (
               <Chip
                 key={preset}
+                disabled={disabled}
                 size="sm"
                 variant={selected ? 'solid' : 'outlined'}
                 color={selected ? 'primary' : 'neutral'}
@@ -68,6 +77,7 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
         </Stack>
       )}
       <Textarea
+        disabled={disabled}
         minRows={2}
         maxRows={4}
         autoFocus={autoFocus}
@@ -90,12 +100,12 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
       />
       <FormHelperText data-testid={`${testId}-helper`}>
         {!audited
-          ? isAdminReasonComplete(value)
+          ? complete
             ? UNSTORED_REASON_NOTE
-            : `${ADMIN_REASON_HINT} ${UNSTORED_REASON_NOTE}`
-          : isAdminReasonComplete(value)
+            : `${hint} ${UNSTORED_REASON_NOTE}`
+          : complete
             ? `Recorded in the audit log as "${composed}".`
-            : `${ADMIN_REASON_HINT} Recorded in the audit log.`}
+            : `${hint} Recorded in the audit log.`}
       </FormHelperText>
     </FormControl>
   );

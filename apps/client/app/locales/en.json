@@ -198,6 +198,7 @@
     "errors": {
       "notebookDeleted": "This notebook was deleted. Please create a new one.",
       "noPermission": "You do not have permission to access this notebook.",
+      "modelUnavailable": "This model is no longer available to you. Pick another model and send again.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
       "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",

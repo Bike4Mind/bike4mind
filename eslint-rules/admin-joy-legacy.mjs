@@ -7,7 +7,6 @@ const componentsByFile = {
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
   'AdminWhatsNewModalsTab.tsx': ['Card', 'Modal', 'Table'],
   'CreateSlackAppModal.tsx': ['Modal'],
-  'DiscoveryRunDetailModal.tsx': ['Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
   'EventMetrics/components/OverviewTab.tsx': ['Card'],
   'EventMetrics/components/RawDataTab.tsx': ['Table'],

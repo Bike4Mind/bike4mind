@@ -123,7 +123,10 @@ async function expectGuardrail(body: object): Promise<GuardrailError> {
 }
 
 describe('GET /api/admin/model-prices', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGenerateSeed.mockResolvedValue([]);
+  });
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
@@ -136,6 +139,36 @@ describe('GET /api/admin/model-prices', () => {
     const { res, run } = call({ method: 'GET' });
     await run();
     expect(res._getJSONData().rows).toHaveLength(1);
+  });
+
+  it('names the model and unit pairs a revert to seed has rates for, without their rates', async () => {
+    mockRowsInForce.mockResolvedValue([]);
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().seeded).toEqual([{ modelId: 'gpt-x', unit: 'per_token' }]);
+  });
+
+  it('still returns the rows in force, with nothing seeded, when the seed read fails', async () => {
+    mockRowsInForce.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockGenerateSeed.mockRejectedValueOnce(new Error('adapter tables unreadable'));
+    const { req, res, run } = call({ method: 'GET' });
+    const warn = vi.fn();
+    (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    await run();
+
+    expect(res._getJSONData()).toMatchObject({ rows: [{ modelId: 'gpt-x' }], seeded: [] });
+    expect(warn).toHaveBeenCalledWith('[model-prices] seed read failed; no row offers Revert', {
+      error: 'adapter tables unreadable',
+    });
+  });
+
+  it('fails the read when the rows in force cannot be read', async () => {
+    mockRowsInForce.mockRejectedValueOnce(new Error('database down'));
+    const { run } = call({ method: 'GET' });
+
+    await expect(run()).rejects.toThrow('database down');
   });
 
   it('returns per-model history when requested', async () => {

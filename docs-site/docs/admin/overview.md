@@ -104,7 +104,7 @@ The General Ops section contains tabs for system configuration and operational t
 |-----|-------------|
 | Admin Settings | Platform-wide configuration settings |
 | System Health | Monitor system health status |
-| LLM Dashboard | Large language model configuration and monitoring |
+| Models | Which AI models users can pick, their provider prices, model discovery, and model settings |
 | Tool Definitions | Manage tool definitions available to AI |
 | Rapid Reply | Configure rapid reply templates |
 | System Prompts | Manage system-level prompts |

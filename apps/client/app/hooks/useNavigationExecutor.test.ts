@@ -93,12 +93,12 @@ describe('useNavigationExecutor', () => {
 
   it('navigates to the admin tab before changing the store', () => {
     const { result } = renderHook(() => useNavigationExecutor());
-    result.current({ navigationType: 'tab', target: String(AdminTab.LLMDashboard) } as Parameters<
+    result.current({ navigationType: 'tab', target: String(AdminTab.Models) } as Parameters<
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
     expect(mockSetActiveTab).not.toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'models' } });
   });
 
   // A tab intent whose target is not an index still opens the console; it just has no tab to name.
