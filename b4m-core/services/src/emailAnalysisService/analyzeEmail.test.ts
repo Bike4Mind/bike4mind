@@ -330,6 +330,55 @@ Hope this helps!`;
 
       expect(result.actionItems[0].deadline).toBeUndefined();
     });
+
+    it('accepts a null deadline and normalizes it to absent', async () => {
+      const mockLLMResponse = JSON.stringify({
+        summary: 'Task with no deadline',
+        entities: { companies: [], people: [], products: [], technologies: [] },
+        sentiment: 'neutral',
+        actionItems: [
+          { description: 'Reply when you can', deadline: null },
+          { description: 'Ship the draft', deadline: '2025-10-30' },
+        ],
+        privacyRecommendation: 'private',
+        embargoDetected: false,
+        suggestedTags: [],
+      });
+
+      vi.mocked(mockAdapters.llm.backend.complete).mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback([mockLLMResponse]);
+      });
+
+      const result = await analyzeEmail(mockEmail, mockAdapters);
+
+      expect(result.actionItems).toEqual([
+        { description: 'Reply when you can', deadline: undefined },
+        { description: 'Ship the draft', deadline: new Date('2025-10-30') },
+      ]);
+    });
+
+    it('accepts null for the other optional fields and applies their defaults', async () => {
+      const mockLLMResponse = JSON.stringify({
+        summary: 'Sparse analysis',
+        entities: { companies: null, people: null, products: null, technologies: null },
+        sentiment: 'neutral',
+        actionItems: null,
+        privacyRecommendation: 'team',
+        embargoDetected: null,
+        suggestedTags: null,
+      });
+
+      vi.mocked(mockAdapters.llm.backend.complete).mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback([mockLLMResponse]);
+      });
+
+      const result = await analyzeEmail(mockEmail, mockAdapters);
+
+      expect(result.entities).toEqual({ companies: [], people: [], products: [], technologies: [] });
+      expect(result.actionItems).toEqual([]);
+      expect(result.embargoDetected).toBe(false);
+      expect(result.suggestedTags).toEqual([]);
+    });
   });
 
   describe('Privacy Recommendations', () => {
