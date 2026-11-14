@@ -83,7 +83,8 @@ export const llmAnalysisResponseSchema = z.object({
         deadline: z
           .string()
           .nullish()
-          .transform(value => value ?? undefined),
+          .transform(value => value ?? undefined)
+          .optional(),
       })
     )
     .nullish()
