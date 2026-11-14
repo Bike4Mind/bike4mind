@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   Group,
+  spaceRepository,
   fabFileRepository,
   sessionRepository,
   userRepository,
@@ -60,6 +61,7 @@ const handler = baseApi()
             projects: projectRepository,
             organizations: organizationRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );
@@ -124,6 +126,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             projects: projectRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );

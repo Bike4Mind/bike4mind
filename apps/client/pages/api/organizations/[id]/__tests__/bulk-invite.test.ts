@@ -50,6 +50,8 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
   sendInviteNotificationEmails: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   cacheRepository: {
     tryAddWithinLimitFixedWindow: mocks.tryAddWithinLimitFixedWindow,
     decrementCounter: mocks.decrementCounter,

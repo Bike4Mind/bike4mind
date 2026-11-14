@@ -11,6 +11,8 @@ const { findShareAccessById, reserveBudget, createInvite } = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   projectRepository: { shareable: { findShareAccessById } },
   activityRepository: {},
   fabFileRepository: {},

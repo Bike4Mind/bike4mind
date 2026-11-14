@@ -65,6 +65,7 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
   FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },

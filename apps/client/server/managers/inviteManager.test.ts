@@ -12,6 +12,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   projectRepository: {},
   organizationRepository: {},
+  spaceRepository: {},
 }));
 
 const { authorizeByInviteType } = vi.hoisted(() => ({ authorizeByInviteType: vi.fn() }));

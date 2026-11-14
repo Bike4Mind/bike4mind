@@ -11,6 +11,8 @@ import {
   IProjectRepository,
   ISessionDocument,
   ISessionRepository,
+  ISpaceDocument,
+  ISpaceRepository,
   IUserDocument,
   IUserRepository,
   Permission,
@@ -19,6 +21,8 @@ import {
   generateInviteToken,
   isOrgMember,
   isOrgOwnerOrPlatformAdmin,
+  isSpaceManager,
+  isSpaceMember,
   ORG_INVITE_ROLES,
   roleForPermissions,
   MAX_ORG_LINK_AVAILABLE,
@@ -49,7 +53,7 @@ const createInviteSchema = z.object({
   // No prefault here: the default depends on recipients.length (below), which this schema
   // cannot see. The organization invite-links route sets it to cap a share link's joins.
   available: z.number().int().min(1).optional(),
-  // An Organization share link: names nobody, joins whoever holds its token (see accept.ts).
+  // An Organization or Space share link: names nobody, joins whoever holds its token (see accept.ts).
   link: z.boolean().optional(),
   allowedDomains: z
     .array(z.string().trim().toLowerCase().max(253).regex(HOSTNAME_PATTERN, 'Invalid domain'))
@@ -67,6 +71,7 @@ interface CreateInviteAdapters {
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
+    spaces: Pick<ISpaceRepository, 'findLiveById'>;
     // TODO: Use Group model create type def
     groups: {
       findById: (id: string) => Promise<IGroupDocument | null>;
@@ -86,18 +91,25 @@ export const createInvite = async (
     createInviteSchema
   );
   const isOrgLink = link === true && type === InviteType.Organization;
-  if (link && !isOrgLink) throw new BadRequestError('Share links with these options are only for organizations');
-  if (allowedDomains?.length && !isOrgLink) {
+  const isLinkInvite = link === true && (type === InviteType.Organization || type === InviteType.Space);
+  if (link && !isLinkInvite) throw new BadRequestError('Share links with these options are only for organizations');
+  if (allowedDomains?.length && !isLinkInvite) {
     throw new BadRequestError('Allowed domains apply only to organization share links');
   }
-  if (isOrgLink && recipients?.length) throw new BadRequestError('A share link cannot name recipients');
+  if (isLinkInvite && recipients?.length) throw new BadRequestError('A share link cannot name recipients');
 
   // When no expiration date is given, default to 100 years from now.
 
   // May throw if a field is missing:
 
-  let doc: IFabFileDocument | ISessionDocument | IOrganizationDocument | IGroupDocument | IProjectDocument | null =
-    null;
+  let doc:
+    | IFabFileDocument
+    | ISessionDocument
+    | IOrganizationDocument
+    | IGroupDocument
+    | IProjectDocument
+    | ISpaceDocument
+    | null = null;
   let name: string | undefined = '';
   let organizationForInvite: IOrganizationDocument | null = null;
   let pendingOrganizationRecipients: string[] = [];
@@ -158,6 +170,14 @@ export const createInvite = async (
       if (!doc) throw new NotFoundError('Project not found');
       name = doc.name;
       break;
+    case InviteType.Space: {
+      const space = await inviteToSpace(user, { id }, db);
+      doc = space;
+      name = space.name;
+      // A Space invite only ever grants plain membership; the caller's permissions are ignored.
+      rest.permissions = [...ORG_INVITE_ROLES.viewer];
+      break;
+    }
     default:
       break;
   }
@@ -188,7 +208,7 @@ export const createInvite = async (
   // A recipientless invite of any other kind is a mistake, not a share link, and is refused below -
   // this keeps the flag fail-closed regardless.
   const namesNobody =
-    recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session || isOrgLink);
+    recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session || isLinkInvite);
 
   // Every other type always names people, so a recipientless invite there is a mistake, and one
   // that persists: it stores isLinkOnly false with an empty `pending`, which both the view gate and
@@ -231,9 +251,9 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
-  } else if (isOrgLink) {
+  } else if (isLinkInvite) {
     pending = [];
-  } else if (type === InviteType.Project || type === InviteType.Organization) {
+  } else if (type === InviteType.Project || type === InviteType.Organization || type === InviteType.Space) {
     // Project and Organization invites carry raw user ids (the add-members modals send
     // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
     // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed
@@ -330,7 +350,9 @@ export const createInvite = async (
   // same person, or an org/project id that resolves to nobody, must not inflate the count.
   const resolvedAvailable = isOrgLink
     ? Math.min(available ?? seatsLeft, MAX_ORG_LINK_AVAILABLE)
-    : (available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE)));
+    : isLinkInvite
+      ? Math.min(available ?? MAX_ORG_LINK_AVAILABLE, MAX_ORG_LINK_AVAILABLE)
+      : (available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE)));
 
   const build: Omit<IInvite, 'id'> = {
     // We suggest that it's a FabFile so that permissions is a valid/required field
@@ -357,7 +379,7 @@ export const createInvite = async (
     // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
     typedRecipients,
-    ...(isOrgLink && allowedDomains?.length ? { allowedDomains: Array.from(new Set(allowedDomains)) } : {}),
+    ...(isLinkInvite && allowedDomains?.length ? { allowedDomains: Array.from(new Set(allowedDomains)) } : {}),
   };
 
   const invite = await db.invites.create(build);
@@ -384,4 +406,12 @@ const inviteToOrg = async (
   const pendingRecipients = pendingOrgInviteRecipients(await db.invites.findAllByDocumentId(organization.id));
 
   return { organization, pendingRecipients };
+};
+
+const inviteToSpace = async (user: IUserDocument, params: { id: string }, db: CreateInviteAdapters['db']) => {
+  const space = await db.spaces.findLiveById(params.id);
+  // Same answer for a missing and a forbidden Space, so the id cannot be probed.
+  if (!space || !isSpaceMember(user.id, space)) throw new NotFoundError('Document not found');
+  if (!isSpaceManager(user.id, space)) throw new ForbiddenError('Only a Space admin can invite');
+  return space;
 };

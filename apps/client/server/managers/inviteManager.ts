@@ -18,6 +18,7 @@ import {
   sessionRepository,
   projectRepository,
   organizationRepository,
+  spaceRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 
@@ -47,6 +48,11 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
     case InviteType.Group: {
       const group: IGroup | null = await Group.findById(docId);
       name = group?.name;
+      break;
+    }
+    case InviteType.Space: {
+      const space = await spaceRepository.findLiveById(docId);
+      name = space?.name;
       break;
     }
     default:
@@ -99,6 +105,7 @@ export async function canViewInvite(user: IUserDocument, invite: IInviteDocument
       projects: projectRepository,
       organizations: organizationRepository,
       groups: Group,
+      spaces: spaceRepository,
     });
     return 'allowed';
   } catch {
