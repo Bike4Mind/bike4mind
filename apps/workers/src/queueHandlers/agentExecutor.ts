@@ -227,6 +227,7 @@ import {
   shouldGateIteration,
   stopBlockedAccountIteration,
   createSubagentAccountCheck,
+  latchedAccountDenial,
   stopOutOfCredits,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
@@ -1646,11 +1647,17 @@ async function runExecution(
     );
     // In-process subagents run inside one delegating tool call, where the parent's per-iteration account gate
     // cannot run, so each child step re-checks the account and a refusal aborts the run's tools through
-    // getAbortSignal. The parent's own gate then fails the run with the reason on its next iteration.
+    // getAbortSignal. The refusal (or a failed read) is then final for the run: the parent's own gate fails it
+    // with this reason on its next iteration rather than re-reading, so the run never continues with its tools
+    // aborted.
     const accountAbortController = new AbortController();
+    let inProcessAccountDenial: string | null = null;
     const checkInProcessSubagentAccount = createSubagentAccountCheck({
       readAccessDenial: () => readUserAccessDenial(execution.userId),
-      onDenied: () => accountAbortController.abort(),
+      onDenied: reason => {
+        inProcessAccountDenial = reason;
+        accountAbortController.abort();
+      },
       logger,
     });
     const subagentTracker: ServerSubagentTracker = {
@@ -3123,7 +3130,10 @@ async function runExecution(
       const blocked = await stopBlockedAccountIteration(
         {
           executionId,
-          readAccessDenial: () => readUserAccessDenial((user as IUserDocument).id),
+          readAccessDenial: latchedAccountDenial(
+            () => inProcessAccountDenial,
+            () => readUserAccessDenial((user as IUserDocument).id)
+          ),
           snapshot: () => {
             const checkpoint = agent.toCheckpoint();
             return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -5024,7 +5034,7 @@ async function processSubagentDispatch(
             executionId: parentId,
             childExecutionId,
             agentName,
-            error: accountDenial,
+            error: 'account_blocked',
             isTimeout: false,
             partialAnswer: result.finalAnswer,
           });
@@ -5138,7 +5148,7 @@ async function processSubagentDispatch(
           executionId: parentId,
           childExecutionId,
           agentName,
-          error: accountDenial,
+          error: 'account_blocked',
           isTimeout: false,
         });
       } else if (wasAborted) {

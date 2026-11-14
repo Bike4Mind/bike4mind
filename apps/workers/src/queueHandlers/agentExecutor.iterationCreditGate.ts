@@ -192,3 +192,15 @@ export function createSubagentAccountCheck(deps: {
     deps.onDenied(reason);
   };
 }
+
+/**
+ * The parent loop's account read once an in-process subagent check may have refused the run: a latched refusal
+ * (including a failed read) is final and skips the read, so the run stops instead of continuing with its tools
+ * aborted.
+ */
+export function latchedAccountDenial(
+  latched: () => string | null,
+  read: () => Promise<string | null>
+): () => Promise<string | null> {
+  return async () => latched() ?? (await read());
+}
