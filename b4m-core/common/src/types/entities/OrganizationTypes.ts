@@ -2,6 +2,7 @@ import { IAppFileDocument, IShareableDocument, IShareableStaticMethods } from '.
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
+import type { OrganizationRetentionPolicy } from './OrganizationRetention';
 import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
 
 export interface IUserDetails {
@@ -95,6 +96,8 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
     required: boolean;
     graceEndsAt: Date | null;
   };
+  retentionPolicy?: OrganizationRetentionPolicy;
+  retentionVersion?: number;
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 

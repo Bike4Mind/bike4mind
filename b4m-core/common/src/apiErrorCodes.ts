@@ -15,6 +15,9 @@ export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
 export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
+export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
+export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
+export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -75,6 +78,12 @@ export const API_ERROR_CODES = [
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   /** A 403: the request names a built-in tool the caller's organization policy does not allow. */
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
+  MCP_ACTION_REPLACED_ERROR_CODE,
+  /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */
+  PENDING_ACTION_EXPIRED_ERROR_CODE,
+  /** A 409: the pending action was already approved, denied or cleared (including by a replayed request). */
+  PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

@@ -188,6 +188,18 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       ),
       default: undefined,
     },
+    retentionPolicy: {
+      type: new Schema(
+        {
+          chats: { type: Number, min: 1, max: 36500, default: null },
+          files: { type: Number, min: 1, max: 36500, default: null },
+          media: { type: Number, min: 1, max: 36500, default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    retentionVersion: { type: Number, default: 0 },
   },
   {
     virtuals: true,
@@ -211,6 +223,8 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
 OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
 // Same, for organization invite bonuses: bounded by seats in apps/client/server/credits/orgInviteBonus.ts.
 OrganizationSchema.path('signupInviteBonusCount', { type: Number, min: 0, select: false });
+OrganizationSchema.path('retentionSweepRevision', { type: Number, select: false });
+OrganizationSchema.path('retentionLastSweptAt', { type: Date, select: false });
 
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
@@ -237,6 +251,10 @@ OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCu
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
+OrganizationSchema.index(
+  { personal: 1, retentionLastSweptAt: 1, _id: 1 },
+  { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
+);
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??

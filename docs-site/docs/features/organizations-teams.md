@@ -87,6 +87,18 @@ If **Models and tools** is missing, ask the owner to check your Team management 
 
 Unrecognized saved provider or tool entries are shown so an administrator can remove them before saving. They do not authorize a different provider or tool. If the stored policy is malformed, requests fail closed until an administrator saves a valid replacement or resets it. If no model satisfies the policy and the usual platform and plan checks, widen the policy or choose another permitted model; the system does not bypass the restriction to find a fallback.
 
+## Data retention
+
+Open **Teams > View Details > Overview > Data retention** to see the active periods for **Chat history**, **Uploaded files** and **Generated media**. Each starts at **Keep forever**.
+
+If you own or manage the Team, enter a whole number of days for each category you want cleaned up. Leave a field empty to keep that category forever. Shortening a period first shows **Estimate deletions**. Read the estimated message, uploaded-file and generated-file/object counts, then choose **Confirm shorter retention** to enable automatic cleanup. An estimate expires after ten minutes; changing a field requires a new estimate. Large estimates either finish counting all eligible records or ask you to retry; an unfinished estimate cannot confirm a shorter period.
+
+Cleanup runs hourly in bounded batches, so a backlog can take multiple runs. Chat age is measured per message, independently of the file and generated-media periods. File age starts at creation, not when it joins a Team lake. Only explicitly Team-owned data qualifies. Personal files, older unbound chats and imported notebooks are excluded; membership alone never makes personal content eligible. Notebook creation paths that validate and record Team retention ownership qualify; other creation paths, including legacy chat and voice paths, remain unbound. Shared generated media stays while another live notebook or library file references it. Retention ownership does not change storage billing. Generated media follows a validated notebook retention binding; billing a file to a Team lake alone does not bind its inline object. A legal hold on a copied notebook also protects its generated media.
+
+Deleting a member's personal account removes their personal notebooks and confirmation estimates, while Team-owned files and generated media remain subject to the Team's own policy. Cleanup can still process those Team assets after the original uploader or notebook is gone.
+
+Estimates are counts of eligible records, not guaranteed storage savings. The counts can change before cleanup. Deletion follows the existing soft-delete and storage-version behavior; it does not immediately erase backups. Deletions appear in the Team audit log, and held data is preserved.
+
 ## Roles
 
 Each member shows a role label on the Members tab.

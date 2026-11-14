@@ -202,6 +202,7 @@ export const apiKeyAuth = (
             billingOwnerType: validation.billingOwnerType,
             organizationId: validation.organizationId,
             createdByUserId: validation.createdByUserId,
+            oauthExchangeClientId: validation.oauthExchangeClientId,
           },
           req
         ))

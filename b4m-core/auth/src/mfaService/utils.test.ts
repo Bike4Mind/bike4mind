@@ -4,9 +4,11 @@ import QRCode from 'qrcode';
 import {
   clearFailedAttempts,
   generateTOTPSetup,
+  isMfaEnforcementExempt,
   matchTOTPStep,
   userHasMFAConfigured,
   userHasTotpConfigured,
+  userRequiresMFA,
 } from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
@@ -125,5 +127,28 @@ describe('generateTOTPSetup', () => {
     expect(setup.manualEntryKey).toBe(fresh.base32);
     expect(toDataURL).toHaveBeenCalledWith(fresh.otpauth_url);
     toDataURL.mockRestore();
+  });
+});
+
+describe('userRequiresMFA', () => {
+  const ordinary = { mfa: {} } as unknown as IUserDocument;
+  const persona = { mfa: {}, isPersona: true } as unknown as IUserDocument;
+
+  it('requires every ordinary user while enforcement is on, and nobody while it is off', () => {
+    expect(userRequiresMFA(ordinary, true)).toBe(true);
+    expect(userRequiresMFA({ ...ordinary, isPersona: false } as IUserDocument, true)).toBe(true);
+    expect(userRequiresMFA(ordinary, false)).toBe(false);
+  });
+
+  it('never requires a test persona', () => {
+    expect(isMfaEnforcementExempt(persona)).toBe(true);
+    expect(userRequiresMFA(persona, true)).toBe(false);
+  });
+
+  it('requires a persona that holds any admin access', () => {
+    const fullAdmin = { ...persona, isAdmin: true } as IUserDocument;
+    const delegate = { ...persona, adminPermissions: ['settings:manage'] } as unknown as IUserDocument;
+    expect(userRequiresMFA(fullAdmin, true)).toBe(true);
+    expect(userRequiresMFA(delegate, true)).toBe(true);
   });
 });

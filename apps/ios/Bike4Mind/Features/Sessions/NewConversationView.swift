@@ -41,7 +41,8 @@ struct NewConversationView: View {
       // Must stay in sync with the session chat composer: both render ChatComposer.
       ChatComposer(
         draft: $model.draft, isFocused: $focused, canSend: model.canSend, agentRun: nil,
-        onDictate: { isRecordingVoice = true }, onSend: send)
+        onDictate: { isRecordingVoice = true },
+        onVoiceConversation: { services.navigator.startVoiceConversation(.newConversation) }, onSend: send)
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {

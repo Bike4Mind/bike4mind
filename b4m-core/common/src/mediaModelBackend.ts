@@ -1,6 +1,6 @@
 import { ModelBackend } from './models';
-import { IMAGE_MODEL_CATALOG } from './image/catalog';
-import type { ImageProviderId } from './image/types';
+import { getImageModelCatalogEntry, IMAGE_MODEL_CATALOG } from './image/catalog';
+import { isLocalImageModelId, TEST_IMAGE_MODEL, type ImageProviderId } from './image/types';
 import { VIDEO_MODEL_CATALOG } from './video/catalog';
 import type { VideoProviderId } from './video/types';
 import { MUSIC_MODEL_CATALOG } from './music/catalog';
@@ -8,11 +8,13 @@ import type { MusicProviderId } from './music/types';
 import { ttsVendorOfModel } from './voicePricing';
 import type { VoiceGenerationVendor } from './voiceGeneration';
 
-const IMAGE_PROVIDER_BACKEND: Record<ImageProviderId, ModelBackend> = {
+const IMAGE_PROVIDER_BACKEND: Record<ImageProviderId, ModelBackend | null> = {
   openai: ModelBackend.OpenAI,
   bfl: ModelBackend.BFL,
   xai: ModelBackend.XAI,
   gemini: ModelBackend.Gemini,
+  local: ModelBackend.LocalImage,
+  test: null,
 };
 
 // null marks a vendor with no ModelBackend member (as are ElevenLabs music and sound), so an org
@@ -46,6 +48,9 @@ export function resolveAudioVendorBackend(vendor: VoiceGenerationVendor): ModelB
  * entry for it. Undefined means unknown; null means a known provider outside ModelBackend.
  */
 export function resolveMediaModelBackend(modelId: string): ModelBackend | null | undefined {
+  if (modelId === TEST_IMAGE_MODEL || isLocalImageModelId(modelId)) {
+    return IMAGE_PROVIDER_BACKEND[getImageModelCatalogEntry(modelId).provider];
+  }
   if (Object.hasOwn(IMAGE_MODEL_CATALOG, modelId)) {
     return IMAGE_PROVIDER_BACKEND[IMAGE_MODEL_CATALOG[modelId as keyof typeof IMAGE_MODEL_CATALOG].provider];
   }

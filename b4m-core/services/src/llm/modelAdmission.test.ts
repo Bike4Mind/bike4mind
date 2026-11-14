@@ -547,6 +547,26 @@ describe('organization model policy', () => {
     await expect(open.assert('gpt')).resolves.toBeUndefined();
   });
 
+  it('applies provider restrictions to runtime local image checkpoints and refuses the image test provider', async () => {
+    const localImages = createModelAdmission({
+      user: {},
+      configs: [],
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.LocalImage] }),
+    });
+    await expect(localImages.assert('local-image/sd-xl')).resolves.toBeUndefined();
+    await expect(localImages.assert('test-image')).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    const openaiOnly = createModelAdmission({
+      user: {},
+      configs: [],
+      orgModelPolicy: policy({ allowedProviders: [ModelBackend.OpenAI] }),
+    });
+    await expect(openaiOnly.assert('local-image/sd-xl')).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+  });
+
   it('resolves a media model backend without a catalog entry, so an allowed provider admits it', async () => {
     const admission = createModelAdmission({
       user: {},

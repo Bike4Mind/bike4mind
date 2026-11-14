@@ -60,6 +60,18 @@ export const Group: mongoose.Model<IGroupDocument> =
   mongoose.models.Group ?? mongoose.model<IGroupDocument>('Group', GroupSchema);
 
 export class GroupRepository extends BaseRepository<IGroupDocument> implements IGroupRepository {
+  async renameIfNameMatches({
+    groupId,
+    organizationId,
+    expectedName,
+    name,
+  }: Parameters<IGroupRepository['renameIfNameMatches']>[0]): Promise<IGroupDocument | null> {
+    return this._plainUpdate<IGroupDocument>(
+      { _id: groupId, organizationId, deletedAt: null, name: expectedName },
+      { name }
+    );
+  }
+
   /** Live instances (the soft-delete plugin's find hook excludes `deletedAt` rows). */
   async findByOrganization(organizationId: string, options?: { includeDeleted?: boolean }): Promise<IGroupDocument[]> {
     const query = this.model.find({ organizationId });

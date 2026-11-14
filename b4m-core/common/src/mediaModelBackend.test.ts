@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_MODELS } from './models';
+import { IMAGE_MODELS, ModelBackend } from './models';
 import { VIDEO_MODEL_IDS } from './video/catalog';
 import { MUSIC_MODEL_IDS } from './music/catalog';
 import { TTS_DEFAULT_MODEL } from './voicePricing';
@@ -9,6 +9,12 @@ describe('resolveMediaModelBackend', () => {
   it('resolves every image model, so a provider allowlist can admit it', () => {
     const unresolved = IMAGE_MODELS.filter(id => resolveMediaModelBackend(id) === undefined);
     expect(unresolved).toEqual([]);
+  });
+
+  it('resolves runtime local image checkpoints and marks the unrepresentable image test provider', () => {
+    expect(resolveMediaModelBackend('local-image/sd-xl')).toBe(ModelBackend.LocalImage);
+    expect(resolveMediaModelBackend('test-image')).toBeNull();
+    expect(resolveMediaModelBackend('local-image-lookalike')).toBeUndefined();
   });
 
   it('recognizes every video model and explicitly marks the unrepresentable test provider', () => {

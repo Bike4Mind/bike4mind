@@ -192,12 +192,12 @@ describe('ChatService approvals decided per part', () => {
     events.length = 0;
   }
 
-  it('names only the unreadable part of a chain in auto mode, and scopes "always" to it', async () => {
+  it('names only the part that stops auto mode in a chain, and scopes "always" to it', async () => {
     const id = await session('auto');
-    await runCommand(id, 'git status && node -e 1');
+    await runCommand(id, 'git status && cat .env');
 
     const card = await awaitCall('bash_execute', 'awaiting-approval');
-    expect(card.approvalParts).toEqual([{ text: 'node -e 1', reason: 'Can send data off this computer (node -e).' }]);
+    expect(card.approvalParts).toEqual([{ text: 'cat .env', reason: 'Reads .env, which usually holds secrets.' }]);
     expect(card.approvalAlways ?? '').not.toContain('git status');
   });
 
@@ -251,10 +251,10 @@ describe('ChatService approvals decided per part', () => {
 
   it('remembers only the listed parts when "Allow in this chat" answers a narrowed card', async () => {
     const id = await session('auto');
-    const command = 'git status && printf ok && node -e 1';
+    const command = 'git status && printf ok && cat .env';
     const first = await runCommand(id, command);
     const card = await awaitCall('bash_execute', 'awaiting-approval');
-    expect(card.approvalParts?.map(part => part.text)).toEqual(['node -e 1']);
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['cat .env']);
     approvals.resolve(card.approvalId!, { decision: 'always' });
     await finishReply(first);
 
@@ -319,11 +319,11 @@ describe('ChatService approvals decided per part', () => {
 
   it('closes a narrowed card when a rule saved meanwhile covers its remaining parts', async () => {
     const id = await session('auto');
-    const first = await runCommand(id, 'git status && node -e 1');
+    const first = await runCommand(id, 'git status && cat .env');
     const card = await awaitCall('bash_execute', 'awaiting-approval');
-    expect(card.approvalParts?.map(part => part.text)).toEqual(['node -e 1']);
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['cat .env']);
 
-    await permissions.setRules({ kind: 'user' }, { allow: ['Bash(node -e 1)'], ask: [], deny: [] });
+    await permissions.setRules({ kind: 'user' }, { allow: ['Bash(cat .env)'], ask: [], deny: [] });
     await approvals.settleCovered();
     expect((await settled()).approval?.decidedBy).toMatchObject({ kind: 'rule' });
     await finishReply(first);
