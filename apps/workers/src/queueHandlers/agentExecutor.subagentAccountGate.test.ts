@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { ACCOUNT_CHECK_FAILED_MESSAGE } from './agentExecutor.iterationCreditGate';
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
@@ -69,9 +70,9 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
-// Each iteration emits a step through the handler's tracker, then "calls the provider". The handler's
-// per-iteration account check runs inside onStep, so a block that lands mid-run must stop the loop
-// before the next provider call.
+// Each iteration "calls the provider", then emits a step through the handler's tracker. The handler's
+// per-iteration account check runs inside onStep. This mock awaits onStep; the real orchestrator does not,
+// so in production the abort lands on the next call already in flight.
 const ITERATIONS = 3;
 const providerCalls = { count: 0 };
 const runResult = {
@@ -208,6 +209,34 @@ describe('processSubagentDispatch per-iteration account check', () => {
     expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
       expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', status: 'failed' }) })
     );
+  });
+
+  it('refuses a subagent whose account was blocked before it was dispatched, with no provider call', async () => {
+    const { User } = await import('@bike4mind/database');
+    const suspended = { id: 'user-1', isBanned: true };
+    vi.mocked(User.findById).mockResolvedValueOnce(suspended as never);
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(providerCalls.count).toBe(0);
+    expect(mockFreshUserRead).not.toHaveBeenCalled();
+    expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: aiAccessDeniedMessage(suspended) });
+    expect(mockMarkComplete).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', status: 'failed' }) })
+    );
+  });
+
+  it('fails the subagent closed with a stated reason when the mid-run account read errors', async () => {
+    mockFreshUserRead.mockRejectedValue(new Error('connection reset'));
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), ctx);
+
+    expect(providerCalls.count).toBe(1);
+    expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: ACCOUNT_CHECK_FAILED_MESSAGE });
+    expect(mockMarkComplete).not.toHaveBeenCalled();
   });
 
   it('runs every iteration to completion for an active account, checking once per iteration', async () => {

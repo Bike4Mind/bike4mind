@@ -5,6 +5,8 @@ import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import { nextIterationCredits } from './agentExecutor.billing';
 import {
+  ACCOUNT_CHECK_FAILED_MESSAGE,
+  createSubagentAccountCheck,
   aggregationWakeStartIteration,
   aggregationGraceReasonOf,
   refusesUnrunnableModel,
@@ -344,5 +346,45 @@ describe('aggregation model configuration failures', () => {
         modelAccessOk: false,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('createSubagentAccountCheck', () => {
+  const makeCheck = (readAccessDenial: () => Promise<string | null>) => {
+    const onDenied = vi.fn();
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const read = vi.fn(readAccessDenial);
+    return { check: createSubagentAccountCheck({ readAccessDenial: read, onDenied, logger }), read, onDenied, logger };
+  };
+
+  it('reads once per child and iteration and never denies an active account', async () => {
+    const { check, read, onDenied } = makeCheck(async () => null);
+    await check('child-a', 0);
+    await check('child-a', 0);
+    await check('child-b', 0);
+    await check('child-a', 1);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(onDenied).not.toHaveBeenCalled();
+  });
+
+  it('reports the refusal once, then stops reading', async () => {
+    const { check, read, onDenied } = makeCheck(async () => 'Your account is suspended.');
+    await check('child-a', 0);
+    await check('child-a', 1);
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith('Your account is suspended.');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed with a stated reason when the account read throws', async () => {
+    const { check, onDenied, logger } = makeCheck(async () => {
+      throw new Error('connection reset');
+    });
+    await check('child-a', 0);
+    expect(onDenied).toHaveBeenCalledWith(ACCOUNT_CHECK_FAILED_MESSAGE);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('account check failed'),
+      expect.objectContaining({ error: 'connection reset' })
+    );
   });
 });

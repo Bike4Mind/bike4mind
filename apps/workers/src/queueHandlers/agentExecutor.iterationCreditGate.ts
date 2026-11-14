@@ -156,3 +156,39 @@ export async function stopBlockedAccountIteration(
   await deps.persistRunAsQuest(args.executionId, `Stopped: ${denial}`);
   return true;
 }
+
+export const ACCOUNT_CHECK_FAILED_MESSAGE = 'Stopped: the account status could not be verified. Please retry.';
+
+/**
+ * Per-iteration account re-check for subagent runs, which the parent's own gate cannot reach while the
+ * delegating tool call is in progress. Reads at most once per (child, iteration); calls `onDenied` once with
+ * the refusal, or with ACCOUNT_CHECK_FAILED_MESSAGE when the read fails (fail-closed), and stops checking.
+ * Tracker `onStep` callbacks are not awaited by the orchestrator, so the abort lands on the next provider
+ * call already in flight rather than strictly before it.
+ */
+export function createSubagentAccountCheck(deps: {
+  readAccessDenial: () => Promise<string | null>;
+  onDenied: (reason: string) => void;
+  logger: Pick<Logger, 'warn' | 'error'>;
+}): (childExecutionId: string, iteration: number) => Promise<void> {
+  const lastCheckedIteration = new Map<string, number>();
+  let denied = false;
+  return async (childExecutionId, iteration) => {
+    if (denied || lastCheckedIteration.get(childExecutionId) === iteration) return;
+    lastCheckedIteration.set(childExecutionId, iteration);
+    let reason: string | null;
+    try {
+      reason = await deps.readAccessDenial();
+    } catch (err) {
+      deps.logger.error('[Account] Subagent account check failed; stopping fail-closed', {
+        childExecutionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      reason = ACCOUNT_CHECK_FAILED_MESSAGE;
+    }
+    if (!reason || denied) return;
+    denied = true;
+    deps.logger.warn('[Account] Account can no longer use AI; stopping subagent', { childExecutionId });
+    deps.onDenied(reason);
+  };
+}

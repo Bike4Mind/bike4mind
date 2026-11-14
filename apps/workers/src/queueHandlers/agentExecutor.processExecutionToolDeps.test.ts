@@ -1037,6 +1037,56 @@ describe('processExecution tool deps', () => {
     expect(deps.sessionIncludeLibraryFiles).toBe(true);
   });
 
+  describe('in-process subagent account check', () => {
+    type StepTracker = {
+      onStep: (info: {
+        childExecutionId: string;
+        agentName: string;
+        step: unknown;
+        iteration: number;
+      }) => Promise<void>;
+    };
+    async function runToolWiring() {
+      await runWithSession(baseSession);
+      const [, callbacks, options] = buildSharedToolsMock.mock.calls[0] as [
+        unknown,
+        { subagentTracker: StepTracker },
+        { getAbortSignal: () => AbortSignal },
+      ];
+      return { tracker: callbacks.subagentTracker, signal: options.getAbortSignal() };
+    }
+    const step = (iteration: number) => ({
+      childExecutionId: 'child-1',
+      agentName: 'researcher',
+      step: { type: 'thought', content: 'x' },
+      iteration,
+    });
+
+    it("aborts the run's tool signal when a child step finds the account blocked", async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ id: 'user-1', isBanned: true } as never);
+
+      await tracker.onStep(step(0));
+
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('reads the account once per child iteration and leaves an active run alone', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { tracker, signal } = await runToolWiring();
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'user-1' } as never);
+
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(0));
+      await tracker.onStep(step(1));
+
+      expect(findUser).toHaveBeenCalledTimes(2);
+      expect(findUser).toHaveBeenCalledWith('user-1');
+      expect(signal.aborted).toBe(false);
+    });
+  });
+
   describe('contributed workspace session settings', () => {
     it('withholds delegation when the workspace resolves integrations off', async () => {
       resolveWorkspaceSettings.mockResolvedValue({ disableUserIntegrations: true });

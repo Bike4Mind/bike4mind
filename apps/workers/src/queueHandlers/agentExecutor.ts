@@ -226,6 +226,7 @@ import {
   refusesUnrunnableModel,
   shouldGateIteration,
   stopBlockedAccountIteration,
+  createSubagentAccountCheck,
   stopOutOfCredits,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
@@ -1643,6 +1644,15 @@ async function runExecution(
       payload => sendWs('subagent_text_delta', { executionId, ...payload }),
       MAX_STEP_CONTENT
     );
+    // In-process subagents run inside one delegating tool call, where the parent's per-iteration account gate
+    // cannot run, so each child step re-checks the account and a refusal aborts the run's tools through
+    // getAbortSignal. The parent's own gate then fails the run with the reason on its next iteration.
+    const accountAbortController = new AbortController();
+    const checkInProcessSubagentAccount = createSubagentAccountCheck({
+      readAccessDenial: () => readUserAccessDenial(execution.userId),
+      onDenied: () => accountAbortController.abort(),
+      logger,
+    });
     const subagentTracker: ServerSubagentTracker = {
       onStart: async info => {
         // Background children are treated as TOP-LEVEL for cap/billing purposes:
@@ -1773,6 +1783,7 @@ async function runExecution(
           iteration,
           step: truncatedStep,
         });
+        await checkInProcessSubagentAccount(childExecutionId, iteration);
       },
       // Ordered, chunked forwarding lives in agentExecutor.subagentTextDelta.ts.
       onTextDelta: subagentTextDeltas.send,
@@ -2403,6 +2414,7 @@ async function runExecution(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
+      getAbortSignal: () => accountAbortController.signal,
       // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
       // merged inside buildSharedTools after that filter, so the denylist has to travel with them
       // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
@@ -4191,6 +4203,28 @@ async function processSubagentDispatch(
     // Auth + ownership checks (mirror processExecution).
     const storedUser = await User.findById(child.userId);
     if (!storedUser) throw new Error(`User ${child.userId} not found`);
+    // A child queued before its account was blocked must not start: refuse before any setup or provider call.
+    const entryAccountDenial = aiAccessDeniedMessage(storedUser as IUserDocument);
+    if (entryAccountDenial) {
+      logger.warn('[SubagentDispatch] Account can no longer use AI; refusing to start subagent');
+      await agentExecutionRepository.markFailed(childExecutionId, { message: entryAccountDenial });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'account_blocked',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
     const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
     const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
@@ -4703,16 +4737,14 @@ async function processSubagentDispatch(
     // Set when the per-iteration account check stops the run, so the terminal write reports the refusal
     // rather than a user abort. Mirrors stopBlockedAccountIteration on the parent loop.
     let accountDenial: string | null = null;
-    let lastAccountCheckIteration: number | null = null;
-    const stopIfAccountBlocked = async (iteration: number): Promise<void> => {
-      if (iteration === lastAccountCheckIteration || abortController.signal.aborted) return;
-      lastAccountCheckIteration = iteration;
-      const denial = await readUserAccessDenial(child.userId);
-      if (!denial) return;
-      logger.warn('[SubagentDispatch] Account can no longer use AI; stopping subagent', { childExecutionId });
-      accountDenial = denial;
-      abortController.abort();
-    };
+    const checkAccount = createSubagentAccountCheck({
+      readAccessDenial: () => readUserAccessDenial(child.userId),
+      onDenied: reason => {
+        accountDenial = reason;
+        abortController.abort();
+      },
+      logger,
+    });
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
@@ -4763,7 +4795,7 @@ async function processSubagentDispatch(
           iteration,
           step: truncatedStep,
         });
-        await stopIfAccountBlocked(iteration);
+        await checkAccount(childExecutionId, iteration);
       },
       onChildProgress: async ({ status }) => {
         await sendWs('subagent_progress', {
