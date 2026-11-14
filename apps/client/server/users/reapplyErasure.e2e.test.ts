@@ -14,10 +14,12 @@ import {
   FeedbackNoteModel,
   OrganizationGeneratedObject,
   OrganizationRetentionEstimate,
+  OrganizationAuditEventModel,
   erasureRecordRepository,
   realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
+import { legacyOrganizationExportKey } from '@bike4mind/server-utils/utils/organizationDataExport';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -186,6 +188,40 @@ const rowCounts = async () => ({
 });
 
 describe('reapplyErasure after a simulated restore', () => {
+  it('resumes a restored self erasure after strict legacy export deletion fails', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'self', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    const request = await OrganizationAuditEventModel.create({
+      organizationId: 'A'.repeat(24),
+      actorUserId: id,
+      action: 'export.requested',
+      targetId: randomUUID(),
+    });
+    const key = legacyOrganizationExportKey(request.organizationId, id, request.targetId!);
+    let fail = true;
+    effects.storage.mockImplementation(async (path: string) => {
+      if (path === key && fail) {
+        fail = false;
+        throw new Error('legacy archive unavailable');
+      }
+    });
+    try {
+      await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('legacy archive unavailable');
+      const user = await User.findById(id).select('+accountFilePurge').lean();
+      expect(user?.deletion).toBeUndefined();
+      expect(user?.accountFilePurge?.startedAt).toBeInstanceOf(Date);
+      expect(user?.accountFilePurge?.afterAuditId).toBeUndefined();
+      await reapplyErasure(id, { record, logger });
+      expect(await User.exists({ _id: id })).toBeNull();
+      expect(effects.storage.mock.calls.filter(([path]) => path === key)).toHaveLength(2);
+      expect(await OrganizationAuditEventModel.findById(request._id).lean()).not.toBeNull();
+    } finally {
+      effects.storage.mockReset();
+    }
+  });
+
   it.each(['self', 'admin'] as const)('re-erases a %s-erased account and sends nothing', async initiatedBy => {
     const { id, insertRows, mediaKey } = await seedAccount();
     const bystander = await seedAccount();

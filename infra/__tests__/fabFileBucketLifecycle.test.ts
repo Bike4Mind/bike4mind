@@ -75,6 +75,18 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(rulePrefix).toBe(reserved);
   });
 
+  it('keeps organization metadata exports under the expiring prefix', () => {
+    const source = read('packages/server-utils/src/utils/organizationDataExport.ts');
+    const prefixTemplate = source.match(/export const organizationExportPrefix = [^`]*`([^`]+)`/)?.[1];
+    const keyTemplate = source.match(/export const organizationExportKey = [^`]*`([^`]+)`/)?.[1];
+    const legacyTemplate = source.match(/export const legacyOrganizationExportKey = [^`]*`([^`]+)`/)?.[1];
+    expect(rulePrefix).toBeDefined();
+    expect(prefixTemplate?.startsWith(rulePrefix!)).toBe(true);
+    expect(keyTemplate?.startsWith('${organizationExportPrefix(userId)}')).toBe(true);
+    expect(legacyTemplate?.startsWith(rulePrefix!)).toBe(true);
+    expect(source).toContain('ORGANIZATION_EXPORT_TTL_MS = 24 * 60 * 60 * 1000');
+  });
+
   it('keeps the generated-audio offload rule on the shared prefix, reserved and present in compose', () => {
     const offloadRule =
       LIFECYCLE_BLOCK.split(/(?=\bid:\s*')/).find(r => r.startsWith("id: 'expire-generated-audio-offload'")) ?? '';

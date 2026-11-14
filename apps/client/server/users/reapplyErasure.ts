@@ -45,7 +45,9 @@ export async function reapplyErasure(
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
   if (record.initiatedBy !== 'admin') {
-    const assertLease = async () => {}; // no purge lease: the account is already past its grace period
+    // File erasure acquires its own User lease and permanent export fence, including restored
+    // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
+    const assertLease = async () => {};
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
     await withTransaction(async session => {

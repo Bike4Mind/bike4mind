@@ -840,10 +840,9 @@ const accountErasureQueueSubscription = accountErasureQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Account Data Export Queue
-// "Download all my data": builds a zip of the user's data under the fabFileBucket exports/ prefix
-// (expired by its lifecycle rule). Self-serve exports email a link to the app download page; admin
-// data subject exports (with the registry records) are fetched from the admin user profile instead.
+// Account and organization exports share a consumer and retry policy, with a payload discriminator.
+// All write under the expiring exports/ prefix. Self-serve and organization exports email an
+// authenticated app link; admin data subject exports are fetched from the admin user profile.
 const accountDataExportQueueDLQ = new sst.aws.Queue('accountDataExportQueueDLQ', {});
 const accountDataExportQueue = new sst.aws.Queue('accountDataExportQueue', {
   visibilityTimeout: '16 minutes',

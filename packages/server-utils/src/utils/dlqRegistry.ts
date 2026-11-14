@@ -294,7 +294,7 @@ const DLQ_REGISTRY = [
     displayName: 'Account Data Export',
     application: 'AccountDataExport',
     sourceQueue: 'accountDataExportQueue',
-    description: "Builds a user's account data export and emails them the download link.",
+    description: 'Builds account data or organization metadata exports and emails an authenticated download link.',
     replay: 'unsafe',
     replayNote: 'An export that was already built is not rebuilt, but the ready email is sent again.',
     owner: 'Accounts',

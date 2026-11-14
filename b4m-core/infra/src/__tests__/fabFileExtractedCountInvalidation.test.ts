@@ -47,6 +47,10 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/adminAuditExportStorage.ts',
   // Uploads the account data export zip under exports/ (no FabFile row); nothing to invalidate.
   'apps/workers/src/queueHandlers/accountDataExport.ts',
+  // Shared ZIP upload fence for account and metadata-only organization exports; no FabFile rewrite.
+  'apps/workers/src/queueHandlers/accountExportLease.ts',
+  // Creates an organization metadata ZIP under exports/ without a FabFile row or content rewrite.
+  'apps/workers/src/queueHandlers/organizationDataExport.ts',
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.

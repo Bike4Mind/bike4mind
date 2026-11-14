@@ -41,6 +41,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('./OrganizationExportSection', () => ({ default: () => <div data-testid="organization-export-section" /> }));
 
 const OWNER_ID = 'owner1';
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -65,6 +66,16 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
  * a member who can reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
+  it('shows exports only to the owner, never to a platform admin or member', () => {
+    const owner = renderAs({ id: OWNER_ID });
+    expect(screen.getByTestId('organization-export-section')).toBeTruthy();
+    owner.unmount();
+    const admin = renderAs({ id: 'platform1', isAdmin: true });
+    expect(screen.queryByTestId('organization-export-section')).toBeNull();
+    admin.unmount();
+    renderAs({ id: 'member1' });
+    expect(screen.queryByTestId('organization-export-section')).toBeNull();
+  });
   it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
     updateProfile.mockClear();
     renderAs({ id: 'manager', isAdmin: false }, {
