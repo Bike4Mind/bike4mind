@@ -26,6 +26,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (name: string) => h.settings[name],
 }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
+  isFeatureEnabled: vi.fn(async (name: string) => h.settings[name] === true),
+}));
 vi.mock('@bike4mind/database', () => ({
   inviteRepository: {
     findByToken: vi.fn(async () => h.state.invite),

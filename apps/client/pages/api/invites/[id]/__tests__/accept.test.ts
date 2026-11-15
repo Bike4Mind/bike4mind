@@ -42,6 +42,7 @@ const tagMocks = vi.hoisted(() => ({
 const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite } }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   getSettingsMap: vi.fn(async () => ({})),

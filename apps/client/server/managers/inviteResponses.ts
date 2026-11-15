@@ -1,6 +1,6 @@
 import { sharingService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { reserveInviteAccept } from '@server/utils/inviteAcceptLimits';
 import {
   inviteRepository,
@@ -81,11 +81,11 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     {
-      names: ['SpaceMaxMembers', 'EnableSpaces'],
+      names: ['SpaceMaxMembers'],
     }
   );
   const spaceMaxMembers = getSettingsValue('SpaceMaxMembers', settings);
-  const spacesEnabled = isSettingEnabled(getSettingsValue('EnableSpaces', settings));
+  const spacesEnabled = await isFeatureEnabled('EnableSpaces');
   const { invite, outcome } = await withTransaction(() =>
     sharingService.acceptInvite(
       user.id,
