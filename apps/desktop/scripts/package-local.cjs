@@ -3,13 +3,8 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
-function resolveVersion(override, tags, revision) {
-  if (override !== undefined) {
-    if (!versionPattern.test(override) || override.split('-').slice(1).join('-').split('.').some(part => /^0\d+$/.test(part))) {
-      throw new Error('DESKTOP_VERSION must be a valid SemVer without build metadata');
-    }
-    return override;
-  }
+/** Highest stable desktop release in a whitespace-separated tag list, or undefined when there is none. */
+function latestStableVersion(tags) {
   const versions = tags.split(/\s+/).filter(tag => tag.startsWith('desktop-v'))
     .filter(tag => tag !== 'desktop-v1.0.0')
     .map(tag => tag.slice(9)).filter(version => stable.test(version));
@@ -24,9 +19,20 @@ function resolveVersion(override, tags, revision) {
     }
     return 0;
   });
-  if (!versions.length) throw new Error('No desktop tags. Run git fetch origin --tags or set DESKTOP_VERSION explicitly.');
+  return versions[0];
+}
+
+function resolveVersion(override, tags, revision) {
+  if (override !== undefined) {
+    if (!versionPattern.test(override) || override.split('-').slice(1).join('-').split('.').some(part => /^0\d+$/.test(part))) {
+      throw new Error('DESKTOP_VERSION must be a valid SemVer without build metadata');
+    }
+    return override;
+  }
+  const latest = latestStableVersion(tags);
+  if (latest === undefined) throw new Error('No desktop tags. Run git fetch origin --tags or set DESKTOP_VERSION explicitly.');
   if (!/^[a-f0-9]+$/.test(revision)) throw new Error('Invalid git revision');
-  return `${versions[0]}-local.${revision}`;
+  return `${latest}-local.${revision}`;
 }
 
 function builderArgs(args, version, platform, identity) {
@@ -54,4 +60,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { resolveVersion, builderArgs };
+module.exports = { resolveVersion, builderArgs, latestStableVersion };

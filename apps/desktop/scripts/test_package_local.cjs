@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveVersion, builderArgs } = require('./package-local.cjs');
+const { resolveVersion, builderArgs, latestStableVersion } = require('./package-local.cjs');
 
 test('uses highest numeric desktop tag, not package baseline or web tags', () => {
   assert.equal(resolveVersion(undefined, 'desktop-v0.5.0\ndesktop-v0.9.0\ndesktop-v0.10.0\ndesktop-v1.0.0\nv2026.10.15.4\ndesktop-v2.0.0-pr.1', 'abcdef'), '0.10.0-local.abcdef');
@@ -23,4 +23,10 @@ test('rejects alternate publish/version/signing flags', () => {
   for (const arg of ['--publish=always', '-c.extraMetadata.version=0.1.0', '-c.mac.identity=null', '-c.forceCodeSigning=false']) {
     assert.throws(() => builderArgs([arg], '1.0.0', 'darwin'));
   }
+});
+test('latestStableVersion picks the highest numeric stable tag and reports none as undefined', () => {
+  assert.equal(latestStableVersion('desktop-v0.5.0 desktop-v0.10.0 desktop-v0.9.0 desktop-v1.0.0 desktop-v0.11.0-pr.1 v0.99.0'), '0.10.0');
+  assert.equal(latestStableVersion(''), undefined);
+  assert.equal(latestStableVersion('desktop-v1.0.0 desktop-v0.2.0-rc.1'), undefined);
+  assert.throws(() => latestStableVersion('desktop-v2.0.0'), /beta policy/);
 });
