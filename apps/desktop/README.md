@@ -363,6 +363,17 @@ Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
 notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
 needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper acceptance.
 
+An unpackaged run (`pnpm dev`) reports a version derived the same way, not the `package.json`
+baseline: `<newest local desktop tag>-dev.g<commit>`, with `.dirty` appended when tracked files
+have uncommitted changes (for example `0.203.0-dev.g083d26f9ca44.dirty`). It is read from the local
+checkout when the build starts, with no network, and is shown in app information and update
+settings along with a "Version basis" line naming the tag it came from. It is the newest tag
+this checkout has, not necessarily the latest release: run `git fetch origin --tags` if it
+looks old. With no usable desktop tags it is `0.0.0-dev.untagged.g<commit>`, and where git or the
+commit is unavailable it is `0.0.0-dev.unknown`. Unreadable local tags or working-tree status also
+report `0.0.0-dev.unknown`, with a basis naming the unavailable metadata, rather than claiming an
+untagged or clean checkout. Packaged builds are unaffected.
+
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.
 - During beta, `type!: ...` or a `BREAKING CHANGE:` footer bumps minor, not major.
