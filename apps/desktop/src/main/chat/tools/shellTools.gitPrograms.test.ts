@@ -360,10 +360,10 @@ const ROWS: [string, string, string][] = [
   ['npm x git status', '', 'rrrr'],
   ['npm -w a exec -- git status', '', 'arrr'],
   ['npm --prefix . exec -- git status', '', 'aaaa'],
-  ['git branch --unset-upstream "$B"', '', 'rrrr'],
-  ['git log --grep=unset "$X"', '', 'rrrr'],
+  ['git branch --unset-upstream "$B"', '', 'aaaa'],
+  ['git log --grep=unset "$X"', '', 'aaaa'],
   ['export GIT_EXTERNAL_DIFF=./x.sh; git log -1 -p "$X"', '', 'aaaa'],
-  ['git log --format="%H unset $x"', '', 'rrrr'],
+  ['git log --format="%H unset $x"', '', 'aaaa'],
   ['unset -v GIT_CONFIG_COUNT; git log', '', 'aaaa'],
   ['unset GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git log', '', 'aaaa'],
   ['unset "$X"; git log', '', 'aaaa'],
@@ -1006,12 +1006,12 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       ["git for-each-ref --format='%(*signature:grade)'", ''],
       ['git log --pretty=SIG.foo', '[pretty "SIG"]\nfoo = format:%G?\n[pretty "sig"]\nfoo = format:%h\n'],
       ['git log --pretty=alias', '[pretty]\nalias = other\nother = format:%-GS\n'],
-    ])('asks once in approve for me, whole, and runs in full for %s', async (command, config) => {
+    ])('asks once in Auto and Full for the whole signing command %s', async (command, config) => {
       await withConfigs({ repo: config }, {}, async () => {
         const context = { roots: [proj], workingDirectory: proj, signal: new AbortController().signal };
         const prompt = await shellApproval('bash_execute', { command, cwd: proj }, context);
         expect(prompt.askInAuto).toBe(true);
-        expect(prompt.askInFull).toBeUndefined();
+        expect(prompt.askInFull).toBe(true);
         expect(prompt.byPart).not.toBe(true);
         expect(prompt.allowOnce).toBe(true);
         const subject = await resolveSubject(
@@ -1323,7 +1323,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
     /**
      * Whether the last command of `command` asks in auto mode as a form Desktop does not list (`asked`), and whether it
-     * is only named as one (`flagged`), which leaves it to the mode as a command the scan cannot follow.
+     * is only named as one without a whole-script mode flag (`flagged`). Opaque and signing risks must ask.
      */
     const lastAsked = async (command: string): Promise<{ asked: boolean; flagged: boolean; detail: string }> => {
       const prompt = await promptIn(command);
@@ -1365,8 +1365,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       'git config remove-section includeIf.onbranch:x',
       'git config rename-section format y',
     ];
-    // Writes the scan cannot follow, or whose effect hangs on an includeIf it does not evaluate: the signing form after
-    // one is named but left to the mode, as an unlisted git form is.
+    // Writes the scan cannot follow, or whose effect hangs on an unresolved includeIf, require signing consent.
     const AFTER_UNREAD_CONFIG = [
       'git config x y',
       'git config remote.origin.url x',
@@ -1465,14 +1464,13 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       }
     });
 
-    // Approve for me runs an unlisted git form the scan cannot follow (partAsk), so a signing form after a change it
-    // cannot read is named on the card and left to the mode.
+    // Unresolved signing changes are whole-script consent requirements in Auto and Full.
     it.each(pairs([...AFTER_UNREAD_CONFIG, ...AFTER_OTHER], LASTS))(
-      'names %s before %s and leaves it to the mode',
+      'asks for unresolved signing config after %s before %s',
       async (first, last) => {
         for (const joiner of [';', '&&']) {
           const found = await lastAsked(`${first} ${joiner} ${last}`);
-          expect(found, `${first} ${joiner} ${last}`).toMatchObject({ asked: false, flagged: true });
+          expect(found, `${first} ${joiner} ${last}`).toMatchObject({ asked: true, flagged: false });
         }
       }
     );
@@ -1534,9 +1532,15 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       const SIGN_ALL = `${SIGN}[log]\n\tshowSignature = true\n`;
 
       it.each(['git config core.fsmonitor x; git status', 'git -c core.fsmonitor=$X status'])(
-        'asks in auto mode and runs in full for the git program in %s',
+        'asks in Auto and Full for the opaque configured program in %s without classifying it as signing',
         async command => {
-          expect((await modes({}, command)).slice(0, 2)).toBe('ar');
+          await withConfigs({}, {}, async () => {
+            const prompt = await promptIn(command);
+            expect(prompt.askInAuto).toBe(true);
+            expect(prompt.askInFull).toBe(true);
+            expect(prompt.unchecked).toBe(true);
+            expect(prompt.allowOnce).not.toBe(true);
+          });
         }
       );
 
@@ -1560,14 +1564,11 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         ['git commit -m x | cat', { global: SIGN }],
         ['for i in 1 2; do git commit -m x; git config commit.gpgsign true; done', {}],
         ['git commit -m x & git config tag.gpgsign true; git tag v9', {}],
-      ] as [string, Partial<Record<Place, string>>][])(
-        'asks in auto mode and runs in full for %s',
-        async (command, configs) => {
-          expect((await modes(configs, command)).slice(0, 2)).toBe('ar');
-        }
-      );
+      ] as [string, Partial<Record<Place, string>>][])('asks in Auto and Full for %s', async (command, configs) => {
+        expect((await modes(configs, command)).slice(0, 2)).toBe('aa');
+      });
 
-      // A form the table does not list runs unchecked in both modes, as does a signing form with no config that signs.
+      // Unlisted forms remain opaque and require consent even when the current config does not sign.
       it.each([
         'git am x.patch',
         'git whatchanged -1',
@@ -1575,8 +1576,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         'git -C $D commit -m x',
         'git -c gpg.program=x commit -m x',
         'git stash list --frobnicate',
-      ])('runs %s unchecked in both modes with no signing config', async command => {
-        expect(await modes({}, command)).toBe('rru');
+      ])('asks about unchecked %s in both modes with no signing config', async command => {
+        expect(await modes({}, command)).toBe('aau');
       });
 
       it('names a racing signing change on the form it reaches', async () => {
@@ -1585,6 +1586,33 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       });
 
       describe('for signing or verifying the command asks for itself', () => {
+        it.each([
+          ['git commit -S -m x', true],
+          ['git commit --no-gpg-sign --gpg-sign -m x', true],
+          ['git commit -S --no-gpg-sign -m x', false],
+          ['git commit -m -S', false],
+          ['git log -S foo -1', false],
+          ['git log --format=$FMT -1', true],
+          ['git branch --unset-upstream "$B"', true],
+          ['git log --grep=unset "$X"', true],
+        ] as const)(
+          'classifies fresh signing consent independently of opaque mode flags: %s',
+          async (command, signs) => {
+            await withConfigs({}, {}, async () => {
+              expect(Boolean((await promptIn(command)).allowOnce)).toBe(signs);
+            });
+          }
+        );
+
+        it('honors a later --no-gpg-sign over configured signing without confusing opaque consent with signing', async () => {
+          await withConfigs({ global: SIGN }, {}, async () => {
+            const prompt = await promptIn('git commit -S --no-gpg-sign -m x');
+            expect(prompt.askInAuto).toBe(true);
+            expect(prompt.askInFull).toBe(true);
+            expect(prompt.allowOnce).not.toBe(true);
+          });
+        });
+
         const GPG_FORMS = [
           'commit -m x',
           'commit-tree -m x HEAD^{tree}',
@@ -1602,13 +1630,13 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
         };
 
         it.each(GPG_FORMS.flatMap(form => GPG_SPELLINGS.map(option => [form, option])))(
-          'asks in auto mode and runs in full for git %s with %s, unless a later --no-gpg-sign takes it back',
+          'asks in Auto and Full for git %s with %s, unless a later --no-gpg-sign takes it back',
           async (form, option) => {
-            expect(await modes({}, withOption(form, option))).toBe('aru');
-            expect(await modes({}, withOption(form, `--no-gpg-sign ${option}`))).toBe('aru');
-            expect(await modes({}, withOption(form, `${option} --no-gpg-sign`))).toBe('rru');
+            expect(await modes({}, withOption(form, option))).toBe('aau');
+            expect(await modes({}, withOption(form, `--no-gpg-sign ${option}`))).toBe('aau');
+            expect(await modes({}, withOption(form, `${option} --no-gpg-sign`))).toBe('aau');
             // The later --no-gpg-sign turns commit.gpgSign off too.
-            expect(await modes({ global: SIGN }, withOption(form, `${option} --no-gpg-sign`))).toBe('rru');
+            expect(await modes({ global: SIGN }, withOption(form, `${option} --no-gpg-sign`))).toBe('aau');
           }
         );
 
@@ -1617,25 +1645,25 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
             ['--verify-signatures', '--verify-sig'].map(option => [form, option])
           )
         )(
-          'asks in auto mode and runs in full for git %s with %s, unless a later --no-verify-signatures takes it back',
+          'asks in Auto and Full for git %s with %s, unless a later --no-verify-signatures takes it back',
           async (form, option) => {
-            expect(await modes({}, withOption(form, option))).toBe('aru');
-            expect(await modes({}, withOption(form, `--no-verify-signatures ${option}`))).toBe('aru');
-            expect(await modes({}, withOption(form, `${option} --no-verify-signatures`))).toBe('rru');
+            expect(await modes({}, withOption(form, option))).toBe('aau');
+            expect(await modes({}, withOption(form, `--no-verify-signatures ${option}`))).toBe('aau');
+            expect(await modes({}, withOption(form, `${option} --no-verify-signatures`))).toBe('aau');
           }
         );
 
         it.each(['--signed', '--signed=true', '--signed=yes', '--signed=if-asked', '--signed=$V'])(
-          'asks in auto mode and runs in full for git push %s, unless a later --no-signed takes it back',
+          'asks in Auto and Full for git push %s, unless a later --no-signed takes it back',
           async option => {
-            expect(await modes({}, `git push ${option} origin main`)).toBe('aru');
-            expect(await modes({}, `git push --no-signed ${option} origin main`)).toBe('aru');
-            expect(await modes({}, `git push ${option} --no-signed origin main`)).toBe('rru');
+            expect(await modes({}, `git push ${option} origin main`)).toBe('aau');
+            expect(await modes({}, `git push --no-signed ${option} origin main`)).toBe('aau');
+            expect(await modes({}, `git push ${option} --no-signed origin main`)).toBe('aau');
           }
         );
 
-        it.each(['--signed=false', '--signed=no'])('runs git push %s unchecked in both modes', async option => {
-          expect(await modes({}, `git push ${option} origin main`)).toBe('rru');
+        it.each(['--signed=false', '--signed=no'])('asks about unlisted git push %s in both modes', async option => {
+          expect(await modes({}, `git push ${option} origin main`)).toBe('aau');
         });
 
         it.each([
@@ -1652,8 +1680,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           'git tag -u KEY --no-sign v9',
           'git verify-commit HEAD',
           'git verify-tag v9',
-        ])('asks in auto mode and runs in full for %s', async command => {
-          expect(await modes({}, command)).toBe('aru');
+        ])('asks in Auto and Full for %s', async command => {
+          expect(await modes({}, command)).toBe('aau');
         });
 
         it.each([
@@ -1667,33 +1695,33 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           'git status && git commit --gpg-sign -m x',
           'git ls-files | xargs git commit -S -m x',
           'cd . && git merge --verify-signatures other',
-        ])('asks in auto mode and runs in full for %s, wherever the signing form stands', async command => {
-          expect(await modes({}, command)).toBe('aru');
+        ])('asks in Auto and Full for %s, wherever the signing form stands', async command => {
+          expect(await modes({}, command)).toBe('aau');
         });
 
         it.each([
-          ['sc', 'commit -S', 'git sc -m x', 'aru'],
-          ['lg', 'log --show-signature', 'git lg -1', 'aru'],
-          ['lf', "log '--format=%G?'", 'git lf -1', 'aru'],
-          ['tv', 'tag -v', 'git tv v9', 'aru'],
-          ['un', 'commit -S --no-gpg-sign', 'git un -m x', 'rru'],
+          ['sc', 'commit -S', 'git sc -m x', 'aau'],
+          ['lg', 'log --show-signature', 'git lg -1', 'aau'],
+          ['lf', "log '--format=%G?'", 'git lf -1', 'aau'],
+          ['tv', 'tag -v', 'git tv v9', 'aau'],
+          ['un', 'commit -S --no-gpg-sign', 'git un -m x', 'aau'],
         ])('reads git alias %s = %s as the form it runs: %s', async (name, expansion, command, expected) => {
           expect(await modes({ repo: `[alias]\n\t${name} = ${expansion}\n` }, command)).toBe(expected);
         });
 
-        it('runs git tag -s with a later --no-sign unchecked in both modes', async () => {
-          expect(await modes({}, 'git tag -s --no-sign v9')).toBe('rru');
-          expect(await modes({ global: '[tag]\n\tgpgSign = true\n' }, 'git tag -s --no-sign v9')).toBe('rru');
+        it('asks about an unlisted tag form even with a later --no-sign', async () => {
+          expect(await modes({}, 'git tag -s --no-sign v9')).toBe('aau');
+          expect(await modes({ global: '[tag]\n\tgpgSign = true\n' }, 'git tag -s --no-sign v9')).toBe('aau');
         });
 
         it.each(['log -1', 'show HEAD', 'whatchanged -1', 'reflog'])(
-          'asks in auto mode and runs in full for git %s with --show-signature, unless a later --no-show-signature takes it back',
+          'asks in Auto and Full for git %s with --show-signature, unless a later --no-show-signature takes it back',
           async form => {
-            expect(await modes({}, withOption(form, '--show-signature'))).toBe('aru');
-            expect(await modes({}, withOption(form, '--no-show-signature --show-signature'))).toBe('aru');
-            expect(await modes({}, withOption(form, '--show-signature --no-show-signature'))).toBe('rru');
+            expect(await modes({}, withOption(form, '--show-signature'))).toBe('aau');
+            expect(await modes({}, withOption(form, '--no-show-signature --show-signature'))).toBe('aau');
+            expect(await modes({}, withOption(form, '--show-signature --no-show-signature'))).toBe('aau');
             const shows = { xdg: '[log]\n\tshowSignature = true\n' };
-            expect(await modes(shows, withOption(form, '--show-signature --no-show-signature'))).toBe('rru');
+            expect(await modes(shows, withOption(form, '--show-signature --no-show-signature'))).toBe('aau');
           }
         );
 
@@ -1705,44 +1733,40 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           "git for-each-ref '--format=%(signature)'",
           "git branch --format '%(signature)'",
           'git log "--format=%G? $FMT" -1',
-        ])('asks in auto mode and runs in full for %s', async command => {
-          expect(await modes({}, command)).toBe('aru');
+        ])('asks in Auto and Full for %s', async command => {
+          expect(await modes({}, command)).toBe('aau');
         });
 
         it('reads a pretty alias the command names as format.pretty', async () => {
           const alias = { global: '[pretty]\n\tsig = format:%h %G?\n\tplain = format:%h\n' };
-          expect(await modes(alias, 'git log --pretty=sig -1')).toBe('aru');
-          expect(await modes(alias, 'git log --format=si -1')).toBe('aru');
+          expect(await modes(alias, 'git log --pretty=sig -1')).toBe('aau');
+          expect(await modes(alias, 'git log --format=si -1')).toBe('aau');
           expect((await modes(alias, 'git log --pretty=plain -1')).slice(0, 2)).toBe('rr');
           expect((await modes(alias, 'git log --pretty=oneline -1')).slice(0, 2)).toBe('rr');
           // A name no alias or built-in format starts with stops git, and is read as one that may print signatures.
-          expect((await modes({}, 'git log --pretty=sig -1')).slice(0, 2)).toBe('ar');
+          expect((await modes({}, 'git log --pretty=sig -1')).slice(0, 2)).toBe('aa');
         });
 
-        // A format filled at run time is left to the PATH check of the programs it may start, as on main.
-        it.each([
-          'git log -S foo -1',
-          'git commit -m -S',
-          'git commit -mS',
-          'git log --format=%h -1',
-          'git log --format=$FMT -1',
-          'git diff -S x',
-        ])('does not read -S or a format as signing in %s', async command => {
-          expect(await modes({}, command)).toBe('rr-');
-        });
+        // Known literal data and non-signing formats retain their existing classification.
+        it.each(['git log -S foo -1', 'git commit -m -S', 'git commit -mS', 'git log --format=%h -1', 'git diff -S x'])(
+          'does not read -S or a format as signing in %s',
+          async command => {
+            expect(await modes({}, command)).toBe('rr-');
+          }
+        );
 
         it.each(['gpg.program', 'gpg.ssh.program', 'gpg.x509.program', 'gpg.openpgp.program', 'gpg.format'])(
           'asks for %s given by -c, --config-env or an earlier git config on a form that signs',
           async key => {
             const value = key === 'gpg.format' ? 'ssh' : './x.sh';
-            expect(await modes({}, `git -c ${key}=${value} commit -S -m x`)).toBe('aru');
-            expect(await modes({}, `git -c ${key}=${value} tag -s v9`)).toBe('aru');
-            expect(await modes({}, `git --config-env ${key}=GPG_VALUE commit -S -m x`)).toBe('aru');
-            expect(await modes({ global: SIGN }, `git -c ${key}=${value} commit -m x`)).toBe('aru');
-            expect(await modes({ global: SIGN }, `git --config-env ${key}=GPG_VALUE commit -m x`)).toBe('aru');
-            expect((await modes({}, `git config ${key} ${value}; git commit -m x`)).slice(0, 2)).toBe('ar');
+            expect(await modes({}, `git -c ${key}=${value} commit -S -m x`)).toBe('aau');
+            expect(await modes({}, `git -c ${key}=${value} tag -s v9`)).toBe('aau');
+            expect(await modes({}, `git --config-env ${key}=GPG_VALUE commit -S -m x`)).toBe('aau');
+            expect(await modes({ global: SIGN }, `git -c ${key}=${value} commit -m x`)).toBe('aau');
+            expect(await modes({ global: SIGN }, `git --config-env ${key}=GPG_VALUE commit -m x`)).toBe('aau');
+            expect((await modes({}, `git config ${key} ${value}; git commit -m x`)).slice(0, 2)).toBe('aa');
             // With nothing that signs, the setting is only a form the table may not list.
-            expect(await modes({}, `git -c ${key}=${value} commit -m x`)).toBe(key === 'gpg.format' ? 'rr-' : 'rru');
+            expect(await modes({}, `git -c ${key}=${value} commit -m x`)).toBe(key === 'gpg.format' ? 'rr-' : 'aau');
           }
         );
       });
@@ -1818,7 +1842,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     });
 
     describe('after a branch change', () => {
-      // Which branch an onbranch include then reads is past what the scan follows, so the form is left to the mode.
+      // An unresolved onbranch include can select a verifier and requires fresh consent.
       it.each(pairs(AFTER_BRANCH, LASTS))('names %s before %s only with an includeIf onbranch', async (first, last) => {
         const script = `${first} && ${last}`;
         const none = { asked: false, flagged: false };
@@ -1835,8 +1859,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           },
         ] as Partial<Record<Place, string>>[]) {
           expect(await foundWith(configs, script), `${script} with ${JSON.stringify(configs)}`).toMatchObject({
-            asked: false,
-            flagged: true,
+            asked: true,
+            flagged: false,
           });
         }
       });
@@ -1876,7 +1900,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       const PLACES = [...AFTER_REPO, ...AFTER_FOLDER];
       const TEMPLATE = '[init]\n\ttemplateDir = /dev/null\n';
 
-      // Config a new repository may read past the user config is past what the scan follows: left to the mode.
+      // A new repository may read additional signing config, which requires fresh consent if unresolved.
       const NEW_REPO_LASTS = ['git commit -m x', 'git log -1', 'git merge other', 'git tag v9'];
       const scriptOf = (first: string, last: string): string =>
         first.includes('cd ') ? `${first} && ${last}` : `${first}; ${last}`;
@@ -1901,7 +1925,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
           ].map((configs): [string, string, Partial<Record<Place, string>>] => [first, last, configs])
         )
       )('names %s before %s when the new repository could read other config: %j', async (first, last, configs) => {
-        expect(await foundWith(configs, scriptOf(first, last))).toMatchObject({ asked: false, flagged: true });
+        expect(await foundWith(configs, scriptOf(first, last))).toMatchObject({ asked: true, flagged: false });
       });
 
       it('reads the signing settings of the new repository from the user and system config alone', async () => {

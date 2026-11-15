@@ -112,12 +112,14 @@ export interface ShellCommand {
   gitUnlisted?: string;
   /**
    * The git form this part runs signs or verifies: its own words ask for it, or config the scan read or the script
-   * sets turns it on. Approve for me asks, and only once (shellTools.ts `signingRisk`).
+   * sets turns it on. Auto and Full require fresh consent (shellTools.ts `signingRisk`).
    */
   gitSigningRisk?: true;
 }
 
 export interface ShellScan {
+  /** A deferred signing/config check needs fresh consent but cannot be attributed to one part. */
+  gitSigningRisk?: true;
   commands: ShellCommand[];
   /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
   paths?: string[];
@@ -133,17 +135,13 @@ export interface ShellScan {
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
+  /** A command may send data unless every executed part is positively proven local. */
+  potentialOutbound: boolean;
   /**
    * Each outbound command's reason, with the repository it writes to when its words pin one (see
    * `repositoryWrite`). Never set for a script that changes the environment, which can redirect git or gh.
    */
   sends: { reason: string; target: RepositoryWrite | null }[];
-  /**
-   * True when every command is one `containedCommand` accepts and nothing in the script sets the
-   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
-   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
-   */
-  contained: boolean;
   /**
    * True when every command only reads: a contained program that writes nothing, or a git
    * subcommand that only reports (see `readOnlyGit`), with no redirect, in-place edit or
@@ -154,6 +152,11 @@ export interface ShellScan {
   writes: string[];
   /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
   writtenTrees: string[];
+  /**
+   * What the commands that are not read-only name, and the folder each runs in. A path named only by a
+   * command that reads lies outside it, so auto mode need not ask about a folder that is only read.
+   */
+  writtenPlaces?: string[];
   /**
    * Set when a path operand is decided by something the scan cannot read: a variable, a substitution, an xargs
    * replace string, a word joined across lines, or a folder a directory change may or may not have reached.
@@ -449,9 +452,12 @@ function globMayMatchEnvFile(path: string): boolean {
   const name = basename(path);
   if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
   if (/^[?*[]/.test(name)) return false;
+  // A bracket expression matches one character, so it is read as `?`: copied into a RegExp as written, a
+  // range such as `[d-1]` is invalid and would report the name as a possible `.env`.
   // One `.*` per run of stars keeps the backtracking bounded by the short samples.
   const pattern = name
-    .replace(/[.+^${}()|\\]/g, '\\$&')
+    .replace(/\[[!^]?\]?[^\]]*\]/g, '?')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*+/g, '.*')
     .replace(/\?/g, '.');
   try {
@@ -3007,8 +3013,8 @@ function unsetsGitEnvironment(root: Node): boolean {
 type HistoryChange = 'signing' | 'any' | 'branch' | 'place';
 
 /**
- * Why a git call may sign or verify. `asks` when config the scan read turns signing on, or the script sets a key
- * that can; config it cannot read leaves the call to the mode, as any unlisted form is.
+ * Why a git call may sign or verify. Signing settings and unresolved signing configuration require fresh consent.
+ * The marker also prevents an earlier unsigned allowance from covering a newly selected verifier.
  */
 interface SigningFinding {
   text: string;
@@ -4794,10 +4800,8 @@ function ghCommandWords(words: readonly string[], valued: boolean): number[] {
 const GH_CREATE = /^(create|new)$/;
 
 /**
- * Why one simple command can send data off this computer, or null. Defence in depth only: a
- * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command `containedCommand` does not vouch for (see
- * ChatService's DirectoryTurn.untrusted).
+ * Why one simple command can send data off this computer, or null, for the card. A script file, a
+ * decoded payload or a wrapper not listed here slips past.
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
@@ -5138,7 +5142,7 @@ const MODELED_PROGRAMS = new Set([
 
 /** curl options the scan reads: flags, and options whose value is no file (`-o` is noted as a download). */
 const CURL_FLAGS = 'sSfLIivkgG46N#OJ';
-const CURL_VALUED = 'oXHmdAeurxwcbDT';
+const CURL_VALUED = 'oXHmdAeurxwcbDTF';
 const CURL_LONG_FLAGS = new Set([
   'silent',
   'show-error',
@@ -5196,6 +5200,7 @@ const CURL_LONG_VALUED = new Set([
   'cookie-jar',
   'dump-header',
   'upload-file',
+  'form',
 ]);
 
 /** A URL curl fetches over http or https: the scheme as written, or a bare host curl does not guess another for. */
@@ -5247,6 +5252,7 @@ const CURL_SHORT: Readonly<Record<string, string>> = {
   b: 'cookie',
   D: 'dump-header',
   T: 'upload-file',
+  F: 'form',
   d: 'data',
   H: 'header',
   w: 'write-out',
@@ -5260,10 +5266,30 @@ function curlModeled(args: readonly string[]): boolean {
   const options = curlOptions(args);
   return (
     options !== null &&
+    !curlUploadGlobs(options) &&
     options.every(({ name, value }) =>
-      name === 'url' ? curlUrl(value ?? '') : name !== 'write-out' || !/%output|^@/.test(value ?? '')
+      name === 'url'
+        ? curlUrl(value ?? '')
+        : name === 'form'
+          ? simpleCurlForm(value ?? '')
+          : name !== 'write-out' || !/%output|^@/.test(value ?? '')
     )
   );
+}
+
+/** Curl expands upload lists/ranges itself even inside a shell-quoted word. */
+function curlUploadGlobs(options: readonly { name: string; value?: string }[]): boolean {
+  if (options.some(({ name }) => name === 'g' || name === 'globoff')) return false;
+  return options.some(({ name, value }) => name === 'upload-file' && /[{[]/.test(wordValue(value ?? '')));
+}
+
+/** Curl parses its own quoting, file lists and attributes inside a form value; those need a decision. */
+function simpleCurlForm(value: string): boolean {
+  if (/[,;"\\\r\n]/.test(value)) return false;
+  const equals = value.indexOf('=');
+  if (equals === -1) return false;
+  const data = value.slice(equals + 1);
+  return !/^[@<]/.test(data.trimStart()) || !/\s/.test(data);
 }
 
 /** `text` as one single-quoted shell word. */
@@ -5273,8 +5299,14 @@ const shellQuoted = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`
  * The files a curl call reads and writes, as shell words: `-o` (under `--output-dir`), `-c`, `-D`, a `-O` name
  * taken from each URL, `-b` without `=`, `-T`, and `@file` data. `named` when `-J` lets the server name the file.
  */
-function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } {
-  const options = curlOptions(args) ?? [];
+function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } | null {
+  const options = curlOptions(args);
+  if (
+    !options ||
+    curlUploadGlobs(options) ||
+    options.some(({ name, value }) => name === 'form' && !simpleCurlForm(wordValue(value ?? '')))
+  )
+    return null;
   const values = (...names: string[]): string[] =>
     options.flatMap(({ name, value }) => (names.includes(name) && value !== undefined ? [value] : []));
   const directory = values('output-dir').at(-1);
@@ -5294,10 +5326,17 @@ function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]
   const data = values('data', 'data-binary', 'data-urlencode', 'json', 'header')
     .map(wordValue)
     .flatMap(value => (value.includes('@') ? [shellQuoted(value.slice(value.indexOf('@') + 1))] : []));
+  // A form field reads a file through `name=@f` or `name=<f`.
+  const forms = values('form')
+    .map(wordValue)
+    .flatMap(value => {
+      const at = value.search(/=[@<]/);
+      return at === -1 ? [] : [shellQuoted(value.slice(at + 2))];
+    });
   const given = (value: string): boolean => !['', '-'].includes(wordValue(value));
   const cookies = values('cookie').filter(value => !wordValue(value).includes('='));
   return {
-    reads: [...cookies, ...values('upload-file'), ...data].filter(given),
+    reads: [...cookies, ...values('upload-file'), ...data, ...forms].filter(given),
     writes: [...values('output').map(inDirectory), ...values('cookie-jar', 'dump-header'), ...remoteNames].filter(
       given
     ),
@@ -6179,10 +6218,11 @@ export function readOnlyGit(raw: readonly string[]): boolean {
   return false;
 }
 
-function onlyReads(raw: readonly string[]): boolean {
+/** `git` is false to leave the git reports out: git may run a program the repository names, so its folder is not only read. */
+function onlyReads(raw: readonly string[], git = true): boolean {
   const command = unquote(raw[0] ?? '') === 'timeout' ? timeoutCommand(raw.slice(1)) : raw;
   if (!command || command.length === 0) return false;
-  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || readOnlyGit(command);
+  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || (git && readOnlyGit(command));
 }
 
 /** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
@@ -6344,8 +6384,7 @@ function packageTask(manager: string, args: readonly string[]): boolean {
  * `jest`, `tsc`, `eslint`, `prettier`, a dev-task `turbo` pipeline or a `node` script inside the
  * folder, directly or through `pnpm`/`npm`/`yarn`/`npx`, with no option that opens a port, reads a
  * remote cache or installs a package. Only decides whether a tuning env prefix keeps the command
- * coverable. It is NOT contained: these run code the project defines, which a tainted reply can
- * write unasked first, so running one is the barrier the taint check keeps.
+ * coverable. It is NOT contained: these run code the project defines.
  */
 function localToolchainCommand(raw: readonly string[]): boolean {
   if (raw.length === 0 || raw.some(isDynamic)) return false;
@@ -6475,7 +6514,8 @@ const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_a
  */
 export async function shellHome(startDirectory: string): Promise<{ home: string; known: boolean; temp: string[] }> {
   const wsl = wslLocation(startDirectory);
-  if (!wsl) return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp'] };
+  if (!wsl)
+    return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'] };
   const user = await wslUserEnvironment(wsl.distro);
   return { home: user?.home ?? '/', known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
 }
@@ -6731,6 +6771,7 @@ export async function scanShell(
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
+    let potentialOutbound = false;
     const sends: ShellScan['sends'] = [];
     let setsEnvironment = false;
     const writtenCommands = new Set<number>();
@@ -6739,8 +6780,14 @@ export async function scanShell(
     // Commands that write, or may change what git or a walk lists, in the order read; see `trusted`.
     const touchedBy: number[] = [];
     const laterChecks: { own: ReadonlySet<number>; anywhere: boolean; alongside: ReadonlySet<number> }[] = [];
-    let contained = true;
     let readOnly = true;
+    // What each command names, and whether it only reads; a writer's places, cwd included, go to `writtenPlaces`.
+    let part: { places: string[]; reads: boolean } | null = null;
+    const writtenPlaces = new Set<string>();
+    const addPath = (path: string): void => {
+      paths.add(path);
+      part?.places.push(path);
+    };
     let remoteTree = false;
 
     const noteEnvFile = (raw: string): string | null => {
@@ -6887,6 +6934,7 @@ export async function scanShell(
     // Commands that may change what a later config query reads: a repository made, a branch or worktree switched, a
     // cd into a folder not there yet.
     const historyChanges = new Map<number, Set<HistoryChange>>();
+    let deferredSigningRisk = false;
     const historyChecks: {
       own: number;
       anywhere: boolean;
@@ -7012,11 +7060,14 @@ export async function scanShell(
       output?: SignatureFormat
     ): Promise<SigningFinding | null> => {
       const selected = output?.value;
-      // A format filled at run time is left to the PATH check of the programs it may start, as for any listed form.
+      // Runtime-selected formats can request signature verification through configured programs.
+      if (selected && !selected.whole) {
+        return { text: 'with an output format the scan cannot read for signing', asks: true };
+      }
       const pretty =
         output?.kind === 'pretty' && (selected === undefined || (selected.whole && prettyNamesAlias(selected.text)));
       if (signs.length === 0 && !pretty) return null;
-      const unread = { text: 'with git config the scan cannot read for signing', asks: false };
+      const unread = { text: 'with git config the scan cannot read for signing', asks: true };
       const place = gitPlace(words);
       const scripted = place && scriptEnvironment(node, place.folder);
       const env = place && scripted && configEnvironment(node, place.call.settings, scripted);
@@ -7071,7 +7122,7 @@ export async function scanShell(
         const named = selected === undefined ? 'a format.pretty' : `--pretty=${selected.text.slice(0, 40)}`;
         return { text: `${lead}with ${named} that may print signatures`, asks: true };
       };
-      const changed = { text: 'after a config, repository, branch or folder change in the same script', asks: false };
+      const changed = { text: 'after a config, repository, branch or folder change in the same script', asks: true };
       // What a statement that may run before this one can change: only what the query below cannot already see.
       const afterChange = async (kinds: ReadonlySet<HistoryChange>): Promise<SigningFinding | null> => {
         if (kinds.has('signing')) return { text: 'after a signing config change in the same script', asks: true };
@@ -7082,7 +7133,7 @@ export async function scanShell(
           if ((await named) !== 'none') {
             found ??= {
               text: 'after a branch change in the same script with an includeIf onbranch config',
-              asks: false,
+              asks: true,
             };
           }
         }
@@ -7115,10 +7166,10 @@ export async function scanShell(
       if (after?.asks) return after;
       const written = configWrites.some(write => write.id !== node.id && !plainConfigWriters.has(write.id));
       const unsettled = configs ? written : !(await configSettled(node, place.folder, true));
-      // Config the scan cannot follow leaves the call to the mode, unless what is there now already signs.
+      // Unsettled config cannot establish which verifier will run, even if the current config is unsigned.
       const now = await reads(folder, call, '');
       if (now?.asks) return now;
-      return after ?? (unsettled ? { text: 'after a config change in the same script', asks: false } : now);
+      return after ?? (unsettled ? { text: 'after a config change in the same script', asks: true } : now);
     };
 
     const remoteSettings = new Map<string, Promise<GitRemoteSettings | null>>();
@@ -7345,7 +7396,7 @@ export async function scanShell(
         const target = guardForm(settings);
         if (!guardFormWithin(form, target) || form === target) continue;
         if (dotless && target.slice(form.length).replace(/^\/+/, '').startsWith('.')) continue;
-        paths.add(settings);
+        addPath(settings);
       }
       if (dotless) return;
       const settings = await lstat(join(folder, '.claude')).then(
@@ -7353,7 +7404,7 @@ export async function scanShell(
         (error: unknown) => (missing(error) ? false : null)
       );
       if (settings === null) unreadOperands++;
-      else if (settings) paths.add(join(folder, '.claude'));
+      else if (settings) addPath(join(folder, '.claude'));
     };
 
     const processPath = (text: string, cwd: string): boolean =>
@@ -7829,7 +7880,7 @@ export async function scanShell(
       const reached = async (place: string): Promise<void> => {
         if (operand.start !== null) await reachFolder(place, dotless, reach);
         else if (reach) await reachFolder(place, false, reach);
-        if (shape?.namesSettings) paths.add(join(place, '.claude'));
+        if (shape?.namesSettings) addPath(join(place, '.claude'));
       };
       const places = await operandPlaces(prefix, allowed, cwd, reader);
       let own = false;
@@ -7838,25 +7889,25 @@ export async function scanShell(
           // Outside without a look: reading it over the share would start that distro.
           ungranted.add(lexical);
         } else if (inside && physical !== null) {
-          paths.add(physical);
+          addPath(physical);
           if (operand.start === null) own = true;
           await reached(physical);
         } else {
           await reached(lexical);
-          paths.add(lexical);
+          addPath(lexical);
           // Named without a look, so the scan opens no connection to that computer.
           if (physical === null && onAnotherComputer(lexical)) {
             directories.add(dirname(lexical));
             continue;
           }
-          paths.add(await realpathNearest(lexical));
+          addPath(await realpathNearest(lexical));
           if (reader !== 'windows' && HARMLESS_DEVICES.has(lexical)) continue;
           if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
           directories.add(isDirectory ? lexical : dirname(lexical));
         }
       }
-      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) paths.add(place);
+      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) addPath(place);
       const landed = places[0];
       return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
     };
@@ -7912,10 +7963,20 @@ export async function scanShell(
       writer = node.id;
       // `env -C DIR`, `sudo -D DIR`: the command runs from DIR, and this shell stays where it was.
       const saved = effects.folders.length > 0 ? snapshot() : null;
+      const outerPart = part;
+      const current = { places: [] as string[], reads: false };
+      part = current;
+      let ranIn: string | null = null;
       try {
         for (const folder of effects.folders) await enterFolder(folder);
+        ranIn = state.lost ? null : state.cwd;
         return await runCommand(node, tokens, effects, unreadBefore);
       } finally {
+        part = outerPart;
+        if (!current.reads) {
+          for (const place of current.places) writtenPlaces.add(place);
+          if (ranIn !== null) writtenPlaces.add(ranIn);
+        }
         if (saved) restore(saved);
         writer = outer;
       }
@@ -8482,6 +8543,8 @@ export async function scanShell(
 
       if (CHANGES_DIRECTORY.has(program)) {
         directoryChanges++;
+        // Moving changes no file; the commands that run in the new folder count it as theirs.
+        if (part) part.reads = true;
         // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
         const statement = node.parent?.type === 'redirected_statement' ? node.parent : node;
         if (await changeDirectory(program, rest, listMembers.has(statement.id), node.id)) {
@@ -8561,6 +8624,7 @@ export async function scanShell(
       entries.set(node.id, { entry, original });
       const reason =
         [tokens, ...(findRun?.runs ?? [])].map(run => outboundReason(run, readsStdin(node))).find(Boolean) ?? null;
+      if (reason || assigns || arithmetic || !containedCommand(tokens)) potentialOutbound = true;
       if (reason) {
         outbound.add(reason);
         const computed = tokens.some(isDynamic);
@@ -8588,7 +8652,6 @@ export async function scanShell(
         }
       }
       for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
-      if (reason || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       if (
         reason ||
         assigns ||
@@ -8599,6 +8662,8 @@ export async function scanShell(
         !onlyReads(tokens)
       ) {
         readOnly = false;
+      } else if (part && onlyReads(tokens, false)) {
+        part.reads = true;
       }
       for (const arg of rest) {
         const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
@@ -8629,11 +8694,21 @@ export async function scanShell(
       }
       if (name === 'curl') {
         const curl = curlFiles(wrappedRest);
-        if (curl.named) unreadOperands++;
-        for (const path of curl.reads) await check(path, state.cwd);
-        for (const path of curl.writes) {
+        if (!curl || curl.named) unreadOperands++;
+        for (const path of curl?.reads ?? []) await check(path, state.cwd);
+        for (const path of curl?.writes ?? []) {
           noteWrite(path);
           await check(path, state.cwd);
+        }
+      }
+      if (name === 'wget' || name === 'scp' || name === 'rsync') {
+        // A file a send names (`--post-file f`, `scp f host:`) is read where it sits; a URL or `host:path` is not local.
+        for (const arg of wrappedRest) {
+          const word = wordValue(arg);
+          const value = word.startsWith('-') ? word.slice(word.indexOf('=') + 1) : word;
+          if (value === word && word.startsWith('-')) continue;
+          if (value === '' || /^\w+:\/\//.test(value) || /^[^/\\]*:/.test(value)) continue;
+          await check(shellQuoted(value), state.cwd);
         }
       }
       if (
@@ -8778,10 +8853,10 @@ export async function scanShell(
       const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\', state.cwd);
       if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
       const record = async (physical: string): Promise<void> => {
-        paths.add(physical);
+        addPath(physical);
         if (operand.start !== null) await reachFolder(physical, shape?.dotless === true, reach);
         else if (reach) await reachFolder(physical, false, reach);
-        if (shape?.namesSettings) paths.add(join(physical, '.claude'));
+        if (shape?.namesSettings) addPath(join(physical, '.claude'));
       };
       const targets = operandTargets(state.cwd, prefix);
       const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
@@ -8792,7 +8867,7 @@ export async function scanShell(
           const volume = [parse(targets[0] ?? prefix).root];
           await record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
           const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
-          for (const place of own) paths.add(place);
+          for (const place of own) addPath(place);
         }
         return;
       }
@@ -8804,7 +8879,7 @@ export async function scanShell(
         if (!inside || physical === null) throw new PathAccessDenied(prefix);
         await record(physical);
       }
-      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) paths.add(place);
+      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) addPath(place);
     };
 
     /**
@@ -9260,7 +9335,7 @@ export async function scanShell(
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
-        contained = false;
+        potentialOutbound = true;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -9273,9 +9348,9 @@ export async function scanShell(
         commands.push({ text: header, always: header, coverable: false, words: header });
         const variable = node.childForFieldName('variable')?.text ?? '';
         // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
-        // `GIT_DIR` and `http_proxy` all fail it), so the loop stays contained if its body does.
+        // `GIT_DIR` and `http_proxy` all fail it), so that binding does not change the environment.
         if (!/^[a-z][a-z0-9]*$/.test(variable)) {
-          contained = false;
+          potentialOutbound = true;
           setsEnvironment = true;
         }
         const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
@@ -9442,6 +9517,7 @@ export async function scanShell(
         (configs && configWrites.some(write => racing(write.id) && !plainConfigWriters.has(write.id)))
       ) {
         unreadOperands++;
+        deferredSigningRisk = true;
       }
     }
     for (const check of aliasChecks) {
@@ -9451,6 +9527,7 @@ export async function scanShell(
         if (check.signing && plainConfigWriters.has(write.id)) continue;
         if (racing(write.id) && (await aliasConfigTouched(write, check))) {
           unreadOperands++;
+          if (check.signing) deferredSigningRisk = true;
           break;
         }
       }
@@ -9467,6 +9544,7 @@ export async function scanShell(
     if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;
     return {
       commands,
+      ...(deferredSigningRisk ? { gitSigningRisk: true as const } : {}),
       paths: [...paths],
       ...(globFolders.size > 0 ? { globFolders: [...globFolders] } : {}),
       ...(dotlessGlobFolders.size > 0 ? { dotlessGlobFolders: [...dotlessGlobFolders] } : {}),
@@ -9474,11 +9552,12 @@ export async function scanShell(
       ungranted: [...ungranted],
       envFiles: [...envFiles],
       outbound: [...outbound],
+      potentialOutbound: potentialOutbound || commands.length === 0,
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
-      contained: contained && commands.length > 0,
       readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],
       writtenTrees: [...writtenTrees],
+      writtenPlaces: [...writtenPlaces],
       ...(unreadOperands > 0 ? { unread: true as const } : {}),
       ...(unreadScript ? { unreadScript: true as const } : {}),
       ...(setsEnvironment ? { setsEnvironment: true as const } : {}),

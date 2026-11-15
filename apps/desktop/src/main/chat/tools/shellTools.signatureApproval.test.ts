@@ -67,26 +67,29 @@ describe('configured signature verifier approval', () => {
       false,
     ],
     ['git stash list', ['stash', 'list'], true],
-  ] as const)('asks in auto before %s can invoke the configured verifier', async (command, args, showsSignature) => {
-    git(['config', 'log.showSignature', String(showsSignature)]);
-    git([...args]);
-    expect(existsSync(marker)).toBe(true);
-    rmSync(marker);
-    const prompt = await shellApproval(
-      'bash_execute',
-      { command, cwd: root },
-      {
-        roots: [root],
-        workingDirectory: root,
-        signal: new AbortController().signal,
-      }
-    );
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBeUndefined();
-    expect(prompt.byPart).not.toBe(true);
-    expect(prompt.allowOnce).toBe(true);
-    expect(existsSync(marker)).toBe(false);
-  });
+  ] as const)(
+    'asks in Auto and Full before %s can invoke the configured verifier',
+    async (command, args, showsSignature) => {
+      git(['config', 'log.showSignature', String(showsSignature)]);
+      git([...args]);
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command, cwd: root },
+        {
+          roots: [root],
+          workingDirectory: root,
+          signal: new AbortController().signal,
+        }
+      );
+      expect(prompt.askInAuto).toBe(true);
+      expect(prompt.askInFull).toBe(true);
+      expect(prompt.byPart).not.toBe(true);
+      expect(prompt.allowOnce).toBe(true);
+      expect(existsSync(marker)).toBe(false);
+    }
+  );
 
   it.each(['%%G?', '%%%%G?', '%x25G?', '%h'])('does not mistake literal format %s for verification', async format => {
     git(['config', 'log.showSignature', 'false']);

@@ -1469,14 +1469,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/agents/create-from-context.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
-    },
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/agents/index.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3854,7 +3846,7 @@
   },
   "b4m-core/services/src/organizationService/groupMembership.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "b4m-core/services/src/organizationService/leave.test.ts": {

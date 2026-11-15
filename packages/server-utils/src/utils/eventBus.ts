@@ -146,7 +146,7 @@ export const NotificationEvents = {
 };
 
 /**
- * One per finished Studio group, published by emitStudioJobCompletion (b4m-core/services generationJobs). Consumed by
+ * One per finished Studio group, published by studioCompletionSubscriber (b4m-core/services generationJobs). Consumed by
  * apps/workers/src/events/studioJobCompleted.ts; a native notifier subscribes to the same detail-type.
  */
 export const StudioEvents = {

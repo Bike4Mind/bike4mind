@@ -35,3 +35,4 @@ export * from './PendingCredits';
 export * from './MissingPermission';
 export * from './AiSuggestion';
 export * from './ChartSection';
+export * from './RowActionsMenu';

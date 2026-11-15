@@ -220,20 +220,19 @@ describe('ChatService approval record', () => {
     useTool(streams[1], 'c2', command);
   }
 
-  it('does not reuse an unsigned chat allowance for signing in auto', async () => {
-    await signAfterAllowance('auto');
-    const second = await awaitCall('c2', 'awaiting-approval');
+  it.each(['auto', 'full'] as const)('does not reuse an unsigned chat allowance for signing in %s', async mode => {
+    await signAfterAllowance(mode);
+    const second = await vi.waitUntil(() => calls('c2', 'awaiting-approval')[0] ?? calls('c2', 'done')[0], {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(second.status).toBe('awaiting-approval');
     expect(second.approvalDetail).toContain('commit.gpgsign');
+    expect(second.approvalOnceOnly).toBe(true);
     expect(bashExecute.run).toHaveBeenCalledTimes(1);
     approvals.resolve(second.approvalId!, { decision: 'once' });
-    await awaitCall('c2', 'done');
-    expect(bashExecute.run).toHaveBeenCalledTimes(2);
-  });
-
-  it('runs a signing command in full by the mode, not by the unsigned chat allowance', async () => {
-    await signAfterAllowance('full');
-    const second = await awaitCall('c2', 'done');
-    expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'mode' }, asked: false });
+    const done = await awaitCall('c2', 'done');
+    expect(done.approval?.decidedBy).toEqual({ kind: 'user', answer: 'once' });
     expect(bashExecute.run).toHaveBeenCalledTimes(2);
   });
 

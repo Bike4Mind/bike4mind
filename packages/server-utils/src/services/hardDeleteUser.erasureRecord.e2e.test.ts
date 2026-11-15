@@ -1,7 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { ErasureRecordModel, FeedbackNoteModel, FeedbackModel, FeedbackAiModel, User } from '@bike4mind/database';
+import {
+  ErasureRecordModel,
+  FeedbackNoteModel,
+  FeedbackModel,
+  FeedbackAiModel,
+  OrganizationGeneratedObject,
+  OrganizationRetentionEstimate,
+  User,
+} from '@bike4mind/database';
 import { erasureIdHash } from '../privacy/erasureHash';
 import {
   createMongoReplSet,
@@ -45,6 +53,25 @@ beforeEach(async () => {
   await FeedbackNoteModel.deleteMany({});
   await FeedbackAiModel.deleteMany({});
   await FeedbackModel.deleteMany({});
+  await OrganizationGeneratedObject.collection.deleteMany({});
+  await OrganizationRetentionEstimate.collection.deleteMany({});
+  await OrganizationGeneratedObject.create({
+    key: '12345678-1234-1234-1234-123456789abc.png',
+    organizationId: 'abcdefabcdefabcdefabcdef',
+    userId: id,
+    sessionId: 'fedcbafedcbafedcbafedcba',
+    createdAt: new Date(),
+  });
+  await OrganizationRetentionEstimate.create({
+    token: '12345678-1234-1234-1234-123456789abc',
+    actorUserId: id,
+    organizationId: 'abcdefabcdefabcdefabcdef',
+    version: 1,
+    policy: { chats: 1, files: null, media: null },
+    counts: { chats: 1, files: 0, media: 0 },
+    estimatedAt: new Date(),
+    expiresAt: new Date(Date.now() + 600_000),
+  });
   await User.collection.insertOne({ _id: userId, username: 'erase-me', email: 'erase-me@example.test' });
   const report = await FeedbackModel.create({ userId: id, username: 'Reporter', status: 'New' });
   await FeedbackAiModel.create({
@@ -74,6 +101,8 @@ describe('hardDeleteUser erasure record transaction', () => {
     await erase();
     expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
     expect(await FeedbackNoteModel.countDocuments()).toBe(0);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: id })).toBe(0);
+    expect((await OrganizationGeneratedObject.findOne({}).lean())?.userId).toBe('deleted-account');
     expect(await FeedbackAiModel.countDocuments()).toBe(0);
     const records = await ErasureRecordModel.find().lean();
     expect(records).toHaveLength(1);
@@ -93,6 +122,8 @@ describe('hardDeleteUser erasure record transaction', () => {
     expect(await ErasureRecordModel.countDocuments()).toBe(0);
     expect(await FeedbackNoteModel.countDocuments()).toBe(1);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: id })).toBe(1);
+    expect((await OrganizationGeneratedObject.findOne({}).lean())?.userId).toBe(id);
   });
   it('keeps the user and erasure retry anchor when AI deletion fails, then retries', async () => {
     const failure = vi.spyOn(FeedbackAiModel, 'deleteMany').mockImplementationOnce(() => {
@@ -110,5 +141,21 @@ describe('hardDeleteUser erasure record transaction', () => {
     expect(await User.collection.countDocuments({ _id: userId })).toBe(0);
     expect(await FeedbackAiModel.countDocuments()).toBe(0);
     expect(await ErasureRecordModel.countDocuments()).toBe(1);
+  });
+  it('aborts User and token deletion when immutable creator redaction fails, then retries', async () => {
+    const failure = vi
+      .spyOn(OrganizationGeneratedObject.collection, 'updateMany')
+      .mockRejectedValueOnce(new Error('retention cleanup failed'));
+    try {
+      await expect(erase()).rejects.toThrow('retention cleanup failed');
+    } finally {
+      failure.mockRestore();
+    }
+    expect(await User.exists({ _id: userId })).not.toBeNull();
+    expect(await OrganizationRetentionEstimate.countDocuments({ actorUserId: id })).toBe(1);
+    expect((await OrganizationGeneratedObject.findOne({}).lean())?.userId).toBe(id);
+    await erase();
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect((await OrganizationGeneratedObject.findOne({}).lean())?.userId).toBe('deleted-account');
   });
 });

@@ -466,7 +466,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git status && git ls-files src | xargs wc -l', '', unasked],
     ['pgrep node | xargs kill', '', unasked],
     ['docker ps -q | xargs docker stop', '', unasked],
-    ['git branch --merged | xargs git branch -d', '', unasked],
+    ['git branch --merged | xargs git branch -d', '', { auto: false, full: false, allowed: false }],
     ["find src -name '*.ts' | xargs -d '\\n' sed -i s/a/b/", '', unasked],
     ['git diff --name-only -- src | xargs wc -l', 'srepo', unasked],
     ['git ls-files src | xargs -I{} wc -l {}', '', unasked],
@@ -483,7 +483,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ["find src -name '*.ts' 2>/dev/null | xargs cat", '', unasked],
     ['git ls-files | grep -v x | xargs wc -l', '', unasked],
     ["find src -name '*.ts' | head -5 | xargs sed -i s/a/b/", '', unasked],
-    ['git branch --merged | grep -v main | xargs git branch -d', '', unasked],
+    ['git branch --merged | grep -v main | xargs git branch -d', '', { auto: false, full: false, allowed: false }],
     ['git diff --name-only main...other | xargs sed -i s/a/b/', '', unasked],
     ['git diff --name-only main..other | xargs sed -i s/a/b/', '', unasked],
     ['git ls-files -z w | xargs -0 sed -i s/a/b/', 'brepo', unasked],
@@ -965,7 +965,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
     ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
     ...SENDING_GIT.map(sending => `git ${sending}`),
-  ])('marks %s as sending data out, so auto mode asks once the reply read untrusted content', async command => {
+  ])('names the outbound capability of %s on the card', async command => {
     const prompt = await shellApproval(
       'bash_execute',
       { command, cwd: proj },
@@ -977,7 +977,6 @@ describe('shell approval in a project with a large node_modules', () => {
         uncoverablePaths: permissionRoots,
       }
     );
-    expect(prompt.contained).toBeUndefined();
     expect(prompt.detail).toContain('Can send data off this computer');
   });
 
@@ -2131,7 +2130,6 @@ describe('shell approval in a project with a large node_modules', () => {
       { command: 'git p https://example.invalid/r main', cwd },
       { roots: [proj], workingDirectory: cwd, signal: new AbortController().signal, protectedPaths: [userData] }
     );
-    expect(elsewhere.contained).toBeUndefined();
     expect(elsewhere.detail).toContain('Can send data off this computer');
   });
 
@@ -2301,7 +2299,7 @@ describe('shell approval in a project with a large node_modules', () => {
     'cargo build --${PROFILE}',
     'npm test --$X',
     'make --$X',
-    'git log --$X',
+
     'ls --c*',
     'npx prettier --{check,write} src',
     'rg --files',
@@ -2309,6 +2307,10 @@ describe('shell approval in a project with a large node_modules', () => {
     'rsync -a --force src/ dst/',
   ])('runs %s unasked, an option bash cannot change to another', async command => {
     expect(await judge(command, 'grepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('asks for a Git option filled at runtime, which could select verification', async () => {
+    expect(await judge('git log --$X', 'grepo')).toMatchObject({ auto: false, full: false });
   });
 
   it.each([

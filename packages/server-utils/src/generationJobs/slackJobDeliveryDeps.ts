@@ -20,7 +20,7 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
       token = decryptToken(workspace.slackBotToken);
     } catch (error) {
       // decryptToken throws on a wrong or rotated key.
-      logger.warn('slack bot token could not be decrypted; skipping video delivery', { workspaceId, error });
+      logger.warn('slack bot token could not be decrypted; skipping Slack delivery', { workspaceId, error });
       return null;
     }
     if (!token) return null;

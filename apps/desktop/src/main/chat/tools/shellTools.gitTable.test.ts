@@ -206,11 +206,11 @@ const ROWS: [string, string, string][] = [
   ['git fetch && git status', '', 'rrrr'],
   ["git add -A && git commit -m 'x' && git push", '', 'rrrr'],
   ['git ls-tree --name-only $(git merge-base origin/main HEAD)', '', 'rrrr'],
-  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
+  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'aaaa'],
   ['git diff $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
-  ['git log --oneline "$(cat msg.txt)"', '', 'rrrr'],
-  ['git log --$X', '', 'rrrr'],
-  ['git branch -D "$(cat msg.txt)"', '', 'rrrr'],
+  ['git log --oneline "$(cat msg.txt)"', '', 'aaaa'],
+  ['git log --$X', '', 'aaaa'],
+  ['git branch -D "$(cat msg.txt)"', '', 'aaaa'],
   ['git filter-branch --tree-filter true HEAD', '', 'aaaa'],
   ['git filter-repo --path src', '', 'aaaa'],
   ['git instaweb --httpd=./x.sh', '', 'aaaa'],
@@ -333,6 +333,24 @@ describe('shell approval of common agent git commands', () => {
     expect(await cells(command, folder)).toBe(expected);
   });
 
+  it.each(['git branch -D -- "$(cat msg.txt)"', 'git branch --merged | xargs git branch -d --'])(
+    'does not classify data after the option boundary as a signing selector: %s',
+    async command => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command, cwd: proj },
+        {
+          roots: [proj],
+          workingDirectory: proj,
+          signal: new AbortController().signal,
+          protectedPaths: [userData],
+          uncoverablePaths: roots,
+        }
+      );
+      expect(prompt.allowOnce).not.toBe(true);
+    }
+  );
+
   it.each([
     'git frobnicate',
     'git status --frobnicate',
@@ -342,7 +360,7 @@ describe('shell approval of common agent git commands', () => {
     expect(await cells(command, '')).toBe('aaaa');
   });
 
-  it('names the git form the safe table does not list, and asks about that part alone', async () => {
+  it('names an unlisted git form and asks about the whole script in every mode', async () => {
     const context = {
       roots: [proj],
       workingDirectory: proj,
@@ -352,7 +370,10 @@ describe('shell approval of common agent git commands', () => {
     } as ToolContext;
     const prompt = await shellApproval('bash_execute', { command: 'git log -1 && git frobnicate', cwd: proj }, context);
     expect(prompt.detail).toContain('Runs git in a form Desktop does not list as safe (git frobnicate).');
-    expect(prompt.always?.commands.map(part => part.ask?.kinds ?? [])).toEqual([[], ['gitUnlisted']]);
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
+    expect(prompt.always?.commands.map(part => part.ask?.kinds ?? [])).toEqual([[], []]);
   });
 
   // GIT_CELLS=<file> appends every row's current cells to that file, to compare two versions of the scan.

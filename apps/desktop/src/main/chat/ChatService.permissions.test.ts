@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -154,10 +154,29 @@ describe('ChatService permission rules', () => {
     }
   );
 
-  it.each(SIGNING_CASES)('runs %s in full under config that signs or verifies', async (command, config) => {
+  it.each(SIGNING_CASES)('holds %s before execution in full under signing config', async (command, config, named) => {
     const execute = await runSigning('full', command, config);
-    await awaitCall('bash_execute', 'done');
-    expect(execute).toHaveBeenCalledTimes(1);
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain(named);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(['auto', 'full'] as const)('holds an assembled protected-settings write in %s', async mode => {
+    await mkdir(join(root, '.claude'), { recursive: true });
+    const settings = join(root, '.claude/settings.json');
+    const original = '{"marker":"original"}';
+    await writeFile(settings, original);
+    await writeFile(join(root, 'evil.json'), '{"marker":"replacement"}');
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('controlled result');
+    await run(mode, 'bash_execute', { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: root });
+    const result = await vi.waitUntil(
+      () => calls('bash_execute', 'awaiting-approval')[0] ?? calls('bash_execute', 'done')[0],
+      { timeout: 5000, interval: 10 }
+    );
+    expect(result.status).toBe('awaiting-approval');
+    expect(result.approvalInAppOnly).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(await readFile(settings, 'utf8')).toBe(original);
   });
 
   it('runs a signing command an exact Bash rule names in auto', async () => {

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { CreditHolderType } from '@bike4mind/common';
 import {
   Artifact,
+  Organization,
+  OrganizationGeneratedObject,
   ArtifactContent,
   ArtifactVersion,
   FabFile,
@@ -19,6 +21,7 @@ import {
   campaignWatchRepository,
   withTransaction,
   deleteFeedbackAiForUser,
+  eraseOrganizationRetentionForUser,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -115,6 +118,20 @@ async function purgeNotebookMedia(
       }
       if (retained || (await collectionFor(FabFile.modelName).findOne({ 'sourceMetadata.generatedCopyKey': key })))
         continue;
+      const organizationOwner = await OrganizationGeneratedObject.findOne({ key, deletedAt: null })
+        .select('organizationId')
+        .maxTimeMS(15_000)
+        .lean();
+      if (
+        organizationOwner &&
+        mongoose.isObjectIdOrHexString(organizationOwner.organizationId) &&
+        (await Organization.exists({ _id: organizationOwner.organizationId, personal: { $ne: true } })
+          .setOptions({ includeDeleted: true })
+          .maxTimeMS(15_000))
+      ) {
+        // The org ledger can be the sole owner when saving a Files copy was skipped for quota.
+        continue;
+      }
       await getGeneratedImageStorage().deletePermanently(key);
       cdn.add(generatedCdnPath(key));
     }
@@ -487,6 +504,7 @@ async function purgePersonalMemory(
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
   await deleteFeedbackAiForUser(userId, { assertLease });
+  await eraseOrganizationRetentionForUser(userId, { assertLease });
   const personalOrganizationIds = await findPersonalOrganizationIds(userId);
   await purgeUserPublishedArtifacts(userId, { deletedBy: userId, logger });
   await withdrawAuthorListings(userId);

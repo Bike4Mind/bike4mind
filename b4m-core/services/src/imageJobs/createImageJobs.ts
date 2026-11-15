@@ -13,6 +13,7 @@ import {
 import { releaseCreditHold, type CreditHold } from '../creditService/creditHold';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
+  checkBatchSpendCap,
   findIdempotentReplay,
   holdJobCredits,
   persistAndEnqueueJob,
@@ -95,9 +96,10 @@ export async function createImageJobs(
   const caps = getImageModelCatalogEntry(parsed.data.model);
   const provider = deps.providers.get(caps.provider);
   // A retired id is refused rather than rendered as its successor: the job records the model it renders.
+  // Local checkpoints are discovered at runtime, so the local provider lists no models and serves every local id.
   const served =
     provider !== undefined &&
-    (provider.models as readonly string[]).includes(parsed.data.model) &&
+    (caps.provider === 'local' || (provider.models as readonly string[]).includes(parsed.data.model)) &&
     resolveLegacyImageModel(parsed.data.model) === parsed.data.model;
   if (!served) {
     return refuse(422, 'model_unavailable', `Image model ${parsed.data.model} is not available for generation jobs`);
@@ -174,6 +176,13 @@ async function holdBatch(
   params: HoldParams,
   deps: CreateImageJobsDeps
 ): Promise<{ ok: true; holds: (CreditHold | null)[] } | Refusal> {
+  if (count > 1) {
+    const capped = await checkBatchSpendCap(
+      { enforceCredits: params.enforceCredits, user: params.user, totalCredits: count * params.requiredCredits },
+      deps
+    );
+    if (capped) return capped;
+  }
   const holds: (CreditHold | null)[] = [];
   for (let index = 0; index < count; index++) {
     let held: Awaited<ReturnType<typeof holdJobCredits>>;
@@ -237,6 +246,7 @@ async function persistBatch(
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
           source: input.source,
+          ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',
           payload: { request, providerId, groupId, groupSize: input.count },
           pollCount: 0,

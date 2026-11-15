@@ -111,7 +111,9 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
         // A mismatch rejects here, so it lands as a failed download like any other.
         if (signed) service.apply({ type: 'downloaded', version: await signed.confirmDownload(file) });
       },
-      install: () => autoUpdater.quitAndInstall(),
+      // Silent, so Windows applies the update without showing the assisted setup wizard. A silent
+      // install only reopens the app when asked to, hence the second flag. macOS ignores both.
+      install: () => autoUpdater.quitAndInstall(true, true),
     };
   }
 
