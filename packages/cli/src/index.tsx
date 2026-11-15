@@ -221,7 +221,6 @@ import {
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
-import { runTurn } from './session/turnController.js';
 import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
 import { releaseSession, type SessionResources } from './session/releaseSession.js';
 import {
@@ -230,6 +229,10 @@ import {
   sessionBackgroundCallbacks,
 } from './session/backgroundCallbacks.js';
 import { settlePendingPrompts } from './session/pendingPrompts.js';
+import { runTurn, runPeerTurn, type TurnContext } from './session/turnController.js';
+import { PeerService } from './peers/PeerService.js';
+import { createPeerIdentity, peerAccountId, peerAccountScope } from './peers/scope.js';
+import { createPeerTools } from './tools/peerTools.js';
 import {
   createFreshSession,
   resumeSession,
@@ -388,6 +391,46 @@ function CliApp() {
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
   const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
+  const peerServiceRef = useRef<PeerService | null>(null);
+  const peerStoppingRef = useRef(false);
+  const peerReadyRef = useRef<() => boolean>(() => false);
+  const peerTurnContextRef = useRef<() => TurnContext>(() => {
+    throw new Error('CLI not ready');
+  });
+  const peerScopeRef = useRef('');
+  const peerGenerationRef = useRef(0);
+  const currentPeerScope = JSON.stringify([
+    state.signedOutLocal ? state.config?.userId : (state.config?.auth?.userId ?? state.config?.userId),
+    state.signedOutLocal,
+    state.config?.apiConfig,
+    state.additionalDirectories,
+    state.config?.defaultModel,
+  ]);
+  const livePeerScopeRef = useRef(currentPeerScope);
+  livePeerScopeRef.current = currentPeerScope;
+
+  const stopPeers = async () => {
+    const service = peerServiceRef.current;
+    peerServiceRef.current = null;
+    if (service) await service.close();
+  };
+
+  useEffect(() => {
+    const unsubscribe = useCliStore.subscribe((next, previous) => {
+      if (next.session?.id !== previous.session?.id) void stopPeers().catch(() => {});
+    });
+    return () => {
+      unsubscribe();
+      void stopPeers().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (peerServiceRef.current && peerScopeRef.current !== currentPeerScope) {
+      void stopPeers().catch(() => {});
+      console.log('Peer messaging disabled because the account, model, or granted folders changed.');
+    }
+  }, [currentPeerScope]);
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -424,7 +467,9 @@ function CliApp() {
       featureRegistry: state.featureRegistry,
       wsManager: state.wsManager,
       clearWebSocketToolExecutor: () => setWebSocketToolExecutor(null),
-      stopBridgePresence: () => bridgePresence.stop(reason),
+      stopBridgePresence: async () => {
+        await Promise.allSettled([stopPeers(), bridgePresence.stop(reason)]);
+      },
       agent: state.agent,
       backgroundManager: state.backgroundManager,
       // The image store outlives a sign-in restart: init() does not open a new one.
@@ -434,7 +479,8 @@ function CliApp() {
 
   // Cleanup function to close all handles and allow natural process exit
   const performCleanup = useCallback(async () => {
-    await releaseSession(sessionResources('cli_exit'), 500);
+    peerStoppingRef.current = true;
+    await Promise.allSettled([stopPeers(), releaseSession(sessionResources('cli_exit'), 500)]);
     await settleSignInRefresh();
 
     // Force exit after a short delay if process hasn't exited naturally
@@ -1110,6 +1156,16 @@ function CliApp() {
           findDefinitionTool: createFindDefinitionTool(additionalDirectories),
           getFileStructureTool: createGetFileStructureTool(additionalDirectories),
           workItemTools,
+          peerTools: createPeerTools(
+            () => peerServiceRef.current,
+            async (target, text) => {
+              const response = await reviewGateFn({
+                id: uuidv4(),
+                description: `Send this peer message to ${JSON.stringify(target)}? It may start model usage in the recipient.\n${JSON.stringify(text)}`,
+              });
+              return response.decision === 'approved';
+            }
+          ),
           skillTool,
           dynamicAgentTool,
           coordinateTaskTool:
@@ -1692,34 +1748,144 @@ function CliApp() {
   // Thin wrapper over the extracted turn lifecycle (session/turnController.ts,
   // issue #228). Builds a React-free TurnContext from the current render state;
   // all turn logic lives in runTurn so it can be tested without mounting Ink.
-  const handleMessage = (message: string): Promise<void> =>
-    runTurn(message, {
-      agent: state.agent,
-      sessionStore: state.sessionStore,
-      configStore: state.configStore,
-      customCommandStore: state.customCommandStore,
-      messageBuilder: state.messageBuilder,
-      config: state.config,
-      availableModels: state.availableModels,
-      agentStore: state.agentStore,
-      contextContent: state.contextContent,
-      additionalDirectories: state.additionalDirectories,
-      featureRegistry: state.featureRegistry,
-      backgroundManager: state.backgroundManager,
-      toolCatalog: state.toolCatalog,
-      todoStore: todoStoreRef.current,
+  const buildTurnContext = (): TurnContext => ({
+    onTurnStart: () => peerServiceRef.current?.resetSendBudget(),
+    agent: state.agent,
+    sessionStore: state.sessionStore,
+    configStore: state.configStore,
+    customCommandStore: state.customCommandStore,
+    messageBuilder: state.messageBuilder,
+    config: state.config,
+    availableModels: state.availableModels,
+    agentStore: state.agentStore,
+    contextContent: state.contextContent,
+    additionalDirectories: state.additionalDirectories,
+    featureRegistry: state.featureRegistry,
+    backgroundManager: state.backgroundManager,
+    toolCatalog: state.toolCatalog,
+    todoStore: todoStoreRef.current,
+    decisionStore: decisionStoreRef.current,
+    blockerStore: blockerStoreRef.current,
+    postEditDiagnostics: postEditDiagnosticsRef.current,
+    workflowStores: {
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
-      postEditDiagnostics: postEditDiagnosticsRef.current,
-      workflowStores: {
-        decisionStore: decisionStoreRef.current,
-        blockerStore: blockerStoreRef.current,
-        reviewGateStore: reviewGateStoreRef.current,
-      },
-      setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
-      sessionGeneration: () => initGenerationRef.current,
-    });
+      reviewGateStore: reviewGateStoreRef.current,
+    },
+    setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+    sessionGeneration: () => initGenerationRef.current,
+  });
+  peerTurnContextRef.current = buildTurnContext;
+  peerReadyRef.current = () => {
+    const store = useCliStore.getState();
+    return (
+      isInitialized &&
+      !peerStoppingRef.current &&
+      peerGenerationRef.current === initGenerationRef.current &&
+      !exitInProgress &&
+      peerScopeRef.current === livePeerScopeRef.current &&
+      store.interactionMode === 'normal' &&
+      !store.turnInFlight &&
+      store.sessionHolds === 0 &&
+      !store.isThinking &&
+      !store.inputValue &&
+      store.pastedContent === null &&
+      store.pendingMessages.length === 0 &&
+      store.messageQueue.length === 0 &&
+      !store.permissionPrompt &&
+      !store.userQuestionPrompt &&
+      !store.reviewGatePrompt &&
+      !store.exitHandoffPrompt &&
+      !store.showConfigEditor &&
+      !store.showMcpViewer &&
+      !store.exitRequested &&
+      !state.trustLocationSelector &&
+      !state.folderTrustPrompt &&
+      !state.mcpApprovalPrompt &&
+      !state.rewindSelector &&
+      !state.sessionSelector &&
+      !state.showLoginFlow &&
+      !state.showEnvironmentPicker &&
+      !state.showModelPicker
+    );
+  };
+  const handleMessage = (message: string): Promise<void> => {
+    return runTurn(message, buildTurnContext());
+  };
   handleMessageRef.current = handleMessage;
+
+  const enablePeers = async (name?: string) => {
+    if (!isInitialized || peerStoppingRef.current || !state.config) throw new Error('CLI is not ready.');
+    if (process.platform === 'win32') throw new Error('Local peer messaging currently supports macOS and Linux.');
+    await stopPeers();
+    const session = useCliStore.getState().session;
+    if (!session) throw new Error('No active session.');
+    const scope = livePeerScopeRef.current;
+    const generation = initGenerationRef.current;
+    const config = await state.configStore.load();
+    const resolvedEndpoint = resolveApiEndpoint(config.apiConfig);
+    const { endpoint, userId } = peerAccountScope(
+      config,
+      resolvedEndpoint.status === 'configured' ? resolvedEndpoint.url : 'local-only',
+      state.signedOutLocal
+    );
+    const identity = await createPeerIdentity({
+      cwd: process.cwd(),
+      endpoint,
+      userId,
+      threadId: session.id,
+      name,
+      grantedDirectories: state.additionalDirectories,
+    });
+    if (
+      scope !== livePeerScopeRef.current ||
+      generation !== initGenerationRef.current ||
+      useCliStore.getState().session?.id !== session.id
+    )
+      throw new Error('Session changed; enable peers again.');
+    peerScopeRef.current = scope;
+    peerGenerationRef.current = generation;
+    const service: PeerService = new PeerService({
+      root: path.join(homedir(), '.bike4mind', 'peers'),
+      identity,
+      canDeliver: () => peerServiceRef.current === service && peerReadyRef.current(),
+      deliver: async (text, provenance) => {
+        const current = await state.configStore.load();
+        const resolved = resolveApiEndpoint(current.apiConfig);
+        const account = peerAccountScope(
+          current,
+          resolved.status === 'configured' ? resolved.url : 'local-only',
+          state.signedOutLocal
+        );
+        if (
+          peerAccountId(account.endpoint, account.userId) !== identity.accountId ||
+          useCliStore.getState().session?.id !== identity.threadId ||
+          !peerReadyRef.current()
+        )
+          return { status: 'busy' as const };
+        return runPeerTurn(text, provenance, peerTurnContextRef.current());
+      },
+      notify: text => console.log(`[peers] ${JSON.stringify(text)}`),
+    });
+    peerServiceRef.current = service;
+    try {
+      await service.start();
+      if (
+        scope !== livePeerScopeRef.current ||
+        generation !== initGenerationRef.current ||
+        peerServiceRef.current !== service ||
+        peerStoppingRef.current
+      ) {
+        await service.close();
+        throw new Error('Session changed while starting peer messaging.');
+      }
+      console.log(`Peer session: ${identity.id} (${JSON.stringify(identity.name)})`);
+    } catch (error) {
+      if (peerServiceRef.current === service) peerServiceRef.current = null;
+      await service.close();
+      throw error;
+    }
+  };
 
   // Builds a React-free SessionLifecycleContext from the current render state
   // (issue #228, phase 3). The create/resume/compact/rewind command handlers are
@@ -1737,6 +1903,7 @@ function CliApp() {
     todoStore: todoStoreRef.current,
     onSessionReplaced: () => {
       usageCache = null;
+      void stopPeers().catch(() => {});
     },
     drainReviewGatePrompt: dequeueReviewGatePrompt,
   });
@@ -2400,6 +2567,7 @@ function CliApp() {
       blockerStore: blockerStoreRef.current,
       reviewGateStore: reviewGateStoreRef.current,
       openConfigEditor: () => setShowConfigEditor(true),
+      peers: { enable: enablePeers, disable: stopPeers, get: () => peerServiceRef.current },
     });
     if (handledByRegistry) return;
 
@@ -2411,6 +2579,9 @@ function CliApp() {
     }
 
     // Handle built-in commands
+    if (['login', 'logout', 'set-api', 'reset-api', 'add-dir', 'remove-dir', 'trust', 'untrust'].includes(command)) {
+      await stopPeers();
+    }
     switch (command) {
       case 'exit':
       case 'quit':

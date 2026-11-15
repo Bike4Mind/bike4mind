@@ -19,6 +19,11 @@ export interface CommandDefinition {
 
 export const COMMANDS: CommandDefinition[] = [
   {
+    name: 'peers',
+    description: 'Discover and message local CLI sessions (opt-in)',
+    args: '<on|off|list|send|reply|inbox|status|cancel|accept|hold|refuse|release|delete>',
+  },
+  {
     name: 'help',
     description: 'Show this help message',
   },

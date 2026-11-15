@@ -988,6 +988,84 @@ to trust it. Pending repo MCP servers stay off with the usual warning. Context t
 host needs should reach the session through `--append-system-prompt` and
 `--mcp-config`.
 
+## Local CLI session messaging
+
+On macOS and Linux, independently launched interactive CLI sessions can discover
+and message each other without Desktop running. Messaging is off at startup;
+repository settings, agent tools, and saved histories cannot enable it.
+
+In two terminals working in the same repository (separate Git worktrees work):
+
+1. Run `/peers on api-worker` in the first terminal and `/peers on client-worker`
+   in the second. Each command prints that process's session ID.
+2. Run `/peers list` to see reachable sessions and their advertised readiness.
+3. Run `/peers send <session-id> The response field is now displayName.`
+4. In the recipient, inspect `/peers inbox`, then run `/peers release <message-id>`
+   to approve that message. It runs only when the recipient is safely idle.
+5. The sender can run `/peers status <session-id> <message-id>` for the exact
+   correlated result. The recipient can send an explicit reply with
+   `/peers reply <received-message-id> Confirmed; the client uses displayName.`
+
+Incoming messages are held by default. `/peers accept` explicitly allows pending
+and future incoming messages to start idle model turns and incur usage.
+`/peers hold` pauses pending delivery; `/peers refuse` rejects incoming work.
+`/peers cancel <session-id> <message-id>` withdraws an undelivered message, and
+`/peers delete <message-id>` removes stored message content when safe.
+`/peers off` unregisters the session and closes its local endpoint.
+
+The agent has `peer_list`, `peer_send`, and `peer_status` tools, but cannot enable
+messaging or change inbound policy. Every agent send requires a separate human
+review, including in auto-accept mode. Peer-origin turns can only send back to
+their sender and preserve the reply hop limit. A message is peer input, never
+human permission, and cannot answer approval prompts or bypass denied actions.
+Approval identifies the recipient process and conversation before sending. If
+that recipient restarts while approval is pending, request a new approval.
+
+Discovery is limited to the same local user, account/API environment, canonical
+repository, and additional granted directories. Local-only profiles use the
+user-owned CLI profile identity. Other projects/accounts and different folder
+grants cannot communicate in this release; explicit cross-scope pairing is not
+implemented. Session/model/account/folder changes disable messaging and require
+another `/peers on`. Automatic delivery is paused outside normal permission mode,
+while drafting input, while another turn holds the session, and during dialogs.
+
+Only explicit text crosses the connection. Messages do not expand `@file` or
+image references, execute slash commands, or attach full conversation histories.
+Receiving agents can use their own tools subject to their existing permissions.
+Transport credentials stay outside model context in owner-only registry files
+under `~/.bike4mind/peers`. These controls do not isolate malicious programs
+already running as the same OS user.
+
+Messages are limited to 8 KiB UTF-8, with 20 pending messages per recipient,
+two agent sends per turn, a five-hop reply-chain limit, and per-sender rate
+limits. Pending messages expire after 15 minutes. Receipt content is bounded
+and retained for up to seven days; unresolved outgoing receipts in the current
+process retain visible status metadata until reconciled. Correlated result
+previews are bounded separately.
+Queued/held, delivered, completed, stopped, cancelled, failed, expired, rejected,
+and unknown are separate states. Completed means the turn finished, not that its
+claims were independently verified. An ambiguous disconnect is unknown; do not
+blindly resend it.
+Sender-side deadlines cannot prove remote work expired. Unconfirmed outgoing
+work remains unknown and visible until its remote status is reconciled, including
+when the recipient started running before the deadline.
+If a model turn finishes but its conversation history cannot be saved, the receipt
+reports a storage failure with the completed result. This does not mean the work
+never ran; do not automatically retry it.
+
+Each launch has a new process identity, separate from its saved conversation.
+Use distinct saved conversations for concurrent processes. Enrollment rejects an
+already-discovered copy of the same conversation, but is not a general atomic
+lock on shared history files.
+Old process addresses are not redirected to resumed histories. Restarted work
+does not replay pending peer messages automatically. `/peers inbox` can show
+retired receipts for the same saved conversation; unfinished historical work is
+marked unknown and must be reconciled manually. When context needs compaction,
+peer work stops before starting a model turn; compact manually and enable peers
+again. Native Windows, headless/ACP
+enrollment, cross-machine delivery, mid-turn injection, shared task boards, and
+autonomous coordination are outside this first release.
+
 ## License
 
 Private - Bike4Mind

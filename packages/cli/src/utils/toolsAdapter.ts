@@ -90,6 +90,7 @@ class CliLogger extends Logger {
  * interactive-only).
  */
 export interface CliToolListInput {
+  peerTools?: ICompletionOptionTools[];
   /** `tool_search`, when deferred tool schemas exist. Offered ahead of the rest of the list. */
   toolSearchTool?: ICompletionOptionTools | null;
   agentDelegateTool: ICompletionOptionTools;
@@ -129,6 +130,7 @@ export function buildCliToolList(input: CliToolListInput, wrapDeps: WrapToolDeps
       input.findDefinitionTool,
       input.getFileStructureTool,
       ...(input.workItemTools ?? []),
+      ...(input.peerTools ?? []),
       ...(input.skillTool ? [input.skillTool] : []),
       ...(input.dynamicAgentTool ? [input.dynamicAgentTool] : []),
       ...(input.coordinateTaskTool ? [input.coordinateTaskTool] : []),

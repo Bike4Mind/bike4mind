@@ -41,6 +41,12 @@ export interface Message {
     earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
     steered?: boolean; // User input sent mid-turn and injected into that running turn (session/steering.ts)
+    peer?: {
+      messageId: string;
+      senderId: string;
+      senderName: string;
+      replyTo?: string;
+    };
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
     subagentExecution?: {

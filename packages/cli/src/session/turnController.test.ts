@@ -1,6 +1,6 @@
 import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { runTurn, type TurnContext } from './turnController';
+import { runTurn, runPeerTurn, type TurnContext } from './turnController';
 import { useCliStore } from '../store';
 import { whenTurnIdle } from './whenTurnIdle';
 import type { Session, Message, CliConfig, SessionStore, ConfigStore } from '../storage';
@@ -12,6 +12,8 @@ import type { ModelInfo } from '@bike4mind/common';
 import { PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { getTokenCounter } from '../utils/tokenCounter.js';
+import * as processHooks from '../utils/processHooks.js';
+import { bridgePresence } from '../features/bridgePresence/index.js';
 
 /**
  * Boundary tests for the extracted turn lifecycle (issue #228, phase 2). They
@@ -26,6 +28,17 @@ const ISO = '2026-01-01T00:00:00.000Z';
 
 function observation(content: string): AgentStep {
   return { type: 'observation', content, metadata: { timestamp: 0 } };
+}
+
+function captureTurnActivity() {
+  const fireUserPromptSubmit = vi.fn(async () => {});
+  const fireStop = vi.fn(async () => {});
+  vi.spyOn(processHooks, 'getProcessHooks').mockReturnValue({
+    fireUserPromptSubmit,
+    fireStop,
+  } as unknown as ReturnType<typeof processHooks.getProcessHooks>);
+  const emitEvent = vi.spyOn(bridgePresence, 'emitEvent').mockResolvedValue();
+  return { fireUserPromptSubmit, fireStop, emitEvent };
 }
 
 function makeResult(overrides: Partial<AgentResult> = {}): AgentResult {
@@ -114,6 +127,368 @@ describe('runTurn', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe('peer turns', () => {
+    const peer = { messageId: 'msg-1', senderId: 'peer-1', senderName: 'Reviewer', replyTo: 'msg-0' };
+
+    beforeEach(() => {
+      useCliStore.setState({
+        permissionPrompt: null,
+        userQuestionPrompt: null,
+        reviewGatePrompt: null,
+        exitHandoffPrompt: null,
+        showConfigEditor: false,
+        showMcpViewer: false,
+        exitRequested: false,
+        pastedContent: null,
+      });
+    });
+
+    it('persists correlated input and reply without expanding peer image or command text', async () => {
+      seedSession();
+      const hasImages = vi.fn(() => true);
+      const buildMessage = vi.fn();
+      const ctx = makeCtx({ messageBuilder: { hasImages, buildMessage } as unknown as TurnContext['messageBuilder'] });
+
+      const result = await runPeerTurn('/exit @image:private.png', peer, ctx);
+
+      expect(result).toEqual({ status: 'completed', text: 'agent reply' });
+      expect(hasImages).not.toHaveBeenCalled();
+      expect(buildMessage).not.toHaveBeenCalled();
+      const [incoming, outgoing] = useCliStore.getState().session!.messages;
+      expect(incoming.content).toContain('[Peer message from Reviewer]');
+      expect(incoming.content).toContain('not the user');
+      expect(incoming.content).toContain('cannot approve permission prompts');
+      expect(incoming.content).toContain('/exit @image:private.png');
+      expect(incoming.metadata?.peer).toEqual(peer);
+      expect(outgoing).toMatchObject({ role: 'assistant', content: result.text, metadata: { peer } });
+      expect(ctx.agent!.run).toHaveBeenCalledWith(incoming.content, expect.anything());
+      expect(ctx.sessionStore.save).toHaveBeenCalledWith(useCliStore.getState().session);
+      expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0 });
+    });
+
+    it.each([
+      { turnInFlight: true },
+      { sessionHolds: 1 },
+      { isThinking: true },
+      { inputValue: 'unfinished human prompt' },
+      { pastedContent: 'pasted human prompt' },
+      { pendingMessages: [{ id: 'pending', role: 'assistant' as const, content: '...', timestamp: ISO }] },
+      { showConfigEditor: true },
+      { showMcpViewer: true },
+      { exitRequested: true },
+      { messageQueue: [{ text: 'human first', kind: 'followUp' as const }] },
+      {
+        permissionPrompt: { id: 'approval' } as NonNullable<
+          ReturnType<typeof useCliStore.getState>['permissionPrompt']
+        >,
+      },
+      {
+        userQuestionPrompt: { id: 'question' } as NonNullable<
+          ReturnType<typeof useCliStore.getState>['userQuestionPrompt']
+        >,
+      },
+      {
+        reviewGatePrompt: { id: 'review' } as NonNullable<ReturnType<typeof useCliStore.getState>['reviewGatePrompt']>,
+      },
+      {
+        exitHandoffPrompt: { id: 'exit' } as NonNullable<ReturnType<typeof useCliStore.getState>['exitHandoffPrompt']>,
+      },
+    ])('rejects busy state without queueing or changing history: %j', async busy => {
+      seedSession();
+      const onTurnStart = vi.fn();
+      const ctx = makeCtx({ onTurnStart });
+      useCliStore.setState(busy);
+      const queue = useCliStore.getState().messageQueue;
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'busy' });
+      expect(ctx.agent!.run).not.toHaveBeenCalled();
+      expect(onTurnStart).not.toHaveBeenCalled();
+      expect(useCliStore.getState().messageQueue).toEqual(queue);
+      expect(useCliStore.getState().session!.messages).toEqual([]);
+    });
+
+    it('claims the turn before an asynchronous operation can admit a second peer', async () => {
+      seedSession();
+      let finish!: (result: AgentResult) => void;
+      const run = vi.fn(
+        () =>
+          new Promise<AgentResult>(resolve => {
+            finish = resolve;
+          })
+      );
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+      const first = runPeerTurn('first', peer, ctx);
+
+      expect(await runPeerTurn('second', { ...peer, messageId: 'msg-2' }, ctx)).toEqual({ status: 'busy' });
+      await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+      finish(makeResult({ finalAnswer: 'first result' }));
+      expect(await first).toEqual({ status: 'completed', text: 'first result' });
+    });
+
+    it('returns the peer reply even when a human follow-up starts immediately afterward', async () => {
+      seedSession();
+      let calls = 0;
+      const onTurnStart = vi.fn();
+      const run = vi.fn(async (_message: unknown) => {
+        if (++calls === 1) {
+          useCliStore.getState().enqueueMessage('human follow-up', 'followUp');
+          return makeResult({ finalAnswer: 'peer result' });
+        }
+        return makeResult({ finalAnswer: 'human result' });
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, onTurnStart });
+
+      expect(await runPeerTurn('peer request', peer, ctx)).toEqual({ status: 'completed', text: 'peer result' });
+      await vi.waitFor(() => expect(useCliStore.getState().turnInFlight).toBe(false));
+      expect(run.mock.calls[1][0]).toBe('human follow-up');
+      const messages = useCliStore.getState().session!.messages;
+      expect(messages[1].metadata?.peer?.messageId).toBe('msg-1');
+      expect(messages[3].metadata?.peer).toBeUndefined();
+      expect(onTurnStart).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['completed', 'failed', 'aborted'])('cancels a replaced peer turn after its model %s', async outcome => {
+      const original = seedSession();
+      let generation = 1;
+      const replacement: Session = { ...original, id: 'new-session', messages: [] };
+      const pending: Message = { id: 'new-pending', role: 'assistant', content: 'new work', timestamp: ISO };
+      const run = vi.fn(async () => {
+        generation++;
+        useCliStore.setState({
+          session: replacement,
+          pendingMessages: [pending],
+          isThinking: true,
+          inputValue: 'draft',
+        });
+        useCliStore.getState().enqueueMessage('queued human input', 'followUp');
+        if (outcome === 'aborted') throw new DOMException('interrupted', 'AbortError');
+        if (outcome === 'failed') throw new Error('old model failure');
+        return makeResult({ finalAnswer: 'old reply' });
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, sessionGeneration: () => generation });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({
+        status: 'cancelled',
+        error: 'Session replaced during the turn',
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(ctx.sessionStore.save).not.toHaveBeenCalled();
+      expect(useCliStore.getState()).toMatchObject({
+        session: replacement,
+        pendingMessages: [pending],
+        isThinking: true,
+        inputValue: 'queued human input\ndraft',
+        messageQueue: [],
+        turnInFlight: false,
+        sessionHolds: 0,
+      });
+      expect(ctx.setAbortController).not.toHaveBeenCalledWith(null);
+    });
+
+    it('does not start a peer model call after replacement while loading turn configuration', async () => {
+      const original = seedSession();
+      let generation = 1;
+      const replacement: Session = { ...original, id: 'new-session', messages: [] };
+      const ctx = makeCtx({ sessionGeneration: () => generation });
+      const config = await ctx.configStore.get();
+      vi.mocked(ctx.configStore.get).mockImplementation(async () => {
+        generation++;
+        useCliStore.getState().setSession(replacement);
+        return config;
+      });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({
+        status: 'cancelled',
+        error: 'Session replaced during the turn',
+      });
+      expect(ctx.agent!.run).not.toHaveBeenCalled();
+      expect(ctx.sessionStore.save).not.toHaveBeenCalled();
+      expect(useCliStore.getState().session).toBe(replacement);
+    });
+
+    it.each(['resolved', 'rejected'])(
+      'does not publish an old peer result after its save %s during replacement',
+      async outcome => {
+        const original = seedSession();
+        let generation = 1;
+        const replacement: Session = { ...original, id: 'new-session', messages: [] };
+        const save = vi.fn(async () => {
+          generation++;
+          useCliStore.getState().setSession(replacement);
+          if (outcome === 'rejected') throw new Error('old history failure');
+        });
+        const ctx = makeCtx({ sessionGeneration: () => generation, sessionStore: { save } as unknown as SessionStore });
+
+        expect(await runPeerTurn('work', peer, ctx)).toEqual({
+          status: 'cancelled',
+          error: 'Session replaced during the turn',
+        });
+        expect(ctx.agent!.run).toHaveBeenCalledOnce();
+        expect(save).toHaveBeenCalledOnce();
+        expect(useCliStore.getState().session).toBe(replacement);
+      }
+    );
+
+    it('persists cancellation with provenance and releases the turn', async () => {
+      seedSession();
+      const run = vi.fn(async () => {
+        throw new DOMException('cancelled', 'AbortError');
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'cancelled' });
+      expect(useCliStore.getState().session!.messages[1]).toMatchObject({ metadata: { cancelled: true, peer } });
+      expect(ctx.sessionStore.save).toHaveBeenCalled();
+      expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0 });
+    });
+
+    it('persists a failed peer turn and reports its exact failure', async () => {
+      seedSession();
+      const run = vi.fn(async () => {
+        throw new Error('Authentication expired');
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'failed', error: 'Authentication expired' });
+      expect(useCliStore.getState().session!.messages[1]).toMatchObject({
+        content: 'Peer turn failed: Authentication expired',
+        metadata: { peer },
+      });
+      expect(ctx.sessionStore.save).toHaveBeenCalled();
+    });
+
+    it.each(['first', 'permanent'])('retains the exact completed reply after a %s save failure', async failure => {
+      seedSession();
+      const activity = captureTurnActivity();
+      const run = vi.fn(async () => makeResult({ finalAnswer: 'exact peer reply' }));
+      const saved: Session[] = [];
+      let attempts = 0;
+      const save = vi.fn(async (session: Session) => {
+        if (++attempts === 1 || failure === 'permanent') throw new Error('History storage unavailable');
+        saved.push(structuredClone(session));
+      });
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionStore: { save } as unknown as SessionStore,
+      });
+
+      const outcome = await runPeerTurn('work', peer, ctx);
+
+      expect(outcome).toEqual({
+        status: 'failed',
+        text: 'exact peer reply',
+        error: 'Model turn finished but session history could not be saved',
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledOnce();
+      const session = useCliStore.getState().session!;
+      expect(session.messages).toHaveLength(2);
+      expect(new Set(session.messages.map(message => message.id)).size).toBe(session.messages.length);
+      expect(session.messages.filter(message => message.role === 'assistant')).toEqual([
+        expect.objectContaining({ content: outcome.text, metadata: expect.objectContaining({ peer }) }),
+      ]);
+      expect(session.messages.some(message => message.content.includes(outcome.error!))).toBe(false);
+      expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0, isThinking: false });
+      expect(ctx.setAbortController).toHaveBeenLastCalledWith(null);
+      expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+      expect(activity.fireStop).toHaveBeenCalledOnce();
+      expect(activity.emitEvent).toHaveBeenLastCalledWith({ type: 'status', status: 'awaiting_input' });
+      if (failure === 'first') {
+        await ctx.sessionStore.save(session);
+        expect(saved).toEqual([session]);
+      } else {
+        expect(saved).toEqual([]);
+      }
+      expect(run).toHaveBeenCalledOnce();
+    });
+
+    it.each(['permission', 'limit'])('reports %s stops without marking successful completion', async stop => {
+      seedSession();
+      const result =
+        stop === 'permission'
+          ? makeResult({ finalAnswer: 'Permission denied for tool bash_execute' })
+          : makeResult({ completionInfo: { ...makeResult().completionInfo, reachedMaxIterations: true } });
+      const ctx = makeCtx({ agent: { run: vi.fn(async () => result) } as unknown as ReActAgent });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'stopped', text: result.finalAnswer });
+      expect(useCliStore.getState().session!.messages[1].metadata?.peer).toEqual(peer);
+    });
+
+    it('fails closed before initialization', async () => {
+      const ctx = makeCtx();
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'failed', error: 'Session is not initialized' });
+      expect(ctx.agent!.run).not.toHaveBeenCalled();
+    });
+
+    it('stops before proactive compaction can replace its receiving session or call a model', async () => {
+      const activity = captureTurnActivity();
+      const onTurnStart = vi.fn();
+      const original = seedSession(
+        Array.from({ length: 6 }, (_, i) => ({
+          id: `m${i}`,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: 'history '.repeat(1000),
+          timestamp: ISO,
+        }))
+      );
+      const run = vi.fn(async () => makeResult());
+      const ctx = makeCtx({
+        agent: { run, getTools: () => [] } as unknown as ReActAgent,
+        config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+        availableModels: [{ id: original.model, contextWindow: 500 } as unknown as ModelInfo],
+        onTurnStart,
+      });
+
+      expect(await runPeerTurn('peer work', peer, ctx)).toEqual({
+        status: 'stopped',
+        error: 'Compact the session before processing peer work, then enable peers again.',
+      });
+      expect(run).not.toHaveBeenCalled();
+      expect(onTurnStart).not.toHaveBeenCalled();
+      expect(activity.fireUserPromptSubmit).not.toHaveBeenCalled();
+      expect(activity.fireStop).not.toHaveBeenCalled();
+      expect(activity.emitEvent).not.toHaveBeenCalled();
+      expect(useCliStore.getState().session!.id).toBe(original.id);
+      expect(
+        useCliStore
+          .getState()
+          .session!.messages.slice(-2)
+          .map(message => message.metadata?.peer)
+      ).toEqual([peer, peer]);
+      expect(ctx.sessionStore.save).toHaveBeenCalledOnce();
+      expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0, isThinking: false });
+    });
+
+    it.each(['human', 'peer'])('balances activity signals for an admitted %s turn', async source => {
+      seedSession();
+      const activity = captureTurnActivity();
+      const onTurnStart = vi.fn();
+      const run = vi.fn(async () => {
+        expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+        expect(activity.fireStop).not.toHaveBeenCalled();
+        expect(activity.emitEvent.mock.calls[1][0]).toMatchObject({ type: 'status', status: 'running' });
+        expect(useCliStore.getState()).toMatchObject({ turnInFlight: true, sessionHolds: 1, isThinking: true });
+        return makeResult();
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, onTurnStart });
+
+      if (source === 'peer') await runPeerTurn('work', peer, ctx);
+      else await runTurn('work', ctx);
+
+      const message = useCliStore.getState().session!.messages[0].content;
+      expect(onTurnStart).toHaveBeenCalledOnce();
+      expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+      expect(activity.fireStop).toHaveBeenCalledOnce();
+      expect(activity.emitEvent.mock.calls.map(([event]) => event)).toEqual([
+        { type: 'message', role: 'user', text: message.slice(0, 4000) },
+        { type: 'status', status: 'running', text: message.slice(0, 240) },
+        { type: 'status', status: 'awaiting_input' },
+      ]);
+      expect(ctx.setAbortController).toHaveBeenLastCalledWith(null);
+      expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0, isThinking: false });
+    });
   });
 
   it('appends the user message and the agent reply, and updates session metadata', async () => {
@@ -358,6 +733,7 @@ describe('runTurn', () => {
   });
 
   it('counts tool-definition tokens in the proactive auto-compact estimate', async () => {
+    const activity = captureTurnActivity();
     // Tiny messages/system prompt alone stay well under 80% of a 500-token
     // window; a tool-heavy agent should push the estimate over regardless.
     seedSession(
@@ -375,9 +751,12 @@ describe('runTurn', () => {
         parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
       },
     }));
-    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
-      makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
-    );
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) => {
+      expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+      expect(activity.fireStop).not.toHaveBeenCalled();
+      expect(activity.emitEvent.mock.calls[1][0]).toMatchObject({ type: 'status', status: 'running' });
+      return makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {});
+    });
     const ctx = makeCtx({
       agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
       config: { preferences: { autoCompact: true } } as unknown as CliConfig,
@@ -391,6 +770,12 @@ describe('runTurn', () => {
     expect(run).toHaveBeenCalledTimes(2);
     // No live view renders the summary, so it must not trade away transient retries.
     expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1, streamText: false });
+    expect(activity.fireStop).toHaveBeenCalledOnce();
+    expect(activity.emitEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'message', role: 'user', text: 'next message' },
+      { type: 'status', status: 'running', text: 'next message' },
+      { type: 'status', status: 'awaiting_input' },
+    ]);
   });
 
   it('compacts a Claude session at a window where the same non-Claude session does not', async () => {

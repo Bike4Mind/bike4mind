@@ -12,8 +12,10 @@ import type { ConfigStore } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { PermissionManager } from '../utils';
 import type { DecisionStore, BlockerStore, ReviewGateStore } from '../tools';
+import type { PeerControls } from './handlers/peerCommands.js';
 
 export interface CommandContext {
+  peers?: PeerControls;
   configStore: ConfigStore;
   customCommandStore: CustomCommandStore;
   permissionManager: PermissionManager | null;
