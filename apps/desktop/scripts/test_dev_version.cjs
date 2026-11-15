@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, writeFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { resolveDevVersion, readDevVersion } = require('./dev-version.cjs');
@@ -95,6 +95,25 @@ test('readDevVersion reads tags, revision and tracked changes from a local repos
 
     writeFileSync(join(directory, 'file.txt'), 'two\n');
     assert.equal(readDevVersion(directory).version, `0.12.0-dev.g${revision}.dirty`);
+
+    const indexPath = join(directory, '.git', 'index');
+    const index = readFileSync(indexPath);
+    writeFileSync(indexPath, 'corrupt index\n');
+    assert.equal(git('rev-parse', '--short=12', 'HEAD'), revision);
+    assert.deepEqual(readDevVersion(directory), {
+      version: '0.0.0-dev.unknown',
+      basis: 'working-tree status unavailable',
+    });
+
+    writeFileSync(indexPath, index);
+    const commit = git('rev-parse', 'HEAD');
+    rmSync(join(directory, '.git', 'objects', commit.slice(0, 2), commit.slice(2)));
+    assert.equal(git('rev-parse', '--short=12', 'HEAD'), revision);
+    assert.throws(() => git('tag', '--list', 'desktop-v*', '--merged', 'HEAD'));
+    assert.deepEqual(readDevVersion(directory), {
+      version: '0.0.0-dev.unknown',
+      basis: 'local desktop release tags unavailable',
+    });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

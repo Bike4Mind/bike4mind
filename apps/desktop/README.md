@@ -370,7 +370,9 @@ checkout when the build starts, with no network, and is shown in app information
 settings along with a "Version basis" line naming the tag it came from. It is the newest tag
 this checkout has, not necessarily the latest release: run `git fetch origin --tags` if it
 looks old. With no usable desktop tags it is `0.0.0-dev.untagged.g<commit>`, and where git or the
-commit is unavailable it is `0.0.0-dev.unknown`. Packaged builds are unaffected.
+commit is unavailable it is `0.0.0-dev.unknown`. Unreadable local tags or working-tree status also
+report `0.0.0-dev.unknown`, with a basis naming the unavailable metadata, rather than claiming an
+untagged or clean checkout. Packaged builds are unaffected.
 
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.

@@ -46,8 +46,15 @@ function readDevVersion(cwd) {
   try {
     const revision = git('rev-parse', '--short=12', 'HEAD');
     if (!revision) return resolveDevVersion({ revision: undefined });
-    const tags = git('tag', '--list', 'desktop-v*', '--merged', 'HEAD') ?? '';
-    const dirty = Boolean(git('status', '--porcelain', '--untracked-files=no'));
+    const tags = git('tag', '--list', 'desktop-v*', '--merged', 'HEAD');
+    if (tags === undefined) {
+      return { version: '0.0.0-dev.unknown', basis: 'local desktop release tags unavailable' };
+    }
+    const status = git('status', '--porcelain', '--untracked-files=no');
+    if (status === undefined) {
+      return { version: '0.0.0-dev.unknown', basis: 'working-tree status unavailable' };
+    }
+    const dirty = status !== '';
     let latest;
     try {
       latest = latestStableVersion(tags);

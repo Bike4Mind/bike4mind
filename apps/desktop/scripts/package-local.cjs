@@ -5,9 +5,12 @@ const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-
 
 /** Highest stable desktop release in a whitespace-separated tag list, or undefined when there is none. */
 function latestStableVersion(tags) {
-  const versions = tags.split(/\s+/).filter(tag => tag.startsWith('desktop-v'))
+  const versions = tags
+    .split(/\s+/)
+    .filter(tag => tag.startsWith('desktop-v'))
     .filter(tag => tag !== 'desktop-v1.0.0')
-    .map(tag => tag.slice(9)).filter(version => stable.test(version));
+    .map(tag => tag.slice(9))
+    .filter(version => stable.test(version));
   if (versions.some(version => !version.startsWith('0.'))) {
     throw new Error('Major desktop releases require an explicit beta policy change');
   }
@@ -24,13 +27,22 @@ function latestStableVersion(tags) {
 
 function resolveVersion(override, tags, revision) {
   if (override !== undefined) {
-    if (!versionPattern.test(override) || override.split('-').slice(1).join('-').split('.').some(part => /^0\d+$/.test(part))) {
+    if (
+      !versionPattern.test(override) ||
+      override
+        .split('-')
+        .slice(1)
+        .join('-')
+        .split('.')
+        .some(part => /^0\d+$/.test(part))
+    ) {
       throw new Error('DESKTOP_VERSION must be a valid SemVer without build metadata');
     }
     return override;
   }
   const latest = latestStableVersion(tags);
-  if (latest === undefined) throw new Error('No desktop tags. Run git fetch origin --tags or set DESKTOP_VERSION explicitly.');
+  if (latest === undefined)
+    throw new Error('No desktop tags. Run git fetch origin --tags or set DESKTOP_VERSION explicitly.');
   if (!/^[a-f0-9]+$/.test(revision)) throw new Error('Invalid git revision');
   return `${latest}-local.${revision}`;
 }
@@ -40,18 +52,30 @@ function builderArgs(args, version, platform, identity) {
     throw new Error('Use DESKTOP_VERSION and DESKTOP_MAC_IDENTITY for local overrides; publication is disabled.');
   }
   const mac = args.includes('--mac') || (!args.includes('--linux') && !args.includes('--win') && platform === 'darwin');
-  return [...args, '--publish', 'never', `-c.extraMetadata.version=${version}`,
-    ...(mac ? [`-c.mac.identity=${identity || '-'}`] : [])];
+  return [
+    ...args,
+    '--publish',
+    'never',
+    `-c.extraMetadata.version=${version}`,
+    ...(mac ? [`-c.mac.identity=${identity || '-'}`] : []),
+  ];
 }
 
 if (require.main === module) {
   try {
     const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-    const version = resolveVersion(process.env.DESKTOP_VERSION,
-      git('tag', '--list', 'desktop-v*', '--merged', 'HEAD'), git('rev-parse', '--short=12', 'HEAD'));
+    const version = resolveVersion(
+      process.env.DESKTOP_VERSION,
+      git('tag', '--list', 'desktop-v*', '--merged', 'HEAD'),
+      git('rev-parse', '--short=12', 'HEAD')
+    );
     const args = builderArgs(process.argv.slice(2), version, process.platform, process.env.DESKTOP_MAC_IDENTITY);
     console.log(`Local desktop package: ${version} (publication disabled)`);
-    const result = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['exec', 'electron-builder', ...args], { stdio: 'inherit' });
+    const result = spawnSync(
+      process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+      ['exec', 'electron-builder', ...args],
+      { stdio: 'inherit' }
+    );
     if (result.error) throw result.error;
     process.exitCode = result.status ?? 1;
   } catch (error) {
