@@ -737,7 +737,6 @@ export const SettingKeySchema = z.enum([
 
   // B4M PI SETTINGS
   'EnableBmPi',
-  'EnableBmPiDefault',
   'EnableBmPiJira',
 
   // OPTIHASHI SETTINGS
@@ -2719,7 +2718,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnablePromptBuilder', order: 28 },
       { key: 'EnableBmPi', order: 30 },
-      { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
       { key: 'EnableDeepResearch', order: 40 },
       { key: 'EnableDeepResearchDefault', order: 41 },
@@ -8152,16 +8150,6 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 30,
-  }),
-  EnableBmPiDefault: makeBooleanSetting({
-    key: 'EnableBmPiDefault',
-    name: 'B4M Pi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, B4M Pi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 31,
-    dependsOn: 'EnableBmPi',
   }),
   EnableBmPiJira: makeBooleanSetting({
     key: 'EnableBmPiJira',

@@ -29,7 +29,6 @@ export const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableMementosV2: {},
   enableOllama: { adminKey: 'EnableOllama', defaultKey: 'EnableOllamaDefault' },
   enableDeepResearch: { adminKey: 'EnableDeepResearch', defaultKey: 'EnableDeepResearchDefault' },
-  enableBmPi: { adminKey: 'EnableBmPi', defaultKey: 'EnableBmPiDefault' },
   enableLattice: { adminKey: 'EnableLattice', defaultKey: 'EnableLatticeDefault' },
   enableBriefcase: { adminKey: 'EnableBriefcase', defaultKey: 'EnableBriefcaseDefault' },
   enableHearth: { adminKey: 'EnableHearth', defaultKey: 'EnableHearthDefault' },

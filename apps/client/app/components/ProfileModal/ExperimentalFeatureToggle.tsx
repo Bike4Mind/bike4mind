@@ -142,17 +142,6 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableArtifacts')}
       />
-      <FeatureContainer
-        title="B4M Pi"
-        featureKey="enableBmPi"
-        description="Repository analysis, task scheduling, Gantt charts, and team activity dashboards for project intelligence."
-        helpId="features/b4m-pi"
-        enabled={isFeatureEnabled('enableBmPi')}
-        disabled={!getServerSettingValue('EnableBmPi')}
-        disabledReason={!getServerSettingValue('EnableBmPi') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableBmPi')}
-      />
       {(getServerSettingValue('EnableHearth') || currentUser?.isAdmin) && (
         <FeatureContainer
           title="Hearth"
