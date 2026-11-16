@@ -29,8 +29,9 @@ export const erasureRegistry: ErasureRegistry = {
     assertEveryModelClassified(mongoose.modelNames());
     return new SubjectErasurePlan(subject).collections(assertLease);
   },
+  // No classification check here: it would block self-serve deletion on a deploy that registers
+  // models outside this registry. Only registry holders are walked; audit lists the rest as unclassified.
   async erase(subject, assertLease) {
-    assertEveryModelClassified(mongoose.modelNames());
     for (const name of beforeErasureHooks()) {
       const hook = BEFORE_ERASURE_HOOKS[name];
       if (!hook) throw new Error(`No beforeErasure function is registered under ${name}`);
