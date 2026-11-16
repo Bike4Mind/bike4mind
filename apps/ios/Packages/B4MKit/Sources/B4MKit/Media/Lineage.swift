@@ -106,7 +106,7 @@ public struct LineageEdge: Hashable, Sendable {
 public struct LineageLink: Identifiable, Hashable, Sendable {
   public let node: LineageNode
   public let role: LineageRole
-  public var id: String { "\(role.title):\(node.id)" }
+  public var id: String { "\(role):\(node.id)" }
 }
 
 /// The trail around one file, as `GET /api/v1/files/{id}/lineage` returns it.
@@ -193,7 +193,9 @@ public enum LineageBranch {
       if let quality = text("quality") { params[.quality] = .text(quality) }
       if let count = number("n") { params[.count] = .number(count) }
       if let seed = number("seed") { params[.seed] = .number(seed) }
-      if text("background") == "transparent" { params[.transparentBackground] = .flag(true) }
+      if text("background") == "transparent" || request["transparentBackground"]?.boolValue == true {
+        params[.transparentBackground] = .flag(true)
+      }
     case .video:
       if let duration = number("durationSeconds") { params[.duration] = .number(duration) }
       if let ratio = text("aspectRatio") { params[.aspectRatio] = .text(ratio) }

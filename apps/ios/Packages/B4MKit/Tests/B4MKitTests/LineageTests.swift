@@ -38,6 +38,17 @@ final class LineageTests: XCTestCase {
     XCTAssertEqual(lineage.madeFrom[1].role.title, "Made from")
   }
 
+  func testTwoUnknownRolesFromOneParentGetDistinctIDs() {
+    let parent = LineageNode(id: "p", kind: .image)
+    let links = [LineageLink(node: parent, role: .other("a")), LineageLink(node: parent, role: .other("b"))]
+    XCTAssertEqual(Set(links.map(\.id)).count, 2)
+  }
+
+  func testBranchReadsTransparentBackgroundFromAnImageJobRequest() {
+    let params = LineageBranch.params(from: ["transparentBackground": .bool(true)], kind: .image)
+    XCTAssertEqual(params[.transparentBackground], .flag(true))
+  }
+
   func testNonOKStatusThrows() {
     XCTAssertThrowsError(try MediaWire.lineage(status: 404, body: Data()))
   }
