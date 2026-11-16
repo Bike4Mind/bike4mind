@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,9 +9,17 @@ const mockPost = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...a: unknown[]) => mockGet(...a), post: (...a: unknown[]) => mockPost(...a) },
 }));
+const gate = vi.hoisted(() => ({ blocked: false, modelTypes: new Map<string, string>() }));
+vi.mock('../../Models/ModelWriteAction', () => ({
+  ModelWriteAction: ({ children }: { children: (disabled: boolean) => React.ReactElement }) => children(gate.blocked),
+}));
+vi.mock('../../Models/Discovery/useModelIndex', () => ({
+  useModelIndex: () => ({
+    data: { byId: new Map([...gate.modelTypes].map(([id, type]) => [id, { id, type }])), truncated: false },
+  }),
+}));
 
 import { ModelPricingCatalog } from './ModelPricingCatalog';
-import { useCreditAnalysisStore } from '../store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -35,6 +43,12 @@ const ROWS = [
   },
 ];
 
+/** The (modelId, unit) pairs the server can revert to a seed. */
+const SEEDED = [
+  { modelId: 'gpt-x', unit: 'per_token' },
+  { modelId: 'gpt-y', unit: 'per_token' },
+];
+
 const DISCOVERY_ROW = {
   modelId: 'gpt-z',
   unit: 'per_token',
@@ -44,10 +58,10 @@ const DISCOVERY_ROW = {
   repricedBy: 'model-discovery',
 };
 
-function renderCatalog() {
+function renderCatalog(toolbarActions?: React.ReactNode) {
   return render(
     <TestWrapper>
-      <ModelPricingCatalog />
+      <ModelPricingCatalog toolbarActions={toolbarActions} />
     </TestWrapper>
   );
 }
@@ -55,16 +69,43 @@ function renderCatalog() {
 describe('ModelPricingCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGet.mockResolvedValue({ data: { rows: ROWS } });
+    gate.blocked = false;
+    gate.modelTypes = new Map();
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: ROWS } });
     mockPost.mockResolvedValue({ data: { row: {} } });
-    useCreditAnalysisStore.setState({ activeTab: 'pricing', pricingModelId: null });
   });
 
-  it('renders in-force rows with seed/operator source chips', async () => {
+  it('shows rates with at least two decimals and keeps the digits of small rates', async () => {
+    const priced = (modelId: string, input: number, output: number) => ({
+      modelId,
+      unit: 'per_token',
+      pricing: { '0': { input, output } },
+      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      note: 'adapter-seed',
+    });
+    mockGet.mockResolvedValue({
+      data: { seeded: [], rows: [priced('mid-model', 1.5e-6, 0.8e-6), priced('tiny-model', 0.075e-6, 15e-6)] },
+    });
+    renderCatalog();
+
+    const mid = await screen.findByTestId('model-pricing-row-mid-model-per_token');
+    expect(mid).toHaveTextContent(/\$1\.50(?!\d)/);
+    expect(mid).toHaveTextContent(/\$0\.80(?!\d)/);
+    const tiny = screen.getByTestId('model-pricing-row-tiny-model-per_token');
+    expect(tiny).toHaveTextContent(/\$0\.075(?!\d)/);
+    expect(tiny).toHaveTextContent(/\$15\.00(?!\d)/);
+  });
+
+  it('names each source in plain words on a neutral chip, with what it means on hover', async () => {
     renderCatalog();
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
-    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
-    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+    const seed = screen.getByTestId('model-pricing-source-gpt-x-per_token');
+    const admin = screen.getByTestId('model-pricing-source-gpt-y-per_token');
+    expect(seed).toHaveTextContent('Default');
+    expect(seed).toHaveAttribute('title', 'Value shipped in code or a seed row');
+    expect(admin).toHaveTextContent('Set by admin');
+    expect(admin).toHaveAttribute('title', 'Value an admin saved here');
+    for (const chip of [seed, admin]) expect(chip).toHaveClass('MuiChip-colorNeutral');
   });
 
   it('keeps the full catalog visible without locally paging away models', async () => {
@@ -77,16 +118,16 @@ describe('ModelPricingCatalog', () => {
   });
 
   it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
-    mockGet.mockResolvedValue({ data: { rows: [...ROWS, DISCOVERY_ROW] } });
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: [...ROWS, DISCOVERY_ROW] } });
     renderCatalog();
     const chip = await screen.findByTestId('model-pricing-source-gpt-z-per_token');
-    expect(chip).toHaveTextContent('discovery');
+    expect(chip).toHaveTextContent('Discovered');
     expect(chip).toHaveAttribute('data-provenance', 'discovery');
+    expect(chip).toHaveClass('MuiChip-colorNeutral');
     // Which feed priced it, without making an admin open history.
-    expect(chip.getAttribute('title')).toContain('openrouter');
-    // Seed and operator rows keep their existing chips.
-    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
-    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+    expect(chip).toHaveAttribute('title', 'Value read from a provider feed (openrouter)');
+    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('Default');
+    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('Set by admin');
   });
 
   it('marks a discovery row in history so an audit can tell automation from an operator', async () => {
@@ -231,12 +272,12 @@ describe('ModelPricingCatalog', () => {
     fireEvent.click(await screen.findByTestId('model-pricing-reprice-gpt-x-per_token'));
     // gpt-x stores 4e-6 / 16e-6 -> $4 and $16 per 1M cost, x1.2 default markup.
     const derived = screen.getByTestId('reprice-markup-0');
-    expect(derived).toHaveTextContent('$4.8');
-    expect(derived).toHaveTextContent('$19.2');
+    expect(derived).toHaveTextContent('$4.80');
+    expect(derived).toHaveTextContent('$19.20');
     expect(derived).toHaveTextContent('markup');
     // Editing the cost re-derives it without changing what gets posted.
     fireEvent.change(screen.getByTestId('reprice-rate-0-input'), { target: { value: '10' } });
-    expect(screen.getByTestId('reprice-markup-0')).toHaveTextContent('$12');
+    expect(screen.getByTestId('reprice-markup-0')).toHaveTextContent('$12.00');
     expect(screen.getByTestId('reprice-rate-0-input')).toHaveValue('10');
   });
 
@@ -344,6 +385,15 @@ describe('ModelPricingCatalog', () => {
     expect(mockPost.mock.calls[0][1]).toMatchObject({ modelId: 'gpt-y', action: 'revert-to-seed' });
   });
 
+  it('offers no revert on an admin-set row the server has no seed for', async () => {
+    mockGet.mockResolvedValue({ data: { seeded: [SEEDED[0]], rows: ROWS } });
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+
+    expect(screen.queryByTestId('model-pricing-revert-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-gpt-y-per_token')).toBeInTheDocument();
+  });
+
   it('formats non-token units at face value with a unit label (a per-minute rate must not be inflated x1M)', async () => {
     mockGet.mockResolvedValue({
       data: {
@@ -412,13 +462,13 @@ describe('ModelPricingCatalog', () => {
     expect(newest.getByTestId('history-who')).toHaveTextContent('admin-1');
     expect(newest.getByText('invoice X')).toBeInTheDocument();
     // Diff against the older row: input $4 -> $9, output $16 -> $27.
-    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$4');
-    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$9');
-    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$16');
-    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$4.00');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$9.00');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$16.00');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27.00');
 
     const oldest = within(rows[1]);
-    expect(oldest.getByTestId('history-who')).toHaveTextContent('seed');
+    expect(oldest.getByTestId('history-who')).toHaveTextContent('Default');
     expect(oldest.queryByTestId('history-diff-0-input')).not.toBeInTheDocument();
     expect(oldest.getByText(/\$4/)).toBeInTheDocument();
   });
@@ -520,6 +570,124 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('stale gpt-x row');
   });
 
+  it('reports a failed history load inside the drawer and leaves the table and its error slot alone', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    mockGet.mockRejectedValueOnce(new Error('history down'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    const drawer = await screen.findByTestId('history-drawer');
+    expect(await within(drawer).findByTestId('model-pricing-history-error')).toHaveTextContent('history down');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-error')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('admin-error-state')).toHaveLength(1);
+  });
+
+  it('retries the history fetch for the same model from the drawer', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    mockGet.mockRejectedValueOnce(new Error('history down'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await screen.findByTestId('model-pricing-history-error');
+
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          {
+            modelId: 'gpt-x',
+            pricing: { '0': { input: 1e-6, output: 2e-6 } },
+            effectiveFrom: '2026-06-01T00:00:00.000Z',
+            note: 'adapter-seed',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+
+    expect(await screen.findAllByTestId('history-row')).toHaveLength(1);
+    expect(screen.queryByTestId('model-pricing-history-error')).not.toBeInTheDocument();
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/model-prices?history=gpt-x');
+  });
+
+  const historyEntry = (note: string) => ({
+    data: {
+      history: [
+        {
+          modelId: 'gpt-x',
+          pricing: { '0': { input: 1e-6, output: 2e-6 } },
+          effectiveFrom: '2026-06-01T00:00:00.000Z',
+          note,
+        },
+      ],
+    },
+  });
+
+  const closeHistoryDrawer = async () => {
+    fireEvent.keyDown(screen.getByTestId('history-drawer'), { key: 'Escape' });
+    await waitFor(() => expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('gpt-x'));
+  };
+
+  it('ignores a late failure from a closed drawer when the same model was reopened', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let rejectFirst: (e: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise((_, reject) => (rejectFirst = reject)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await closeHistoryDrawer();
+
+    let resolveSecond: (v: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise(resolve => (resolveSecond = resolve)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    await act(async () => rejectFirst(new Error('first failed')));
+    await act(async () => resolveSecond(historyEntry('second ok')));
+
+    expect(await screen.findAllByTestId('history-row')).toHaveLength(1);
+    expect(screen.getByTestId('history-drawer')).toHaveTextContent('second ok');
+    expect(screen.queryByTestId('model-pricing-history-error')).not.toBeInTheDocument();
+  });
+
+  it('shows the newest response when an older request for the same model resolves last', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let resolveFirst: (v: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise(resolve => (resolveFirst = resolve)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await closeHistoryDrawer();
+
+    mockGet.mockResolvedValueOnce(historyEntry('entry Y'));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    await screen.findAllByTestId('history-row');
+
+    await act(async () => resolveFirst(historyEntry('entry X')));
+
+    expect(screen.getByTestId('history-drawer')).toHaveTextContent('entry Y');
+    expect(screen.getByTestId('history-drawer')).not.toHaveTextContent('entry X');
+  });
+
+  it('does not turn the table into its load-error state when history fails with no rows on screen', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+
+    let rejectHistory: (e: unknown) => void = () => {};
+    mockGet.mockReturnValueOnce(new Promise((_, reject) => (rejectHistory = reject)));
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+
+    mockGet.mockResolvedValueOnce({ data: { seeded: [], rows: [] } });
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument());
+
+    await act(async () => rejectHistory(new Error('history down')));
+
+    const drawer = screen.getByTestId('history-drawer');
+    expect(await within(drawer).findByTestId('model-pricing-history-error')).toBeInTheDocument();
+    expect(screen.getAllByTestId('admin-error-state')).toHaveLength(1);
+  });
+
   it('filters the catalog by model id', async () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
@@ -530,16 +698,234 @@ describe('ModelPricingCatalog', () => {
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'nothing-like-this' } });
-    expect(screen.getByTestId('model-pricing-filter-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-filter-empty')).toHaveTextContent('No prices match these filters');
+    expect(screen.queryByTestId('model-pricing-table')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-pricing-clear-filters-btn'));
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
   });
 
-  it('seeds the filter from a cross-surface jump and consumes the focus so a later visit is not stuck', async () => {
-    useCreditAnalysisStore.setState({ pricingModelId: 'gpt-y' });
+  it('shows skeleton rows until the first rows arrive', async () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
     renderCatalog();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('model-pricing-updating')).not.toBeInTheDocument();
+    resolve({ data: { seeded: SEEDED, rows: ROWS } });
+    expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y'));
+  it('keeps the rows on screen under an updating bar while a refresh is in flight', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    let resolve: (value: unknown) => void = () => undefined;
+    mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+
+    expect(screen.getByTestId('model-pricing-updating')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).not.toBeInTheDocument();
+    resolve({ data: { seeded: SEEDED, rows: ROWS } });
+    await waitFor(() => expect(screen.queryByTestId('model-pricing-updating')).not.toBeInTheDocument());
+  });
+
+  it('lets only the latest of overlapping loads land', async () => {
+    let resolveFirst: (value: unknown) => void = () => undefined;
+    let resolveSecond: (value: unknown) => void = () => undefined;
+    mockGet
+      .mockReturnValueOnce(new Promise(r => (resolveFirst = r)))
+      .mockReturnValueOnce(new Promise(r => (resolveSecond = r)));
+    const { rerender } = render(
+      <TestWrapper>
+        <ModelPricingCatalog refreshKey={0} />
+      </TestWrapper>
+    );
+    rerender(
+      <TestWrapper>
+        <ModelPricingCatalog refreshKey={1} />
+      </TestWrapper>
+    );
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+
+    resolveSecond({ data: { seeded: SEEDED, rows: [ROWS[1]] } });
+    expect(await screen.findByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
+    resolveFirst({ data: { seeded: SEEDED, rows: [ROWS[0]] } });
+    await act(async () => {});
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
-    expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
+    expect(screen.getByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
+  });
+
+  it('shows the load error with a retry when there are no rows, and recovers on retry', async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { error: 'Catalog unavailable' } } });
+    renderCatalog();
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Catalog unavailable');
+    expect(screen.queryByTestId('model-pricing-table')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps the rows on screen when a refresh fails', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockRejectedValueOnce({ response: { data: { error: 'Catalog unavailable' } } });
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+
+    expect(await screen.findByTestId('model-pricing-error')).toHaveTextContent('Catalog unavailable');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps a failed reprice inside its dialog, off the table', async () => {
+    mockPost.mockRejectedValue({ response: { data: { error: 'Rates out of range' } } });
+    renderCatalog();
+    fireEvent.click(await screen.findByTestId('model-pricing-reprice-gpt-x-per_token'));
+    fireEvent.change(screen.getByTestId('reprice-note-input'), { target: { value: 'invoice' } });
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+
+    expect(await screen.findByTestId('reprice-modal-error')).toHaveTextContent('Rates out of range');
+    expect(screen.queryByTestId('model-pricing-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-table')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-pricing-revert-gpt-y-per_token'));
+    expect(screen.queryByTestId('revert-modal-error')).not.toBeInTheDocument();
+  });
+
+  it('disables reprice and revert for an admin who cannot write, and keeps history open', async () => {
+    gate.blocked = true;
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('model-pricing-reprice-gpt-y-per_token')).toBeDisabled();
+    expect(screen.getByTestId('model-pricing-revert-gpt-y-per_token')).toBeDisabled();
+    expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeEnabled();
+  });
+
+  it('offers reprice and revert only for text, realtime-voice and unknown models', async () => {
+    gate.modelTypes = new Map([
+      ['gpt-x', 'text'],
+      ['gpt-y', 'image'],
+      ['voice-1', 'realtime-voice'],
+    ]);
+    mockGet.mockResolvedValue({
+      data: {
+        seeded: SEEDED,
+        rows: [...ROWS, { ...ROWS[0], modelId: 'voice-1' }, { ...ROWS[0], modelId: 'unlisted' }],
+      },
+    });
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('model-pricing-reprice-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-reprice-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-revert-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-voice-1-per_token')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-unlisted-per_token')).toBeInTheDocument();
+  });
+
+  it('asks a realtime voice reprice for audio rates above 0 on its lowest tier before saving', async () => {
+    gate.modelTypes = new Map([['voice-1', 'realtime-voice']]);
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: [{ ...ROWS[1], modelId: 'voice-1' }] } });
+    renderCatalog();
+    fireEvent.click(await screen.findByTestId('model-pricing-reprice-voice-1-per_token'));
+    fireEvent.change(screen.getByTestId('reprice-note-input'), { target: { value: 'provider price page' } });
+
+    expect(screen.getByTestId('reprice-rate-0-audio_input')).toHaveValue('');
+    expect(screen.getByTestId('reprice-save-btn')).toBeDisabled();
+    expect(screen.getByTestId('reprice-voice-problem')).toHaveTextContent('audio in and audio out rates above 0');
+
+    fireEvent.change(screen.getByTestId('reprice-rate-0-audio_input'), { target: { value: '32' } });
+    fireEvent.change(screen.getByTestId('reprice-rate-0-audio_output'), { target: { value: '64' } });
+    expect(screen.queryByTestId('reprice-voice-problem')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+    expect(mockPost.mock.calls[0][1]).toMatchObject({
+      modelId: 'voice-1',
+      pricing: { '0': { input: 9e-6, output: 27e-6, audio_input: 32e-6, audio_output: 64e-6 } },
+    });
+  });
+
+  it('lets the table scroll sideways on a phone instead of squeezing its columns', async () => {
+    renderCatalog();
+    const table = await screen.findByTestId('model-pricing-table');
+    expect(getComputedStyle(table).minWidth).toBe('68.5rem');
+  });
+
+  it('shows only the model a controlled filter names, and reports edits to the host', async () => {
+    const onChange = vi.fn();
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog modelFilter="gpt-y" onModelFilterChange={onChange} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y');
+    expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'gpt' } });
+    expect(onChange).toHaveBeenCalledWith('gpt');
+  });
+
+  it('titles itself as a section with the toolbar actions in the header', async () => {
+    renderCatalog(<button data-testid="host-action-btn">Add price</button>);
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.getByRole('heading', { level: 2, name: 'Model pricing (2)' })).toBeInTheDocument();
+    const actions = screen.getByTestId('admin-page-header-actions');
+    expect(within(actions).getByTestId('model-pricing-refresh-btn')).toBeInTheDocument();
+    expect(within(actions).getByTestId('host-action-btn')).toBeInTheDocument();
+  });
+
+  it('drops its heading when embedded and keeps the toolbar actions beside the search', async () => {
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog hideHeading toolbarActions={<button data-testid="host-action-btn">Add price</button>} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.queryByTestId('admin-page-header')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+    expect(screen.getByTestId('admin-filter-search-input')).toBeInTheDocument();
+    const actions = screen.getByTestId('model-pricing-toolbar-actions');
+    expect(within(actions).getByTestId('model-pricing-refresh-btn')).toBeInTheDocument();
+    expect(within(actions).getByTestId('host-action-btn')).toBeInTheDocument();
+  });
+
+  it('narrows a full id to that model alone', async () => {
+    mockGet.mockResolvedValue({
+      data: { seeded: SEEDED, rows: [...ROWS, { ...ROWS[0], modelId: 'gpt-x-mini' }] },
+    });
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog modelFilter="gpt-x" onModelFilterChange={vi.fn()} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.queryByTestId('model-pricing-row-gpt-x-mini-per_token')).not.toBeInTheDocument();
+  });
+
+  it('reports a landed reprice and refetches when the refresh key changes', async () => {
+    const onPricesChanged = vi.fn();
+    const { rerender } = render(
+      <TestWrapper>
+        <ModelPricingCatalog onPricesChanged={onPricesChanged} refreshKey={0} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const calls = mockGet.mock.calls.length;
+    rerender(
+      <TestWrapper>
+        <ModelPricingCatalog onPricesChanged={onPricesChanged} refreshKey={1} />
+      </TestWrapper>
+    );
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(calls));
+
+    fireEvent.click(screen.getByTestId('model-pricing-reprice-gpt-x-per_token'));
+    fireEvent.change(await screen.findByTestId('reprice-note-input'), { target: { value: 'invoice' } });
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+    await waitFor(() => expect(onPricesChanged).toHaveBeenCalledTimes(1));
   });
 
   it('history drawer fetches and lists the audit trail for one model', async () => {

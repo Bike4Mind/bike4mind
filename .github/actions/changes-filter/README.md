@@ -46,12 +46,7 @@ pins both sides of that line.
   semantics — not the per-push `before..after` range. Without this, a synchronize
   that also merges/rebases `main` in would carry all of main's deployable files and
   force a spurious deploy of a docs-only PR. `push` to main keeps the per-push
-  range (no PR to scope to), and `merge_group` uses the queue entry's own
-  `base_sha..head_sha`, which is that entry's own change rather than the whole batch:
-  `base_sha` is the commit the entry was built on (the target-branch tip, or the
-  previous entry's speculative head in a stacked group), so each queue entry is gated on
-  exactly the diff its own PR CI evaluated. That also makes `base_sha` an ancestor of
-  `head_sha`, so two-dot already equals three-dot there and no `merge-base` call is needed.
+  range (no PR to scope to).
 - **No third-party trust surface.** ~40 lines of `git diff`; nothing to SHA-pin or
   audit (cf. the 2025 `tj-actions/changed-files` supply-chain incident).
 
@@ -144,10 +139,9 @@ unnecessary deploy for never silently dropping one.
 
 That posture only holds for a _one-off_ unresolved range. An event with no arm in the
 action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger, and
-the run looks entirely normal - nothing errors, some extra jobs just run. That is what
-`merge_group` did before it was handled: the merge queue evaluated
-`deployable=true, docs-changed=true` unconditionally and so gated on a different signal
-than the PR's own CI, which lets a queue run fail a leg the PR legitimately skipped.
+the run looks entirely normal - nothing errors, some extra jobs just run. Such a run
+evaluates `deployable=true, docs-changed=true` unconditionally and so gates on a different
+signal than the PR's own CI, which lets it fail a leg the PR legitimately skipped.
 `packages/scripts/src/checkChangesFilterEvents.test.ts` therefore cross-checks `ci.yml`'s
 trigger list against the arms, and checks that each arm's SHAs are declared in the
 step's `env:` block, bound to that event's own payload, and bound to the end of the range

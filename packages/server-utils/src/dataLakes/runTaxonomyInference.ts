@@ -169,6 +169,7 @@ export async function runTaxonomyInference(
       response_format: { type: 'json_object' },
       temperature: 0.3,
       max_tokens: maxTokens,
+      store: false,
     });
     usage.inputTokens = result.usage?.prompt_tokens;
     usage.outputTokens = result.usage?.completion_tokens;

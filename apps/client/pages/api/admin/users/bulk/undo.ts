@@ -2,9 +2,9 @@ import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { usersBulkUndoDeps } from '@server/admin/usersBulk/adapters';
+import { usersBulkUndoDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { assertCanRunUsersBulkAction } from '@server/admin/usersBulk/authorize';
-import { undoAdminUsersBulk } from '@server/admin/usersBulk/undo';
+import { undoAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/undo';
 import {
   ADMIN_USERS_BULK_ACTION_PERMISSIONS,
   ADMIN_USERS_BULK_ROUTE_PERMISSIONS,
@@ -39,6 +39,7 @@ const handler = adminApi({
           }
           assertCanRunUsersBulkAction(req, record.action as AdminUsersBulkActionType, {
             unblocks: Boolean(record.blockedDomains?.length),
+            tags: record.users.flatMap(user => (user.tagAdded ? [user.tagAdded] : [])),
           });
         }
       );

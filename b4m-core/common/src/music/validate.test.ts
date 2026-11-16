@@ -7,6 +7,8 @@ import { MUSIC_VALIDATION_ERROR_CODES, validateMusicRequest } from './validate';
 const caps = (overrides: Partial<MusicModelCapabilities> = {}): MusicModelCapabilities => ({
   provider: 'test',
   displayName: 'Model',
+  tier: 'standard',
+  releasedAt: '2026-01-01',
   vocals: 'optional',
   lyrics: { maxChars: 50 },
   duration: { control: 'exact', min: 3, max: 60, default: 20 },

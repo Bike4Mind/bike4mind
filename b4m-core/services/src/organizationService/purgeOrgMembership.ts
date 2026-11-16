@@ -1,4 +1,4 @@
-import { IGroupRepository, IUserRepository } from '@bike4mind/common';
+import { IGroupRepository, IUserApiKeyRepository, IUserRepository } from '@bike4mind/common';
 import {
   lapseDepartedMemberLakeAccess,
   type LakeAccessLapseTrigger,
@@ -10,6 +10,7 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
   db: LapseDepartedMemberLakeAccessAdapters['db'] & {
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     users: Pick<IUserRepository, 'removeGroupsFromUser'>;
+    userApiKeys: Pick<IUserApiKeyRepository, 'revokeLiveOrgBilledByUserId'>;
   };
   /**
    * Who the audit trail should name when the caller is an API key rather than a browser session.
@@ -28,7 +29,11 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
  */
 export interface PurgedOrgMembershipFields {
   adminUserIds: string[];
+  /** Keys billed to this org that the purge disabled; the member's personal keys are never touched. */
+  revokedOrgBilledApiKeyIds: string[];
 }
+
+export const ORG_MEMBERSHIP_ENDED_REVOKE_REASON = 'org-membership-ended';
 
 /**
  * Strip an org's footprint from a member who is leaving or being removed. Shared by the two
@@ -39,7 +44,9 @@ export interface PurgedOrgMembershipFields {
  * What it does, for one departing member:
  *   - pull the org's live group ids from the member's `user.groups[]` (a real DB write),
  *   - end the member's data-lake access on this org's lakes, passing on ownership of any lake they
- *     created so it does not fall back to them (a real DB write), AND
+ *     created so it does not fall back to them (a real DB write),
+ *   - disable the member's API keys billed to this org, which would otherwise keep spending the
+ *     org's credits after the membership ended (a real DB write; not undoable), AND
  *   - compute `adminUserIds` with the member removed and RETURN it.
  *
  * Neither `user.groups[]` nor `adminUserIds` carries an org qualifier, so a member who keeps them
@@ -91,7 +98,13 @@ export async function purgeOrgMembershipArtifacts(
     { ...triggeredBy, auditPrincipal: triggeredBy.auditPrincipal ?? adapters.auditPrincipal },
     adapters
   );
+  const revokedOrgBilledApiKeyIds = await adapters.db.userApiKeys.revokeLiveOrgBilledByUserId(
+    targetUserId,
+    organization.id,
+    { revokedBy: triggeredBy.userId, revokedReason: ORG_MEMBERSHIP_ENDED_REVOKE_REASON }
+  );
   return {
     adminUserIds: (organization.adminUserIds ?? []).filter(id => id !== targetUserId),
+    revokedOrgBilledApiKeyIds,
   };
 }

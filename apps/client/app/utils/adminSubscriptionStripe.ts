@@ -38,6 +38,8 @@ export type AdminStripeInvoice = {
   hostedInvoiceUrl: string | null;
   /** Credits the ledger granted for this invoice; null when none was found. */
   creditsGranted: number | null;
+  /** Refunded from this invoice's payment, from our stored refund events; 0 when none was recorded. */
+  amountRefunded: number;
 };
 
 export type AdminSubscriptionStripe =
@@ -59,6 +61,10 @@ export type AdminSubscriptionStripe =
       lifetimePaid: { amount: number; currency: string }[];
       upcoming: { amount: number; currency: string; at: string } | null;
     };
+
+/** What the customer was charged once paid; what Stripe asked for otherwise (open, void, uncollectible). */
+export const invoiceAmount = (invoice: Pick<AdminStripeInvoice, 'status' | 'amountPaid' | 'amountDue'>): number =>
+  invoice.status === 'paid' ? invoice.amountPaid : invoice.amountDue;
 
 type PaymentRef = {
   payments?: { data: { payment?: { type?: string; payment_intent?: string | { id: string } | null } }[] };

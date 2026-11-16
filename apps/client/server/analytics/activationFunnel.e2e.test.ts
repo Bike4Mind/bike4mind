@@ -6,10 +6,10 @@ import { AnalyticsUserDay, CreditTransaction, Organization, UsageEvent, User } f
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { USER_FUNNEL_STEP_FILTERS, type UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { listAdminUsers } from '../admin/usersList/listAdminUsers';
-import { classifyFunnelCohort, funnelStepUserIds } from './activationFunnel';
+import { listAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
+import { classifyFunnelCohort, funnelStepUserIds } from '@bike4mind/server-utils/analytics/activationFunnel';
 import { getActivationFunnel } from './activationFunnelSummary';
-import { signupVerdictUserIds } from './realSignup';
+import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

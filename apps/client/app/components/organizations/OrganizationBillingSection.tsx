@@ -47,6 +47,7 @@ import {
 import dayjs from 'dayjs';
 import SeatCountInput from './SeatCountInput';
 import ContactSalesNote from './ContactSalesNote';
+import OrganizationInvoiceList from './OrganizationInvoiceList';
 import { useState, useEffect, useMemo } from 'react';
 
 type OrganizationBillingSectionProps = {
@@ -542,16 +543,13 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
           </CardContent>
         </Card>
 
-        {/* Billing History - Placeholder for future implementation */}
         {subscription && (
           <Card variant="outlined" className="organization-billing-history-card">
             <CardContent className="organization-billing-history-content">
               <Typography level="title-lg" sx={{ mb: 2 }} className="organization-billing-history-title">
-                Recent Activity
+                Billing History
               </Typography>
-              <Typography level="body-md" color="neutral" className="organization-billing-history-description">
-                View your billing history and download invoices in the billing portal.
-              </Typography>
+              <OrganizationInvoiceList organizationId={organization.id} />
             </CardContent>
           </Card>
         )}

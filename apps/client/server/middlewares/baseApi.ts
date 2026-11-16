@@ -1,6 +1,7 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { authMiddleware, auth } from '@server/auth/auth';
 import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { logging } from '@server/middlewares/logging';
 import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
@@ -24,6 +25,7 @@ import { requestLogUrl } from './requestLogUrl';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
+registerOrgAlertObserver();
 
 interface BaseAPIOptions {
   /**
@@ -54,6 +56,14 @@ interface BaseAPIOptions {
    * doc comment (apiKeyScopeGate.ts).
    */
   alsoRequiredScopes?: ApiKeyScopeValue[];
+  /**
+   * Keep admitting legacy API keys that miss `requiredScopes` until the legacy window ends
+   * (LEGACY_API_KEY_WINDOW in apiKeyScopeGate.ts). Only for a route keys could reach before it
+   * declared scopes; a route that already enforced them must never opt in, or old keys would
+   * gain access they lack today. Methods narrowed in the handler pass the same flag to
+   * `assertApiKeyScope`.
+   */
+  grandfatherLegacyKeys?: boolean;
   /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
@@ -256,6 +266,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       router.use(
         apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
           recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
+          grandfatherLegacyKeys: resolvedOptions.grandfatherLegacyKeys,
         })
       );
 

@@ -11,7 +11,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
-import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { loadAccessibleFabFile } from '@bike4mind/server-utils/files/loadAccessibleFabFile';
 import {
   assertFilesReadScope,
   assertFilesWriteScope,
@@ -25,7 +25,7 @@ import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScop
 import { Request } from 'express';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 
 // baseApi's scope gate is per route, so it admits either files scope (and ai:generate, for the
 // narrow GET and DELETE below) and each method asserts its own.

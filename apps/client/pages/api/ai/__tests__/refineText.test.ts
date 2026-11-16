@@ -23,7 +23,7 @@ vi.mock('@bike4mind/services', () => ({
   // Metering is covered in server/ai/refineTextRequest.test.ts; here the backend passes through.
   meterCompletionBackend: (llm: unknown) => llm,
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 vi.mock('@bike4mind/services/llm/refineText', () => ({
   refineText: (...a: any[]) => mockRefineText(...a),
   // Real schema so validation + ZodError behave exactly as in production.

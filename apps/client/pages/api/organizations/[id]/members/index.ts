@@ -2,13 +2,14 @@ import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import {
   OrganizationEvents,
   toSafeUser,
@@ -20,7 +21,7 @@ import {
 import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
 // No `force` here, deliberately. The service still accepts a seat-ceiling override for the
@@ -86,11 +87,12 @@ const handler = baseApi()
           type: OrganizationEvents.ADD_ORG_MEMBER,
           metadata: {
             organizationId,
+            userId: newMember.id,
             memberEmail: newMember.email || '',
             memberLevel: newMember.level,
           },
         },
-        { ability: req.ability }
+        { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
       );
 
       return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
@@ -119,6 +121,7 @@ const handler = baseApi()
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           // See the sibling removal route: a key-driven departure must be attributed to the KEY,
@@ -131,6 +134,7 @@ const handler = baseApi()
 
     // After the commit, as on the removal route. The leaver gets no count back: they already know
     // what they were shared.
+    await refreshSeatEntitlements(req.user.id);
     await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization, req.logger);
 
     await logEvent(
@@ -142,7 +146,7 @@ const handler = baseApi()
           organizationId: organization.id,
         },
       },
-      { ability: req.ability }
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
     );
 
     return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));

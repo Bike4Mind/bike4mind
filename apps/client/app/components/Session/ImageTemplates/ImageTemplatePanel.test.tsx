@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 
+vi.mock('@client/app/components/organizations/OrganizationLibraryPicker', () => ({ default: () => null }));
+
 const { mockCreate, mockDelete, holder } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
   mockDelete: vi.fn(),

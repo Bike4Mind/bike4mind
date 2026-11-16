@@ -41,15 +41,15 @@ describe('useModelLogsView', () => {
   it('writes a custom range and page size, and drops them again at their defaults', () => {
     const { result } = setup();
 
-    act(() => result.current[1]({ startDate: '2026-09-01', endDate: '2026-09-30', limit: 25 }));
+    act(() => result.current[1]({ startDate: '2026-09-01', endDate: '2026-09-30', limit: 50 }));
     expect(fakeAdminRouter.search).toEqual({
       tab: 'model-logs',
       modelLogsFrom: '2026-09-01',
       modelLogsTo: '2026-09-30',
-      modelLogsLimit: 25,
+      modelLogsLimit: 50,
     });
 
-    act(() => result.current[1]({ startDate: '2026-10-15', endDate: '2026-10-21', limit: 10 }));
+    act(() => result.current[1]({ startDate: '2026-10-15', endDate: '2026-10-21', limit: 25 }));
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' });
   });
 

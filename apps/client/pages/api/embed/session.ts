@@ -25,7 +25,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
-import { verifyEmbedApiKey } from '@server/cli/auth';
+import { verifyEmbedApiKey } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';

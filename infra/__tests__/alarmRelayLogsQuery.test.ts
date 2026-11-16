@@ -37,9 +37,7 @@ describe('alarm relay log query wiring', () => {
   it('lets the relay start a query on those groups only, and read or stop any query', () => {
     expect(RELAY).toContain("actions: ['logs:StartQuery'], resources: spendLogGroupArns");
     expect(RELAY).toContain("actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*']");
-    expect(DLQ_ALARMS).toContain(
-      'const arn = logGroupArn ?? aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;'
-    );
+    expect(DLQ_ALARMS).toContain('const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;');
     expect(DLQ_ALARMS).toContain('return [arn, $interpolate`${arn}:*`];');
   });
 

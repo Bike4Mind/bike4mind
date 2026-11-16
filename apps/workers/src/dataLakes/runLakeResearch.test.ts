@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals } from '@bike4mind/common';
+import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   claimForExecution: vi.fn(),
@@ -17,6 +18,13 @@ const h = vi.hoisted(() => ({
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
   recordOperationalUsage: vi.fn(),
+  autoApprove: vi.fn(),
+  loadActiveLakeGrants: vi.fn(),
+  resolveEffectiveOwnerIds: vi.fn(),
+  findIdsWithAdminRights: vi.fn(),
+  findConfig: vi.fn(),
+  recordFeedCursor: vi.fn(),
+  ssrfSafeDownload: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -25,11 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {},
+  dataLakeResearchConfigRepository: { findByIdInLake: h.findConfig, recordFeedCursor: h.recordFeedCursor },
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
-  organizationRepository: { findById: h.findOrgById },
+  organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -37,19 +46,34 @@ vi.mock('@bike4mind/database', () => ({
     recordProgress: h.recordProgress,
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
-  dataLakeService: { proposeDataLakeContent: h.proposeDataLakeContent },
-  dataLakeResearchService: {
-    executeResearchRun: h.executeResearchRun,
-    recordResearchRunOutcome: h.recordResearchRunOutcome,
-    RelevanceJudgeService: class {
-      judge = h.judge;
+vi.mock('@bike4mind/services', async importOriginal => {
+  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  return {
+    apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
+    dataLakeService: {
+      proposeDataLakeContent: h.proposeDataLakeContent,
+      autoApproveDataLakeProposal: h.autoApprove,
+      loadActiveLakeGrants: h.loadActiveLakeGrants,
+      resolveEffectiveOwnerIds: h.resolveEffectiveOwnerIds,
     },
-    RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
-  },
-  recordOperationalUsage: h.recordOperationalUsage,
-}));
+    dataLakeResearchService: {
+      executeResearchRun: h.executeResearchRun,
+      recordResearchRunOutcome: h.recordResearchRunOutcome,
+      RelevanceJudgeService: class {
+        judge = h.judge;
+      },
+      RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
+      // Real: the live source rules are what these tests exercise.
+      normalizeResearchLevers: real.normalizeResearchLevers,
+      feedFingerprintLevers: real.feedFingerprintLevers,
+      matchSource: real.matchSource,
+      FeedUnavailableError: real.FeedUnavailableError,
+      parseFeed: real.parseFeed,
+      trustedEntryForUrl: real.trustedEntryForUrl,
+    },
+    recordOperationalUsage: h.recordOperationalUsage,
+  };
+});
 // The real searchWithHedge runs, so the failover test exercises the same hedge chat uses.
 vi.mock('@bike4mind/services/llm', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/llm')>()),
@@ -59,8 +83,17 @@ vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableMo
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes
 // every caller there, and mocking the wrong module leaves the REAL fetcher in place - which fails
 // closed to null and reads as a broken extraction contract rather than a broken mock.
-vi.mock('@bike4mind/fab-pipeline', () => ({ fetchAndParseURL: h.fetchAndParseURL }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  fetchAndParseURL: h.fetchAndParseURL,
+  ssrfSafeDownload: h.ssrfSafeDownload,
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsByNames: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({ serializeLakeClaim: vi.fn() }));
 
 import { runLakeResearch } from './runLakeResearch';
 
@@ -94,6 +127,14 @@ const claimedRun = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const liveConfig = (overrides: Record<string, unknown> = {}) => ({
+  name: 'Weekly filings',
+  query: 'coastal erosion',
+  autoAdmitTrusted: true,
+  trustedDomains: ['example.com'],
+  ...overrides,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.claimForExecution.mockResolvedValue(claimedRun());
@@ -112,6 +153,12 @@ beforeEach(() => {
   });
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
   h.recordOperationalUsage.mockResolvedValue(undefined);
+  h.loadActiveLakeGrants.mockResolvedValue([]);
+  h.resolveEffectiveOwnerIds.mockReturnValue(['owner-1']);
+  h.findIdsWithAdminRights.mockResolvedValue(['org-7']);
+  h.findConfig.mockResolvedValue(liveConfig());
+  h.autoApprove.mockResolvedValue({ outcome: 'admitted' });
+  h.recordFeedCursor.mockResolvedValue(true);
 });
 
 describe('runLakeResearch', () => {
@@ -508,7 +555,8 @@ describe('runLakeResearch', () => {
     expect(h.executeResearchRun).toHaveBeenCalledWith(
       expect.objectContaining({ maxProposals: 2 }),
       'run-1',
-      expect.anything()
+      expect.anything(),
+      null
     );
   });
 
@@ -864,5 +912,545 @@ describe('runLakeResearch', () => {
     // Logged, not dropped: otherwise "the run card never moved" is indistinguishable from "the
     // progress write never fired".
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/progress write failed/), expect.anything());
+  });
+
+  describe('auto-admit port', () => {
+    type AutoPorts = {
+      autoAdmit?: (
+        p: { id: string; sourceUrl: string },
+        r: { isTrusted: (u: string) => string | null }
+      ) => Promise<string>;
+    };
+    // The run's own snapshot rule, which trusts every host here.
+    const rule = { isTrusted: (u: string) => new URL(u).hostname.replace(/^www\./, '') };
+    const runWithPort = async (
+      levers_: Record<string, unknown> = { autoAdmitTrusted: true },
+      sourceUrl = 'https://example.com/a'
+    ) => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers(levers_) }));
+      let result: string | undefined;
+      let hadPort = false;
+      h.executeResearchRun.mockImplementation(async (_l: unknown, _r: string, ports: AutoPorts) => {
+        hadPort = !!ports.autoAdmit;
+        result = await ports.autoAdmit?.({ id: 'prop-1', sourceUrl }, rule);
+        return {
+          totals: { ...emptyResearchRunTotals(), proposed: 1, autoAdmitted: result === 'admitted' ? 1 : 0 },
+          spentMicroUsd: 0,
+          stopReason: 'exhausted',
+        };
+      });
+      await runLakeResearch('run-1', logger);
+      return { result, hadPort };
+    };
+
+    it('provides no port unless the run snapshot opted in', async () => {
+      const { hadPort } = await runWithPort({});
+      expect(hadPort).toBe(false);
+    });
+
+    it('binds the port to the effective owner after a transfer, with the config id and name', async () => {
+      h.resolveEffectiveOwnerIds.mockReturnValue(['new-owner']);
+      h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('admitted');
+      const [proposalId, boundRule] = h.autoApprove.mock.calls[0];
+      expect(proposalId).toBe('prop-1');
+      expect(boundRule).toMatchObject({
+        configId: 'config-1',
+        configName: 'Weekly filings',
+        owner: { userId: 'new-owner', isAdmin: false, administeredOrgIds: ['org-7'] },
+      });
+      expect(boundRule.isTrusted('https://example.com/a')).toBe('example.com');
+    });
+
+    it('leaves the proposal pending when the owner cannot be resolved', async () => {
+      h.findUserById.mockResolvedValueOnce({ id: 'owner-1', organizationId: null }).mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+    });
+
+    it('keeps the run succeeded and reports left_pending when the service throws', async () => {
+      h.autoApprove.mockRejectedValue(new Error('mongo down'));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/auto-admit failed/), expect.anything());
+    });
+
+    it('leaves the proposal pending when the manager turned auto-admit off mid-run', async () => {
+      h.findConfig.mockResolvedValue(liveConfig({ autoAdmitTrusted: false }));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'auto_admit_off' })
+      );
+    });
+
+    it('leaves the proposal pending when the config was deleted mid-run', async () => {
+      h.findConfig.mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'config_missing' })
+      );
+    });
+
+    describe('live source rules', () => {
+      const admitCalls = () => h.autoApprove.mock.calls;
+      const finalUrlRule = () => admitCalls()[0][1] as { isTrusted: (u: string) => string | null };
+
+      it('admits when the live config is unchanged', async () => {
+        const { result } = await runWithPort();
+
+        expect(result).toBe('admitted');
+        expect(finalUrlRule().isTrusted('https://example.com/a')).toBe('example.com');
+      });
+
+      it('does not admit when the source site was removed, even if the final url is on a trusted site', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['other.org'] }));
+
+        const { result } = await runWithPort(undefined, 'https://example.com/a');
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringMatching(/stopped by the live config/),
+          expect.objectContaining({ reason: 'source_not_trusted_live' })
+        );
+      });
+
+      it('does not admit when the source site was blocked live', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ blockedDomains: ['example.com'] }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('does not admit when a longer live review entry now covers the source', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ reviewDomains: ['news.example.com'] }));
+
+        const { result } = await runWithPort(undefined, 'https://news.example.com/a');
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('rejects a final url whose site was blocked live', async () => {
+        h.findConfig.mockResolvedValue(
+          liveConfig({ trustedDomains: ['example.com', 'other.org'], blockedDomains: ['other.org'] })
+        );
+
+        await runWithPort();
+
+        expect(finalUrlRule().isTrusted('https://other.org/x')).toBeNull();
+        expect(finalUrlRule().isTrusted('https://example.com/x')).toBe('example.com');
+      });
+
+      it('rejects a final url on a site added to the live list but not trusted by the run', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['example.com', 'other.org'] }));
+        h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ autoAdmitTrusted: true }) }));
+        let added: string | null | undefined;
+        h.executeResearchRun.mockImplementation(async (_l: unknown, _r: string, ports: AutoPorts) => {
+          await ports.autoAdmit?.(
+            { id: 'prop-1', sourceUrl: 'https://example.com/a' },
+            {
+              isTrusted: u => (u.includes('example.com') ? 'example.com' : null),
+            }
+          );
+          added = (admitCalls()[0][1] as { isTrusted: (u: string) => string | null }).isTrusted('https://other.org/x');
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+        });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(added).toBeNull();
+      });
+
+      it('treats a legacy config without trustedDomains as an empty list', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: undefined }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('left_pending');
+        expect(h.autoApprove).not.toHaveBeenCalled();
+      });
+
+      it('matches the live list after normalizing its entries', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ trustedDomains: ['https://www.Example.com/blog'] }));
+
+        const { result } = await runWithPort();
+
+        expect(result).toBe('admitted');
+        expect(finalUrlRule().isTrusted('https://example.com/a')).toBe('example.com');
+      });
+    });
+
+    it('passes autoAdmitted through to the settle', async () => {
+      await runWithPort();
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ totals: expect.objectContaining({ autoAdmitted: 1 }) })
+      );
+    });
+  });
+  describe('a feed run', () => {
+    const FEED_URL = 'https://example.com/feed.xml';
+    const feedLevers = (overrides: Record<string, unknown> = {}) =>
+      levers({
+        source: 'feed',
+        feedUrl: FEED_URL,
+        model: 'gpt-4.1-mini',
+        trustedDomains: [],
+        reviewDomains: [],
+        unlistedSources: 'review',
+        ...overrides,
+      });
+    const cursorFor = (run: Record<string, unknown>): ResearchFeedCursor => ({
+      fingerprint: researchFeedFingerprint(run as Parameters<typeof researchFeedFingerprint>[0]),
+      newestPublishedAt: new Date('2026-11-01T00:00:00Z'),
+      seenKeys: ['example.com/a'],
+      retries: [],
+    });
+    const RSS = `<?xml version="1.0"?><rss version="2.0"><channel><item><title>T</title><link>https://example.com/a</link></item></channel></rss>`;
+    const download = (body: string) => ({
+      data: Buffer.from(body),
+      contentType: 'application/rss+xml',
+      finalUrl: FEED_URL,
+    });
+    const readFeedPort = () => h.executeResearchRun.mock.calls[0][2].readFeed as (url: string) => Promise<unknown[]>;
+
+    beforeEach(() => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: feedLevers() }));
+      h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), feedCursor: null }));
+    });
+
+    it('skips the web-search provider check', async () => {
+      h.resolveWebSearchProviders.mockResolvedValue([null, null]);
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.resolveWebSearchProviders).not.toHaveBeenCalled();
+      expect(h.executeResearchRun).toHaveBeenCalled();
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('still checks the provider for a search run', async () => {
+      h.claimForExecution.mockResolvedValue(claimedRun());
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.resolveWebSearchProviders).toHaveBeenCalled();
+    });
+
+    it('downloads with the size cap and a 10s budget, then parses against the final url', async () => {
+      h.ssrfSafeDownload.mockResolvedValue(download(RSS));
+      await runLakeResearch('run-1', logger);
+
+      const items = await readFeedPort()(FEED_URL);
+
+      expect(h.ssrfSafeDownload).toHaveBeenCalledWith(FEED_URL, {
+        maxBytes: RESEARCH_FEED_MAX_BYTES,
+        timeoutMs: 10_000,
+      });
+      expect(items).toEqual([expect.objectContaining({ url: 'https://example.com/a', title: 'T' })]);
+    });
+
+    it('passes the stored cursor to the executor', async () => {
+      const cursor = cursorFor(feedLevers());
+      h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), feedCursor: cursor }));
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.executeResearchRun).toHaveBeenCalledWith(expect.anything(), 'run-1', expect.anything(), cursor);
+    });
+
+    describe('an unreadable feed settles failed with a reason and is not rethrown', () => {
+      const expectFailedWith = async (reason: RegExp) => {
+        const feedError = await readFeedPort()(FEED_URL).then(
+          () => null,
+          (error: Error) => error
+        );
+        expect(feedError?.message).toMatch(reason);
+        return feedError;
+      };
+
+      it.each([
+        [
+          'an over-cap body',
+          new Error(`maxContentLength size of ${RESEARCH_FEED_MAX_BYTES} exceeded`),
+          /larger than 10 MB/,
+        ],
+        ['a download error', new Error('getaddrinfo ENOTFOUND internal.host'), /could not be downloaded/],
+      ])('maps %s', async (_label, cause, reason) => {
+        h.ssrfSafeDownload.mockRejectedValue(cause);
+        await runLakeResearch('run-1', logger);
+        const feedError = await expectFailedWith(reason);
+        expect(feedError?.message).not.toMatch(/internal\.host/);
+      });
+
+      it('maps a body that is not a feed', async () => {
+        h.ssrfSafeDownload.mockResolvedValue(download('<html><body>hello</body></html>'));
+        await runLakeResearch('run-1', logger);
+        await expectFailedWith(/not an RSS or Atom feed/);
+      });
+
+      it('maps a parser that throws', async () => {
+        const { dataLakeResearchService } = await import('@bike4mind/services');
+        vi.spyOn(dataLakeResearchService, 'parseFeed').mockImplementationOnce(() => {
+          throw new Error('Unexpected close tag at internal.host');
+        });
+        h.ssrfSafeDownload.mockResolvedValue(download(RSS));
+        await runLakeResearch('run-1', logger);
+        const feedError = await expectFailedWith(/not an RSS or Atom feed/);
+        expect(feedError?.message).not.toMatch(/internal\.host/);
+      });
+
+      it('settles the run failed with the executor reason, spends nothing and writes no cursor', async () => {
+        const { FeedUnavailableError } = (await import('@bike4mind/services')).dataLakeResearchService;
+        h.executeResearchRun.mockRejectedValue(new FeedUnavailableError('This feed is larger than 10 MB'));
+
+        await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+
+        expect(h.settleRun).toHaveBeenCalledTimes(1);
+        expect(h.settleRun).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({ status: 'failed', error: 'This feed is larger than 10 MB', spentMicroUsd: 0 })
+        );
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+        expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+          expect.anything(),
+          'coastal erosion',
+          'failed',
+          'run-1',
+          expect.anything()
+        );
+      });
+
+      it('still rethrows any other error', async () => {
+        h.executeResearchRun.mockRejectedValue(new Error('boom'));
+
+        await expect(runLakeResearch('run-1', logger)).rejects.toThrow('boom');
+      });
+    });
+
+    describe('decoding the feed body', () => {
+      const latin1Feed = (declaration: string) =>
+        Buffer.concat([
+          Buffer.from(`${declaration}<rss version="2.0"><channel><item><title>Caf`, 'latin1'),
+          Buffer.from([0xe9]),
+          Buffer.from('</title><link>https://example.com/a</link></item></channel></rss>', 'latin1'),
+        ]);
+      const titleOf = async (body: Buffer, contentType: string) => {
+        h.ssrfSafeDownload.mockResolvedValue({ data: body, contentType, finalUrl: FEED_URL });
+        await runLakeResearch('run-1', logger);
+        return ((await readFeedPort()(FEED_URL)) as { title: string }[])[0].title;
+      };
+
+      it('uses the charset from the Content-Type header', async () => {
+        expect(await titleOf(latin1Feed('<?xml version="1.0"?>'), 'text/xml; charset=windows-1252')).toBe('Caf\u00e9');
+      });
+
+      it('uses the encoding from the XML declaration when the header names none', async () => {
+        expect(await titleOf(latin1Feed('<?xml version="1.0" encoding="windows-1252"?>'), 'application/rss+xml')).toBe(
+          'Caf\u00e9'
+        );
+      });
+
+      it('falls back to UTF-8 on an unknown label', async () => {
+        const body = Buffer.from(
+          '<?xml version="1.0" encoding="no-such-charset"?><rss version="2.0"><channel><item><title>Caf\u00e9</title><link>https://example.com/a</link></item></channel></rss>'
+        );
+        expect(await titleOf(body, 'text/xml; charset=also-unknown')).toBe('Caf\u00e9');
+      });
+    });
+
+    describe('consecutive runs while the judge is down', () => {
+      const pubDate = (day: number) => `Mon, 0${day} Nov 2026 00:00:00 GMT`;
+      const RSS5 = `<?xml version="1.0"?><rss version="2.0"><channel>${[1, 2, 3, 4, 5]
+        .map(
+          n => `<item><title>I${n}</title><link>https://example.com/i${n}</link><pubDate>${pubDate(n)}</pubDate></item>`
+        )
+        .join('')}</channel></rss>`;
+
+      it('offers fresh items first on the second run and persists the attempts', async () => {
+        const real = (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
+          .dataLakeResearchService;
+        const run = feedLevers({ maxResults: 2 });
+        h.claimForExecution.mockResolvedValue(claimedRun({ levers: run }));
+        h.ssrfSafeDownload.mockResolvedValue(download(RSS5));
+        h.executeResearchRun.mockImplementation(real.executeResearchRun);
+        h.judge.mockResolvedValue({ outcome: 'failed', error: 'down', costMicroUsd: 0 });
+        let stored: ResearchFeedCursor | null = { ...cursorFor(run), newestPublishedAt: null, seenKeys: [] };
+        h.recordFeedCursor.mockImplementation(async (_id: string, _url: string, cursor: ResearchFeedCursor) => {
+          stored = cursor;
+          return true;
+        });
+        h.findConfig.mockImplementation(async () => liveConfig({ ...run, feedCursor: stored }));
+        const judgedTitles = () => h.judge.mock.calls.map(([args]) => (args as { title: string }).title);
+
+        await runLakeResearch('run-1', logger);
+        expect(judgedTitles()).toEqual(['I1', 'I2']);
+        expect(stored!.retries).toEqual([
+          { key: 'https://example.com/i1', attempts: 1 },
+          { key: 'https://example.com/i2', attempts: 1 },
+        ]);
+        expect(stored!.seenKeys).toEqual([]);
+
+        h.judge.mockClear();
+        await runLakeResearch('run-2', logger);
+        expect(judgedTitles()).toEqual(['I3', 'I4']);
+        expect(stored!.retries.map(retry => retry.key)).toEqual([
+          'https://example.com/i1',
+          'https://example.com/i2',
+          'https://example.com/i3',
+          'https://example.com/i4',
+        ]);
+        expect(h.settleRun).toHaveBeenLastCalledWith('run-2', expect.objectContaining({ status: 'failed' }));
+      });
+    });
+
+    describe('writing the cursor back', () => {
+      const completedWith = (cursor: ResearchFeedCursor, extra: Record<string, unknown> = {}) =>
+        h.executeResearchRun.mockResolvedValue({
+          totals: { ...emptyResearchRunTotals(), searchHits: 2, proposed: 1 },
+          spentMicroUsd: 800,
+          stopReason: 'exhausted',
+          judgeStepFailed: false,
+          feedCursor: cursor,
+          feedBacklog: 4,
+          ...extra,
+        });
+
+      it('writes it with the config id and feed url after a completed run, and stores the backlog', async () => {
+        const cursor = cursorFor(feedLevers());
+        completedWith(cursor);
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).toHaveBeenCalledWith('config-1', FEED_URL, cursor);
+        expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ feedBacklog: 4 }));
+      });
+
+      it('writes it after the run is settled', async () => {
+        completedWith(cursorFor(feedLevers()));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.settleRun.mock.invocationCallOrder[0]).toBeLessThan(h.recordFeedCursor.mock.invocationCallOrder[0]);
+      });
+
+      it('writes the retries-only cursor when the judge step failed', async () => {
+        const retriesOnly = { ...cursorFor(feedLevers()), retries: [{ key: 'example.com/a', attempts: 1 }] };
+        completedWith(retriesOnly, { judgeStepFailed: true });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+        expect(h.recordFeedCursor).toHaveBeenCalledWith('config-1', FEED_URL, retriesOnly);
+      });
+
+      it('writes nothing when the judge step failed with no cursor returned', async () => {
+        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true, feedCursor: undefined });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('writes nothing when the judge step failed and the settings changed mid-run', async () => {
+        completedWith(cursorFor(feedLevers()), { judgeStepFailed: true });
+        h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), minRelevance: 0.9, feedCursor: null }));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('still writes when the stored config holds un-normalized spellings of the same levers', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(
+          liveConfig({
+            ...feedLevers(),
+            query: '  coastal erosion  ',
+            trustedDomains: [],
+            blockedDomains: ['B.example.com', 'a.example.com', 'a.example.com'],
+            feedCursor: null,
+          })
+        );
+        h.claimForExecution.mockResolvedValue(
+          claimedRun({ levers: feedLevers({ blockedDomains: ['a.example.com', 'b.example.com'] }) })
+        );
+        h.executeResearchRun.mockResolvedValue({
+          totals: emptyResearchRunTotals(),
+          spentMicroUsd: 0,
+          stopReason: 'exhausted',
+          judgeStepFailed: false,
+          feedCursor: cursorFor(feedLevers({ blockedDomains: ['a.example.com', 'b.example.com'] })),
+        });
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).toHaveBeenCalled();
+      });
+
+      it.each([
+        ['topic', { query: 'something else' }],
+        ['feed address', { feedUrl: 'https://example.com/other.xml' }],
+        ['threshold', { minRelevance: 0.9 }],
+        ['trusted site list', { trustedDomains: ['example.com'] }],
+      ])('does not write it when the %s changed mid-run', async (_label, change) => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(liveConfig({ ...feedLevers(), ...change, feedCursor: null }));
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('does not write it when the config was deleted mid-run', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.findConfig.mockResolvedValue(null);
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+
+      it('logs a failed write without failing the run', async () => {
+        completedWith(cursorFor(feedLevers()));
+        h.recordFeedCursor.mockRejectedValue(new Error('write conflict'));
+
+        await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+
+        expect(h.settleRun).toHaveBeenCalledTimes(1);
+        expect(h.recordResearchRunOutcome).toHaveBeenCalled();
+      });
+
+      it('writes nothing for a search run', async () => {
+        h.claimForExecution.mockResolvedValue(claimedRun());
+
+        await runLakeResearch('run-1', logger);
+
+        expect(h.recordFeedCursor).not.toHaveBeenCalled();
+      });
+    });
   });
 });

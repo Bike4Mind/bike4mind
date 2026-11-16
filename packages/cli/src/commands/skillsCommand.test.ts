@@ -377,6 +377,17 @@ describe('pushSkill', () => {
     await expect(pushSkill(file(), deps)).rejects.toThrow('Name must be kebab-case');
   });
 
+  it('names the scope an API key is missing when the skill routes refuse it', async () => {
+    const { api, deps } = makeDeps();
+    api.get.mockRejectedValue({
+      response: { status: 403, data: { error: 'Insufficient API key permissions', required_scopes: ['skills:write'] } },
+    });
+    await expect(pushSkill(file(), deps)).rejects.toThrow(
+      'Insufficient API key permissions (the API key needs skills:write)'
+    );
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('falls back to the server message field when the error field is absent', async () => {
     const { api, deps } = makeDeps({ update: true }, [{ id: 's1', name: 'my-skill', userId: 'u1' }]);
     api.put.mockRejectedValue({ response: { data: { message: 'Forbidden' } } });

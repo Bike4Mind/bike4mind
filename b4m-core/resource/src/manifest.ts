@@ -13,6 +13,8 @@ export const DEFAULT_MANIFEST = {
   APNS_KEY_ID: { kind: 'secret', optional: true },
   APNS_TEAM_ID: { kind: 'secret', optional: true },
   APNS_TOPIC: { kind: 'secret', optional: true },
+  // FCM (Android push) service account JSON; unset disables Android push.
+  FCM_SERVICE_ACCOUNT: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
@@ -156,6 +158,7 @@ export const DEFAULT_MANIFEST = {
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
   accountDataExportQueue: { kind: 'queue', optional: true },
+  accountErasureQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },

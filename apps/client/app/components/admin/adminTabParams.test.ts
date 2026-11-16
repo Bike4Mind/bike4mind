@@ -18,6 +18,8 @@ import { ANALYTICS_SEARCH_KEYS } from './Analytics/analyticsTabSearch';
 import { PENDING_SEARCH_KEYS } from './inviteCenterSearch';
 import { STRIPE_DISPUTE_SEARCH_KEYS } from './stripeDisputeSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from './ModelMetrics/modelMetricsSearch';
+import { MODELS_LIST_SEARCH_KEYS } from './Models/modelsSearch';
+import { DLQ_SEARCH_KEYS } from './dlqSearch';
 import type { AdminListSearchKeys } from './shared/useAdminListUrlState';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -387,6 +389,8 @@ describe('Security tab params', () => {
   });
 });
 
+import { PAYMENT_REVIEW_SEARCH_KEYS } from './Revenue/paymentReviewSearch';
+
 describe('useAdminListUrlState keys', () => {
   // Every key set passed to useAdminListUrlState, by the name its caller imports it under.
   const LIST_SEARCH_KEYS: Readonly<Record<string, AdminListSearchKeys>> = {
@@ -399,6 +403,14 @@ describe('useAdminListUrlState keys', () => {
     PENDING_SEARCH_KEYS,
     STRIPE_DISPUTE_SEARCH_KEYS,
     MODEL_METRICS_SEARCH_KEYS,
+    MODELS_LIST_SEARCH_KEYS,
+    PAYMENT_REVIEW_SEARCH_KEYS,
+    ECONOMY_SEARCH_KEYS: {
+      query: 'economyQuery',
+      view: 'creditView',
+      filters: { from: 'economyFrom', to: 'economyTo', owner: 'economyOwner', flow: 'economyFlow' },
+    },
+    DLQ_SEARCH_KEYS,
   };
   // Left out of the registry on purpose, so validateSearch strips them: free-text searches that can
   // hold personal data, saved-view names that are not shareable yet, and query/view keys a tab never writes.
@@ -419,6 +431,10 @@ describe('useAdminListUrlState keys', () => {
     'disputeView',
     'metricsQuery',
     'metricsView',
+    'paymentUnused',
+    'economyQuery',
+    'dlqQuery',
+    'dlqView',
   ]);
   const registered = new Set<string>(Object.values(ADMIN_TAB_PARAMS).flat());
 

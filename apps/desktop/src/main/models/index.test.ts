@@ -57,6 +57,7 @@ vi.mock('@bike4mind/local-models', async importOriginal => ({
   },
 }));
 vi.mock('../windows', () => ({ appWindows: () => [origin, other] }));
+vi.mock('../secrets', () => ({ appSecretCipher: () => electron.safeStorage }));
 vi.mock('./ModelHubService', () => ({
   ModelHubService: class {
     serverChanged = service.serverChanged;

@@ -1,4 +1,4 @@
-import { getSharedSessionsByUser } from '@server/managers/sessionManager';
+import { getSharedSessionsByUser } from '@bike4mind/server-utils/managers/sessionManager';
 import { redactSessionsForClient, sessionSearchSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';

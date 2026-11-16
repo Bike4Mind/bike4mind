@@ -7,7 +7,7 @@ import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService, meterCompletionBackend } from '@bike4mind/services';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { HTTPError } from '@bike4mind/common';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 /**
  * /api/ai/tavern-conversation - Two-mode endpoint for live NPC conversations.

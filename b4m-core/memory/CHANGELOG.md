@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.3.0
+
+### Minor Changes
+
+- [#7181](https://github.com/Bike4Mind/bike4mind/pull/7181) [`f1a9d57`](https://github.com/Bike4Mind/bike4mind/commit/f1a9d576acca7a6477699c03ccdc1a734233aafe) Thanks [@vinchi777](https://github.com/vinchi777)! - export and verify owner-scoped memory
+
 ## 0.2.5
 
 ### Patch Changes

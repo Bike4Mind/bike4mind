@@ -61,6 +61,7 @@ vi.mock('@bike4mind/services', () => ({
   adminService: { loginAs: (...a: unknown[]) => mockLoginAs(...a) },
 }));
 vi.mock('@bike4mind/auth/mfaService', () => ({
+  userHasTotpConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user?.mfa?.totpEnabled,
   verifyMFA: vi.fn().mockResolvedValue({ verified: true }),
   isUserLockedOut: () => false,
   getLockoutTimeRemaining: () => 0,

@@ -172,11 +172,12 @@ export const generateNewSession = async (
   knowledgeIds: string[] = [],
   agentIds: string[] = [],
   projectId?: string,
-  lastUsedModel?: string
+  lastUsedModel?: string,
+  organizationId?: string
 ) => {
   const response = await api.post<ISessionDocument>(
     `/api/sessions/create`,
-    { name, knowledgeIds, agentIds, projectId, lastUsedModel },
+    { name, knowledgeIds, agentIds, projectId, lastUsedModel, organizationId },
     { timeout: SEND_REQUEST_TIMEOUT_MS }
   );
   return response.data;

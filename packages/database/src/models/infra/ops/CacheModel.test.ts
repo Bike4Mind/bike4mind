@@ -205,6 +205,10 @@ describe('CacheRepository.findByKey', () => {
     expect(doc?.result).toEqual({ value: 'fresh' });
   });
 
+  it('resolves exactly null for a key that has no row', async () => {
+    expect(await cacheRepository.findByKey(`cache:missing:${Date.now()}`)).toBeNull();
+  });
+
   it('does not return an entry that has expired but is awaiting TTL cleanup', async () => {
     // Mongo's TTL monitor sweeps about once a minute, so a row can outlive its own expiresAt by
     // that long. Before the expiresAt guard, findByKey handed those out as hits - which meant a
@@ -212,8 +216,7 @@ describe('CacheRepository.findByKey', () => {
     const key = `cache:stale:${Date.now()}`;
     await Cache.create({ key, result: { value: 'stale' }, expiresAt: new Date(Date.now() - 1000) });
 
-    // Falsy, not null: the underlying findOne yields undefined for a miss.
-    expect(await cacheRepository.findByKey(key)).toBeFalsy();
+    expect(await cacheRepository.findByKey(key)).toBeNull();
     // Still physically present - the guard is what excludes it, not a deletion.
     expect(await Cache.findOne({ key })).not.toBeNull();
   });

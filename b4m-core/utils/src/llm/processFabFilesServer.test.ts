@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CorruptedFileError, type IFabFileDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  CorruptedFileError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
+  PasswordProtectedFileError,
+  type IFabFileDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { BadRequestError } from '../errors';
 
 const mockGetFileContent = vi.fn();
@@ -483,6 +489,57 @@ describe('processFabFilesServer file notices', () => {
     // One unreadable attachment must not cost the turn its other attachments.
     expect(deliveredFileIds).toEqual(['good']);
     expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
+  });
+
+  describe.each([
+    ['mapped by getFileContent', () => new PasswordProtectedFileError()],
+    // The shape pdf.js (through unpdf) throws, in case it reaches here unmapped.
+    [
+      'raw pdf.js PasswordException',
+      () => Object.assign(new Error('No password given'), { name: 'PasswordException', code: 1 }),
+    ],
+  ])('a password-protected PDF (%s)', (_label, makeError) => {
+    it('records the user-facing error and a notice, logs at warn, and does not throw', async () => {
+      mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+        if (file.id === 'locked') throw makeError();
+        return 'hello world';
+      });
+      const dependencies = deps();
+
+      const { fileNotices, deliveredFileIds } = await processFabFilesServer(
+        embeddingFactory,
+        [textFile('good'), textFile('locked')],
+        'prompt',
+        4000,
+        modelInfo,
+        async () => {},
+        dependencies
+      );
+
+      expect(deliveredFileIds).toEqual(['good']);
+      expect(dependencies.db.fabfiles.update).toHaveBeenCalledWith({
+        id: 'locked',
+        error: PASSWORD_PROTECTED_PDF_MESSAGE,
+      });
+      expect(fileNotices).toEqual([
+        expect.objectContaining({ fabFileId: 'locked', band: 'read_failed', delivered: false }),
+      ]);
+      expect(fileNotices[0].message).toContain(PASSWORD_PROTECTED_PDF_MESSAGE);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('password-protected'), { fileId: 'locked' });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+  });
+
+  it('still logs an unrelated read error at error level', async () => {
+    mockGetFileContent.mockRejectedValue(new Error('Cannot transfer object of unsupported type.'));
+
+    await run([textFile('bad')]);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('[processFabFilesServer] Error processing file'),
+      expect.any(Error),
+      expect.objectContaining({ fileId: 'bad' })
+    );
   });
 
   it('contains an unclassified read error to its own file instead of rejecting the batch', async () => {

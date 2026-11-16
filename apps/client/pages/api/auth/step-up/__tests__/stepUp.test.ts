@@ -133,7 +133,9 @@ vi.mock('@bike4mind/services', async () => {
       OTC_CODE_LENGTH: actual.userService.OTC_CODE_LENGTH,
     },
     mfaService: {
-      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
+      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+        !!user.mfa?.totpEnabled || !!user.mfa?.passkeyEnabled,
+      userHasTotpConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) =>
         !!user.mfa?.lockedUntil && new Date(user.mfa.lockedUntil) > new Date(),
       getLockoutTimeRemaining: () => 15,

@@ -20,8 +20,8 @@ import {
   isCreditsEnforced,
   reserveCompletionCredits,
   settleCompletion,
-} from '@server/billing/meterPlatformCompletion';
-import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   apiKeyRepository,

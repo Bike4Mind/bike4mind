@@ -1,6 +1,7 @@
 import {
   IChatHistoryItemDocument,
   IFabFileRepository,
+  IOrganizationRepository,
   ISessionRepository,
   IUserRepository,
   PromptMeta,
@@ -15,6 +16,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { copyOrganizationId } from './copyOrganizationId';
 import { createSession, CreateSessionAdapters } from './create';
 import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
@@ -31,6 +33,7 @@ type CloneSessionAdapters = {
     users: IUserRepository;
     sessions: ISessionRepository;
     fabFiles: IFabFileRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     chatHistories: {
       findAllBySessionId: (sessionId: string) => Promise<IChatHistoryItemDocument[]>;
       create: (chat: Omit<IChatHistoryItemDocument, 'id'>) => Promise<IChatHistoryItemDocument>;
@@ -66,6 +69,7 @@ export const cloneSession = async (
 
   const buildCloneSession = {
     name: `Cloned ${session.name}`,
+    organizationId: await copyOrganizationId(session.organizationId, userId, db.organizations),
     knowledgeIds: session.knowledgeIds,
     tags: session.tags ?? [],
     summary: session.summary,

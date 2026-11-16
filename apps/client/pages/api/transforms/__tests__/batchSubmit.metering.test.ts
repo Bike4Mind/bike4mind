@@ -45,7 +45,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
     messages = { batches: { cancel: m.cancel } };
   },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
     assert: async (id: string) => {
       if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);

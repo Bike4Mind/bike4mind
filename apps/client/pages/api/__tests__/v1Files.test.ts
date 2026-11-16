@@ -81,14 +81,16 @@ vi.mock('@server/files/createPresignedUpload', () => ({
   createPresignedUpload: mockCreatePresignedUpload,
   PRESIGNED_UPLOAD_EXPIRES_IN: 600,
 }));
-vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
+vi.mock('@bike4mind/server-utils/files/loadAccessibleFabFile', () => ({
+  loadAccessibleFabFile: mockLoadAccessibleFabFile,
+}));
 vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
-vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { updateFabFile: mockUpdateFabFile } }));
 vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },

@@ -18,7 +18,7 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
 }));
 
@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
 }));
@@ -70,7 +70,7 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getVideoJobDeps: () => ({ marker: 'video-job-deps' }),
   getCreateVideoJobDeps: () => ({ marker: 'create-video-job-deps' }),
 }));

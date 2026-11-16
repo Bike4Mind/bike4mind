@@ -26,6 +26,8 @@ import type {
 } from '@bike4mind/common';
 
 import { isObjectIdOrHexString } from 'mongoose';
+import { decodeMirrorCursor, encodeMirrorCursor, sealMirrorEntries } from './mirror';
+import type { MirrorPage } from './mirror';
 import { usableSessionIds } from '../utils/objectIds';
 
 /** Matches a bare "2026-01-15", as opposed to a full ISO datetime. */
@@ -272,6 +274,40 @@ export class NotebookExportService {
   async listNotebooks(userId: string, options: NotebookExportOptions): Promise<{ id: string; name: string }[]> {
     const sessions = await this.getSessionsToExport(userId, options, { name: 1 });
     return sessions.map(session => ({ id: session.id, name: session.name }));
+  }
+
+  /**
+   * One page of the mirror feed: notebooks changed after `cursorToken`, ordered by (lastUpdated, id).
+   * Fetches one extra row to learn whether more remain. The final page also lists every live id so
+   * the client can prune deletions.
+   */
+  async getMirrorPage(
+    userId: string,
+    options: NotebookExportOptions,
+    cursorToken: string | undefined,
+    limit: number
+  ): Promise<MirrorPage> {
+    const cursor = decodeMirrorCursor(cursorToken);
+    const after = new Date(cursor.at);
+    const query: ExportQuery = {
+      userId,
+      ...(cursorToken
+        ? { $or: [{ lastUpdated: { $gt: after } }, { lastUpdated: after, _id: { $gt: cursor.id } }] }
+        : {}),
+    };
+    const rows = await this.adapters.sessionRepository.find(query, {
+      sort: { lastUpdated: 1, _id: 1 },
+      limit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const notebooks: ExportedNotebook[] = [];
+    for (const session of rows.slice(0, limit)) {
+      notebooks.push(await this.exportSession(session, options, userId));
+    }
+    const { entries, next } = sealMirrorEntries(cursor, notebooks);
+    const page: MirrorPage = { entries, cursor: encodeMirrorCursor(next), hasMore };
+    if (!hasMore) page.liveIds = (await this.listNotebooks(userId, {} as NotebookExportOptions)).map(n => n.id);
+    return page;
   }
 
   private async getSessionsToExport(userId: string, options: NotebookExportOptions, projection?: Record<string, 1>) {
@@ -827,3 +863,4 @@ export class NotebookExportService {
 // Re-export types for external consumption
 export * from './types';
 export * from './bundle';
+export * from './mirror';

@@ -7,10 +7,16 @@ import SwiftUI
 struct MediaDetailView: View {
   @State private var model: MediaDetailViewModel
   @State private var isEditing = false
+  @State private var turnInto: TurnIntoRequest?
+  @State private var lineage: LineageViewModel
+  @State private var opened: MediaItem?
   @Environment(\.studioEdit) private var studioEdit
+  private let api: any MediaAPI
 
   init(item: MediaItem, api: any MediaAPI) {
+    self.api = api
     _model = State(initialValue: MediaDetailViewModel(item: item, api: api))
+    _lineage = State(initialValue: LineageViewModel(fileID: item.id, api: api))
   }
 
   var body: some View {
@@ -32,6 +38,16 @@ struct MediaDetailView: View {
           .accessibilityIdentifier("media-edit-btn")
         }
       }
+      if model.state == .ready, studioEdit != nil, !TurnInto.actions(for: model.item).isEmpty {
+        ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            TurnIntoButtons(item: model.item) { turnInto = $0 }
+          } label: {
+            Label("Turn into...", systemImage: "wand.and.stars")
+          }
+          .accessibilityIdentifier("media-turn-into-btn")
+        }
+      }
       if let url = model.item.url {
         ToolbarItem(placement: .topBarTrailing) {
           // The bytes are not on disk (AsyncImage and AVPlayer stream the signed URL), so the link is what is shared.
@@ -41,11 +57,30 @@ struct MediaDetailView: View {
       }
     }
     .task { await model.prepare() }
+    .task { await lineage.load() }
+    .safeAreaInset(edge: .bottom, spacing: 0) { lineageChips }
+    .navigationDestination(item: $opened) { MediaDetailView(item: $0, api: api) }
+    .turnIntoFlow(request: $turnInto, context: studioEdit)
     .fullScreenCover(isPresented: $isEditing) {
       if let studioEdit {
         RegionEditView(item: model.item, api: studioEdit.api, media: studioEdit.media, tracker: studioEdit.tracker)
       }
     }
+  }
+
+  @ViewBuilder
+  private var lineageChips: some View {
+    if let trail = lineage.lineage, !trail.isEmpty || branchSeed(in: trail) != nil {
+      LineageChipsView(
+        lineage: trail, onOpen: { opened = $0.mediaItem },
+        onBranch: branchSeed(in: trail).map { seed in { studioEdit?.apply(seed) } })
+    }
+  }
+
+  /// Branch needs the create bar (Studio) and a node Studio can re-run.
+  private func branchSeed(in trail: FileLineage) -> StudioSeed? {
+    guard studioEdit != nil, let root = trail.root else { return nil }
+    return LineageBranch.seed(for: root, parents: trail.madeFrom)
   }
 
   @ViewBuilder

@@ -27,7 +27,7 @@ import {
   MissionModelRefusedError,
   missionWakeMeter,
   pauseMission,
-} from '@server/deepAgent/wakeMetering';
+} from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
 import { resolveThinkingVisibilityForUserId } from '@bike4mind/server-utils/utils/thinkingVisibility';
 

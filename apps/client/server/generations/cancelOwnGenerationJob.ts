@@ -1,5 +1,5 @@
 import type { ApiErrorCode, IGenerationJobDocument } from '@bike4mind/common';
-import { getGenerationJobEngine } from '@server/generationJobs/wiring';
+import { getGenerationJobEngine } from '@bike4mind/server-utils/generationJobs/wiring';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 
 /**

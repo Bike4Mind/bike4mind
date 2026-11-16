@@ -1,13 +1,16 @@
-import { IUserDocument, WithOrgRef, IOrganizationDocument, ICounterLog } from '@bike4mind/common';
+import { IUserDocument, WithOrgRef, IOrganizationDocument, ICounterLog, OrganizationEvents } from '@bike4mind/common';
 import { mongoose, Ability, User, UserActivityCounter, CounterLog } from '@bike4mind/database';
 import { counterService } from '@bike4mind/services';
 import { isValidEnumValue } from '@bike4mind/utils';
 import { Logger, type ILogger } from '@bike4mind/observability';
 import { ANALYTICS_EVENTS, AnalyticsEventPayloads, AnalyticsEvents } from '../types/analytics/index';
+import { recordOrganizationAuditEventSafe } from './organizationAudit';
 
 interface LogEventOptions {
   session?: mongoose.ClientSession;
   ability?: Ability;
+  /** Trusted request principal, separate from the account whose analytics counters are updated. */
+  organizationAuditActorUserId?: string;
 }
 
 /**
@@ -18,6 +21,18 @@ interface LogEventOptions {
  * analytics outage cannot fail the operation it is describing.
  */
 export async function logEvent(event: AnalyticsEventPayloads, options?: LogEventOptions): Promise<void> {
+  if (
+    event.type === OrganizationEvents.ADD_ORG_MEMBER ||
+    event.type === OrganizationEvents.REMOVE_ORG_MEMBER ||
+    event.type === OrganizationEvents.LEAVE_ORG
+  ) {
+    await recordOrganizationAuditEventSafe({
+      organizationId: event.metadata.organizationId,
+      actorUserId: options?.organizationAuditActorUserId ?? event.userId!,
+      action: event.type === OrganizationEvents.ADD_ORG_MEMBER ? 'member.added' : 'member.removed',
+      targetId: 'userId' in event.metadata ? event.metadata.userId : undefined,
+    });
+  }
   // No transaction wrapping: UserActivityCounter.updateOne ($inc upsert) and CounterLog.create
   // are both single-document atomic operations that don't require multi-document transaction
   // guarantees for analytics data. Wrapping in withTransaction caused "transaction aborted"

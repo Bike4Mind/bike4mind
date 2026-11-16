@@ -17,6 +17,7 @@ import AgentProactiveMessagingModal from './AgentProactiveMessagingModal';
 import { useGetSessionAgentConfigs } from '@client/app/hooks/data/agentProactiveMessaging';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 const ToolContainer = ({ children }: PropsWithChildren) => {
   return (
@@ -157,6 +158,7 @@ const AgentsSection: React.FC<AgentsSectionProps> = ({ onClose, showMobileHeader
   if (availableAgents.length === 0) {
     return (
       <Box sx={{ p: 2, textAlign: 'center' }}>
+        <OrganizationLibraryPicker kind="agent" />
         <SmartToyIcon sx={{ fontSize: '3rem', color: 'text.secondary', mb: 1 }} />
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
           No agents available. Create your first agent to get started.
@@ -222,6 +224,7 @@ const AgentsSection: React.FC<AgentsSectionProps> = ({ onClose, showMobileHeader
           ...scrollbarStyles,
         }}
       >
+        <OrganizationLibraryPicker kind="agent" />
         {availableAgents.map(agent => {
           const isAttached = isAgentAttached(agent.id);
 

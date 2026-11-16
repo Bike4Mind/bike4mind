@@ -37,7 +37,7 @@ vi.mock('@server/services/publish', () => ({
   toCacheTarget: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 import { stripFences } from '../revise';
 

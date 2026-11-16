@@ -10,6 +10,9 @@ import {
   IUserApiKeyDocument,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
+  LegacyApiKeyCandidatePage,
+  LegacyApiKeyCandidateQuery,
+  OrgApiKeyGrant,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -66,6 +69,36 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       { $group: { _id: '$userId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  async findLegacyCandidatesPage({
+    createdBefore,
+    usedSince,
+    excludeScopes,
+    skip,
+    limit,
+  }: LegacyApiKeyCandidateQuery): Promise<LegacyApiKeyCandidatePage> {
+    const now = new Date();
+    const filter = {
+      status: ApiKeyStatus.ACTIVE,
+      // Explicit because countDocuments and aggregate skip the soft-delete filter.
+      deletedAt: null,
+      lastUsedAt: { $gte: usedSince },
+      ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+      scopes: { $nin: [...excludeScopes] },
+      'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
+    };
+    const [keys, total, owners] = await Promise.all([
+      this.model.find(filter).sort({ lastUsedAt: -1, _id: -1 }).skip(skip).limit(limit).exec(),
+      this.model.countDocuments(filter).exec(),
+      this.model.aggregate<{ count: number }>([
+        { $match: filter },
+        { $group: { _id: '$userId' } },
+        { $count: 'count' },
+      ]),
+    ]);
+    return { keys, total, ownerCount: owners[0]?.count ?? 0 };
   }
 
   /** When each user created their first key, deleted keys included; users with no key are absent. */
@@ -252,6 +285,37 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       }
     );
     return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Disables the member's live keys billed to this org when their membership ends. Personal
+   * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
+   * they serve the org's embedded widget, not the member) are left alone. No batch id: a
+   * removal is not undoable, so these must not be restorable through `reactivateByIds`.
+   * Returns the selected live ids. Call within withTransaction when these ids are used as an
+   * exact audit receipt, so a concurrent revocation retries the read and write together.
+   */
+  // Keep the selection in sync with orgBilledKeyFilter in b4m-core/services/src/organizationService/offboardingScope.ts.
+  async revokeLiveOrgBilledByUserId(
+    userId: string,
+    organizationId: string,
+    { revokedBy, revokedReason }: { revokedBy: string; revokedReason: string }
+  ): Promise<string[]> {
+    const filter = {
+      userId,
+      organizationId,
+      billingOwnerType: CreditHolderType.Organization,
+      status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
+    };
+    const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
+    if (live.length === 0) return [];
+    const ids = live.map(key => key._id);
+    await this.model.updateMany(
+      { ...filter, _id: { $in: ids } },
+      { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason } }
+    );
+    return ids.map(String);
   }
 
   /**
@@ -475,6 +539,30 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
+    // Org-owned key (see IUserApiKey.orgOwned). `createdByUserId` is set on insert only; `grants`
+    // is the key's reach, edited by pages/api/organizations/[id]/api-keys/[keyId]/index.ts.
+    orgOwned: {
+      type: new mongoose.Schema<{ createdByUserId: string; grants?: OrgApiKeyGrant[] }>(
+        {
+          createdByUserId: { type: String, required: true },
+          grants: {
+            type: [
+              new mongoose.Schema<OrgApiKeyGrant>(
+                {
+                  resourceType: { type: String, enum: ['organization', 'group'], required: true },
+                  resourceId: { type: String, required: true },
+                  permission: { type: String, enum: ['read'], required: true },
+                },
+                { _id: false }
+              ),
+            ],
+            default: undefined,
+          },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {

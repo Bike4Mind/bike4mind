@@ -4,11 +4,15 @@ import {
   realtimeConnectionRepository,
   userRepository,
   withTransaction,
+  deleteFeedbackAiForUser,
+  deleteOrgAlertsForUser,
+  eraseOrganizationRetentionForUser,
+  FeedbackNoteModel,
   type IErasureRecord,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
-import { purgeAccountContent } from './purgeAccountContent';
+import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDeletedUserData';
+import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
@@ -42,16 +46,26 @@ export async function reapplyErasure(
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
   if (record.initiatedBy !== 'admin') {
-    const assertLease = async () => {}; // no purge lease: the account is already past its grace period
+    // File erasure acquires its own User lease and permanent export fence, including restored
+    // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
+    const assertLease = async () => {};
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
-    await withTransaction(async () => {
+    await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+      await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });
   } else {
-    await withTransaction(async () => {
+    await withTransaction(async session => {
+      await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
+      await eraseOrganizationRetentionForUser(userId, { session });
+      await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
       await writeRecord();
     });

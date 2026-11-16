@@ -29,7 +29,7 @@ export type MeteredCompletion = {
  * Admits `modelInfo` and reserves the worst-case cost of one call before the provider is called.
  * Throws (422 insufficient_credits, or the admission refusal) without reserving anything. Injected
  * into b4m-core services that run platform-key completions outside a request; the implementation
- * is createCompletionMeter in apps/client/server/billing/meterPlatformCompletion.ts.
+ * is createCompletionMeter in packages/server-utils/src/billing/meterPlatformCompletion.ts.
  */
 export type CompletionMeter = (
   modelInfo: ModelInfo,

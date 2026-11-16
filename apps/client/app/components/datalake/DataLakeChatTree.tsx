@@ -231,7 +231,7 @@ export default function DataLakeChatTree({
             justifyContent: 'center',
             gap: 0.5,
             px: 1,
-            py: 0.25,
+            minHeight: 32,
             borderRadius: 'sm',
             border: '1px dashed',
             borderColor: isDark ? gray[800] : gray[200],

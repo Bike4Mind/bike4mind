@@ -19,7 +19,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
-import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 import {
   chargeStampedKnowledgeStorage,
   chargeUploadedObject,

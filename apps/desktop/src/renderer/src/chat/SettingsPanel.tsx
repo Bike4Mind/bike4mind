@@ -25,6 +25,7 @@ import { LocalHistorySettings } from './LocalHistorySettings';
 import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
 import { WorktreesSettings } from './WorktreesSettings';
+import { AutoFixAttemptsSettings, autoFixAttemptsSummary, useAutoFixAttempts } from './AutoFixAttemptsSettings';
 import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
 import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { SettingsRow, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
@@ -35,6 +36,7 @@ import {
   DownloadIcon,
   FolderIcon,
   ModelsIcon,
+  PullRequestIcon,
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
@@ -43,6 +45,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { useMenuBarSetting } from './menuBarSetting';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
@@ -158,6 +161,22 @@ function worktreeEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   };
 }
 
+function autoFixAttemptsEntry(
+  attempts: number | null,
+  onChange: (attempts: number) => void,
+  error: string | null
+): ConfigEntry {
+  return {
+    id: 'autofix-attempts',
+    icon: <PullRequestIcon />,
+    label: 'Auto-fix attempts',
+    summary: autoFixAttemptsSummary(attempts),
+    description:
+      'How many times auto-fix tries a pull request before it stops. Takes effect when you next turn auto-fix on. Raising it also applies where auto-fix is already on.',
+    control: <AutoFixAttemptsSettings attempts={attempts} onChange={onChange} error={error} />,
+  };
+}
+
 function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   return {
     id: 'nested-sessions',
@@ -194,6 +213,25 @@ function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEnt
         slotProps={{
           input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
         }}
+      />
+    ),
+  };
+}
+
+function menuBarEntry(shown: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'menu-bar',
+    icon: null,
+    label: 'Show in menu bar',
+    summary: shown ? 'Agent status and quick approvals in the menu bar.' : 'Off.',
+    description:
+      'Show how your orchestrations are doing in the menu bar, with quick approvals and the mini Tavern. It appears once you start an orchestration.',
+    control: (
+      <Switch
+        size="sm"
+        checked={shown}
+        onChange={toggle}
+        slotProps={{ input: { 'aria-label': 'Show in menu bar', 'data-testid': 'settings-menu-bar-switch' } }}
       />
     ),
   };
@@ -510,6 +548,8 @@ function useSettingsEntries(
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
+  const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
+  const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -519,8 +559,10 @@ function useSettingsEntries(
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      menuBarEntry(menuBar, toggleMenuBar),
       {
         id: 'orchestration-policy',
         icon: null,
@@ -583,12 +625,12 @@ const GENERAL_GROUPS = [
   {
     id: 'appearance',
     label: 'Appearance & feedback',
-    entries: ['appearance', 'orchestrator-sound', 'nested-sessions'],
+    entries: ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
   },
   {
     id: 'conversations',
     label: 'Conversations & code',
-    entries: ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
+    entries: ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
   },
   { id: 'models', label: 'Models', entries: ['local-context', 'token-rate', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },

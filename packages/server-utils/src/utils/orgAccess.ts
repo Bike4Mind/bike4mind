@@ -104,10 +104,9 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
  * The strictest of the five tiers in this file - owner only, where `verifyOrgAccess` also admits
  * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
  * owns the org may act: billing writes (committing the org to a charge, or changing what it pays),
- * the org's credit spend and ledger (`usage/index.ts`, `admin/transactions.ts`,
- * `admin/session-usage.ts`), and org-level integration wiring and secrets (`integrations/slack/*`,
+ * and org-level integration wiring and secrets (`integrations/slack/*`,
  * `organizations/[id]/github/*`, `organizations/[id]/webhooks/github*`), which act for the whole
- * tenant. A manager has agreed to none of these. The client's tab gates for them
+ * tenant. Usage and ledger reads use verifyOrgAccess. The client's tab gates for them
  * (routes/organizations/orgTabAccess.ts) must stay in sync with this list.
  *
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer

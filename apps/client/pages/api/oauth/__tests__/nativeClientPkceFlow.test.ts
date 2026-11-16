@@ -85,7 +85,7 @@ vi.mock('@bike4mind/database', () => {
     userRepository: {
       findById: async (id: string) => ({ id, email: 'u@example.com', username: 'u', tokenVersion: 0 }),
     },
-    User: {},
+    User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
     realtimeConnectionRepository: {},
     authSessionRepository: {
       create: async (row: Omit<SessionRow, 'id'>) => {

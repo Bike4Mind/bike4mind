@@ -505,13 +505,14 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       field: 'mfa',
       input: {
         totpEnabled: true,
+        passkeyEnabled: true,
         setupAt: new Date(),
         lastUsedAt: new Date(),
         totpSecret: 'x',
         backupCodes: ['x'],
         futureField: 'x',
       },
-      allowed: ['totpEnabled', 'setupAt', 'lastUsedAt'],
+      allowed: ['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt'],
     },
     {
       field: 'googleDrive',

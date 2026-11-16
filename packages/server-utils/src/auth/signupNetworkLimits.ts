@@ -45,7 +45,9 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
     if (overIp || overAsn) logger.warn('[signup-limits] Refused signup', { overIp, overAsn, asn: network.asn });
     return overIp || overAsn;
   } catch (error) {
-    logger.warn('[signup-limits] Limit check failed; allowing signup', error);
+    // Bare event name: infra/signupAlarms.ts counts it with an exact-message metric filter, and a
+    // trailing Error argument would be folded into the message text. Keep the error in metadata.
+    logger.warn('signup-limit-failed-open', { error: error instanceof Error ? error.message : String(error) });
     return false;
   }
 }

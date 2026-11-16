@@ -3,7 +3,7 @@ import { Connection, questRepository } from '@bike4mind/database';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { publishImageQuestReadyPush } from './generationPush';
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
-import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
+import { getImageGeneration } from '@bike4mind/server-utils/imageGenerations/imageGeneration';
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   logger.debug('Starting image generation dispatch', {

@@ -280,6 +280,11 @@ const nextConfig = {
         source: '/.well-known/jwks.json',
         destination: '/api/oauth/jwks',
       },
+      // Digital Asset Links: verifies the Android app's https sign-in redirect as an App Link
+      {
+        source: '/.well-known/assetlinks.json',
+        destination: '/api/well-known/assetlinks',
+      },
       // Client ID Metadata Document for custom MCP connector sign-in
       {
         source: '/.well-known/oauth-client/mcp-client.json',
@@ -334,6 +339,11 @@ const nextConfig = {
     // Skip server source map generation to reduce build memory pressure on CI.
     // Recommended in the Next.js memory-usage guide for large projects.
     serverSourceMaps: false,
+    // Next 16.4 defaults this on. The self-host image build starts from an empty .next and
+    // discards it, so the cache is never read back, and persisting it at shutdown, which
+    // `next build` awaits after printing the route table, intermittently never finished
+    // there (the Self-host image workflow timed out with the route table as its last output).
+    ...(process.env.B4M_SELF_HOST === 'true' ? { turbopackFileSystemCacheForBuild: false } : {}),
   },
 };
 

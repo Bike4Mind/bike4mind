@@ -1079,9 +1079,7 @@ export function useSendMessage({
           sessionFabFileIds: dispatchSessionFabFileIds.length > 0 ? dispatchSessionFabFileIds : undefined,
           messageFileIds: dispatchMessageFileIds.length > 0 ? dispatchMessageFileIds : undefined,
           messageOnlyFileIds: sentMessageOnlyFileIds.length > 0 ? sentMessageOnlyFileIds : undefined,
-          // LLM runtime knobs. `thinking` is forwarded only when the user
-          // actually enabled it - the LLM store ships a baseline
-          // `{enabled: false, ...}` that would otherwise round-trip needlessly.
+          // LLM runtime knobs.
           temperature: temperature ?? undefined,
           // `safeMaxTokens` (`useTokenLimits.ts`) only guards null/undefined,
           // so a persisted `0` / negative `max_tokens` would slip through and
@@ -1090,7 +1088,9 @@ export function useSendMessage({
           // `agent_execute` dispatch. Forward only when strictly positive so
           // the executor falls back to its built-in default instead.
           maxTokens: safeMaxTokens > 0 ? safeMaxTokens : undefined,
-          thinking: sentThinking?.enabled ? sentThinking : undefined,
+          // Forwarded as-is, including `{enabled: false}`: the backends read it
+          // as the off switch for adaptive-by-default models.
+          thinking: sentThinking,
           // Image config (#agent-mode-image-gen). Forwarded only when an image
           // model is resolvable so the executor's image_generation / edit_image
           // tools get a model instead of short-circuiting with "Image model

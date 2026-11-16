@@ -13,7 +13,7 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: (...a: unknown[]) => mocks.reserve(...a),
 }));
 vi.mock('@bike4mind/services', () => ({

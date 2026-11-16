@@ -76,7 +76,7 @@ struct SignInView: View {
       }
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
-      .buttonBorderShape(.roundedRectangle(radius: Tokens.Radius.control))
+      .buttonBorderShape(.roundedRectangle(radius: Tokens.Radius.md))
       .disabled(isSigningIn)
       .accessibilityIdentifier("signin-submit-btn")
 

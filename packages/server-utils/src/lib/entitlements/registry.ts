@@ -120,6 +120,20 @@ export const LIBREONCOLOGY_PRO_PRICE_ID = resolveStagePriceId(LIBREONCOLOGY_PRO_
 const PRICE_STAGED_ROWS: ReadonlyArray<{ priceIds: StagedPriceId; entitlements: EntitlementKey[] }> = [
   // [DELETION-FOOTPRINT] LibreOncology Pro.
   { priceIds: LIBREONCOLOGY_PRO_PRICE_IDS, entitlements: ['libreoncology:pro'] },
+  {
+    priceIds: {
+      test: process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '',
+      prod: process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '',
+    },
+    entitlements: ['paintbox:pro'],
+  },
+  {
+    priceIds: {
+      test: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST ?? '',
+      prod: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD ?? '',
+    },
+    entitlements: ['paintbox:pro'],
+  },
 ];
 
 const PRICE_ENTITLEMENT_ROWS: PriceEntitlementRow[] = PRICE_STAGED_ROWS.map(row => ({
@@ -606,7 +620,7 @@ export const SIGNUP_CREDITS: ReadonlyMap<EntitlementKey, number> = new Map(
 );
 
 export const PRICE_ENTITLEMENTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
-  PRICE_ENTITLEMENT_ROWS.map(row => [row.priceId, row.entitlements])
+  PRICE_ENTITLEMENT_ROWS.filter(row => row.priceId).map(row => [row.priceId, row.entitlements])
 );
 
 export const TAG_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(

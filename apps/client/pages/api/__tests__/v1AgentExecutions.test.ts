@@ -54,7 +54,7 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: async () => ({ release: async () => {} }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),
   isChatModelUsable: () => true,
 }));

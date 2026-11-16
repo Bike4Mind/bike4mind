@@ -42,8 +42,8 @@ export const shadows = {
 };
 
 // Motion durations in ms, seeded from the durations the web app's transitions
-// use most (0.15s/0.2s/0.3s/0.5s account for nearly all of them). Not yet
-// consumed by the web emitters.
+// use most (0.15s/0.2s/0.3s/0.5s account for nearly all of them). The Joy
+// emitter emits them as ms strings under `motion.duration`.
 export const motion = {
   duration: {
     fast: 150,

@@ -12,7 +12,7 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
-import type { BrowserPage, BrowserProvider } from './tools/types';
+import type { BrowserPage, BrowserProvider, BrowserTabInfo } from './tools/types';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -37,6 +37,7 @@ describe('ChatService agent browser', () => {
   let pageUrl: string;
   /** Hosts the user imported their own browser cookies for. */
   let imported: string[];
+  let tabRows: BrowserTabInfo[];
 
   const page: BrowserPage = {
     currentUrl: () => pageUrl,
@@ -74,6 +75,7 @@ describe('ChatService agent browser', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-browser-')));
     pageUrl = 'http://localhost:3080/app';
     imported = [];
+    tabRows = [];
     approvals = new ApprovalGate();
     granted = [root];
     // Bound per test: a previous service replying late must not push into this test's events.
@@ -92,10 +94,20 @@ describe('ChatService agent browser', () => {
     const browser: BrowserProvider = {
       context: (_sessionId, keepScreenshot) => ({
         page: async () => page,
-        tabs: () => [],
+        tabs: () => tabRows,
         newTab: async () => page,
-        selectTab: () => Promise.reject(new Error('No tabs in this test.')),
-        closeTab: () => Promise.reject(new Error('No tabs in this test.')),
+        selectTab: async id => {
+          const tab = tabRows.find(row => row.id === id);
+          if (!tab) throw new Error('No tabs in this test.');
+          pageUrl = tab.url;
+          return tab;
+        },
+        closeTab: async id => {
+          const tab = tabRows.find(row => row.id === id);
+          if (!tab) throw new Error('No tabs in this test.');
+          tabRows = tabRows.filter(row => row.id !== id);
+          return tab;
+        },
         keepScreenshot,
         usesImportedCookies: url => imported.includes(new URL(url).hostname),
       }),
@@ -269,9 +281,13 @@ describe('ChatService agent browser', () => {
     expect(await evaluateInFullAccess(await codeSession())).toBe(false);
   });
 
-  // The url bar is what makes this necessary: the user can sign in to anything in this cookie
-  // jar now, and a script in that page reads the cookies and answers to the model's provider.
-  it('asks before running a script on a site that is not local, in full access', async () => {
+  it('runs a script on a site that is not local without asking, in full access', async () => {
+    pageUrl = 'https://app.example.com/inbox';
+    expect(await evaluateInFullAccess(await codeSession())).toBe(false);
+  });
+
+  it('asks before a script on an unconsented imported-cookie origin in full access', async () => {
+    imported = ['app.example.com'];
     pageUrl = 'https://app.example.com/inbox';
     expect(await evaluateInFullAccess(await codeSession())).toBe(true);
   });
@@ -322,22 +338,56 @@ describe('ChatService agent browser', () => {
     return { asked, result: end && 'call' in end ? (end.call.preview ?? end.call.error ?? '') : '' };
   }
 
-  it('asks before reading a signed-in page in full access, and an "always" covers the next read', async () => {
+  it.each(['auto', 'full'] as const)(
+    'asks for an unconsented signed-in page, then reuses only standing origin consent in %s',
+    async mode => {
+      imported = ['mail.example.com'];
+      pageUrl = 'https://mail.example.com/inbox';
+      const id = await codeSession();
+      await store.setApprovalMode(id, mode);
+
+      const once = await snapshotRound(id, 'once');
+      expect(once.asked).toBe(true);
+      expect(once.result).toContain('123456');
+      const always = await snapshotRound(id, 'always');
+      expect(always.asked).toBe(true);
+      expect(always.result).toContain('123456');
+      const covered = await snapshotRound(id, undefined);
+      expect(covered.asked).toBe(false);
+      expect(covered.result).toContain('123456');
+      pageUrl = 'https://mail.example.com:444/inbox';
+      const otherOrigin = await snapshotRound(id, 'once');
+      expect(otherOrigin.asked).toBe(true);
+    }
+  );
+
+  it.each(['auto', 'full'] as const)('still asks before opening a signed-in site in %s', async mode => {
     imported = ['mail.example.com'];
-    pageUrl = 'https://mail.example.com/inbox';
     const id = await codeSession();
-    await store.setApprovalMode(id, 'full');
-
-    const first = await snapshotRound(id, 'always');
-    expect(first.asked).toBe(true);
-    expect(first.result).toContain('123456');
-
-    const second = await snapshotRound(id, undefined);
-    expect(second.asked).toBe(false);
-    expect(second.result).toContain('123456');
+    await store.setApprovalMode(id, mode);
+    await service.send(id, 'open the inbox');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          { id: 'nav', name: 'browser_navigate', arguments: JSON.stringify({ url: 'https://mail.example.com/' }) },
+        ],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    const card = await vi.waitUntil(
+      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
+      { timeout: 3000, interval: 5 }
+    );
+    expect(card).toBeDefined();
+    expect(events.find(e => e.type === 'tool-end' && e.call.name === 'browser_navigate')).toBeUndefined();
   });
 
-  it('asks in "Approve for me" before a command that follows a page read', async () => {
+  it.each([
+    ['unproven', 'node --version'],
+    ['proven local', 'pwd'],
+  ] as const)('runs a %s command in Approve for me after the reply read a page', async (_, command) => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then run the build');
@@ -345,20 +395,53 @@ describe('ChatService agent browser', () => {
     streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'snap', name: 'browser_snapshot', arguments: '{}' }] }));
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
-    const build = JSON.stringify({ command: 'node --version', cwd: root });
+    const build = JSON.stringify({ command, cwd: root });
     streams[1].write(frame({ type: 'tool_use', tools: [{ id: 'build', name: 'bash_execute', arguments: build }] }));
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'bash_execute' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'bash_execute') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'bash_execute' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain(
-      'Asked because this reply read content from a web page in the browser (browser_snapshot).'
-    );
+    expect(settled.type).toBe('tool-end');
   });
 
-  it('asks in "Approve for me" before opening a site once the reply has read a page', async () => {
+  describe.each(['auto', 'full'] as const)('existing public tabs in %s', mode => {
+    it.each(['list', 'close', 'select'] as const)('keeps %s usable without a card', async action => {
+      const id = await codeSession();
+      await store.setApprovalMode(id, mode);
+      pageUrl = 'https://example.com/';
+      tabRows = [{ id: 1, title: 'Public page', url: pageUrl, active: true }];
+      await service.send(id, 'Read the page and use an existing tab');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+      streams[0].write(
+        frame({ type: 'tool_use', tools: [{ id: 'snapshot', name: 'browser_snapshot', arguments: '{}' }] })
+      );
+      streams[0].write(frame('[DONE]'));
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(
+        frame({
+          type: 'tool_use',
+          tools: [{ id: 'local-tabs', name: 'browser_tabs', arguments: JSON.stringify({ action, id: 1 }) }],
+        })
+      );
+      streams[1].write(frame('[DONE]'));
+      const outcome = await vi.waitUntil(
+        () =>
+          events.find(
+            event =>
+              (event.type === 'tool-end' && event.call.id === 'local-tabs') ||
+              (event.type === 'tool-start' && event.call.id === 'local-tabs' && !!event.call.approvalId)
+          ),
+        { timeout: 3000, interval: 5 }
+      );
+      expect(outcome).toMatchObject({ type: 'tool-end', call: { status: 'done' } });
+    });
+  });
+
+  it('opens a site in "Approve for me" after the reply read a page', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then open example.com');
@@ -374,14 +457,16 @@ describe('ChatService agent browser', () => {
     );
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'browser_navigate') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+    expect(settled.type).toBe('tool-end');
   });
 
-  it('asks in "Approve for me" before opening a tab once the reply has read a page', async () => {
+  it('opens a tab in "Approve for me" after the reply read a page', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
     await service.send(id, 'read the page, then open a tab');
@@ -403,11 +488,13 @@ describe('ChatService agent browser', () => {
     );
     streams[1].write(frame('[DONE]'));
 
-    const card = await vi.waitUntil(
-      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_tabs' && !!e.call.approvalId),
+    const settled = await vi.waitUntil(
+      () =>
+        events.find(e => e.type === 'tool-end' && e.call.name === 'browser_tabs') ??
+        events.find(e => e.type === 'tool-start' && e.call.name === 'browser_tabs' && !!e.call.approvalId),
       { timeout: 3000, interval: 5 }
     );
-    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+    expect(settled.type).toBe('tool-end');
   });
 
   it('closes the browser with its conversation', async () => {

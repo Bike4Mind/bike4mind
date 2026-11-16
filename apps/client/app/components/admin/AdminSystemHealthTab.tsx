@@ -1,29 +1,9 @@
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  Chip,
-  CircularProgress,
-  Divider,
-  LinearProgress,
-  Sheet,
-  Stack,
-  Typography,
-} from '@mui/joy';
+import { Alert, Box, Button, Stack, Typography } from '@mui/joy';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
-import WarningIcon from '@mui/icons-material/Warning';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
-import EmailIcon from '@mui/icons-material/Email';
-import StorageIcon from '@mui/icons-material/Storage';
 import SendIcon from '@mui/icons-material/Send';
 import NetworkPingIcon from '@mui/icons-material/NetworkPing';
-import SecurityIcon from '@mui/icons-material/Security';
-import CloudIcon from '@mui/icons-material/Cloud';
 import BlockIcon from '@mui/icons-material/Block';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
@@ -31,6 +11,9 @@ import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { AdminPageHeader, EmptyState, ErrorState, InlineBar, LoadingState, SectionCard, StatusChip } from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 import type { SystemHealthResponse, OAuthProviderStatus } from '@server/admin/systemHealth/getSystemHealthStatus';
 import type { TestOAuthResult, OAuthProvider, OktaDiagnostics } from '@client/pages/api/admin/system-health/test-oauth';
 
@@ -205,32 +188,34 @@ const INTEGRATION_TO_MCP_SERVER: Partial<Record<IntegrationName, string>> = {
 const getRealtimeBreakerChipProps = (
   state: RealtimeCircuitBreakerState,
   snapshot: RealtimeCircuitBreakerSnapshot
-): { color: 'success' | 'danger' | 'warning'; label: string } => {
+): { tone: AdminStatusTone; label: string } => {
   switch (state) {
     case 'OPEN': {
       const ratePart = snapshot.failureRate !== null ? ` / ${Math.round(snapshot.failureRate * 100)}% rate` : '';
-      return { color: 'danger', label: `OPEN (${snapshot.failureCount} failures${ratePart})` };
+      return { tone: 'bad', label: `OPEN (${snapshot.failureCount} failures${ratePart})` };
     }
     case 'HALF_OPEN':
-      return { color: 'warning', label: `HALF_OPEN (${snapshot.successCount} successes)` };
+      return { tone: 'warn', label: `HALF_OPEN (${snapshot.successCount} successes)` };
     case 'CLOSED':
     default:
-      return { color: 'success', label: 'CLOSED' };
+      return { tone: 'good', label: 'CLOSED' };
   }
 };
 
-const getStatusColor = (status: string): 'success' | 'warning' | 'danger' | 'neutral' => {
-  if (status === 'healthy') return 'success';
-  if (status === 'degraded') return 'warning';
+const getStatusTone = (status: string): AdminStatusTone => {
+  if (status === 'healthy') return 'good';
+  if (status === 'degraded') return 'warn';
   if (status === 'no_data') return 'neutral';
-  return 'danger';
+  return 'bad';
 };
 
-const getStatusIcon = (status: string) => {
-  if (status === 'healthy') return <CheckCircleIcon sx={{ fontSize: 16 }} />;
-  if (status === 'degraded') return <WarningIcon sx={{ fontSize: 16 }} />;
-  if (status === 'no_data') return <HelpOutlineIcon sx={{ fontSize: 16 }} />;
-  return <ErrorIcon sx={{ fontSize: 16 }} />;
+/** A hairline-separated row inside a SectionCard body. */
+const ROW_SX = {
+  px: 2,
+  py: 2,
+  borderTop: '1px solid',
+  borderColor: 'admin.border',
+  '&:first-of-type': { borderTop: 0 },
 };
 
 /** Actionable guidance for common email errors. */
@@ -313,15 +298,7 @@ const getOAuthErrorGuidance = (provider: OAuthProvider, error: string): string |
 };
 
 const ConfigStatusChip = ({ configured, testId }: { configured: boolean; testId?: string }) => (
-  <Chip
-    size="sm"
-    color={configured ? 'success' : 'danger'}
-    variant="outlined"
-    startDecorator={configured ? <CheckCircleIcon /> : <ErrorIcon />}
-    data-testid={testId}
-  >
-    {configured ? 'Configured' : 'Missing'}
-  </Chip>
+  <StatusChip tone={configured ? 'good' : 'warn'} label={configured ? 'Configured' : 'Missing'} data-testid={testId} />
 );
 
 const OAUTH_PROVIDERS: { key: OAuthProvider; label: string }[] = [
@@ -332,26 +309,26 @@ const OAUTH_PROVIDERS: { key: OAuthProvider; label: string }[] = [
 
 /** Detailed Okta diagnostics: JWKS, token/userinfo endpoints, issuer validation. */
 const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics }) => {
-  const items: { label: string; status: 'success' | 'warning' | 'error'; detail: string }[] = [];
+  const items: { label: string; status: AdminStatusTone; detail: string }[] = [];
 
   // JWKS status
   if (diagnostics.jwks) {
     if (diagnostics.jwks.reachable && diagnostics.jwks.keyCount > 0) {
       items.push({
         label: 'JWKS',
-        status: 'success',
+        status: 'good',
         detail: `${diagnostics.jwks.keyCount} signing key(s) found`,
       });
     } else if (diagnostics.jwks.reachable && diagnostics.jwks.keyCount === 0) {
       items.push({
         label: 'JWKS',
-        status: 'warning',
+        status: 'warn',
         detail: diagnostics.jwks.error || 'No signing keys found',
       });
     } else {
       items.push({
         label: 'JWKS',
-        status: 'error',
+        status: 'bad',
         detail: diagnostics.jwks.error || 'Unreachable',
       });
     }
@@ -363,20 +340,20 @@ const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics })
       if (diagnostics.tokenEndpoint.acceptsClientAuth) {
         items.push({
           label: 'Token Endpoint',
-          status: 'success',
+          status: 'good',
           detail: `Responds (${diagnostics.tokenEndpoint.status})`,
         });
       } else {
         items.push({
           label: 'Token Endpoint',
-          status: 'warning',
+          status: 'warn',
           detail: 'Reachable but may reject client credentials',
         });
       }
     } else {
       items.push({
         label: 'Token Endpoint',
-        status: 'error',
+        status: 'bad',
         detail: diagnostics.tokenEndpoint.error || 'Unreachable',
       });
     }
@@ -387,13 +364,13 @@ const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics })
     if (diagnostics.userinfoEndpoint.reachable) {
       items.push({
         label: 'Userinfo Endpoint',
-        status: 'success',
+        status: 'good',
         detail: `Responds (${diagnostics.userinfoEndpoint.status})`,
       });
     } else {
       items.push({
         label: 'Userinfo Endpoint',
-        status: 'error',
+        status: 'bad',
         detail: diagnostics.userinfoEndpoint.error || 'Unreachable',
       });
     }
@@ -404,13 +381,13 @@ const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics })
     if (diagnostics.issuerMatch) {
       items.push({
         label: 'Issuer',
-        status: 'success',
+        status: 'good',
         detail: 'Matches expected URL',
       });
     } else {
       items.push({
         label: 'Issuer',
-        status: 'error',
+        status: 'bad',
         detail: `Mismatch: expected ${diagnostics.expectedIssuer}, got ${diagnostics.actualIssuer}`,
       });
     }
@@ -421,13 +398,13 @@ const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics })
     if (diagnostics.supportsRS256) {
       items.push({
         label: 'Signing',
-        status: 'success',
+        status: 'good',
         detail: 'RS256 supported',
       });
     } else {
       items.push({
         label: 'Signing',
-        status: 'warning',
+        status: 'warn',
         detail: `RS256 not supported (available: ${diagnostics.signingAlgorithms?.join(', ') || 'none'})`,
       });
     }
@@ -436,23 +413,15 @@ const OktaDiagnosticsPanel = ({ diagnostics }: { diagnostics: OktaDiagnostics })
   if (items.length === 0) return null;
 
   return (
-    <Box sx={{ mt: 1, pl: 1, borderLeft: '2px solid', borderColor: 'neutral.300' }}>
+    <Box sx={{ mt: 1, pl: 1, borderLeft: '2px solid', borderColor: 'admin.border' }}>
       <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
-        Detailed Diagnostics:
+        Detailed diagnostics:
       </Typography>
-      <Stack spacing={0.25}>
+      <Stack spacing={0.5}>
         {items.map(item => (
-          <Stack key={item.label} direction="row" spacing={0.5} alignItems="center">
-            {item.status === 'success' ? (
-              <CheckCircleIcon sx={{ fontSize: 14, color: 'success.500' }} />
-            ) : item.status === 'warning' ? (
-              <ErrorIcon sx={{ fontSize: 14, color: 'warning.500' }} />
-            ) : (
-              <ErrorIcon sx={{ fontSize: 14, color: 'danger.500' }} />
-            )}
-            <Typography level="body-xs">
-              <strong>{item.label}:</strong> {item.detail}
-            </Typography>
+          <Stack key={item.label} direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <StatusChip tone={item.status} label={item.label} />
+            <Typography level="body-xs">{item.detail}</Typography>
           </Stack>
         ))}
       </Stack>
@@ -611,749 +580,684 @@ const AdminSystemHealthTab = () => {
     }
   };
 
+  const header = (
+    <AdminPageHeader
+      title="System health"
+      description="Configuration and connection status for email, database, sign-in and integrations."
+      actions={
+        <>
+          <ContextHelpButton helpId="admin/system-health" tooltipText="System health help" />
+          <Button
+            size="sm"
+            variant="outlined"
+            startDecorator={systemHealth.isFetching ? undefined : <RefreshIcon sx={{ fontSize: 16 }} />}
+            onClick={handleRefresh}
+            loading={systemHealth.isFetching}
+            data-testid="system-health-refresh-btn"
+            sx={adminFocus}
+          >
+            Refresh
+          </Button>
+        </>
+      }
+    />
+  );
+
   if (systemHealth.isPending) {
     return (
-      <Sheet sx={{ p: 4, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-        <CircularProgress />
-      </Sheet>
+      <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
+        {header}
+        <LoadingState label="Loading system health" />
+      </Stack>
     );
   }
 
   if (systemHealth.isError) {
     return (
-      <Sheet sx={{ p: 2 }}>
-        <Alert color="danger" variant="outlined">
-          <Typography sx={{ color: 'text.primary' }}>Failed to load system health status. Please try again.</Typography>
-        </Alert>
-      </Sheet>
+      <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
+        {header}
+        <ErrorState
+          message="Failed to load system health status."
+          onRetry={() => systemHealth.refetch()}
+          retrying={systemHealth.isFetching}
+        />
+      </Stack>
     );
   }
 
   const { email, database, oauth } = systemHealth.data || {};
+  const integrations = integrationHealth.data?.integrations ?? [];
+
+  const renderBreakerChip = (
+    integration: IntegrationHealthSummary['integration'],
+    kind: 'read' | 'write',
+    snapshot: RealtimeCircuitBreakerSnapshot | undefined
+  ) => {
+    if (!snapshot) return null;
+    const { tone, label } = getRealtimeBreakerChipProps(snapshot.state, snapshot);
+    return (
+      <StatusChip
+        tone={tone}
+        label={`${kind === 'read' ? 'Read' : 'Write'}: ${label}`}
+        data-testid={`realtime-breaker-${integration}-${kind}`}
+      />
+    );
+  };
 
   return (
-    <Sheet sx={{ px: 2, py: 1 }}>
-      <Stack spacing={3}>
-        {/* Header */}
-        <Card>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Box>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography level="h4">System Health</Typography>
-                <ContextHelpButton helpId="admin/system-health" tooltipText="System Health Help" />
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
+      {header}
+
+      <SectionCard
+        title="Email"
+        body="custom"
+        action={<ConfigStatusChip configured={email?.configured ?? false} testId="system-health-email-status" />}
+      >
+        <Stack gap={2} sx={{ p: 2 }}>
+          {!email?.configured && (
+            <Alert color="warning" variant="outlined">
+              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                <Typography level="body-sm" fontWeight="bold">
+                  Email not configured
+                </Typography>
+                <Typography level="body-xs">
+                  Users will not receive verification emails, password resets, or other system emails.
+                </Typography>
               </Stack>
-              <Typography level="body-sm" color="neutral">
-                Monitor configuration status for critical services. Useful for fork deployments to diagnose issues
-                without CloudWatch access.
-              </Typography>
-            </Box>
+            </Alert>
+          )}
+
+          <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
+            Required secrets
+          </Typography>
+
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
+            {email?.secrets &&
+              Object.entries(email.secrets).map(([key, configured]) => (
+                <Stack key={key} direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+                  <Typography level="body-sm" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
+                    {key}
+                  </Typography>
+                  {!configured && <StatusChip tone="warn" label="Missing" />}
+                </Stack>
+              ))}
+          </Box>
+
+          {email?.missingSecrets && email.missingSecrets.length > 0 && (
+            <Alert color="warning" variant="outlined">
+              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                <Typography level="body-sm" fontWeight="bold">
+                  Missing secrets
+                </Typography>
+                <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
+                <Typography level="body-xs">
+                  Set these using: <code>./for-env {'<stage>'} npx sst secret set MAIL_HOST smtp.example.com</code>
+                </Typography>
+              </Stack>
+            </Alert>
+          )}
+
+          <Stack direction="row" alignItems="center" flexWrap="wrap" gap={2}>
             <Button
-              size="sm"
-              startDecorator={systemHealth.isFetching ? undefined : <RefreshIcon />}
-              onClick={handleRefresh}
-              loading={systemHealth.isFetching}
-              data-testid="system-health-refresh-btn"
+              variant="outlined"
+              startDecorator={<SendIcon />}
+              onClick={handleSendTestEmail}
+              loading={sendTestEmail.isPending}
+              disabled={!email?.configured || sendTestEmail.isPending}
+              data-testid="system-health-send-test-email-btn"
+              sx={adminFocus}
             >
-              Refresh
+              Send test email
             </Button>
-          </Stack>
-        </Card>
-
-        {/* Email Configuration */}
-        <Card>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <EmailIcon color="primary" />
-              <Typography level="title-lg">Email Configuration</Typography>
-              <ConfigStatusChip configured={email?.configured ?? false} testId="system-health-email-status" />
-            </Stack>
-
-            <Divider />
-
-            {!email?.configured && (
-              <Alert color="warning" variant="outlined">
-                <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                  <Typography level="body-sm" fontWeight="bold">
-                    Email not configured
-                  </Typography>
-                  <Typography level="body-xs">
-                    Users will not receive verification emails, password resets, or other system emails.
-                  </Typography>
-                </Stack>
-              </Alert>
-            )}
-
-            <Typography level="body-sm" fontWeight="bold">
-              Required Secrets Status:
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              Sends a test email to your admin email address
             </Typography>
+          </Stack>
 
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
-              {email?.secrets &&
-                Object.entries(email.secrets).map(([key, configured]) => (
-                  <Stack key={key} direction="row" alignItems="center" spacing={1}>
-                    {configured ? (
-                      <CheckCircleIcon color="success" fontSize="small" />
-                    ) : (
-                      <ErrorIcon color="error" fontSize="small" />
+          {lastTestResult && (
+            <Alert color={lastTestResult.success ? 'success' : 'danger'} variant="outlined">
+              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                <Typography level="body-sm" fontWeight="bold">
+                  {lastTestResult.success ? 'Test email sent successfully!' : 'Test email failed'}
+                </Typography>
+                {lastTestResult.success ? (
+                  <>
+                    <Typography level="body-xs">Sent to: {lastTestResult.sentTo}</Typography>
+                    {lastTestResult.messageId && (
+                      <Typography level="body-xs">Message ID: {lastTestResult.messageId}</Typography>
                     )}
-                    <Typography level="body-sm" color={configured ? 'neutral' : 'danger'}>
-                      {key}
-                    </Typography>
-                  </Stack>
-                ))}
-            </Box>
+                  </>
+                ) : (
+                  <>
+                    <Typography level="body-xs">Error: {lastTestResult.error}</Typography>
+                    {lastTestResult.error && getEmailErrorGuidance(lastTestResult.error) && (
+                      <Typography level="body-xs" sx={{ mt: 1, fontStyle: 'italic' }}>
+                        How to fix: {getEmailErrorGuidance(lastTestResult.error)}
+                      </Typography>
+                    )}
+                  </>
+                )}
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                  {new Date(lastTestResult.timestamp).toLocaleString()}
+                </Typography>
+              </Stack>
+            </Alert>
+          )}
+        </Stack>
+      </SectionCard>
 
-            {email?.missingSecrets && email.missingSecrets.length > 0 && (
-              <Alert color="danger" variant="outlined">
-                <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                  <Typography level="body-sm" fontWeight="bold">
-                    Missing secrets
-                  </Typography>
-                  <Typography level="body-xs">{email.missingSecrets.join(', ')}</Typography>
-                  <Typography level="body-xs">
-                    Set these using: <code>./for-env {'<stage>'} npx sst secret set MAIL_HOST smtp.example.com</code>
-                  </Typography>
-                </Stack>
-              </Alert>
-            )}
-
-            <Divider />
-
-            <Stack direction="row" alignItems="center" spacing={2}>
-              <Button
-                startDecorator={<SendIcon />}
-                onClick={handleSendTestEmail}
-                loading={sendTestEmail.isPending}
-                disabled={!email?.configured || sendTestEmail.isPending}
-                color="primary"
-                data-testid="system-health-send-test-email-btn"
-              >
-                Send Test Email
-              </Button>
-              <Typography level="body-xs" color="neutral">
-                Sends a test email to your admin email address
+      <SectionCard
+        title="Database"
+        body="custom"
+        action={
+          <StatusChip
+            tone={database?.connected ? 'good' : 'bad'}
+            label={database?.connected ? 'Connected' : 'Disconnected'}
+            data-testid="system-health-database-status"
+          />
+        }
+      >
+        <Stack gap={2} sx={{ p: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 2 }}>
+            <Stack spacing={0.5}>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Database type
+              </Typography>
+              <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+                {database?.type || 'Unknown'}
               </Typography>
             </Stack>
 
-            {lastTestResult && (
-              <Alert color={lastTestResult.success ? 'success' : 'danger'} variant="outlined">
-                <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                  <Typography level="body-sm" fontWeight="bold">
-                    {lastTestResult.success ? 'Test email sent successfully!' : 'Test email failed'}
+            <Stack spacing={0.5}>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Ready state
+              </Typography>
+              <Typography level="body-sm" sx={{ color: 'admin.ink' }}>
+                {database?.readyState === 0
+                  ? 'Disconnected'
+                  : database?.readyState === 1
+                    ? 'Connected'
+                    : database?.readyState === 2
+                      ? 'Connecting'
+                      : database?.readyState === 3
+                        ? 'Disconnecting'
+                        : 'Unknown'}
+              </Typography>
+            </Stack>
+          </Box>
+
+          {database?.type === 'DocumentDB' && (
+            <Alert color="neutral" variant="outlined">
+              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                <Typography level="body-sm" fontWeight="bold">
+                  DocumentDB detected
+                </Typography>
+                <Typography level="body-xs">
+                  Ensure <code>MAIN_DB_TYPE=DocumentDB</code> is set in your environment to disable retryable writes
+                  (not supported by DocumentDB).
+                </Typography>
+              </Stack>
+            </Alert>
+          )}
+
+          <Stack direction="row" alignItems="center" flexWrap="wrap" gap={2}>
+            <Button
+              variant="outlined"
+              startDecorator={<NetworkPingIcon />}
+              onClick={handleTestDatabase}
+              loading={testDatabase.isPending}
+              disabled={!database?.connected || testDatabase.isPending}
+              data-testid="system-health-test-database-btn"
+              sx={adminFocus}
+            >
+              Test connection
+            </Button>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              Runs a ping command to verify database connectivity
+            </Typography>
+          </Stack>
+
+          {lastDbTestResult && (
+            <Alert color={lastDbTestResult.success ? 'success' : 'danger'} variant="outlined">
+              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                <Typography level="body-sm" fontWeight="bold">
+                  {lastDbTestResult.success ? 'Database connection successful!' : 'Database connection failed'}
+                </Typography>
+                {lastDbTestResult.success ? (
+                  <Typography level="body-xs">Latency: {lastDbTestResult.latencyMs}ms</Typography>
+                ) : (
+                  <Typography level="body-xs">Error: {lastDbTestResult.error}</Typography>
+                )}
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                  {new Date(lastDbTestResult.timestamp).toLocaleString()}
+                </Typography>
+              </Stack>
+            </Alert>
+          )}
+        </Stack>
+      </SectionCard>
+
+      <SectionCard title="OAuth providers" body="custom">
+        <Stack>
+          {OAUTH_PROVIDERS.map(({ key, label }) => {
+            const providerStatus = oauth?.[key] as OAuthProviderStatus | undefined;
+            const testResult = oauthTestResults[key];
+            const isConfigured = providerStatus?.configured ?? false;
+
+            return (
+              <Stack key={key} gap={1.5} sx={ROW_SX} data-testid={`system-health-oauth-${key}-row`}>
+                <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+                  <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
+                    {label}
                   </Typography>
-                  {lastTestResult.success ? (
-                    <>
-                      <Typography level="body-xs">Sent to: {lastTestResult.sentTo}</Typography>
-                      {lastTestResult.messageId && (
-                        <Typography level="body-xs">Message ID: {lastTestResult.messageId}</Typography>
+                  <ConfigStatusChip configured={isConfigured} testId={`system-health-oauth-${key}-status`} />
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    startDecorator={<NetworkPingIcon />}
+                    onClick={() => handleTestOAuth(key)}
+                    loading={testingProvider === key}
+                    disabled={!isConfigured || testingProvider !== null}
+                    data-testid={`system-health-test-oauth-${key}-btn`}
+                    sx={{ ...adminFocus, ml: 'auto' }}
+                  >
+                    Test {label}
+                  </Button>
+                </Stack>
+
+                {!isConfigured && providerStatus?.missingSecrets && providerStatus.missingSecrets.length > 0 && (
+                  <Alert color="warning" variant="outlined" size="sm">
+                    <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                      <Typography level="body-xs" fontWeight="bold">
+                        Missing configuration
+                      </Typography>
+                      <Typography level="body-xs">{providerStatus.missingSecrets.join(', ')}</Typography>
+                    </Stack>
+                  </Alert>
+                )}
+
+                {/* Okta-specific: Show config source and warnings */}
+                {key === 'okta' && providerStatus && (
+                  <>
+                    {providerStatus.effectiveSource && (
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                          Config source:
+                        </Typography>
+                        <StatusChip
+                          tone={providerStatus.effectiveSource === 'database' ? 'info' : 'neutral'}
+                          label={
+                            providerStatus.effectiveSource === 'database'
+                              ? 'Database IDP'
+                              : providerStatus.effectiveSource === 'sst'
+                                ? 'SST secrets'
+                                : 'Not configured'
+                          }
+                        />
+                      </Stack>
+                    )}
+
+                    {providerStatus.databaseConfigured && providerStatus.sstConfigured && (
+                      <Alert color="neutral" variant="outlined" size="sm">
+                        <Typography level="body-xs" sx={{ color: 'text.primary' }}>
+                          Database IDP config is active and overriding SST secrets.
+                        </Typography>
+                      </Alert>
+                    )}
+
+                    {providerStatus.missingSecrets?.includes('JWT_SECRET') && (
+                      <Alert color="warning" variant="outlined" size="sm">
+                        <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                          <Typography level="body-xs" fontWeight="bold">
+                            JWT_SECRET missing
+                          </Typography>
+                          <Typography level="body-xs">
+                            Okta login will fail with <code>error=okta_setup_failed</code>
+                          </Typography>
+                          <Typography level="body-xs">
+                            JWT_SECRET is required for OAuth state token signing (CSRF protection).
+                          </Typography>
+                          <Typography level="body-xs">
+                            Generate and set:{' '}
+                            <code>
+                              ./for-env {'<stage>'} npx sst secret set JWT_SECRET &quot;$(openssl rand -base64 48)&quot;
+                            </code>
+                          </Typography>
+                        </Stack>
+                      </Alert>
+                    )}
+
+                    {providerStatus.warnings && providerStatus.warnings.length > 0 && (
+                      <Alert color="warning" variant="outlined" size="sm">
+                        <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                          <Typography level="body-xs" fontWeight="bold">
+                            Configuration warning
+                          </Typography>
+                          {providerStatus.warnings.map(warning => (
+                            <Typography key={warning} level="body-xs">
+                              {warning}
+                            </Typography>
+                          ))}
+                        </Stack>
+                      </Alert>
+                    )}
+                  </>
+                )}
+
+                {testResult && (
+                  <Alert color={testResult.success ? 'success' : 'danger'} variant="outlined" size="sm">
+                    <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+                      <Typography level="body-xs" fontWeight="bold">
+                        {testResult.success ? 'Test passed!' : 'Test failed'}
+                        {testResult.success && testResult.latencyMs && ` (${testResult.latencyMs}ms)`}
+                      </Typography>
+                      {testResult.success && testResult.details?.endpoint && (
+                        <Typography level="body-xs">Endpoint: {testResult.details.endpoint}</Typography>
                       )}
-                    </>
-                  ) : (
-                    <>
-                      <Typography level="body-xs">Error: {lastTestResult.error}</Typography>
-                      {lastTestResult.error && getEmailErrorGuidance(lastTestResult.error) && (
-                        <Typography level="body-xs" sx={{ mt: 1, fontStyle: 'italic' }}>
-                          How to fix: {getEmailErrorGuidance(lastTestResult.error)}
+                      {key === 'okta' && testResult.details?.configSource && (
+                        <Typography level="body-xs">
+                          Config source:{' '}
+                          {testResult.details.configSource === 'database' ? 'Database IDP' : 'SST secrets'}
                         </Typography>
                       )}
-                    </>
-                  )}
-                  <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                    {new Date(lastTestResult.timestamp).toLocaleString()}
-                  </Typography>
-                </Stack>
-              </Alert>
-            )}
-          </Stack>
-        </Card>
-
-        {/* Database Configuration */}
-        <Card>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <StorageIcon color="primary" />
-              <Typography level="title-lg">Database Configuration</Typography>
-              <ConfigStatusChip configured={database?.connected ?? false} testId="system-health-database-status" />
-            </Stack>
-
-            <Divider />
-
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 2 }}>
-              <Stack spacing={0.5}>
-                <Typography level="body-xs" color="neutral">
-                  Database Type
-                </Typography>
-                <Chip size="sm" variant="outlined">
-                  {database?.type || 'Unknown'}
-                </Chip>
-              </Stack>
-
-              <Stack spacing={0.5}>
-                <Typography level="body-xs" color="neutral">
-                  Connection Status
-                </Typography>
-                <Chip size="sm" color={database?.connected ? 'success' : 'danger'} variant="outlined">
-                  {database?.connected ? 'Connected' : 'Disconnected'}
-                </Chip>
-              </Stack>
-
-              <Stack spacing={0.5}>
-                <Typography level="body-xs" color="neutral">
-                  Ready State
-                </Typography>
-                <Chip size="sm" variant="outlined">
-                  {database?.readyState === 0
-                    ? 'Disconnected'
-                    : database?.readyState === 1
-                      ? 'Connected'
-                      : database?.readyState === 2
-                        ? 'Connecting'
-                        : database?.readyState === 3
-                          ? 'Disconnecting'
-                          : 'Unknown'}
-                </Chip>
-              </Stack>
-            </Box>
-
-            {database?.type === 'DocumentDB' && (
-              <Alert color="primary" variant="outlined">
-                <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                  <Typography level="body-sm" fontWeight="bold">
-                    DocumentDB detected
-                  </Typography>
-                  <Typography level="body-xs">
-                    Ensure <code>MAIN_DB_TYPE=DocumentDB</code> is set in your environment to disable retryable writes
-                    (not supported by DocumentDB).
-                  </Typography>
-                </Stack>
-              </Alert>
-            )}
-
-            <Divider />
-
-            <Stack direction="row" alignItems="center" spacing={2}>
-              <Button
-                startDecorator={<NetworkPingIcon />}
-                onClick={handleTestDatabase}
-                loading={testDatabase.isPending}
-                disabled={!database?.connected || testDatabase.isPending}
-                color="primary"
-                data-testid="system-health-test-database-btn"
-              >
-                Test Connection
-              </Button>
-              <Typography level="body-xs" color="neutral">
-                Runs a ping command to verify database connectivity
-              </Typography>
-            </Stack>
-
-            {lastDbTestResult && (
-              <Alert color={lastDbTestResult.success ? 'success' : 'danger'} variant="outlined">
-                <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                  <Typography level="body-sm" fontWeight="bold">
-                    {lastDbTestResult.success ? 'Database connection successful!' : 'Database connection failed'}
-                  </Typography>
-                  {lastDbTestResult.success ? (
-                    <Typography level="body-xs">Latency: {lastDbTestResult.latencyMs}ms</Typography>
-                  ) : (
-                    <Typography level="body-xs">Error: {lastDbTestResult.error}</Typography>
-                  )}
-                  <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                    {new Date(lastDbTestResult.timestamp).toLocaleString()}
-                  </Typography>
-                </Stack>
-              </Alert>
-            )}
-          </Stack>
-        </Card>
-
-        {/* OAuth Providers */}
-        <Card>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <SecurityIcon color="primary" />
-              <Typography level="title-lg">OAuth Providers</Typography>
-            </Stack>
-
-            <Divider />
-
-            <Typography level="body-sm" fontWeight="bold">
-              Provider Configuration Status:
-            </Typography>
-
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 2 }}>
-              {OAUTH_PROVIDERS.map(({ key, label }) => {
-                const providerStatus = oauth?.[key] as OAuthProviderStatus | undefined;
-                const testResult = oauthTestResults[key];
-                const isConfigured = providerStatus?.configured ?? false;
-
-                return (
-                  <Card key={key} variant="outlined" sx={{ p: 2 }}>
-                    <Stack spacing={1.5}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography level="title-sm">{label}</Typography>
-                        <ConfigStatusChip configured={isConfigured} testId={`system-health-oauth-${key}-status`} />
-                      </Stack>
-
-                      {!isConfigured && providerStatus?.missingSecrets && providerStatus.missingSecrets.length > 0 && (
-                        <Alert color="danger" variant="outlined" size="sm">
-                          <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                            <Typography level="body-xs" fontWeight="bold">
-                              Missing configuration
-                            </Typography>
-                            <Typography level="body-xs">{providerStatus.missingSecrets.join(', ')}</Typography>
-                          </Stack>
-                        </Alert>
+                      {key === 'okta' && testResult.success && testResult.details?.diagnostics && (
+                        <OktaDiagnosticsPanel diagnostics={testResult.details.diagnostics} />
                       )}
-
-                      {/* Okta-specific: Show config source and warnings */}
-                      {key === 'okta' && providerStatus && (
+                      {key === 'okta' && testResult.success && testResult.error && (
+                        <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.5 }}>
+                          <StatusChip tone="warn" label="Warning" />
+                          <Typography level="body-xs" sx={{ color: 'text.primary' }}>
+                            {testResult.error}
+                          </Typography>
+                        </Stack>
+                      )}
+                      {!testResult.success && testResult.error && (
                         <>
-                          {/* Config source indicator */}
-                          {providerStatus.effectiveSource && (
-                            <Stack direction="row" spacing={0.5} alignItems="center">
-                              <Typography level="body-xs" color="neutral">
-                                Config source:
-                              </Typography>
-                              <Chip
-                                size="sm"
-                                color={providerStatus.effectiveSource === 'database' ? 'success' : 'primary'}
-                                variant="outlined"
-                              >
-                                {providerStatus.effectiveSource === 'database'
-                                  ? 'Database IDP'
-                                  : providerStatus.effectiveSource === 'sst'
-                                    ? 'SST Secrets'
-                                    : 'Not configured'}
-                              </Chip>
-                            </Stack>
-                          )}
-
-                          {/* Database config overrides SST info */}
-                          {providerStatus.databaseConfigured && providerStatus.sstConfigured && (
-                            <Alert color="neutral" variant="outlined" size="sm">
-                              <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                                Database IDP config is active and overriding SST secrets.
-                              </Typography>
-                            </Alert>
-                          )}
-
-                          {/* JWT_SECRET missing warning */}
-                          {providerStatus.missingSecrets?.includes('JWT_SECRET') && (
-                            <Alert color="warning" variant="outlined" size="sm">
-                              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                                <Typography level="body-xs" fontWeight="bold">
-                                  JWT_SECRET missing
-                                </Typography>
-                                <Typography level="body-xs">
-                                  Okta login will fail with <code>error=okta_setup_failed</code>
-                                </Typography>
-                                <Typography level="body-xs">
-                                  JWT_SECRET is required for OAuth state token signing (CSRF protection).
-                                </Typography>
-                                <Typography level="body-xs">
-                                  Generate and set:{' '}
-                                  <code>
-                                    ./for-env {'<stage>'} npx sst secret set JWT_SECRET &quot;$(openssl rand -base64
-                                    48)&quot;
-                                  </code>
-                                </Typography>
-                              </Stack>
-                            </Alert>
-                          )}
-
-                          {/* URL format warnings */}
-                          {providerStatus.warnings && providerStatus.warnings.length > 0 && (
-                            <Alert color="warning" variant="outlined" size="sm">
-                              <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                                <Typography level="body-xs" fontWeight="bold">
-                                  Configuration warning
-                                </Typography>
-                                {providerStatus.warnings.map(warning => (
-                                  <Typography key={warning} level="body-xs">
-                                    {warning}
-                                  </Typography>
-                                ))}
-                              </Stack>
-                            </Alert>
+                          <Typography level="body-xs">Error: {testResult.error}</Typography>
+                          {getOAuthErrorGuidance(key, testResult.error) && (
+                            <Typography level="body-xs" sx={{ mt: 0.5, fontStyle: 'italic' }}>
+                              How to fix: {getOAuthErrorGuidance(key, testResult.error)}
+                            </Typography>
                           )}
                         </>
                       )}
-
-                      <Button
-                        size="sm"
-                        variant="outlined"
-                        startDecorator={<NetworkPingIcon />}
-                        onClick={() => handleTestOAuth(key)}
-                        loading={testingProvider === key}
-                        disabled={!isConfigured || testingProvider !== null}
-                        data-testid={`system-health-test-oauth-${key}-btn`}
-                      >
-                        Test {label}
-                      </Button>
-
-                      {testResult && (
-                        <Alert color={testResult.success ? 'success' : 'danger'} variant="outlined" size="sm">
-                          <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
-                            <Typography level="body-xs" fontWeight="bold">
-                              {testResult.success ? 'Test passed!' : 'Test failed'}
-                              {testResult.success && testResult.latencyMs && ` (${testResult.latencyMs}ms)`}
-                            </Typography>
-                            {testResult.success && testResult.details?.endpoint && (
-                              <Typography level="body-xs">Endpoint: {testResult.details.endpoint}</Typography>
-                            )}
-                            {/* Okta-specific: Show config source */}
-                            {key === 'okta' && testResult.details?.configSource && (
-                              <Typography level="body-xs">
-                                Config source:{' '}
-                                {testResult.details.configSource === 'database' ? 'Database IDP' : 'SST Secrets'}
-                              </Typography>
-                            )}
-                            {/* Okta-specific: Show detailed diagnostics */}
-                            {key === 'okta' && testResult.success && testResult.details?.diagnostics && (
-                              <OktaDiagnosticsPanel diagnostics={testResult.details.diagnostics} />
-                            )}
-                            {/* Okta-specific: Show warning message even on success */}
-                            {key === 'okta' && testResult.success && testResult.error && (
-                              <Alert color="warning" variant="outlined" size="sm" sx={{ mt: 1 }}>
-                                <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                                  {testResult.error}
-                                </Typography>
-                              </Alert>
-                            )}
-                            {!testResult.success && testResult.error && (
-                              <>
-                                <Typography level="body-xs">Error: {testResult.error}</Typography>
-                                {getOAuthErrorGuidance(key, testResult.error) && (
-                                  <Typography level="body-xs" sx={{ mt: 0.5, fontStyle: 'italic' }}>
-                                    How to fix: {getOAuthErrorGuidance(key, testResult.error)}
-                                  </Typography>
-                                )}
-                              </>
-                            )}
-                            <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                              {new Date(testResult.timestamp).toLocaleString()}
-                            </Typography>
-                          </Stack>
-                        </Alert>
-                      )}
+                      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                        {new Date(testResult.timestamp).toLocaleString()}
+                      </Typography>
                     </Stack>
-                  </Card>
-                );
-              })}
-            </Box>
-
-            <Alert color="neutral" variant="outlined" size="sm">
-              <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                OAuth tests verify connectivity to provider endpoints. Configure secrets using:{' '}
-                <code>./for-env {'<stage>'} npx sst secret set OKTA_AUDIENCE https://your-domain.okta.com</code>
-              </Typography>
-            </Alert>
-          </Stack>
-        </Card>
-
-        {/* Integration Health */}
-        <Card>
-          <Stack spacing={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <CloudIcon color="primary" />
-                <Typography level="title-lg">Slack + (Github & Atlassian) Integration Health</Typography>
+                  </Alert>
+                )}
               </Stack>
+            );
+          })}
+          <Box sx={ROW_SX}>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              OAuth tests verify connectivity to provider endpoints. Configure secrets using:{' '}
+              <code>./for-env {'<stage>'} npx sst secret set OKTA_AUDIENCE https://your-domain.okta.com</code>
+            </Typography>
+          </Box>
+        </Stack>
+      </SectionCard>
+
+      <SectionCard
+        title="Integration health"
+        body="custom"
+        action={
+          <Button
+            size="sm"
+            variant="outlined"
+            startDecorator={probingIntegration === 'all' ? undefined : <NetworkPingIcon />}
+            onClick={handleProbeAll}
+            loading={probingIntegration === 'all'}
+            disabled={probingIntegration !== null}
+            data-testid="integration-health-probe-all-btn"
+            sx={adminFocus}
+          >
+            Probe all
+          </Button>
+        }
+      >
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', px: 2, pt: 2 }}>
+          Proactive health monitoring for Slack, GitHub and Atlassian. Probes run automatically every 5 minutes.
+        </Typography>
+
+        {integrationHealth.isPending ? (
+          <LoadingState label="Loading integrations" />
+        ) : integrationHealth.isError ? (
+          <ErrorState
+            message="Unable to load integration health data. Health probes may not have run yet."
+            onRetry={() => integrationHealth.refetch()}
+            retrying={integrationHealth.isFetching}
+          />
+        ) : integrations.length === 0 ? (
+          <EmptyState
+            title="No integration health data yet"
+            description="Health probes will populate this section automatically."
+            action={
               <Button
                 size="sm"
                 variant="outlined"
-                startDecorator={probingIntegration === 'all' ? undefined : <NetworkPingIcon />}
                 onClick={handleProbeAll}
                 loading={probingIntegration === 'all'}
                 disabled={probingIntegration !== null}
-                data-testid="integration-health-probe-all-btn"
+                data-testid="integration-health-empty-probe-btn"
+                sx={adminFocus}
               >
-                Probe All
+                Probe all
               </Button>
-            </Stack>
+            }
+          />
+        ) : (
+          <Stack sx={{ mt: 1 }}>
+            {integrations.map(integration => (
+              <Stack key={integration.integration} gap={1.5} sx={ROW_SX}>
+                <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+                  <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
+                    {INTEGRATION_LABELS[integration.integration]}
+                  </Typography>
+                  <StatusChip
+                    tone={getStatusTone(integration.status)}
+                    label={
+                      integration.status === 'no_data'
+                        ? 'Not checked'
+                        : integration.status.charAt(0).toUpperCase() + integration.status.slice(1)
+                    }
+                    data-testid={`integration-health-${integration.integration}-status`}
+                  />
+                </Stack>
 
-            <Typography level="body-sm" color="neutral">
-              Proactive health monitoring for external API integrations. Probes run automatically every 5 minutes.
-            </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, maxWidth: 360 }}>
+                  <Stack spacing={0.25}>
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      Latency
+                    </Typography>
+                    <Typography level="body-sm" fontWeight="bold" sx={{ color: 'admin.ink' }}>
+                      {integration.latencyMs > 0 ? `${integration.latencyMs}ms` : '--'}
+                    </Typography>
+                  </Stack>
+                  <Stack spacing={0.25}>
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      Success rate (24h)
+                    </Typography>
+                    <Stack direction="row" alignItems="center" gap={1}>
+                      <Typography level="body-sm" fontWeight="bold" sx={{ color: 'admin.ink' }}>
+                        {integration.successRate > 0 ? `${(integration.successRate * 100).toFixed(1)}%` : '--'}
+                      </Typography>
+                      {integration.successRate > 0 && <InlineBar value={integration.successRate * 100} max={100} />}
+                    </Stack>
+                  </Stack>
+                </Box>
 
-            <Divider />
+                {integration.consecutiveFailures >= 3 && (
+                  <Alert color="danger" variant="outlined" size="sm">
+                    <Typography level="body-xs" sx={{ color: 'text.primary' }}>
+                      {integration.consecutiveFailures} consecutive failures
+                    </Typography>
+                  </Alert>
+                )}
 
-            {integrationHealth.isPending ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-                <CircularProgress size="sm" />
-              </Box>
-            ) : integrationHealth.isError ? (
-              <Alert color="warning" variant="outlined" size="sm">
-                <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                  Unable to load integration health data. Health probes may not have run yet.
-                </Typography>
-              </Alert>
-            ) : (
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2 }}>
-                {(integrationHealth.data?.integrations ?? []).map(integration => (
-                  <Card key={integration.integration} variant="outlined" sx={{ p: 2 }}>
-                    <Stack spacing={1.5}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography level="title-sm">{INTEGRATION_LABELS[integration.integration]}</Typography>
-                        <Chip
-                          size="sm"
-                          color={getStatusColor(integration.status)}
-                          variant="outlined"
-                          startDecorator={getStatusIcon(integration.status)}
-                          data-testid={`integration-health-${integration.integration}-status`}
-                        >
-                          {integration.status === 'no_data'
-                            ? 'Not checked'
-                            : integration.status.charAt(0).toUpperCase() + integration.status.slice(1)}
-                        </Chip>
-                      </Stack>
+                {integration.error && (
+                  <Typography level="body-xs" sx={{ color: 'admin.danger', wordBreak: 'break-word' }}>
+                    {integration.error}
+                  </Typography>
+                )}
 
-                      {/* Metrics */}
-                      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-                        <Stack spacing={0.25}>
-                          <Typography level="body-xs" color="neutral">
-                            Latency
-                          </Typography>
-                          <Typography level="body-sm" fontWeight="bold">
-                            {integration.latencyMs > 0 ? `${integration.latencyMs}ms` : '--'}
-                          </Typography>
-                        </Stack>
-                        <Stack spacing={0.25}>
-                          <Typography level="body-xs" color="neutral">
-                            Success Rate (24h)
-                          </Typography>
-                          <Typography level="body-sm" fontWeight="bold">
-                            {integration.successRate > 0 ? `${(integration.successRate * 100).toFixed(1)}%` : '--'}
-                          </Typography>
-                        </Stack>
-                      </Box>
-
-                      {/* Success rate bar */}
-                      {integration.successRate > 0 && (
-                        <LinearProgress
-                          determinate
-                          value={integration.successRate * 100}
-                          color={
-                            integration.successRate >= 0.95
-                              ? 'success'
-                              : integration.successRate >= 0.8
-                                ? 'warning'
-                                : 'danger'
-                          }
-                          size="sm"
-                          sx={{ borderRadius: 4 }}
+                {integration.circuitBreaker && (
+                  <Stack spacing={1}>
+                    <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+                      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                        Circuit breaker:
+                      </Typography>
+                      {integration.circuitBreaker.mode === 'force_block' && (
+                        <StatusChip
+                          tone="bad"
+                          label="Blocked (manual)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
                         />
                       )}
-
-                      {/* Failure streak warning */}
-                      {integration.consecutiveFailures >= 3 && (
-                        <Alert color="danger" variant="outlined" size="sm">
-                          <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                            {integration.consecutiveFailures} consecutive failures
-                          </Typography>
-                        </Alert>
+                      {integration.circuitBreaker.mode === 'force_open' && (
+                        <StatusChip
+                          tone="warn"
+                          label="Forced open (manual)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
+                        />
                       )}
-
-                      {/* Error display */}
-                      {integration.error && (
-                        <Typography level="body-xs" color="danger" sx={{ wordBreak: 'break-word' }}>
-                          {integration.error}
-                        </Typography>
+                      {integration.circuitBreaker.mode === 'auto' && integration.circuitBreaker.autoTripped && (
+                        <StatusChip
+                          tone="bad"
+                          label="Tripped (auto)"
+                          data-testid={`circuit-breaker-status-${integration.integration}`}
+                        />
                       )}
+                      {integration.circuitBreaker.mode === 'auto' &&
+                        !integration.circuitBreaker.autoTripped &&
+                        integration.circuitBreaker.noData && (
+                          <StatusChip
+                            tone="neutral"
+                            label="OK (no data)"
+                            data-testid={`circuit-breaker-status-${integration.integration}`}
+                          />
+                        )}
+                      {integration.circuitBreaker.mode === 'auto' &&
+                        !integration.circuitBreaker.autoTripped &&
+                        !integration.circuitBreaker.noData && (
+                          <StatusChip
+                            tone="good"
+                            label="OK (auto)"
+                            data-testid={`circuit-breaker-status-${integration.integration}`}
+                          />
+                        )}
+                    </Stack>
 
-                      {/* Circuit Breaker Status & Controls */}
-                      {integration.circuitBreaker && (
-                        <Box sx={{ pt: 0.5 }}>
-                          <Stack spacing={1}>
-                            <Stack direction="row" alignItems="center" spacing={1}>
-                              <Typography level="body-xs" color="neutral">
-                                Circuit Breaker:
-                              </Typography>
-                              {integration.circuitBreaker.mode === 'force_block' && (
-                                <Chip size="sm" color="danger" variant="solid">
-                                  Blocked (manual)
-                                </Chip>
-                              )}
-                              {integration.circuitBreaker.mode === 'force_open' && (
-                                <Chip size="sm" color="warning" variant="solid">
-                                  Forced Open (manual)
-                                </Chip>
-                              )}
-                              {integration.circuitBreaker.mode === 'auto' && integration.circuitBreaker.autoTripped && (
-                                <Chip size="sm" color="danger" variant="outlined">
-                                  Tripped (auto)
-                                </Chip>
-                              )}
-                              {integration.circuitBreaker.mode === 'auto' &&
-                                !integration.circuitBreaker.autoTripped &&
-                                integration.circuitBreaker.noData && (
-                                  <Chip size="sm" color="neutral" variant="outlined">
-                                    OK (no data)
-                                  </Chip>
-                                )}
-                              {integration.circuitBreaker.mode === 'auto' &&
-                                !integration.circuitBreaker.autoTripped &&
-                                !integration.circuitBreaker.noData && (
-                                  <Chip size="sm" color="success" variant="outlined">
-                                    OK (auto)
-                                  </Chip>
-                                )}
-                            </Stack>
-
-                            <Stack direction="row" spacing={0.5}>
-                              {/* Show "Block" when not already blocked */}
-                              {integration.circuitBreaker.mode !== 'force_block' && (
-                                <Button
-                                  size="sm"
-                                  variant="outlined"
-                                  color="danger"
-                                  startDecorator={<BlockIcon />}
-                                  onClick={() => handleCircuitBreakerOverride(integration.integration, 'force_block')}
-                                  loading={overridingIntegration === integration.integration}
-                                  disabled={overridingIntegration !== null}
-                                  data-testid={`circuit-breaker-block-${integration.integration}-btn`}
-                                >
-                                  Block
-                                </Button>
-                              )}
-                              {/* Show "Force Open" when auto-tripped or blocked */}
-                              {(integration.circuitBreaker.autoTripped ||
-                                integration.circuitBreaker.mode === 'force_block') && (
-                                <Button
-                                  size="sm"
-                                  variant="outlined"
-                                  color="warning"
-                                  startDecorator={<LockOpenIcon />}
-                                  onClick={() => handleCircuitBreakerOverride(integration.integration, 'force_open')}
-                                  loading={overridingIntegration === integration.integration}
-                                  disabled={overridingIntegration !== null}
-                                  data-testid={`circuit-breaker-force-open-${integration.integration}-btn`}
-                                >
-                                  Force Open
-                                </Button>
-                              )}
-                              {/* Show "Reset to Auto" when in manual override */}
-                              {integration.circuitBreaker.mode !== 'auto' && (
-                                <Button
-                                  size="sm"
-                                  variant="outlined"
-                                  color="neutral"
-                                  startDecorator={<RestartAltIcon />}
-                                  onClick={() => handleCircuitBreakerOverride(integration.integration, 'auto')}
-                                  loading={overridingIntegration === integration.integration}
-                                  disabled={overridingIntegration !== null}
-                                  title="Also resets the in-memory MCP breakers for all users"
-                                  data-testid={`circuit-breaker-reset-${integration.integration}-btn`}
-                                >
-                                  Reset to Auto (all users)
-                                </Button>
-                              )}
-                            </Stack>
-                          </Stack>
-                        </Box>
-                      )}
-
-                      {/* Real-time Circuit Breaker (in-memory) - read/write */}
-                      {(() => {
-                        const mcpServer = INTEGRATION_TO_MCP_SERVER[integration.integration];
-                        if (!mcpServer) return null;
-                        const readSnapshot = integrationHealth.data?.circuitBreakers?.[`${mcpServer}:read`];
-                        const writeSnapshot = integrationHealth.data?.circuitBreakers?.[`${mcpServer}:write`];
-                        if (!readSnapshot && !writeSnapshot) return null;
-                        return (
-                          <Stack
-                            direction="row"
-                            alignItems="center"
-                            spacing={1}
-                            sx={{ flexWrap: 'wrap' }}
-                            data-testid={`realtime-breaker-${integration.integration}`}
-                          >
-                            <Typography
-                              level="body-xs"
-                              color="neutral"
-                              title="Worst state across users: OPEN means open for at least one user"
-                            >
-                              Real-time (worst across users):
-                            </Typography>
-                            {readSnapshot &&
-                              (() => {
-                                const { color, label } = getRealtimeBreakerChipProps(readSnapshot.state, readSnapshot);
-                                return (
-                                  <Chip
-                                    size="sm"
-                                    color={color}
-                                    variant="soft"
-                                    data-testid={`realtime-breaker-${integration.integration}-read`}
-                                  >
-                                    Read: {label}
-                                  </Chip>
-                                );
-                              })()}
-                            {writeSnapshot &&
-                              (() => {
-                                const { color, label } = getRealtimeBreakerChipProps(
-                                  writeSnapshot.state,
-                                  writeSnapshot
-                                );
-                                return (
-                                  <Chip
-                                    size="sm"
-                                    color={color}
-                                    variant="soft"
-                                    data-testid={`realtime-breaker-${integration.integration}-write`}
-                                  >
-                                    Write: {label}
-                                  </Chip>
-                                );
-                              })()}
-                          </Stack>
-                        );
-                      })()}
-
-                      {/* Last checked */}
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography level="body-xs" sx={{ opacity: 0.6 }}>
-                          {integration.lastCheckedAt
-                            ? `Checked ${new Date(integration.lastCheckedAt).toLocaleTimeString()}`
-                            : 'No data yet'}
-                        </Typography>
+                    <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                      {integration.circuitBreaker.mode !== 'force_block' && (
                         <Button
                           size="sm"
-                          variant="plain"
-                          onClick={() => handleProbeSingle(integration.integration)}
-                          loading={probingIntegration === integration.integration}
-                          disabled={probingIntegration !== null}
-                          data-testid={`integration-health-probe-${integration.integration}-btn`}
+                          variant="outlined"
+                          color="danger"
+                          startDecorator={<BlockIcon />}
+                          onClick={() => handleCircuitBreakerOverride(integration.integration, 'force_block')}
+                          loading={overridingIntegration === integration.integration}
+                          disabled={overridingIntegration !== null}
+                          data-testid={`circuit-breaker-block-${integration.integration}-btn`}
+                          sx={adminFocus}
                         >
-                          Probe
+                          Block
                         </Button>
-                      </Stack>
+                      )}
+                      {(integration.circuitBreaker.autoTripped ||
+                        integration.circuitBreaker.mode === 'force_block') && (
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          startDecorator={<LockOpenIcon />}
+                          onClick={() => handleCircuitBreakerOverride(integration.integration, 'force_open')}
+                          loading={overridingIntegration === integration.integration}
+                          disabled={overridingIntegration !== null}
+                          data-testid={`circuit-breaker-force-open-${integration.integration}-btn`}
+                          sx={adminFocus}
+                        >
+                          Force open
+                        </Button>
+                      )}
+                      {integration.circuitBreaker.mode !== 'auto' && (
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          startDecorator={<RestartAltIcon />}
+                          onClick={() => handleCircuitBreakerOverride(integration.integration, 'auto')}
+                          loading={overridingIntegration === integration.integration}
+                          disabled={overridingIntegration !== null}
+                          title="Also resets the in-memory MCP breakers for all users"
+                          data-testid={`circuit-breaker-reset-${integration.integration}-btn`}
+                          sx={adminFocus}
+                        >
+                          Reset to auto (all users)
+                        </Button>
+                      )}
                     </Stack>
-                  </Card>
-                ))}
-              </Box>
-            )}
+                  </Stack>
+                )}
 
-            {(integrationHealth.data?.integrations ?? []).length === 0 &&
-              !integrationHealth.isPending &&
-              !integrationHealth.isError && (
-                <Alert color="neutral" variant="outlined" size="sm">
-                  <Typography level="body-xs" sx={{ color: 'text.primary' }}>
-                    No integration health data available yet. Health probes will populate this section automatically.
+                {(() => {
+                  const mcpServer = INTEGRATION_TO_MCP_SERVER[integration.integration];
+                  if (!mcpServer) return null;
+                  const readSnapshot = integrationHealth.data?.circuitBreakers?.[`${mcpServer}:read`];
+                  const writeSnapshot = integrationHealth.data?.circuitBreakers?.[`${mcpServer}:write`];
+                  if (!readSnapshot && !writeSnapshot) return null;
+                  return (
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      gap={1}
+                      sx={{ flexWrap: 'wrap' }}
+                      data-testid={`realtime-breaker-${integration.integration}`}
+                    >
+                      <Typography
+                        level="body-xs"
+                        sx={{ color: 'admin.inkMuted' }}
+                        title="Worst state across users: OPEN means open for at least one user"
+                      >
+                        Real-time (worst across users):
+                      </Typography>
+                      {renderBreakerChip(integration.integration, 'read', readSnapshot)}
+                      {renderBreakerChip(integration.integration, 'write', writeSnapshot)}
+                    </Stack>
+                  );
+                })()}
+
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                    {integration.lastCheckedAt
+                      ? `Checked ${new Date(integration.lastCheckedAt).toLocaleTimeString()}`
+                      : 'No data yet'}
                   </Typography>
-                </Alert>
-              )}
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    onClick={() => handleProbeSingle(integration.integration)}
+                    loading={probingIntegration === integration.integration}
+                    disabled={probingIntegration !== null}
+                    data-testid={`integration-health-probe-${integration.integration}-btn`}
+                    sx={adminFocus}
+                  >
+                    Probe
+                  </Button>
+                </Stack>
+              </Stack>
+            ))}
           </Stack>
-        </Card>
+        )}
+      </SectionCard>
 
-        {/* Help Section */}
-        <Card variant="soft" color="neutral">
-          <Typography level="title-md">Need Help?</Typography>
-          <Typography level="body-sm" sx={{ mt: 1 }}>
+      <SectionCard title="Troubleshooting" body="custom">
+        <Box sx={{ p: 2, color: 'admin.ink' }}>
+          <Typography level="body-sm">
             If you&apos;re running a fork of this application and experiencing configuration issues:
           </Typography>
-          <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+          <Box component="ul" sx={{ my: 1, pl: 2.5, display: 'grid', gap: 0.5 }}>
             <li>
               <Typography level="body-sm">
                 Check the fork setup documentation for required environment variables
@@ -1374,10 +1278,10 @@ const AdminSystemHealthTab = () => {
                 For database issues, ensure your MongoDB/DocumentDB connection string is correct
               </Typography>
             </li>
-          </ul>
-        </Card>
-      </Stack>
-    </Sheet>
+          </Box>
+        </Box>
+      </SectionCard>
+    </Stack>
   );
 };
 

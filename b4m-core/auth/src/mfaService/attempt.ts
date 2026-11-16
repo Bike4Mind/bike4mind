@@ -67,10 +67,11 @@ export async function recordFailedMfaAttempt(
 /** Accepts a TOTP code at most once: returns the step it claimed, or null for a wrong or replayed code. */
 export async function claimTOTPCode(
   userId: string,
-  secret: string,
+  secret: string | undefined,
   token: string,
   repository: MfaAttemptRepository
 ): Promise<number | null> {
+  if (!secret) return null;
   const step = matchTOTPStep(secret, token);
   if (step === null) return null;
   return (await repository.atomicClaimTotpStep(userId, step)) ? step : null;

@@ -42,6 +42,7 @@ import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
 import type { PrSummary } from '@shared/pullRequest';
+import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
@@ -666,7 +667,7 @@ const SessionRow = memo(function SessionRow({
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} pr={pr} />
+          <SessionBadge status={status} pr={pr} deciding={pendingDecisionOf(session.workerTask) !== undefined} />
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (

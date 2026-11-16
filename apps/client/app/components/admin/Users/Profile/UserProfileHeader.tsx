@@ -47,6 +47,7 @@ const menuEntries = (
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
+  { action: 'dataExport', label: 'Export user data' },
   gateEntry(
     { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
     moderationBlocked
@@ -59,14 +60,19 @@ const menuEntries = (
     user.deletion
       ? {
           action: 'cancelDeletion',
-          label: user.deletion.purgeStartedAt
-            ? 'Cancel scheduled deletion (purge in progress)'
-            : 'Cancel scheduled deletion',
-          disabled: !!user.deletion.purgeStartedAt,
+          // An admin erasure cannot be called off (accountDeletion.ts clearAccountDeletion).
+          label:
+            user.deletion.source === 'admin'
+              ? 'Cancel scheduled deletion (erasure in progress)'
+              : user.deletion.purgeStartedAt
+                ? 'Cancel scheduled deletion (purge in progress)'
+                : 'Cancel scheduled deletion',
+          disabled: !!user.deletion.purgeStartedAt || user.deletion.source === 'admin',
         }
       : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
     deletionBlocked
   ),
+  gateEntry({ action: 'erase', label: 'Erase user data', danger: true }, deletionBlocked),
   gateEntry({ action: 'delete', label: 'Delete user', danger: true }, deletionBlocked),
 ];
 

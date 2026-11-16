@@ -35,6 +35,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
@@ -45,10 +46,12 @@ vi.mock('@tanstack/react-router', () => ({
 
 // The route imports eight sibling panels; mocking them keeps this test to the two chips it pins.
 vi.mock('@client/app/components/common/Breadcrumbs', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/TeamOnboardingChecklist', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));

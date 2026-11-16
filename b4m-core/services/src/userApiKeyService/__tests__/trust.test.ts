@@ -157,6 +157,27 @@ describe('assessApiKeyTrust', () => {
     });
   });
 
+  describe('a test persona', () => {
+    const oldPersona = (overrides: Partial<ApiKeyTrustSubject> = {}) =>
+      youngVerifiedUser({ isPersona: true, createdAt: new Date(NOW.getTime() - 365 * DAY_MS), ...overrides });
+
+    it('never earns trust by account age', async () => {
+      expect(await assess(oldPersona())).toEqual({
+        status: 'untrusted',
+        reason: 'paid_standing_required',
+        maxActiveKeys: 1,
+      });
+    });
+
+    it.each([
+      ['an active plan', oldPersona(), true],
+      ['admin approval', oldPersona({ apiKeyTrustApproved: true }), false],
+      ['a past purchase', oldPersona({ lastCreditsPurchasedAt: new Date() }), false],
+    ])('still trusts it with %s', async (_label, user, hasActivePlan) => {
+      expect(await assess(user, { hasActivePlan })).toEqual({ status: 'trusted' });
+    });
+  });
+
   it('skips the plan lookup when a cheap field already settles trust', async () => {
     const hasActivePlan = vi.fn().mockResolvedValue(false);
     await assessApiKeyTrust(youngVerifiedUser({ apiKeyTrustApproved: true }), { settings: SETTINGS, hasActivePlan });

@@ -4,6 +4,8 @@ import SwiftUI
 /// A strip of what Studio is making right now: progress while it runs, the result or the reason once it settles.
 struct GenerationTilesView: View {
   let tracker: GenerationTracker
+  /// "Use these settings": loads a generation's kind, model, prompt and values back into the create bar.
+  var settings: StudioCreateViewModel?
   @State private var cancelError: String?
 
   var body: some View {
@@ -12,7 +14,10 @@ struct GenerationTilesView: View {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: Tokens.Spacing.s) {
             ForEach(tracker.generations) { generation in
-              GenerationTile(generation: generation) {
+              GenerationTile(
+                generation: generation, summary: settings?.summary(of: generation.handle),
+                onUseSettings: settings.map { create in { Task { await create.use(settingsOf: generation.handle) } } }
+              ) {
                 Task {
                   do { try await tracker.cancel(generation.id) } catch { cancelError = "Couldn't cancel this one." }
                 }
@@ -39,8 +44,23 @@ struct GenerationTilesView: View {
 
 private struct GenerationTile: View {
   let generation: TrackedGeneration
+  /// The values it was made with that differ from the model defaults.
+  let summary: String?
+  let onUseSettings: (() -> Void)?
   let onCancel: () -> Void
   let onDismiss: () -> Void
+
+  /// Nil when it was made with changed values but its model's controls are not loaded to label them (another kind's
+  /// list, or a model since removed): "Model defaults" would be wrong there.
+  private var settingsHeader: String? {
+    if let summary { return summary }
+    return generation.handle.params?.isEmpty ?? true ? "Model defaults" : nil
+  }
+
+  private func useSettingsButton(_ action: @escaping () -> Void) -> some View {
+    Button("Use these settings", systemImage: "slider.horizontal.3", action: action)
+      .accessibilityIdentifier("studio-generation-use-settings")
+  }
 
   private let side: CGFloat = 76
   @State private var showsFailure = false
@@ -48,12 +68,12 @@ private struct GenerationTile: View {
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       ZStack {
-        RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous)
+        RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous)
           .fill(Tokens.Palette.groupedBackground)
         preview
       }
       .frame(width: side, height: side)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
       .overlay(alignment: .topTrailing) { cornerButton }
       Text(generation.handle.prompt)
         .font(Tokens.Typography.meta)
@@ -63,6 +83,16 @@ private struct GenerationTile: View {
     }
     .contentShape(Rectangle())
     .onTapGesture { if case .failed = generation.phase { showsFailure = true } }
+    .contextMenu {
+      // A generation saved before settings were recorded has no model or values to restore.
+      if let onUseSettings, generation.handle.modelID != nil {
+        if let settingsHeader {
+          Section(settingsHeader) { useSettingsButton(onUseSettings) }
+        } else {
+          useSettingsButton(onUseSettings)
+        }
+      }
+    }
     .alert("Couldn't create this", isPresented: $showsFailure) {
       Button("OK", role: .cancel) {}
     } message: {

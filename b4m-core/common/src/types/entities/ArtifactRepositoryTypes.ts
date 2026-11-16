@@ -52,6 +52,12 @@ export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> 
     data: Partial<IArtifactDocument> & { id: string }
   ): Promise<IArtifactDocument | null>;
 
+  /** Transfers scoped ownership and removes the departing owner's explicit grants atomically. */
+  reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }>;
+
   // Artifact-specific methods
   findByType(type: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;
   findByUser(userId: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;

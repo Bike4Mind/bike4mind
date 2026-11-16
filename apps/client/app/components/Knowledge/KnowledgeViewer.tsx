@@ -65,7 +65,7 @@ import {
 } from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
-import { CodeArtifactData } from '@client/app/hooks/useSessionLayout';
+import { ArtifactData, CodeArtifactData } from '@client/app/hooks/useSessionLayout';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import EditFileDialog, { EditOptions } from './EditFileDialog';
 import DiffPreview from './DiffPreview';
@@ -100,6 +100,7 @@ import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
 import { findArtifactSaveTarget } from '@client/app/utils/artifactPersistence';
+import { useRefreshArtifactOnNewVersion } from '@client/app/hooks/useRefreshArtifactOnNewVersion';
 import { useQueryClient } from '@tanstack/react-query';
 import { useArtifact } from '@client/app/hooks/data/artifacts';
 import { useArtifactPersistence } from '@client/app/hooks/useArtifactPersistence';
@@ -323,6 +324,37 @@ export const shouldSyncArtifactFromDb = (params: {
 };
 
 /**
+ * Decides whether the opened artifact should be stamped with the persisted version without
+ * touching its content. Cards open the viewer with no version, so when the shown content already
+ * equals the persisted latest the sync guard adopts nothing and the header would sit at its
+ * default of 1. Content must match exactly, so a stale read racing a save (different content)
+ * never qualifies, and the version only ever moves forward.
+ */
+export const shouldStampPersistedVersion = (params: {
+  currentContent?: string;
+  latestContent?: string;
+  currentVersion?: number;
+  latestVersion?: number;
+}): boolean =>
+  params.latestVersion !== undefined &&
+  params.latestContent !== undefined &&
+  params.currentContent === params.latestContent &&
+  params.latestVersion > (params.currentVersion ?? 0);
+
+/**
+ * Decides whether a new saved version of `artifactId` means the open artifact must be restored.
+ * Sending a message clears `artifactData` while the tab stays on screen, and the viewer only reads
+ * the saved artifact through `artifactData`, so without restoring it a tab that is still shown
+ * never sees the new version. Another tab, or an artifactData that already is this artifact, needs
+ * nothing.
+ */
+export const shouldRestoreOpenArtifact = (params: {
+  shownItemId?: string;
+  openArtifactId?: string;
+  artifactId: string;
+}): boolean => params.shownItemId === params.artifactId && params.openArtifactId !== params.artifactId;
+
+/**
  * Decides whether an empty KnowledgeViewer may push the layout to `hide`.
  *
  * An empty pane is only collapse-worthy once it has actually SHOWN items in the current
@@ -503,6 +535,8 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const syncArtifactIdRef = React.useRef<string | undefined>(undefined);
   const syncBaselineVersionRef = React.useRef<number | undefined>(undefined);
 
+  const carriedVersion = (artifactData?.content as { version?: number } | undefined)?.version;
+
   useEffect(() => {
     if (latestArtifact?.artifact.id && artifactData?.id && artifactData.id === latestArtifact.artifact.id) {
       // On switching to a different artifact, pin the baseline to the DB version present now
@@ -517,10 +551,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         lastUpdatedVersionRef.current = undefined;
       }
 
-      if (lastUpdatedVersionRef.current === latestArtifact.artifact.version) {
-        return;
-      }
-
       // All Quest4 persisted artifact types share one envelope shape (id, type,
       // title, content, metadata, createdAt, updatedAt) and carry string content.
       // 'recharts' is excluded: its content is JSON (application/json) and is not
@@ -529,11 +559,44 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       type PersistedType = (typeof persistedTypes)[number];
       const isPersistedType = (persistedTypes as readonly string[]).includes(artifactData.type);
 
-      // Skip when nothing changed (avoids an infinite loop) and never regress to an older
-      // persisted version - see shouldSyncArtifactFromDb for the #457 rationale.
       // Loose cast: all persisted artifact shapes agree on `content: string`.
       const currentArtifact = artifactData.content as { content?: string; version?: number };
 
+      // Runs before the unchanged-version early return: a same-id reopen swaps in versionless
+      // content while the DB version is unchanged, and must still be stamped. Idempotent, so the
+      // carried-version dep below cannot loop.
+      if (
+        isPersistedType &&
+        shouldStampPersistedVersion({
+          currentContent: currentArtifact.content,
+          latestContent: latestArtifact.content?.content,
+          currentVersion: currentArtifact.version,
+          latestVersion: latestArtifact.artifact.version,
+        })
+      ) {
+        setSessionLayout({
+          layout: useSessionLayout.getState().layout,
+          artifactData: {
+            type: artifactData.type,
+            content: {
+              ...(artifactData.content as Record<string, unknown>),
+              version: latestArtifact.artifact.version,
+            },
+            mimeType: artifactData.mimeType,
+            id: artifactData.id,
+            ...(artifactData.reactGroup && { reactGroup: artifactData.reactGroup }),
+          } as ArtifactData,
+          selectedArtifactId: artifactData.id,
+        });
+        return;
+      }
+
+      if (lastUpdatedVersionRef.current === latestArtifact.artifact.version) {
+        return;
+      }
+
+      // Skip when nothing changed (avoids an infinite loop) and never regress to an older
+      // persisted version - see shouldSyncArtifactFromDb for the #457 rationale.
       const needsUpdate = shouldSyncArtifactFromDb({
         currentContent: currentArtifact.content,
         latestContent: latestArtifact.content?.content,
@@ -591,7 +654,9 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     artifactData?.id,
     artifactData?.type,
     // artifactData.content is omitted deliberately: including it loops forever.
-    // Changes to it are detected inside the effect instead.
+    // Changes to it are detected inside the effect instead; only its version is a dep so a
+    // reopen that drops the stamped version re-runs the stamp.
+    carriedVersion,
     artifactData?.mimeType,
     latestArtifact?.artifact.title,
     latestArtifact?.artifact.updatedAt,
@@ -942,6 +1007,23 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const currentItem = useMemo(() => {
     return knowledgeItems[selectedTabIndex];
   }, [knowledgeItems, selectedTabIndex]);
+
+  const restoreOpenArtifact = React.useCallback(
+    (artifactId: string) => {
+      if (
+        currentItem &&
+        shouldRestoreOpenArtifact({
+          shownItemId: currentItem.id,
+          openArtifactId: useSessionLayout.getState().artifactData?.id,
+          artifactId,
+        })
+      ) {
+        saveOpenArtifactContent(artifactId, currentItem.content as ArtifactData['content']);
+      }
+    },
+    [currentItem]
+  );
+  useRefreshArtifactOnNewVersion(restoreOpenArtifact);
 
   // Keyed on primitive item props so it does not depend on the whole array.
   useEffect(() => {

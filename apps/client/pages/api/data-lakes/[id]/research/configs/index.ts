@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import {
@@ -13,6 +13,7 @@ import {
   RESEARCH_RUN_TRIGGERS,
   researchConfigEnvelopeResponseSchema,
   researchConfigListResponseSchema,
+  withResearchFeedStatus,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
@@ -50,7 +51,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
     ]);
     return respond(res, researchConfigListResponseSchema, {
-      data: configs,
+      data: configs.map(c => withResearchFeedStatus(c, dataLakeResearchService.feedFingerprintLevers(c))),
       pendingProposals: pendingByLake[lake.id] ?? 0,
     });
   })
@@ -74,7 +75,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       await dataLakeRepository.touchIfStable(lake.id);
       return created;
     });
-    return respond(res, researchConfigEnvelopeResponseSchema, { data: config }, 201);
+    return respond(
+      res,
+      researchConfigEnvelopeResponseSchema,
+      { data: withResearchFeedStatus(config, dataLakeResearchService.feedFingerprintLevers(config)) },
+      201
+    );
   });
 
 export const config = {

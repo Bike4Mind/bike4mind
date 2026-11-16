@@ -25,6 +25,7 @@ type StoredSession = { mode: string; project?: { workingDirectory: string; works
 function register(session: StoredSession): PrChatHooks {
   registerPullRequests({
     path: '/unused',
+    autoFixAttemptsPath: '/unused-attempts',
     chat: () => {
       throw new Error('not used');
     },

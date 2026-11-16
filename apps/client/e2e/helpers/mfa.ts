@@ -118,9 +118,11 @@ function withEnforcedMfa(rows: unknown): SettingRow[] {
 /**
  * Make this page's client see enforceMFA on, without touching the global admin setting: it is
  * stage-wide, and the server reads it through a settings cache, so flipping it would confine
- * every unenrolled session on a shared stage for a cache TTL after it is restored. The server
- * keeps enforcement off, so this covers MFAEnforcementWrapper, not the server's 403 gate.
- * Patches both sources the client merges: the public CDN artifact and /api/settings/fetch.
+ * every unenrolled session on a shared stage for a cache TTL after it is restored. This covers
+ * MFAEnforcementWrapper, not the server's 403 gate.
+ * Patches every source the client reads enforcement from: the public CDN artifact,
+ * /api/settings/fetch, and the `required` field of /api/auth/mfa/status. Sign-in is decided by
+ * the server, so with the stage's real setting on, an unenrolled user is sent to setup at sign-in.
  */
 export async function stubEnforcedMfaSetting(page: Page): Promise<void> {
   await page.route('**/app-config/public-settings.json', async route => {
@@ -134,5 +136,12 @@ export async function stubEnforcedMfaSetting(page: Page): Promise<void> {
     const response = await route.fetch();
     if (!response.ok()) return route.fulfill({ response });
     await route.fulfill({ response, json: withEnforcedMfa(await response.json()) });
+  });
+  await page.route('**/api/auth/mfa/status**', async route => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body: unknown = await response.json();
+    const status = typeof body === 'object' && body !== null ? body : {};
+    await route.fulfill({ response, json: { ...status, required: true } });
   });
 }

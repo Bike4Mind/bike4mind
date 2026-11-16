@@ -1,6 +1,11 @@
 import { Connection } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyBridgeApiKey, verifyJwtToken } from '@server/cli/auth';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyBridgeApiKey,
+  verifyJwtToken,
+} from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 export interface ResolvedBridgeAuth {

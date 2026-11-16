@@ -11,10 +11,10 @@ import OrganizationStorageUsage from './OrganizationStorageUsage';
 type UsageTab = 'usage' | 'ledger' | 'storage';
 
 /**
- * Org owner surface for their own org's AI spend: the same Usage and
+ * Org owner/manager surface for their own org's AI spend: the same Usage and
  * Ledger dashboards as the admin Credit Analytics tab, but pinned to this org
- * (picker hidden), plus the org's storage pool. Credit access is enforced server-side via verifyOrgOwner
- * plus the owner-scoped queries; this is only rendered for the owner or a platform admin. Storage reads
+ * (picker hidden), plus the org's storage pool. Credit reads use verifyOrgAccess
+ * plus owner-scoped queries; billing writes remain owner-only. Storage reads
  * go through verifyOrgAdminRead (the read tier in orgAccess.ts).
  */
 const OrganizationUsageSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {

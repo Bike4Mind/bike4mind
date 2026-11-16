@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: vi.fn() }));
 
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
@@ -90,7 +91,10 @@ function makeReq(body: unknown, queryId = 'org-123', isAdmin = false) {
 }
 
 describe('PUT /api/organizations/[id] -- Zod validation', () => {
-  beforeEach(() => update.mockClear());
+  beforeEach(() => {
+    update.mockClear();
+    credit.findById.mockClear();
+  });
 
   it('accepts a real client payload (name + description)', async () => {
     const { req, res } = makeReq({ name: 'Acme Corp', description: 'We build things' });

@@ -1,27 +1,31 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  setFilesOpen: vi.fn(),
   studioFeatures: {} as Record<string, boolean>,
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@tanstack/react-router', async () => {
+  const { createLinkStub } = await import('@client/app/components/Studio/testUtils/routerLinkMock');
+  return { createLink: createLinkStub };
+});
+// The header balance reads the live account; StudioCreditsBalance.test.tsx covers it.
+vi.mock('./StudioCreditsBalance', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('../useStudioFeature', () => ({
   useStudioFeature: (feature: string) => h.studioFeatures[feature] ?? false,
 }));
-vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
-  useFileBrowser: (select: (state: { setOpen: (open: boolean) => void }) => unknown) =>
-    select({ setOpen: h.setFilesOpen }),
+// The Library's own browser is covered by StudioLibrary.test.tsx; this pins only that the page mounts it.
+vi.mock('@client/app/components/Files/StudioLibrary', () => ({
+  StudioLibrary: () => <div data-testid="studio-library" />,
 }));
 
 import StudioLibraryPage from './StudioLibraryPage';
 import StudioProductionsPage from './StudioProductionsPage';
+import StudioV2Frame from './StudioV2Frame';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -37,28 +41,39 @@ describe('Studio Productions', () => {
   it('is a coming-soon placeholder under the Productions area', () => {
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-productions-page')).toBeInTheDocument();
-    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('studio-area-productions')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('studio-productions-coming-soon')).toHaveTextContent('coming soon');
   });
 
-  it('returns to Create on the Image medium when it is open, else Video', () => {
+  it('links back to Create on the Image medium when it is open, else Video', () => {
     h.studioFeatures = { createV2: true, productions: true, image: true };
     const { unmount } = render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('studio-area-create'));
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'image' } });
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/image');
     unmount();
     h.studioFeatures = { createV2: true, productions: true };
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('studio-area-create'));
-    expect(h.navigate).toHaveBeenLastCalledWith({ to: '/studio/$modality', params: { modality: 'video' } });
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/video');
+  });
+});
+
+describe('Studio frame', () => {
+  it('keeps the Create link on the current medium while in Create', () => {
+    h.studioFeatures = { createV2: true, image: true };
+    render(
+      <StudioV2Frame area="create" medium="music" testId="studio-frame">
+        <div />
+      </StudioV2Frame>,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/music');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-current', 'page');
   });
 });
 
 describe('Studio Library', () => {
-  it('points to Files for now', () => {
+  it('mounts the Studio Library under the Library area', () => {
     render(<StudioLibraryPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByTestId('studio-library-open-files-btn'));
-    expect(h.setFilesOpen).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId('studio-area-library')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('studio-library-page')).toContainElement(screen.getByTestId('studio-library'));
   });
 });

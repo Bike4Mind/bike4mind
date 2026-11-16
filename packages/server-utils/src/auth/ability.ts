@@ -23,7 +23,6 @@ import {
   hasAdminPermission,
   hasDeveloperUserTag,
 } from '@bike4mind/common';
-import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '../models/Subscription';
 import { SubscriptionOwnerType } from '../lib/subscriptions/types';
 
@@ -74,11 +73,12 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     allow('read', ModalModel);
 
-    // Allow all users to read settings, but only admins can modify them. modelListRevision is how an
-    // open tab learns its model list changed: the adminsettings subscription is scoped by this rule.
+    // Allow all users to read settings, but only admins can modify them. modelListRevision and
+    // modelAccessRevision are how an open tab learns its model list or model access changed: the
+    // adminsettings subscription is scoped by this rule.
     allow('read', AdminSettings, {
       settingName: {
-        $in: ['EnableQuestMaster', 'EnableMementos', 'EnableArtifacts', 'modelListRevision'],
+        $in: ['EnableQuestMaster', 'EnableMementos', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'],
       },
     });
     if (user.isAdmin) {
@@ -141,10 +141,6 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow(Permission.read, FeedbackModel);
       allow(Permission.delete, FeedbackModel);
       allow(Permission.update, FeedbackModel);
-
-      allow(Permission.read, SecretRotation);
-      allow(Permission.create, SecretRotation);
-      allow(Permission.update, SecretRotation);
 
       allow(Permission.create, Session);
       allow(Permission.delete, Session);

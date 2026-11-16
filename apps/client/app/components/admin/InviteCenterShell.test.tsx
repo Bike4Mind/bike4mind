@@ -124,13 +124,19 @@ describe('InviteCenterShell', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
-  it.each([
-    ['packages', 'invite-center-open-invites-btn', AdminTab.RegistrationInvites],
-    ['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules],
-  ])('on %s, %s opens its admin tab', (id, testId, tab) => {
-    routerMock.search = { inviteSection: id };
+  it.each([['packages', 'invite-center-open-partner-signups-btn', AdminTab.PartnerSignupRules]])(
+    'on %s, %s opens its admin tab',
+    (id, testId, tab) => {
+      routerMock.search = { inviteSection: id };
+      renderShell();
+      fireEvent.click(screen.getByTestId(testId));
+      expect(useAdminModal.getState().activeTab).toBe(tab);
+    }
+  );
+
+  it('on packages, has no link out to Invites since codes are added in the package form', () => {
+    routerMock.search = { inviteSection: 'packages' };
     renderShell();
-    fireEvent.click(screen.getByTestId(testId));
-    expect(useAdminModal.getState().activeTab).toBe(tab);
+    expect(screen.queryByTestId('invite-center-open-invites-btn')).toBeNull();
   });
 });

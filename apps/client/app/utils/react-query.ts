@@ -179,18 +179,21 @@ export const updateSingleQueryDataFast = <
       const newUpdatedAt = getCacheTimestamp(data);
       const cacheTime = Date.now();
 
+      // A collection prefix can also match a cache entry whose pages carry no `data` array (another
+      // page shape under the same prefix); such a page is left as it is instead of crashing the
+      // write, which would reject the mutation that triggered it after its request had succeeded.
       if ('pages' in currentData) {
         if (type === 'delete') {
           return {
-            pages: currentData.pages.map(page => ({
-              ...page,
-              data: page.data.filter(item => item.id !== data.id),
-            })),
+            pages: currentData.pages.map(page =>
+              Array.isArray(page?.data) ? { ...page, data: page.data.filter(item => item.id !== data.id) } : page
+            ),
             pageParams: currentData.pageParams,
           };
         } else {
           let itemFound = false;
           const updatedPages = currentData.pages.map(page => {
+            if (!Array.isArray(page?.data)) return page;
             const itemIndex = page.data.findIndex(item => item.id === data.id);
 
             if (itemIndex >= 0) {
@@ -209,7 +212,7 @@ export const updateSingleQueryDataFast = <
 
           if (!itemFound && allowCreate) {
             const firstPage = updatedPages[0];
-            if (firstPage) {
+            if (firstPage && Array.isArray(firstPage.data)) {
               updatedPages[0] = {
                 ...firstPage,
                 data: [{ ...data, cachedUpdate: cacheTime } as any, ...firstPage.data],
@@ -223,10 +226,11 @@ export const updateSingleQueryDataFast = <
           };
         }
       } else if ('data' in currentData) {
+        const paginated = currentData as PaginatedResponse<T>;
         if (type === 'delete') {
           return {
-            data: currentData.data.filter(item => item.id !== data.id),
-            meta: currentData.meta,
+            ...paginated,
+            data: paginated.data.filter(item => item.id !== data.id),
           };
         } else {
           const itemIndex = currentData.data.findIndex(item => item.id === data.id);
@@ -244,8 +248,8 @@ export const updateSingleQueryDataFast = <
           }
 
           return {
+            ...paginated,
             data: updatedData,
-            meta: currentData.meta,
           };
         }
       } else if (Array.isArray(currentData)) {

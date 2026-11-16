@@ -36,6 +36,8 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
 // evaluated against the instance, then deletes it - hence findById + deleteOne, not
 // findOneAndDelete.
 vi.mock('@bike4mind/database', () => ({
+  FeedbackAiModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackModel: {
     findById: vi.fn().mockResolvedValue(deletedFeedbackDoc),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),

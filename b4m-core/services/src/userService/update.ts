@@ -9,7 +9,7 @@ import {
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { isDuplicateKeyErrorOn } from './duplicateKeyError';
 import { assertUsernameNotReserved } from './reservedUsername';
@@ -278,6 +278,12 @@ export async function updateUser(userId: string, parameters: UpdateUserParameter
 
   if (!userPassword) {
     throw new Error('User not found');
+  }
+
+  // A test persona keeps its server-built persona-<name>-<digits> name: the persona key can only
+  // delete accounts that still carry one, so a rename would put the persona beyond its cleanup.
+  if (userPassword.isPersona && params.username !== undefined && params.username !== userPassword.username) {
+    throw new ForbiddenError('A test persona cannot change its username');
   }
 
   await validateUsernameChange(userPassword, params, db.users, { adminSettings: db.adminSettings });

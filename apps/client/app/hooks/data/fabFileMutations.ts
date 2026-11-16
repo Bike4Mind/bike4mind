@@ -90,6 +90,8 @@ interface BulkDeleteResponse {
     deleted: string[];
     unshared: string[];
     notFound: string[];
+    /** Readable shared or read-only files the caller cannot remove individually. */
+    denied?: string[];
     /** @deprecated Use deleted/unshared instead */
     success?: string[];
     failed: {
@@ -114,7 +116,13 @@ export function useBulkDeleteFiles(options?: { onSuccess?: () => void; onError?:
       // and a batch that removed some files but also had errors isn't a clean success either.
       const removedSomething = data.results.deleted.length > 0 || data.results.unshared.length > 0;
       const hasFailures = data.results.failed.length > 0;
-      if (!removedSomething) {
+      const deniedCount = data.results.denied?.length ?? 0;
+      if (deniedCount > 0) {
+        toast.warning(
+          `${data.message}. Shared or read-only files remain visible. Contact the owner to change your access.`,
+          { duration: 8000 }
+        );
+      } else if (!removedSomething) {
         toast.error(data.message);
       } else if (hasFailures) {
         toast.warning(data.message);

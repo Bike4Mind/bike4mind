@@ -63,7 +63,10 @@ function copyManifoldEngine(): Plugin {
  * variable through as ''. It does not for the others: an explicit '' is how the ad-hoc macOS
  * build in desktop-release.yml switches updates off.
  */
-function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_CURATED_MANIFEST_URL'): string {
+function baked(
+  mode: string,
+  name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_UPDATE_PUBLIC_KEYS' | 'B4M_CURATED_MANIFEST_URL'
+): string {
   const shell = process.env[name];
   if (shell !== undefined && (shell !== '' || name !== 'B4M_DEFAULT_API_URL')) return shell;
   // loadEnv lets a prefixed shell value override the file's even when that value is empty.
@@ -88,7 +91,20 @@ function curatedBuildInfo(info: { devKeys: boolean; manifestUrl: string }): Plug
   };
 }
 
+/** The release-derived version an unpackaged run shows. Computed in every mode and unable to fail the build. */
+function devVersionInfo(): { version: string; basis: string } {
+  try {
+    const { readDevVersion } = createRequire(join(__dirname, 'package.json'))('./scripts/dev-version.cjs') as {
+      readDevVersion(cwd: string): { version: string; basis: string };
+    };
+    return readDevVersion(__dirname);
+  } catch {
+    return { version: '', basis: '' };
+  }
+}
+
 export default defineConfig(({ mode }) => {
+  const devVersion = devVersionInfo();
   const nodeEnv = mode === 'development' ? 'development' : 'production';
   const curatedUrl = baked(mode, 'B4M_CURATED_MANIFEST_URL');
   const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
@@ -111,8 +127,12 @@ export default defineConfig(({ mode }) => {
           baked(mode, 'B4M_DEFAULT_API_URL') || (mode === 'development' ? '' : PRODUCTION_API_URL)
         ),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
+        // The keys the feed's manifest signatures must verify under; empty keeps unsigned manifests.
+        'process.env.B4M_UPDATE_PUBLIC_KEYS': JSON.stringify(baked(mode, 'B4M_UPDATE_PUBLIC_KEYS')),
         'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
         __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),
+        __B4M_DEV_VERSION__: JSON.stringify(devVersion.version),
+        __B4M_DEV_VERSION_BASIS__: JSON.stringify(devVersion.basis),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but
@@ -132,6 +152,17 @@ export default defineConfig(({ mode }) => {
     preload: {
       resolve: { alias: { '@shared': sharedDir } },
       plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          // The app's preload and the mini Tavern's narrow one (main/watch/miniWindow.ts). Both are
+          // sandboxed, which cannot load a shared chunk, so mini.ts imports nothing at runtime but
+          // electron (see its MINI_CHANNELS).
+          input: {
+            index: resolve(__dirname, 'src/preload/index.ts'),
+            mini: resolve(__dirname, 'src/preload/mini.ts'),
+          },
+        },
+      },
     },
     renderer: {
       root: resolve(__dirname, 'src/renderer'),

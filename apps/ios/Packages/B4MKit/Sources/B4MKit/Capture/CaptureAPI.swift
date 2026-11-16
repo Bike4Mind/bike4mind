@@ -57,9 +57,15 @@ public enum SentTurnLookup: Equatable, Sendable {
   case inconclusive
 }
 
+/// The two calls any client needs to put a file on the server: mint an upload, then wait for the scan.
+public protocol FileUploading: Sendable {
+  func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket
+  func fileStatus(fileID: String) async throws -> RemoteFileStatus
+}
+
 /// Everything capture asks of the backend. Hand-written: these are public `/api/v1` contracts that the
 /// generated client's operation filter does not include yet (see `CaptureClient`).
-public protocol CaptureAPI: Sendable {
+public protocol CaptureAPI: FileUploading {
   func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket
   func fileStatus(fileID: String) async throws -> RemoteFileStatus
   func setNotes(fileID: String, notes: String) async throws

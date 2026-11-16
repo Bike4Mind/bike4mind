@@ -52,8 +52,8 @@ describe('the Settings screen', () => {
     expect(groups).toHaveLength(5);
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
-      ['appearance', 'orchestrator-sound', 'nested-sessions'],
-      ['prompt-suggestions', 'worktree-default', 'orchestration-policy'],
+      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
+      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
       ['local-context', 'token-rate', 'curated-list'],
       ['local-history', 'local-data-export'],
       ['server', 'updates'],
@@ -121,6 +121,11 @@ describe('the Settings screen', () => {
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');
+  });
+
+  it('offers the auto-fix attempts setting', () => {
+    expect(html).toContain('data-entry="autofix-attempts"');
+    expect(html).toContain('data-testid="settings-autofix-attempts-select"');
   });
 
   it('offers the worktree-by-default preference', () => {

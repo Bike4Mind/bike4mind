@@ -126,6 +126,7 @@ export const SessionResponseSchema = z.object({
   _id: z.string().optional(),
   name: z.string(),
   userId: z.string(),
+  organizationId: z.string().optional(),
   knowledgeIds: z.array(z.string()).optional(),
   artifactIds: z.array(z.string()).optional(),
   tags: z.array(SessionTagSchema).optional(),
@@ -217,6 +218,11 @@ export type SessionDeleteResponse = z.infer<typeof SessionDeleteResponseSchema>;
  */
 export const CreateSessionRequestSchema = z.object({
   name: z.string(),
+  organizationId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Organization context for new content. Requires membership; immutable after creation.'),
   projectId: z.string().optional().describe('Adds the new session to this project.'),
   dataLakeId: z
     .string()

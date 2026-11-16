@@ -28,6 +28,7 @@ import {
 } from '@bike4mind/utils/videoProviders';
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
+import { storeGeneratedOutput } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import { isUsableApiKey, type VideoJobDeps } from './types';
 
@@ -260,37 +261,33 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
       const derivedFrom = videoRequestInputs(payload.request).flatMap(input =>
         'fileId' in input ? [{ fileId: input.fileId.toLowerCase(), role: input.role }] : []
       );
-      const files = await deps.saveToFiles({
-        userId: job.requestedBy,
-        bytes,
-        contentType,
-        generation: {
-          generator: 'video',
-          provider: payload.providerId,
-          modelId: payload.request.model,
-          jobId: job.id,
-          prompt: payload.request.prompt,
-          durationSeconds: common.durationSeconds,
-          request: payload.request,
-        },
-        ...(derivedFrom.length > 0 && { derivedFrom }),
-        ...(job.questId && { questId: job.questId }),
-        signal: context.signal,
-      });
-      let output: VideoJobOutput;
-      if (files.saved) {
-        output = { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
-      } else {
-        deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
-        const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
-        const { s3Key } = await deps.saveToGeneratedBucket({
-          key,
+      const { location } = await storeGeneratedOutput(
+        {
+          job,
+          noun: 'video',
           bytes,
           contentType,
+          generation: {
+            generator: 'video',
+            provider: payload.providerId,
+            modelId: payload.request.model,
+            jobId: job.id,
+            prompt: payload.request.prompt,
+            durationSeconds: common.durationSeconds,
+            request: payload.request,
+          },
+          derivedFrom,
+          questId: job.questId,
+          bucketFolder: 'generated-video',
+          extension: extensionFor(contentType),
+          // The async store step is retried by the engine, so a throwing Files save is retried rather than
+          // bypassing Files for the bucket.
+          onFilesError: 'rethrow',
           signal: context.signal,
-        });
-        output = { location: 'generated', s3Key, ...common };
-      }
+        },
+        deps
+      );
+      const output: VideoJobOutput = { ...location, ...common };
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };
     },
 

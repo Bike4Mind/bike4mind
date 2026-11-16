@@ -54,6 +54,7 @@ import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLe
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
 import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
 import { mcpHandler } from './mcp';
@@ -72,6 +73,7 @@ import {
   githubWebhookQueue,
   questExportQueue,
   accountDataExportQueue,
+  accountErasureQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
   generatedMediaPurgeQueue,
@@ -97,7 +99,6 @@ import {
   githubLakeRevokeQueue,
   githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
-  whatsNewHighlightsQueue,
   notebookCurationQueue,
   webhookDeliveryQueue,
   liveOpsTriageQueue,
@@ -111,7 +112,6 @@ import {
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   slackExportQueueDLQ,
@@ -119,6 +119,7 @@ import {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
@@ -149,7 +150,6 @@ import {
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
@@ -157,6 +157,7 @@ import {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
@@ -229,7 +230,6 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'generation-job': generationJobDLQ.url,
       'research-engine': researchEngineQueueDLQ.url,
       'release-notes': whatsNewGenerationQueueDLQ.url,
-      'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
       'notebook-curation': notebookCurationQueueDLQ.url,
       'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
       'slack-export': slackExportQueueDLQ.url,
@@ -237,6 +237,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'webhook-delivery': webhookDeliveryQueueDLQ.url,
       'quest-export': questExportQueueDLQ.url,
       'account-data-export': accountDataExportQueueDLQ.url,
+      'account-erasure': accountErasureQueueDLQ.url,
       'liveops-triage': liveOpsTriageQueueDLQ.url,
       'email-ingestion': emailIngestionQueueDLQ.url,
       'email-analysis': emailAnalysisQueueDLQ.url,
@@ -288,6 +289,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
         'subscription-reconciliation': subscriptionReconciliationDeadLetter.queue.url,
       }),
       ...(accountDeletionSweepDeadLetter && { 'account-deletion-sweep': accountDeletionSweepDeadLetter.queue.url }),
+      ...(organizationRetentionDeadLetter && { 'organization-retention': organizationRetentionDeadLetter.queue.url }),
       ...(businessMetricAlertsDLQ && { 'business-metric-alerts': businessMetricAlertsDLQ.url }),
     }),
     // This raw AWS queue retains its existing provider-assigned physical name.
@@ -327,7 +329,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     githubWebhookQueue: githubWebhookQueue.url,
     questExportQueue: questExportQueue.url,
     accountDataExportQueue: accountDataExportQueue.url,
-    whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
+    accountErasureQueue: accountErasureQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
     notebookCurationQueue: notebookCurationQueue.url,
@@ -736,7 +738,6 @@ const dlqConsumerFunctionArns = [
   generationJobQueueSubscription,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   slackExportQueueSubscription,
@@ -744,6 +745,7 @@ const dlqConsumerFunctionArns = [
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
   publishThumbnailQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,

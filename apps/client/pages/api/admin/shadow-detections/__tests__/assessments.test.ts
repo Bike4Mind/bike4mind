@@ -43,13 +43,13 @@ vi.mock('@bike4mind/database', () => ({
   abuseAssessmentRepository: { listForDetection: h.listForDetection },
   shadowDetectionRepository: { findById: h.findById },
 }));
-vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/abuseAssessment', () => ({
   assessShadowDetection: h.assess,
   replayAbuseAssessments: h.replay,
   loadAbuseAssessmentSettings: h.loadSettings,
   summarizeDetection: h.summarize,
 }));
-vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({
+vi.mock('@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence', () => ({
   linkedAccountGroupEvidence: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({

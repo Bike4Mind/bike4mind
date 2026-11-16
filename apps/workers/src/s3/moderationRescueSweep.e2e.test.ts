@@ -16,7 +16,7 @@ const store = vi.hoisted(() => ({
 }));
 
 // The uploader allowance: refused for the users in `store.refusedUsers`, so no detector call is made.
-vi.mock('@server/s3/uploadModerationMeter', () => ({
+vi.mock('@bike4mind/server-utils/s3/uploadModerationMeter', () => ({
   buildUploadModerationMeter: ({ userId }: { userId: string }) => ({
     reserveModerationCalls: async () => !store.refusedUsers.has(userId),
     recordModerationCalls: async () => undefined,

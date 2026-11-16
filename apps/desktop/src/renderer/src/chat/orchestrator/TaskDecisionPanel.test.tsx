@@ -66,6 +66,17 @@ it('renders effective catalog names and acceptance evidence, then sends a concre
   expect(el('agent-task-state').textContent).toContain('accepted');
 });
 
+it('shows a canceled task as closed and offers no restart controls', async () => {
+  const agent = agentFixture('child', 'stopped', {
+    model: 'worker',
+    workerTask: { ...task(), state: { status: 'canceled', reason: 'Closing out: the work is finished.' } },
+  });
+  await themed.render(<TaskDecisionPanel agent={agent} />);
+  expect(el('agent-task-state').textContent).toContain('canceled');
+  expect(el('agent-task-closed-note').textContent).toContain('You can still chat in this conversation');
+  expect(document.querySelector('[data-testid="agent-task-revise-btn"]')).toBeNull();
+});
+
 it('preserves an assessment draft across an unchanged task IPC refresh', async () => {
   const agent = agentFixture('child', 'needs-you', { model: 'worker', workerTask: task() });
   await themed.render(<TaskDecisionPanel agent={agent} />);

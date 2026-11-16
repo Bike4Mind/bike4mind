@@ -83,6 +83,11 @@ describe('organizationService - delete', () => {
         users: {
           removeGroupsFromAllUsers: vi.fn(),
           clearOrganizationPointer: vi.fn(),
+          findOne: vi.fn().mockResolvedValue(null),
+          retireOrgServiceAccount: vi.fn(),
+        },
+        userApiKeys: {
+          revokeLiveByUserId: vi.fn().mockResolvedValue([]),
         },
       },
     };
@@ -525,6 +530,83 @@ describe('organizationService - delete', () => {
       );
 
       expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
+    });
+  });
+  describe('org service account keys', () => {
+    const adminUser = { id: 'admin1', isAdmin: true } as IUserDocument;
+    const serviceAccount = {
+      id: 'sa1',
+      isSystem: true,
+      serviceAccountOrganizationId: 'org1',
+    } as IUserDocument;
+
+    it("revokes the service account's keys and retires it, stamped with the deleting user", async () => {
+      mockAdapters.db.users.findOne.mockResolvedValue(serviceAccount);
+      mockAdapters.db.userApiKeys.revokeLiveByUserId.mockResolvedValue([
+        { id: 'key1', status: 'ACTIVE' },
+        { id: 'key2', status: 'ACTIVE' },
+      ]);
+
+      const result = await deleteOrganization(adminUser, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.users.findOne).toHaveBeenCalledWith({
+        email: 'org-org1@service-account.system.bike4mind.invalid',
+      });
+      expect(mockAdapters.db.userApiKeys.revokeLiveByUserId).toHaveBeenCalledWith('sa1', {
+        revokedBy: 'admin1',
+        revokedReason: 'organization_deleted',
+        batchId: 'org-delete-org1',
+      });
+      expect(mockAdapters.db.users.retireOrgServiceAccount).toHaveBeenCalledWith('sa1', 'org1');
+      expect(result).toEqual({ revokedApiKeyIds: ['key1', 'key2'] });
+    });
+
+    it('uses the authorized canonical org ID for every cleanup after an aliased request', async () => {
+      const canonicalId = '507f1f77bcf86cd799439011';
+      const requestedId = canonicalId.toUpperCase();
+      vi.mocked(getOrganization.get).mockResolvedValueOnce({ ...mockOrganization, id: canonicalId });
+      mockAdapters.db.users.findOne.mockResolvedValue({ ...serviceAccount, serviceAccountOrganizationId: canonicalId });
+      mockAdapters.db.userApiKeys.revokeLiveByUserId.mockResolvedValue([{ id: 'key1' }]);
+      await deleteOrganization(adminUser, { id: requestedId }, mockAdapters);
+      expect(getOrganization.get).toHaveBeenCalledWith(adminUser, { id: requestedId }, mockAdapters);
+      expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith(canonicalId, { includeDeleted: true });
+      expect(mockAdapters.db.users.clearOrganizationPointer).toHaveBeenCalledWith(canonicalId);
+      expect(mockAdapters.db.users.findOne).toHaveBeenCalledWith({
+        email: `org-${canonicalId}@service-account.system.bike4mind.invalid`,
+      });
+      expect(mockAdapters.db.userApiKeys.revokeLiveByUserId).toHaveBeenCalledWith('sa1', {
+        revokedBy: 'admin1',
+        revokedReason: 'organization_deleted',
+        batchId: `org-delete-${canonicalId}`,
+      });
+      expect(mockAdapters.db.users.retireOrgServiceAccount).toHaveBeenCalledWith('sa1', canonicalId);
+      expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith(canonicalId);
+    });
+
+    it('revokes nothing for an org that never created a service account', async () => {
+      const result = await deleteOrganization(adminUser, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.userApiKeys.revokeLiveByUserId).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.retireOrgServiceAccount).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+      expect(result).toEqual({ revokedApiKeyIds: [] });
+    });
+
+    it('ignores an account at the address that is not the org service account', async () => {
+      mockAdapters.db.users.findOne.mockResolvedValue({ ...serviceAccount, isSystem: false });
+
+      await deleteOrganization(adminUser, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.userApiKeys.revokeLiveByUserId).not.toHaveBeenCalled();
+    });
+
+    it('revokes nothing when validation rejects the delete', async () => {
+      mockAdapters.db.users.findOne.mockResolvedValue(serviceAccount);
+      mockAdapters.validation = { canDeleteOrganization: vi.fn().mockResolvedValue({ canDelete: false }) };
+
+      await expect(deleteOrganization(adminUser, { id: 'org1' }, mockAdapters)).rejects.toThrow();
+
+      expect(mockAdapters.db.userApiKeys.revokeLiveByUserId).not.toHaveBeenCalled();
     });
   });
 });

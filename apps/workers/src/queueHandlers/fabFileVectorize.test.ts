@@ -170,7 +170,9 @@ vi.mock('@bike4mind/services', () => ({
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: h.reserveRequestCredits }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: h.reserveRequestCredits,
+}));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
 vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({

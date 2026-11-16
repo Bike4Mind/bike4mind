@@ -35,7 +35,7 @@ vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: () => 0,
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({ settleHeldCredits: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {

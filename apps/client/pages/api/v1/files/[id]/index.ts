@@ -13,7 +13,7 @@ import { deleteFileContract, getFileContract, updateFileContract } from '@bike4m
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { loadAccessibleFabFile } from '@bike4mind/server-utils/files/loadAccessibleFabFile';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
 import { toPublicFile, toPublicFileSummary } from '@server/files/toPublicFile';

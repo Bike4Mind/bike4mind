@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet } from '../permissions/rules';
 import { everySessionRules, permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -66,8 +67,8 @@ describe('shell write target approval', () => {
     const rule = compileRule(parsed.rule, 'allow', { id: 'test', label: 'Test' }, { home: root, root, cwd: root });
     if (rule === null) throw new Error('Could not compile test rule');
     return {
-      auto: !prompt.askInAuto,
-      full: !prompt.askInFull,
+      auto: runsCheckedInAuto(prompt),
+      full: runsCheckedInFull(prompt),
       allowed: new PermissionRuleSet([rule]).evaluate(subject).decision === 'allow',
       savedRules: everySessionRules(subject, prompt),
     };

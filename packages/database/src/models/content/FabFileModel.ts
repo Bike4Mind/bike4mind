@@ -996,6 +996,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0).sort();
   }
 
+  /**
+   * One page of ids of the live generated files that list `fileId` in their `derivedFrom`, newest
+   * first. No access check: the caller filters the ids through a read door. The `sourceType` and
+   * `deletedAt` conjuncts match the partial `derivedFrom.fileId` index.
+   */
+  async findDerivedChildIds(fileId: string, { limit, skip = 0 }: { limit: number; skip?: number }): Promise<string[]> {
+    const children = await this.fabFileModel
+      .find(
+        {
+          'derivedFrom.fileId': fileId,
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        { _id: 1 }
+      )
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    return children.map(child => String(child._id));
+  }
+
   async executeSearch(
     query: {
       filter: Record<string, unknown>;
@@ -4322,6 +4345,17 @@ FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  { name: 'retention_files_present', partialFilterExpression: { organizationId: { $exists: true } } }
+);
+FabFileSchema.index(
+  { 'sourceMetadata.retentionOrganizationId': 1, deletedAt: 1, createdAt: 1, _id: 1 },
+  {
+    name: 'retention_generated_files_present',
+    partialFilterExpression: { 'sourceMetadata.retentionOrganizationId': { $exists: true } },
+  }
 );
 
 // An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including

@@ -386,7 +386,7 @@ describe('ci.yml test-shards turbo commands', () => {
 
   it('saves the cache only from trusted events', () => {
     const save = ci.slice(ci.indexOf('- name: Prune turbo test cache'), ci.indexOf('- name: Save turbo test cache'));
-    expect(save).toMatch(/github\.event_name == 'push' \|\| github\.event_name == 'merge_group'/);
+    expect(save).toMatch(/if: \$\{\{ !cancelled\(\) && github\.event_name == 'push' && /);
     expect(ci.match(/actions\/cache\/save@/g)).toHaveLength(1);
   });
 });

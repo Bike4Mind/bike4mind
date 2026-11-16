@@ -8,6 +8,7 @@ export const ExternalLinks = {
   terms: getWebsiteUrl('terms-of-service'),
   usagePolicy: getWebsiteUrl('usage-policy'),
   privacy: getWebsiteUrl('privacy'),
+  dataHandling: getWebsiteUrl('data-handling'),
   // AUP/ToS acceptance gate. The marketing site redirects this slug to /usage-policy; the
   // acceptance mechanism does not depend on the page existing.
   acceptableUse: getWebsiteUrl('acceptable-use'),
