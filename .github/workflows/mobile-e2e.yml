@@ -14,6 +14,7 @@ on:
       - 'apps/ios/**'
       - 'apps/android/**'
       - '.github/workflows/mobile-e2e.yml'
+      - '.github/scripts/install-maestro.sh'
   push:
     branches: [main]
     paths:
@@ -21,6 +22,7 @@ on:
       - 'apps/ios/**'
       - 'apps/android/**'
       - '.github/workflows/mobile-e2e.yml'
+      - '.github/scripts/install-maestro.sh'
   workflow_dispatch:
 
 permissions:
@@ -34,9 +36,6 @@ env:
   # Pinned release and its published sha256 (maestro.zip on the GitHub release).
   MAESTRO_VERSION: '2.12.0'
   MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
-  B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
-  B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
-  B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
 
 jobs:
   ios:
@@ -104,6 +103,9 @@ jobs:
         run: apps/mobile-e2e/scripts/run-flows.sh ios
         env:
           REPORT_DIR: ${{ github.workspace }}/maestro-report
+          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
+          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
+          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
 
       # Quarantined flows never fail the lane; their result is still visible in the job log and report.
       - name: Run quarantined flows (non-blocking)
@@ -111,6 +113,9 @@ jobs:
         run: apps/mobile-e2e/scripts/run-flows.sh ios --quarantine
         env:
           REPORT_DIR: ${{ github.workspace }}/maestro-report
+          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
+          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
+          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
 
       - name: Upload Maestro report
         if: always()
@@ -146,6 +151,8 @@ jobs:
 
       - name: Build Debug app
         working-directory: apps/android
+        env:
+          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
         run: |
           if [ -n "$B4M_E2E_SERVER_URL" ]; then
             ./gradlew --no-daemon :app:assembleDebug "-Pb4m.serverUrl=$B4M_E2E_SERVER_URL"
@@ -155,6 +162,10 @@ jobs:
 
       - name: Run flows on an emulator
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
+          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
+          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
         with:
           api-level: 34
           arch: x86_64

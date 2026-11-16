@@ -5,11 +5,11 @@
   /// Launch with the environment variable `B4M_UI_FIXTURES=1` to run the signed-in UI against canned data:
   /// no sign-in, no network. For screenshots and UI work while a stage with the endpoints is unavailable.
   enum FixtureServices {
-    /// Also accepts a launch argument naming the flag (`-B4M_UI_FIXTURES 1` or Maestro's `launchApp.arguments`), because
-    /// the Maestro suite cannot set environment variables.
+    /// Also accepts the launch argument `-B4M_UI_FIXTURES 1` (Maestro's `launchApp.arguments`), which lands in the
+    /// UserDefaults argument domain, because the Maestro suite cannot set environment variables.
     static var isEnabled: Bool {
       ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1"
-        || ProcessInfo.processInfo.arguments.contains { $0.contains("B4M_UI_FIXTURES") }
+        || UserDefaults.standard.string(forKey: "B4M_UI_FIXTURES") == "1"
     }
 
     static let api: any B4MAPI = FixtureAPI()
