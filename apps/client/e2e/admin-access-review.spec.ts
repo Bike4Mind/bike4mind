@@ -78,15 +78,16 @@ test.describe('Admin access review', () => {
     await admin.navigateToAccessReview();
 
     const own = page.getByTestId(`admin-access-review-row-${adminA.userId}`);
-    await expect(own.getByTestId('admin-access-review-confirm-btn')).toBeDisabled();
+    await expect(own.getByTestId('admin-access-review-row-actions')).toBeDisabled();
     const rowB = page.getByTestId(`admin-access-review-row-${adminB}`);
     await expect(rowB.getByTestId('admin-access-review-dormant-chip')).toBeVisible();
     await expect(rowB.getByTestId('admin-access-review-no-mfa-chip')).toBeVisible();
 
     await page
       .getByTestId(`admin-access-review-row-${delegateC}`)
-      .getByTestId('admin-access-review-revoke-btn')
+      .getByTestId('admin-access-review-row-actions')
       .click();
+    await page.getByTestId('admin-access-review-revoke-btn').click();
     await page.getByTestId('admin-access-review-revoke-reason-input').fill('no longer needs admin access');
     await page.getByTestId('admin-access-review-revoke-confirm-btn').click();
     await expect(page.getByTestId('admin-access-review-revoke-dialog')).toBeHidden();

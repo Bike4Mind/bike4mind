@@ -96,8 +96,12 @@ const report = (admins: AccessReviewRow[]): AccessReviewReport => ({
 
 const rowOf = (userId: string) => screen.getByTestId(`admin-access-review-row-${userId}`);
 
+const openActions = (userId: string) =>
+  fireEvent.click(within(rowOf(userId)).getByTestId('admin-access-review-row-actions'));
+
 const revoke = async (userId: string) => {
-  fireEvent.click(within(rowOf(userId)).getByTestId('admin-access-review-revoke-btn'));
+  openActions(userId);
+  fireEvent.click(await screen.findByTestId('admin-access-review-revoke-btn'));
   fireEvent.change(await screen.findByTestId('admin-access-review-revoke-reason-input'), {
     target: { value: 'left the team' },
   });
@@ -135,12 +139,12 @@ describe('AccessReviewTab', () => {
     ]);
   });
 
-  it('blocks confirming your own access and allows confirming another admin', () => {
+  it('blocks confirming your own access and allows confirming another admin', async () => {
     renderWithTheme(<AccessReviewTab />);
-    expect(within(rowOf(ME)).getByTestId('admin-access-review-confirm-btn')).toBeDisabled();
-    expect(within(rowOf(ME)).getByTestId('admin-access-review-revoke-btn')).toBeDisabled();
-    const confirm = within(rowOf(OTHER_FULL)).getByTestId('admin-access-review-confirm-btn');
-    expect(confirm).toBeEnabled();
+    expect(within(rowOf(ME)).getByTestId('admin-access-review-row-actions')).toBeDisabled();
+    openActions(OTHER_FULL);
+    const confirm = await screen.findByTestId('admin-access-review-confirm-btn');
+    expect(confirm).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(confirm);
     expect(mocks.mutate).toHaveBeenCalledWith(
       { userId: OTHER_FULL, decision: 'confirmed', dormantDays: 90 },
@@ -231,7 +235,8 @@ describe('AccessReviewTab', () => {
     };
     renderWithTheme(<AccessReviewTab />);
     expect(within(rowOf(DELEGATE)).getByText('Revoked')).toBeInTheDocument();
-    expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-revoke-btn')).toBeNull();
+    expect(within(rowOf(DELEGATE)).queryByTestId('admin-access-review-row-actions')).toBeNull();
+    expect(within(rowOf(DELEGATE)).getAllByText('\u2014')).toHaveLength(2);
   });
 
   it('is not openable by a delegate holding settings:manage', () => {

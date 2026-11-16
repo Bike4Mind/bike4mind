@@ -1,5 +1,18 @@
 import { useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, FormControl, FormLabel, Input, Stack, Tooltip, Typography } from '@mui/joy';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  FormControl,
+  FormLabel,
+  Input,
+  ListDivider,
+  MenuItem,
+  Stack,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import { toast } from 'sonner';
 import { ACCESS_REVIEW_DORMANT_DAYS_MAX, ACCESS_REVIEW_DORMANT_DAYS_MIN } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -12,6 +25,7 @@ import {
 } from '@client/app/hooks/data/adminAccessReview';
 import { AdminPageHeader, DataTable, EmptyState, RelativeTime, type DataColumn } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
+import { RowActionsMenu } from '../shared/RowActionsMenu';
 import { RevokeAccessDialog } from './RevokeAccessDialog';
 
 // Must match ACCESS_REVIEW_DEFAULT_DORMANT_DAYS in packages/server-utils/src/security/accessReview/accessReview.ts.
@@ -53,7 +67,7 @@ function DecisionCell({ row }: { row: ReviewRow }) {
 }
 
 const columns: DataColumn<ReviewRow>[] = [
-  { id: 'admin', label: 'Admin', render: row => label(row) },
+  { id: 'admin', label: 'Admin', width: '16rem', wrap: true, render: row => label(row) },
   { id: 'permissions', label: 'Permissions', wrap: true, render: row => <PermissionsCell row={row} /> },
   {
     id: 'granted',
@@ -74,13 +88,19 @@ const columns: DataColumn<ReviewRow>[] = [
     id: 'lastAction',
     label: 'Last admin action',
     width: '9rem',
-    render: ({ live }) => (live?.lastAdminActionAt ? <RelativeTime at={live.lastAdminActionAt} /> : 'None'),
+    render: ({ live }) => {
+      if (!live) return '\u2014';
+      return live.lastAdminActionAt ? <RelativeTime at={live.lastAdminActionAt} /> : 'None';
+    },
   },
   {
     id: 'lastSignIn',
     label: 'Last sign-in',
     width: '9rem',
-    render: ({ live }) => (live?.lastSignInAt ? <RelativeTime at={live.lastSignInAt} /> : 'None in 12 months'),
+    render: ({ live }) => {
+      if (!live) return '\u2014';
+      return live.lastSignInAt ? <RelativeTime at={live.lastSignInAt} /> : 'None in 12 months';
+    },
   },
   {
     id: 'flags',
@@ -107,7 +127,7 @@ const columns: DataColumn<ReviewRow>[] = [
         </Stack>
       ) : null,
   },
-  { id: 'decision', label: 'Decision', width: '8rem', render: row => <DecisionCell row={row} /> },
+  { id: 'decision', label: 'Decision', width: '11rem', wrap: true, render: row => <DecisionCell row={row} /> },
 ];
 
 /** The quarterly admin access review: every admin's access, its provenance and activity, and a decision per admin. */
@@ -168,32 +188,30 @@ export default function AccessReviewTab() {
   const rowActions = ({ live }: ReviewRow) => {
     if (!live) return null;
     const own = sameId(currentUser?.id, live.userId);
-    return (
-      <Stack direction="row" gap={1}>
-        <Tooltip title={own ? 'Another admin must confirm your access' : ''} disableHoverListener={!own}>
-          <span>
-            <Button
-              size="sm"
-              variant="outlined"
-              disabled={own || live.decision?.decision === 'confirmed' || decision.isPending}
-              onClick={() => confirm(live)}
-              data-testid="admin-access-review-confirm-btn"
-            >
-              Confirm
-            </Button>
-          </span>
-        </Tooltip>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="danger"
-          disabled={own}
-          onClick={() => setRevoking(live)}
-          data-testid="admin-access-review-revoke-btn"
+    const menu = (
+      <RowActionsMenu
+        testId="admin-access-review-row-actions"
+        ariaLabel={`Actions for ${label({ live, revoked: null, userId: live.userId })}`}
+        disabled={own}
+      >
+        <MenuItem
+          disabled={live.decision?.decision === 'confirmed' || decision.isPending}
+          onClick={() => confirm(live)}
+          data-testid="admin-access-review-confirm-btn"
         >
-          Revoke
-        </Button>
-      </Stack>
+          Confirm access
+        </MenuItem>
+        <ListDivider />
+        <MenuItem color="danger" onClick={() => setRevoking(live)} data-testid="admin-access-review-revoke-btn">
+          Revoke access
+        </MenuItem>
+      </RowActionsMenu>
+    );
+    if (!own) return menu;
+    return (
+      <Tooltip title="Another admin must confirm your access">
+        <span>{menu}</span>
+      </Tooltip>
     );
   };
 
@@ -253,7 +271,6 @@ export default function AccessReviewTab() {
         getRowId={row => row.userId}
         rowTestId={row => `admin-access-review-row-${row.userId}`}
         rowActions={rowActions}
-        actionsWidth="12rem"
         loading={isPending}
         error={isError && !data ? 'The access review could not be loaded.' : undefined}
         onRetry={() => void refetch()}
