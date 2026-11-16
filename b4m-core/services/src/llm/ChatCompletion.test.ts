@@ -102,7 +102,7 @@ import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/common';
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
@@ -6303,6 +6303,23 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
       expect(mockDb.creditTransactions.createTransaction).not.toHaveBeenCalled();
+    });
+
+    it('settles a mid-turn account refusal on the quest without rethrowing, and refunds the hold', async () => {
+      const { complete } = reservationOrgSetup();
+      const message = 'Your account has been suspended.';
+      complete.mockImplementation(async () => {
+        throw new AiAccessRefusedError(message);
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await expect(service.process({ body: reservationBody(), logger: mockLogger })).resolves.toBeUndefined();
+
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.reply).toBe(message);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Account refusal]'));
     });
 
     // A Stop that lands after a cross-model failover bills the model that was answering, not the

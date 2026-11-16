@@ -5,6 +5,7 @@ import {
   resolveEmbeddingWithKeylessFallback,
 } from '@bike4mind/utils/embeddingProviders';
 import {
+  AiAccessRefusedError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -7874,9 +7875,11 @@ export class ChatCompletionProcess {
         quest.reply = combined.join('');
       };
       // Provider text on a restricted-tier turn can name the substitute. Credit errors keep their
-      // message; the categorized branches below overwrite this reply with fixed text anyway.
+      // message, as does an account refusal (fixed text from accountState); the categorized branches
+      // below overwrite this reply with fixed text anyway.
       const masksMessage =
-        this.shadowSubstitution && !(err instanceof InsufficientCreditsError || resolveQuestErrorCode(err));
+        this.shadowSubstitution &&
+        !(err instanceof InsufficientCreditsError || err instanceof AiAccessRefusedError || resolveQuestErrorCode(err));
       setErrorReply(masksMessage ? MODEL_UNAVAILABLE_ERROR_REPLY : (err as Error).message);
       quest.type = 'error';
       setTerminalQuestStatus(quest, 'done');
@@ -7900,6 +7903,11 @@ export class ChatCompletionProcess {
         // Terminal: nothing to retry until credits are added, so return without re-throwing
         // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
+        return;
+      } else if (err instanceof AiAccessRefusedError) {
+        // Terminal like the credit refusal: a media tool found the account blocked mid-turn. The
+        // quest already carries the refusal text; rethrowing would log it as a processing failure.
+        logger.warn(`[Account refusal] Quest ${questId}: ${err.message}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
