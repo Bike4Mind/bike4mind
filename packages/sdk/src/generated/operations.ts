@@ -265,6 +265,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects/{id}',
   },
+  getPublicClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config/public',
+  },
   getQuest: {
     method: 'GET',
     path: '/api/v1/quests/{id}',

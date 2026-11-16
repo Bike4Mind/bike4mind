@@ -89,6 +89,7 @@ export function impersonationAnonymousGate(req: Request, _res: Response, next: N
     ['GET', 'HEAD'].includes(req.method) &&
     [
       '/api/settings/serverConfigPublic',
+      '/api/v1/client-config/public',
       '/api/settings/serverStatus',
       '/api/settings/logo',
       '/api/ping',

@@ -247,16 +247,16 @@ describe('ModelSelection admin quick link', () => {
     expect(screen.queryByTestId('model-selection-manage-models-btn')).not.toBeInTheDocument();
   });
 
-  it('sends an admin to the LLM Dashboard tab and closes the picker first', () => {
+  it('sends an admin to the Models tab and closes the picker first', () => {
     admin.isAdmin = true;
     const onSelectionComplete = vi.fn();
     renderSelection({ onSelectionComplete });
 
     fireEvent.click(screen.getByTestId('model-selection-manage-models-btn'));
 
-    expect(useAdminModal.getState().activeTab).toBe(AdminTab.LLMDashboard);
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.Models);
     expect(onSelectionComplete).toHaveBeenCalledOnce();
-    expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
+    expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'models' } });
   });
 });
 

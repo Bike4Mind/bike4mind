@@ -210,7 +210,6 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/queueHandlers/sreFix.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/sreJob.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `sreFixQueue`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/webhookDelivery.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
-| `apps/workers/src/queueHandlers/whatsNewHighlights.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/queueHandlers/whatsNewJob.dispatch` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/s3/appFileUploadComplete.func` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/s3/historyUploadComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |

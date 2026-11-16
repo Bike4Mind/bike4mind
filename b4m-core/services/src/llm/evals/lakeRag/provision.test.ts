@@ -164,7 +164,7 @@ describe('provisionLakeRagLakes', () => {
     const { api, calls } = fakeServer();
     await provisionLakeRagLakes(api, [doc('a.md', 'current')], { runId: 'r1' });
     const put = calls.find(c => c.method === 'PUT')!;
-    expect(put.headers).toEqual({ 'Content-Type': 'text/markdown' });
+    expect(put.headers).toEqual({ 'Content-Type': 'text/markdown', 'If-None-Match': '*' });
     expect(calls.filter(c => c.method !== 'PUT').every(c => c.headers.Authorization === AUTH)).toBe(true);
   });
 
