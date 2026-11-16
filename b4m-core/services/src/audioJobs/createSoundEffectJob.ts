@@ -12,6 +12,7 @@ import {
   persistAndEnqueueJob,
   resolveJobOwner,
 } from '../generationJobs/createJob';
+import { dailyLimitRefusal } from './shared';
 import { estimateSoundCredits } from '../soundCost';
 import {
   AUDIO_JOB_MAX_WALL_CLOCK_MS,
@@ -86,6 +87,8 @@ export async function createSoundEffectJob(
   }
 
   const settings = await deps.getSettings();
+  const capped = await dailyLimitRefusal(input.user, settings.enforceCredits, deps);
+  if (capped) return capped;
   const held = await holdJobCredits(
     {
       enforceCredits: settings.enforceCredits,

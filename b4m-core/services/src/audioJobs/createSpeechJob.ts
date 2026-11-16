@@ -17,6 +17,7 @@ import {
   persistAndEnqueueJob,
   resolveJobOwner,
 } from '../generationJobs/createJob';
+import { dailyLimitRefusal } from './shared';
 import {
   AUDIO_JOB_MAX_WALL_CLOCK_MS,
   type CreateSpeechJobDeps,
@@ -24,11 +25,11 @@ import {
   type CreateSpeechJobResult,
 } from './types';
 
-// The most a clip can take per input character, for the create-time storage check: uncompressed 24 kHz 16-bit audio
-// at a slow ~12 characters a second, and a compressed format at a tenth of that.
+// The most a clip can take per input character, for the create-time storage check, at a slow ~12 characters a
+// second: uncompressed 24 kHz 16-bit audio (~48 KB/s), or a compressed format at up to 128 kbps (~16 KB/s).
 const UNCOMPRESSED_FORMATS: readonly VoiceOutputFormat[] = ['wav', 'pcm', 'flac'];
 const maxBytesPerCharacter = (format: VoiceOutputFormat | undefined) =>
-  format && UNCOMPRESSED_FORMATS.includes(format) ? 4_000 : 400;
+  format && UNCOMPRESSED_FORMATS.includes(format) ? 4_000 : 1_400;
 
 const invalid = (message: string): CreateSpeechJobResult => ({
   ok: false,
@@ -99,6 +100,8 @@ export async function createSpeechJob(
   }
 
   const settings = await deps.getSettings();
+  const capped = await dailyLimitRefusal(input.user, settings.enforceCredits, deps);
+  if (capped) return capped;
   const held = await holdJobCredits(
     {
       enforceCredits: settings.enforceCredits,

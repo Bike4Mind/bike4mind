@@ -15,6 +15,7 @@ import { silentMp3 } from '@bike4mind/utils/musicProviders';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
+import { ProviderBusyError, runWithProviderCapacity } from '../providerCapacity/runWithProviderCapacity';
 import { estimateSoundCredits } from '../soundCost';
 import { createSoundEffectJobHandler } from './soundEffectJobHandler';
 import type { SoundEffectJob, SoundEffectJobDeps, SoundEffectJobProvider } from './types';
@@ -167,6 +168,23 @@ describe('sound effect job handler submit', () => {
     );
   });
 
+  it('gives a bucket-only store a fresh budget once the step signal has fired', async () => {
+    const controller = new AbortController();
+    // The provider honours the signal, so it fires once the clip is fetched: the step budget ran out mid-store.
+    const abortingProvider: SoundEffectJobProvider = {
+      ...testSoundEffectProvider,
+      fetchOutput: async (output, ctx) => {
+        const bytes = await testSoundEffectProvider.fetchOutput(output, ctx);
+        controller.abort();
+        return bytes;
+      },
+    };
+    const { deps, handler } = setup({ providers: { elevenlabs: abortingProvider } });
+    await handler.submit(makeJob({ saveToFiles: false }), { signal: controller.signal });
+    const [{ signal }] = vi.mocked(deps.saveToGeneratedBucket).mock.calls[0];
+    expect(signal.aborted).toBe(false);
+  });
+
   it('falls back to the generated bucket when Files refuses the clip', async () => {
     const { handler } = setup({
       saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
@@ -246,10 +264,33 @@ describe('sound effect job handler submit', () => {
     });
   });
 
-  it('retries a retryable failure', async () => {
+  it('keeps the provider status of a refusal on the job error', async () => {
+    const elevenlabs = providerReturning({
+      status: 'failed',
+      retryable: false,
+      message: 'elevenlabs_sound_effect_http_400',
+      raw: { status: 400, snippet: 'bad' },
+    });
+    const { handler } = setup({ providers: { elevenlabs: elevenlabs.provider } });
+    expect(await handler.submit(makeJob(), stepContext())).toMatchObject({
+      next: 'failed',
+      error: { code: 'provider_error', providerStatus: 400 },
+    });
+  });
+
+  it('fails a rate limit at once, as a 429 with a Retry-After, instead of retrying past the inline wait', async () => {
     const { handler } = setup();
     const job = makeJob({ request: { text: 'x [retry]', provider: 'elevenlabs' } });
-    expect(await handler.submit(job, stepContext())).toEqual({ next: 'retry', reason: 'test provider rate limited' });
+    expect(await handler.submit(job, stepContext())).toEqual({
+      next: 'failed',
+      error: {
+        code: 'provider_error',
+        message: 'test provider rate limited',
+        providerStatus: 429,
+        retryAfterSeconds: 30,
+      },
+      rawProviderError: { text: 'x [retry]' },
+    });
   });
 
   it('lets a thrown generate propagate, so the engine fails it as an orphaned submit', async () => {
@@ -286,6 +327,84 @@ describe('sound effect job handler submit', () => {
   it('has nothing to cancel at the provider', async () => {
     const { handler } = setup();
     await expect(handler.cancelAtProvider(makeJob(), stepContext())).resolves.toBeUndefined();
+  });
+});
+
+describe('sound effect job handler capacity', () => {
+  const rateLimited: ProviderTerminalResult = {
+    status: 'failed',
+    retryable: true,
+    message: 'elevenlabs_sound_effect_rate_limited',
+    raw: { status: 429, snippet: 'busy' },
+  };
+
+  // The real capacity runner, unslotted and without real backoff waits.
+  const runWithCapacity: SoundEffectJobDeps['runWithCapacity'] = (_apiKey, attempt) =>
+    runWithProviderCapacity(
+      {
+        provider: 'elevenlabs',
+        logger: new Logger({ metadata: { test: 'capacity' } }),
+        budgetMs: 45_000,
+        maxSlotWaitMs: 15_000,
+        minAttemptMs: 15_000,
+        maxRetries: 2,
+        retryBaseDelayMs: 1_000,
+        sleep: async () => undefined,
+      },
+      attempt
+    );
+
+  it('runs the provider call in the capacity slots with the resolved key', async () => {
+    const elevenlabs = providerReturning({ status: 'succeeded', output: clip() });
+    const wrapped = vi.fn(runWithCapacity);
+    const { handler } = setup({ providers: { elevenlabs: elevenlabs.provider }, runWithCapacity: wrapped });
+    const step = stepContext();
+    expect(await handler.submit(makeJob(), step)).toMatchObject({ next: 'succeeded' });
+    expect(wrapped).toHaveBeenCalledWith('key', expect.any(Function));
+    // Each attempt is bounded by the wrapper's remaining budget as well as the step.
+    const [, , ctx] = elevenlabs.generate.mock.calls[0];
+    expect(ctx.signal).not.toBe(step.signal);
+  });
+
+  it('retries a 429 inside the wrapper budget', async () => {
+    const elevenlabs = providerReturning({ status: 'succeeded', output: clip() });
+    elevenlabs.generate.mockResolvedValueOnce(rateLimited);
+    const { handler } = setup({ providers: { elevenlabs: elevenlabs.provider }, runWithCapacity });
+    expect(await handler.submit(makeJob(), stepContext())).toMatchObject({ next: 'succeeded' });
+    expect(elevenlabs.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails as rate limited, with the wrapper Retry-After, once the 429s outlast the retries', async () => {
+    const elevenlabs = providerReturning(rateLimited);
+    const { handler } = setup({ providers: { elevenlabs: elevenlabs.provider }, runWithCapacity });
+    const result = await handler.submit(makeJob(), stepContext());
+    expect(result).toMatchObject({ next: 'failed', error: { code: 'provider_error', providerStatus: 429 } });
+    expect(result).toHaveProperty('error.retryAfterSeconds', expect.any(Number));
+    expect(elevenlabs.generate).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails as rate limited when no slot frees up, without calling the provider', async () => {
+    const elevenlabs = providerReturning({ status: 'succeeded', output: clip() });
+    const { handler } = setup({
+      providers: { elevenlabs: elevenlabs.provider },
+      runWithCapacity: async () => {
+        throw new ProviderBusyError('elevenlabs', 'slots_exhausted', 5);
+      },
+    });
+    expect(await handler.submit(makeJob(), stepContext())).toMatchObject({
+      next: 'failed',
+      error: { code: 'provider_error', providerStatus: 429, retryAfterSeconds: 5 },
+    });
+    expect(elevenlabs.generate).not.toHaveBeenCalled();
+  });
+
+  it('lets any other throw from the wrapper propagate as an unknown outcome', async () => {
+    const { handler } = setup({
+      runWithCapacity: async () => {
+        throw new Error('socket hang up');
+      },
+    });
+    await expect(handler.submit(makeJob(), stepContext())).rejects.toThrow('socket hang up');
   });
 });
 

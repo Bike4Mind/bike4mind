@@ -24,12 +24,16 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
  * caller and the worker leases the job first runs the step, the other skips, and a job that waits on a retry
  * backoff is picked up by whichever comes back first.
  *
- * Returns the terminal job, or null when it is gone or did not end within `timeoutMs`; it then carries on in the
- * background and bills (or refunds) as usual.
+ * A step is only started here while at least `minStepMs` of the wait remains, so a sync submit is never cut short
+ * mid-call (an aborted call fails as orphaned_submit after the provider may have billed). Below that it only polls,
+ * and the worker's queued message runs the step with a full budget.
+ *
+ * Returns the terminal job, or null when it is gone or did not end within `timeoutMs`; it then carries on with the
+ * worker, which bills (or refunds) it as usual.
  */
 export async function runJobInline(
   jobId: string,
-  options: { timeoutMs: number; pollIntervalMs?: number },
+  options: { timeoutMs: number; minStepMs: number; pollIntervalMs?: number },
   deps: RunJobInlineDeps
 ): Promise<IGenerationJobDocument | null> {
   const sleep = deps.sleep ?? defaultSleep;
@@ -37,7 +41,9 @@ export async function runJobInline(
   for (;;) {
     const remainingMs = deadline - deps.now().getTime();
     if (remainingMs <= 0) return null;
-    await deps.engine.step(jobId, { remainingMs: remainingMs + STEP_COMMIT_MARGIN_MS });
+    if (remainingMs >= options.minStepMs) {
+      await deps.engine.step(jobId, { remainingMs: remainingMs + STEP_COMMIT_MARGIN_MS });
+    }
     const job = await deps.repository.findById(jobId);
     if (!job) return null;
     if (TERMINAL_GENERATION_JOB_STATES.includes(job.state)) return job;

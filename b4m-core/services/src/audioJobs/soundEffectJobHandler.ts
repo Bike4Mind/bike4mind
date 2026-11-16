@@ -1,18 +1,24 @@
-import { usdToCreditsStochastic } from '@bike4mind/common';
+import { usdToCreditsStochastic, type SoundGenerationVendor } from '@bike4mind/common';
+import { ProviderRateLimitError } from '@bike4mind/utils';
+import type { ProviderContext, ProviderTerminalResult } from '@bike4mind/utils/generationProviders';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
 import type { GenerationJobHandler } from '../generationJobs/types';
+import { ProviderBusyError } from '../providerCapacity/runWithProviderCapacity';
 import { estimateSoundCredits } from '../soundCost';
 import {
-  boundRawPayload,
   contentBlocked,
   failStep,
   fetchAudio,
   messageOf,
+  providerFailedStep,
+  rateLimitedStep,
   storeAudioOutput,
   unreachableStep,
 } from './shared';
 import type { SoundEffectJob, SoundEffectJobDeps } from './types';
+
+type GenerateAttempt = (ctx: ProviderContext) => Promise<ProviderTerminalResult>;
 
 const FEATURE_LABEL = 'sound generation';
 
@@ -58,6 +64,27 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
     }
   };
 
+  /**
+   * One provider call, in the shared-key slots when the host wires them. A 429 is thrown inside the slot so the
+   * wrapper retries it within its budget, and each attempt is cut off when that budget runs out.
+   */
+  const runInCapacity = async (
+    vendor: SoundGenerationVendor,
+    apiKey: string,
+    ctx: ProviderContext,
+    generate: GenerateAttempt
+  ): Promise<ProviderTerminalResult> => {
+    if (!deps.runWithCapacity) return generate(ctx);
+    return deps.runWithCapacity(apiKey, async ({ timeoutMs }) => {
+      const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]);
+      const result = await generate({ ...ctx, signal });
+      if (result.status === 'failed' && result.retryable) {
+        throw new ProviderRateLimitError(vendor, result.message);
+      }
+      return result;
+    });
+  };
+
   return {
     kind: 'sound_effect',
     submitMode: 'sync',
@@ -79,18 +106,27 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
       }
       if (!isUsableApiKey(apiKey)) return failStep('provider_error', `No API key configured for ${providerId}`);
 
-      const ctx = { apiKey, logger: deps.logger, now: () => deps.now(), signal: context.signal };
-      // Not caught: a throw is an unknown outcome, which the engine fails as orphaned_submit.
-      const result = await provider.generate(
-        {
-          text: request.text,
-          durationSeconds: request.durationSeconds,
-          promptInfluence: request.promptInfluence,
-          format: request.format,
-        },
-        {},
-        ctx
-      );
+      const ctx: ProviderContext = { apiKey, logger: deps.logger, now: () => deps.now(), signal: context.signal };
+      const generate: GenerateAttempt = attemptCtx =>
+        provider.generate(
+          {
+            text: request.text,
+            durationSeconds: request.durationSeconds,
+            promptInfluence: request.promptInfluence,
+            format: request.format,
+          },
+          {},
+          attemptCtx
+        );
+      let result: ProviderTerminalResult;
+      try {
+        result = await runInCapacity(providerId, apiKey, ctx, generate);
+      } catch (error) {
+        // Any other throw is an unknown outcome, which the engine fails as orphaned_submit.
+        if (!(error instanceof ProviderBusyError)) throw error;
+        deps.logger.warn('sound effect job gave up: provider at capacity', { jobId: job.id, reason: error.reason });
+        return rateLimitedStep(error.message, error.retryAfterSeconds);
+      }
       switch (result.status) {
         case 'succeeded': {
           const fetched = await fetchAudio(() => provider.fetchOutput(result.output, ctx), result.output);
@@ -117,10 +153,7 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
         case 'blocked':
           return contentBlocked(result.raw);
         case 'failed':
-          // Retryable only when the provider definitively generated nothing (a 429).
-          return result.retryable
-            ? { next: 'retry', reason: result.message }
-            : failStep('provider_error', result.message, boundRawPayload(result.raw));
+          return providerFailedStep(result);
       }
     },
 

@@ -1,8 +1,10 @@
-import type {
-  AudioJobOutput,
-  GeneratedAssetSaveSkippedReason,
-  IGenerationJobDocument,
-  StorageLimitErrorInfo,
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  type AudioJobOutput,
+  type GeneratedAssetSaveSkippedReason,
+  type IGenerationJobDocument,
+  type StorageLimitErrorInfo,
 } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
@@ -60,17 +62,26 @@ export async function savedCopyOf(
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
-
-/** The provider's HTTP status on a failed job, when the provider answered with one (see toAudioProviderResult). */
-export const providerStatusOf = (job: IGenerationJobDocument): number | undefined =>
-  isRecord(job.rawProviderError) && typeof job.rawProviderError.status === 'number'
-    ? job.rawProviderError.status
-    : undefined;
+/** The provider's HTTP status on a failed job, when the provider answered with one (see the audio job handlers). */
+export const providerStatusOf = (job: IGenerationJobDocument): number | undefined => job.error?.providerStatus;
 
 /**
- * A job that kept getting 429s: the engine fails it once its retries run out, keeping only the step's reason
- * (`<vendor>_rate_limited`, from toAudioProviderResult) and no raw payload.
+ * A job the provider rate limited or that found no free capacity slot. The handlers fail it at once instead of
+ * retrying, so the caller is told to come back rather than the job billing after the inline wait gave up.
  */
 export const isRateLimitedFailure = (job: IGenerationJobDocument): boolean =>
-  providerStatusOf(job) === 429 || (job.error?.message.endsWith('_rate_limited') ?? false);
+  job.state === 'failed' && providerStatusOf(job) === 429;
+
+// For a rate-limited failure recorded without a hint of its own.
+const DEFAULT_RETRY_AFTER_SECONDS = 30;
+
+/** The Retry-After, in seconds, to send with a rate-limited failure. */
+export const retryAfterSecondsOf = (job: IGenerationJobDocument): number =>
+  job.error?.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS;
+
+/** The free-tier daily cap refusal, exactly as the credit reservation threw it before these routes ran as jobs. */
+export const dailyLimitError = (refusal: { message: string; retryAfterSeconds: number }) =>
+  new TooManyRequestsError(refusal.message, {
+    errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+    retryAfter: refusal.retryAfterSeconds,
+  });

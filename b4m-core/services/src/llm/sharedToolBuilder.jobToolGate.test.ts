@@ -1,5 +1,5 @@
 /**
- * The job tools (video_generation, music_generation) are inert without a usable config, so
+ * The job tools (video_generation, music_generation, audio_generation) are inert without a usable config, so
  * buildSharedTools is the only thing keeping them away from the LLM. Build-only stubs, as in sharedToolBuilder.mcpNarrowing.test.ts.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -84,5 +84,29 @@ describe.each(JOB_TOOLS)('buildSharedTools: $tool gate', ({ tool, validConfig })
       { warn: vi.fn() } as never
     );
     expect(offered({ config: { [tool]: resolved ?? undefined } })).not.toContain(tool);
+  });
+});
+
+describe('buildSharedTools: audio_generation gate', () => {
+  const jobs = { createSpeechJob: vi.fn(), createSoundEffectJob: vi.fn(), runInline: vi.fn(), readOutput: vi.fn() };
+  const offered = (options: Parameters<typeof buildSharedTools>[2]) =>
+    (buildSharedTools(deps, callbacks, { enabledTools: ['audio_generation'], ...options }) ?? []).map(
+      built => built.toolSchema.name
+    );
+
+  it('offers the tool when the host passes its job functions', () => {
+    expect(offered({ config: { audio_generation: { jobs } } })).toContain('audio_generation');
+  });
+
+  it('does not offer the tool without the job functions, whatever availability claims', () => {
+    expect(offered({ toolAvailability: { audio_generation: true }, config: { audio_generation: {} } })).not.toContain(
+      'audio_generation'
+    );
+  });
+
+  it('does not offer the tool when availability says no usable key', () => {
+    expect(
+      offered({ toolAvailability: { audio_generation: false }, config: { audio_generation: { jobs } } })
+    ).not.toContain('audio_generation');
   });
 });

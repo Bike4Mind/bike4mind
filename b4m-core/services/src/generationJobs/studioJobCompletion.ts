@@ -3,7 +3,6 @@ import {
   studioCompletionLink,
   generationJobPrompt,
   type GenerationJobKind,
-  type IGenerationJobDocument,
   type StudioCompletionMedium,
   type StudioJobCompletedEvent,
 } from '@bike4mind/common';
@@ -31,16 +30,15 @@ export const studioCompletionTitle = (prompt: string | undefined): string => {
   return `${(lastSpace > room / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}${ELLIPSIS}`;
 };
 
-// A throwaway audition (a voice preview) keeps nothing in Files, so there is nothing for the toast to open.
-const isUnsavedAudition = (job: IGenerationJobDocument): boolean =>
-  (job.kind === 'speech' || job.kind === 'sound_effect') && !job.payload.saveToFiles;
+// These finish while the requester waits on the synchronous route, already looking at the result.
+const INLINE_KINDS: readonly GenerationJobKind[] = ['speech', 'sound_effect'];
 
 /** Announces a finished Studio group as `studio.job.completed`, the event every Studio surface subscribes to. */
 export const studioCompletionSubscriber = (
   publish: (event: StudioJobCompletedEvent) => Promise<void>
 ): GroupCompletionSubscriber => ({
   name: 'studio_event',
-  wants: job => job.source === 'studio' && !isUnsavedAudition(job),
+  wants: job => job.source === 'studio' && !INLINE_KINDS.includes(job.kind),
   deliver: async ({ groupId, members, anchor, readyCount, failedCount, cancelledCount, completedAt }) => {
     const medium = MEDIUM_BY_KIND[anchor.kind];
     await publish({

@@ -18,6 +18,8 @@ import {
   failStep,
   fetchAudio,
   messageOf,
+  providerFailedStep,
+  providerStatusOf,
   storeAudioOutput,
   unreachableStep,
 } from './shared';
@@ -152,12 +154,24 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
     }
   };
 
+  const rejectedStep = (failure: { message: string; raw?: unknown }) => {
+    const providerStatus = providerStatusOf(failure.raw);
+    return failStep(
+      'provider_error',
+      failure.message,
+      boundRawPayload(failure.raw),
+      providerStatus === undefined ? {} : { providerStatus }
+    );
+  };
+
   return {
     kind: 'speech',
     submitMode: 'sync',
 
     async submit(job, context) {
       let lastFailure: { message: string; raw?: unknown } | undefined;
+      // Reported over a later candidate's own refusal: the key at fault is what the caller can act on.
+      let credentialRejection: { message: string; raw: unknown } | undefined;
       for (const vendor of job.payload.candidates) {
         let attempt: Attempt;
         try {
@@ -183,18 +197,14 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
         if (result.status === 'blocked') return contentBlocked(result.raw);
         if (isCredentialRejectionResult(result)) {
           deps.logger.warn('speech provider rejected its key', { jobId: job.id, vendor });
-          lastFailure ??= { message: result.message, raw: result.raw };
+          credentialRejection ??= { message: result.message, raw: result.raw };
           continue;
         }
-        // Retryable only when the provider definitively generated nothing (a 429).
-        if (result.retryable) return { next: 'retry', reason: result.message };
-        return failStep('provider_error', result.message, boundRawPayload(result.raw));
+        if (credentialRejection && !result.retryable) return rejectedStep(credentialRejection);
+        return providerFailedStep(result);
       }
-      return failStep(
-        'provider_error',
-        lastFailure?.message ?? 'No text-to-speech provider is available',
-        boundRawPayload(lastFailure?.raw)
-      );
+      const failure = credentialRejection ?? lastFailure;
+      return failure ? rejectedStep(failure) : failStep('provider_error', 'No text-to-speech provider is available');
     },
 
     async poll(job) {

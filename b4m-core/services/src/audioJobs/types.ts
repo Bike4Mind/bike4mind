@@ -77,6 +77,12 @@ export type SpeechJobDeps = AudioJobDeps & {
 export type SoundEffectJobDeps = AudioJobDeps & {
   providers: Partial<Record<SoundGenerationVendor, SoundEffectJobProvider>>;
   resolveApiKey(vendor: SoundGenerationVendor, userId: string): Promise<string | null>;
+  /**
+   * Runs the provider call in the vendor's shared-key concurrency slots (runElevenLabsWithCapacity): retries an
+   * attempt that throws ProviderRateLimitError within its budget, and throws ProviderBusyError once capacity does not
+   * free up in time. `timeoutMs` is what is left of that budget. Absent: the call runs unslotted, once.
+   */
+  runWithCapacity?<T>(apiKey: string, attempt: (call: { timeoutMs: number }) => Promise<T>): Promise<T>;
   recordUsage(event: {
     job: SoundEffectJob;
     billedSeconds: number;
@@ -85,8 +91,19 @@ export type SoundEffectJobDeps = AudioJobDeps & {
   }): Promise<void>;
 };
 
+/** A free-tier user who has spent today's allowance: refused until `retryAfterSeconds` from now. */
+export type DailySpendCapRefusal = { message: string; retryAfterSeconds: number };
+
 type CreateAudioJobExtras = {
   assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /**
+   * As checkFreeTierDailySpendCap (server-utils billing), checked before the hold when credits are enforced.
+   * Absent: no daily cap applies.
+   */
+  checkDailySpendCap?(params: {
+    userId: string;
+    billingOrganizationId: string | null;
+  }): Promise<DailySpendCapRefusal | undefined>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** As CreateMusicJobDeps.checkStorageFor. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -124,6 +141,7 @@ export type CreateAudioJobErrorCode =
   | 'model_unavailable'
   | 'insufficient_credits'
   | 'storage_quota_exceeded'
+  | 'daily_limit_reached'
   | 'idempotency_key_reused';
 
 export type CreateAudioJobResult<J> =
@@ -131,10 +149,11 @@ export type CreateAudioJobResult<J> =
   | {
       ok: false;
       status: 400 | 402 | 422;
-      code: Exclude<CreateAudioJobErrorCode, 'storage_quota_exceeded'>;
+      code: Exclude<CreateAudioJobErrorCode, 'storage_quota_exceeded' | 'daily_limit_reached'>;
       message: string;
     }
-  | { ok: false; status: 400; code: 'storage_quota_exceeded'; message: string; storage: StorageLimitErrorInfo };
+  | { ok: false; status: 400; code: 'storage_quota_exceeded'; message: string; storage: StorageLimitErrorInfo }
+  | { ok: false; status: 429; code: 'daily_limit_reached'; message: string; retryAfterSeconds: number };
 
 export type CreateSpeechJobResult = CreateAudioJobResult<SpeechJob>;
 export type CreateSoundEffectJobResult = CreateAudioJobResult<SoundEffectJob>;

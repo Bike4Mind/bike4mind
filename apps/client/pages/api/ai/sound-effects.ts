@@ -7,7 +7,7 @@ import {
   type GenerationJobSource,
 } from '@bike4mind/common';
 import { ProviderBusyError } from '@bike4mind/services';
-import { createSoundEffectJob } from '@bike4mind/services/audioJobs';
+import { createSoundEffectJob, inlineMinStepMs } from '@bike4mind/services/audioJobs';
 import {
   getCreateSoundEffectJobDeps,
   readAudioJobOutput,
@@ -20,14 +20,13 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   AUDIO_JOB_INLINE_TIMEOUT_MS,
   createAudioJobKeepingAudioOnFullQuota,
+  dailyLimitError,
   isRateLimitedFailure,
+  retryAfterSecondsOf,
   savedCopyOf,
 } from '@server/generations/syncAudioJob';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-
-// The Retry-After a caller gets once the job has used up its retries against a provider that kept answering 429.
-const RATE_LIMITED_RETRY_AFTER_SECONDS = 30;
 
 const GENERATION_FAILED = { error: 'Sound generation failed' };
 
@@ -78,12 +77,17 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
         // 503, not 401: the caller IS authenticated - the provider key is a server-side capability gap. A 401 would
         // tell an API-key caller to re-authenticate, which never fixes a missing ElevenLabs key.
         return res.status(503).json({ error: result.message });
+      case 'daily_limit_reached':
+        throw dailyLimitError(result);
       default:
         throw new UnprocessableEntityError(result.message);
     }
   }
 
-  const job = await runAudioJobInline(result.job.id, AUDIO_JOB_INLINE_TIMEOUT_MS);
+  const job = await runAudioJobInline(result.job.id, {
+    timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+    minStepMs: inlineMinStepMs('sound_effect'),
+  });
   if (!job || !isGenerationJobOfKind(job, 'sound_effect')) {
     req.logger.warn('Sound-effects job did not finish in time; it continues, and bills, in the background', {
       jobId: result.job.id,
@@ -93,11 +97,9 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   }
 
   if (job.state !== 'succeeded') {
-    if (job.state === 'failed' && isRateLimitedFailure(job)) {
-      req.logger.warn('Sound-effects generation gave up: provider kept rate limiting', { jobId: job.id, provider });
-      throw providerBusyHttpError(
-        new ProviderBusyError(provider, 'upstream_rate_limited', RATE_LIMITED_RETRY_AFTER_SECONDS)
-      );
+    if (isRateLimitedFailure(job)) {
+      req.logger.warn('Sound-effects generation deferred: provider at capacity', { jobId: job.id, provider });
+      throw providerBusyHttpError(new ProviderBusyError(provider, 'upstream_rate_limited', retryAfterSecondsOf(job)));
     }
     req.logger.error('Sound-effects generation failed', { jobId: job.id, state: job.state, error: job.error });
     return res.status(502).json(GENERATION_FAILED);

@@ -198,6 +198,53 @@ describe('createSoundEffectJob', () => {
   });
 
   describe('credits', () => {
+    describe('free-tier daily cap', () => {
+      const refusal = {
+        message: 'Daily free-tier credit limit reached. Try again tomorrow.',
+        retryAfterSeconds: 3_600,
+      };
+
+      it('refuses a capped user with a 429 before holding credits or enqueuing work', async () => {
+        const checkDailySpendCap = vi.fn(async () => refusal);
+        const { deps } = makeDeps({ checkDailySpendCap });
+        expect(await createSoundEffectJob({ user, request: validRequest, source: 'api' }, deps)).toEqual({
+          ok: false,
+          status: 429,
+          code: 'daily_limit_reached',
+          ...refusal,
+        });
+        expect(checkDailySpendCap).toHaveBeenCalledWith({ userId: 'u1', billingOrganizationId: null });
+        expect(holdCredits).not.toHaveBeenCalled();
+        expect(deps.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('checks the cap against the billed organization', async () => {
+        const checkDailySpendCap = vi.fn(async () => undefined);
+        const { deps } = makeDeps({ checkDailySpendCap });
+        await createSoundEffectJob(
+          { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
+          deps
+        );
+        expect(checkDailySpendCap).toHaveBeenCalledWith({ userId: 'u1', billingOrganizationId: 'org1' });
+      });
+
+      it('creates the job when the user is under the cap', async () => {
+        const { deps } = makeDeps({ checkDailySpendCap: vi.fn(async () => undefined) });
+        expect(await createSoundEffectJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
+          ok: true,
+        });
+      });
+
+      it('does not check the cap while credits are not enforced', async () => {
+        const checkDailySpendCap = vi.fn(async () => refusal);
+        const { deps } = makeDeps({ checkDailySpendCap, getSettings: async () => ({ enforceCredits: false }) });
+        expect(await createSoundEffectJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
+          ok: true,
+        });
+        expect(checkDailySpendCap).not.toHaveBeenCalled();
+      });
+    });
+
     it('maps insufficient credits to a 402 refusal', async () => {
       vi.mocked(holdCredits).mockRejectedValueOnce(insufficientCreditsError('You do not have enough credits'));
       const { deps } = makeDeps();

@@ -13,7 +13,6 @@ import {
   TTS_MAX_INPUT_CHARS,
   type VoiceGenerationVendor,
 } from '@bike4mind/common';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import type {
   CreateAudioJobInput,
@@ -22,8 +21,9 @@ import type {
   CreateSpeechJobResult,
 } from '../../../../audioJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
+import { inlineMinStepMs } from '../../../../audioJobs/shared';
 import { settingsModelRefusalOrRethrow } from '../../helpers/toolModelRefusal';
-import { buildJobIdempotencyKey } from '../generationJobTool';
+import { buildJobIdempotencyKey, isReplayOfDeadJob } from '../generationJobTool';
 
 /**
  * The speech and sound-effect job functions the tool generates and bills through. Built by the host
@@ -33,8 +33,8 @@ import { buildJobIdempotencyKey } from '../generationJobTool';
 export type AudioToolJobs = {
   createSpeechJob(input: CreateSpeechJobInput): Promise<CreateSpeechJobResult>;
   createSoundEffectJob(input: CreateAudioJobInput): Promise<CreateSoundEffectJobResult>;
-  /** The job once terminal, or null when it is still running at the timeout (it then finishes in the background). */
-  runInline(jobId: string, timeoutMs: number): Promise<IGenerationJobDocument | null>;
+  /** The job once terminal, or null when it is still running at the timeout (the worker then finishes it). */
+  runInline(jobId: string, options: { timeoutMs: number; minStepMs: number }): Promise<IGenerationJobDocument | null>;
   readOutput(output: AudioJobOutput): Promise<Buffer>;
 };
 
@@ -53,6 +53,10 @@ const isAudioToolJobs = (value: unknown): value is AudioToolJobs =>
   'readOutput' in value &&
   typeof value.readOutput === 'function';
 
+/** Whether a tool config carries the host's job functions; the tool is not offered without them. */
+export const hasAudioToolJobs = (config: unknown): boolean =>
+  typeof config === 'object' && config !== null && 'jobs' in config && isAudioToolJobs(config.jobs);
+
 /** Merges the host's job functions into whatever audio settings the request carried (possibly none). */
 export const withAudioToolJobs = (audioConfig: unknown, jobs: AudioToolJobs | undefined): unknown =>
   jobs ? { ...(typeof audioConfig === 'object' && audioConfig !== null ? audioConfig : {}), jobs } : audioConfig;
@@ -64,6 +68,8 @@ const SFX_PROVIDER = 'elevenlabs';
 
 /** Generic, non-leaking message when no provider can serve the request. */
 const UNAVAILABLE_MESSAGE = 'Error: Audio generation is currently unavailable. Please try again later.';
+
+const BUSY_MESSAGE = 'Error: The audio provider is busy right now. Please try again shortly.';
 
 // Defensive shape check for the model-supplied tool arguments. `kind` stays a loose string
 // (the toolFn treats anything that is not 'sound_effect' as speech); this only guards the
@@ -197,16 +203,19 @@ async function generate(
     questId: context.questId,
     idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, { kind, ...request }),
   };
+  const create = (saveToFiles: boolean) =>
+    kind === 'speech'
+      ? jobs.createSpeechJob({ ...input, saveToFiles, preferredVoice: context.user.preferredVoice })
+      : jobs.createSoundEffectJob({ ...input, saveToFiles });
 
   // Status only (live chat status line and the voice preamble): billing is the job's.
   await context.onStart?.('audio_generation', { kind });
 
   let created: CreateSpeechJobResult | CreateSoundEffectJobResult;
   try {
-    created =
-      kind === 'speech'
-        ? await jobs.createSpeechJob({ ...input, preferredVoice: context.user.preferredVoice })
-        : await jobs.createSoundEffectJob(input);
+    created = await create(true);
+    // As the audio routes: a full Files quota still gets the clip inline, just without the saved copy.
+    if (!created.ok && created.code === 'storage_quota_exceeded') created = await create(false);
   } catch (error) {
     // createXJob asserts model admission itself; its REST callers need the throw, the model needs a result.
     return settingsModelRefusalOrRethrow(context, error, modelId, 'audio_generation');
@@ -216,6 +225,8 @@ async function generate(
       // Thrown, not returned: an out-of-credits tool error ends the turn with the add-credits notice.
       case 'insufficient_credits':
         throw insufficientCreditsError(created.message);
+      case 'daily_limit_reached':
+        return `Error: ${created.message} Do not call audio_generation again today.`;
       case 'model_unavailable':
         context.logger.error('[audio_generation] no provider can serve the request', { kind });
         // Speech works with OpenAI or ElevenLabs, sound effects need ElevenLabs: give a speech-capable
@@ -227,16 +238,33 @@ async function generate(
         return `Error: ${label} request refused: ${created.message}`;
     }
   }
+  if (isReplayOfDeadJob(created.created, created.job.state)) {
+    const reason = created.job.error?.code ?? created.job.state;
+    return (
+      `Error: ${label} generation failed (${reason}): an identical request already ended without audio. ` +
+      'Change the text to try again.'
+    );
+  }
 
   await context.statusUpdate({}, kind === 'speech' ? 'Generating speech...' : 'Generating sound effect...');
 
-  const job = await jobs.runInline(created.job.id, AUDIO_JOB_INLINE_TIMEOUT_MS);
+  let job: IGenerationJobDocument | null;
+  try {
+    job = await jobs.runInline(created.job.id, {
+      timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+      minStepMs: inlineMinStepMs(kind),
+    });
+  } catch (error) {
+    // The queued message still runs the job, so its outcome is unknown rather than failed.
+    context.logger.error('[audio_generation] inline run failed', {
+      jobId: created.job.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return stillGenerating(label, created.job.payload.saveToFiles);
+  }
   if (!job) {
     context.logger.warn('[audio_generation] job still running at the inline timeout', { jobId: created.job.id });
-    return (
-      `The ${label} is still generating. It will be saved to the user's Files when it finishes; ` +
-      'do not call audio_generation again for it.'
-    );
+    return stillGenerating(label, created.job.payload.saveToFiles);
   }
   const output = jobOutput(job);
   if (job.state !== 'succeeded' || !output) {
@@ -245,6 +273,7 @@ async function generate(
       state: job.state,
       errorCode: job.error?.code,
     });
+    if (job.state === 'failed' && job.error?.providerStatus === 429) return BUSY_MESSAGE;
     // Generic message, not the job's provider error: provider strings can echo key hints or upstream URLs.
     const resolvedProvider = job.kind === 'speech' ? (job.payload.producedBy?.provider ?? provider) : provider;
     return kind === 'speech'
@@ -254,24 +283,39 @@ async function generate(
 
   let storedPath: string;
   try {
-    storedPath = await uploadForInlinePlayback(context, await jobs.readOutput(output), output.contentType);
+    storedPath = await uploadForInlinePlayback(context, job.id, await jobs.readOutput(output), output.contentType);
   } catch (error) {
     context.logger.error('[audio_generation] could not stage the clip for inline playback', {
       jobId: job.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return `The ${label} was generated and saved to the user's Files, but could not be shown inline in the chat.`;
+    return output.location === 'files'
+      ? `The ${label} was generated and saved to the user's Files, but could not be shown inline in the chat.`
+      : `The ${label} was generated, but could not be shown inline in the chat.`;
   }
   await context.statusUpdate({ images: [storedPath] });
   return kind === 'speech' ? 'Successfully generated speech' : 'Successfully generated sound effect';
 }
 
+const stillGenerating = (label: string, savesToFiles: boolean) =>
+  `The ${label} is still generating.` +
+  (savesToFiles ? " It will be saved to the user's Files when it finishes." : '') +
+  ' Do not call audio_generation again for it.';
+
 const jobOutput = (job: IGenerationJobDocument): AudioJobOutput | undefined =>
   job.kind === 'speech' || job.kind === 'sound_effect' ? job.payload.output : undefined;
 
-/** Uploads the clip to the generated-content bucket, which is what the inline player streams from. */
-async function uploadForInlinePlayback(context: ToolContext, audio: Buffer, contentType: string): Promise<string> {
-  const filename = `${uuidv4()}.${extensionFromMimeType(contentType) || 'mp3'}`;
+/**
+ * Uploads the clip to the generated-content bucket, which is what the inline player streams from. Named by the job,
+ * so a replayed success restages the same key instead of rendering a second player.
+ */
+async function uploadForInlinePlayback(
+  context: ToolContext,
+  jobId: string,
+  audio: Buffer,
+  contentType: string
+): Promise<string> {
+  const filename = `${jobId}.${extensionFromMimeType(contentType) || 'mp3'}`;
   // ContentType so S3 serves audio/* and the browser <audio> element can play it.
   return context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 }

@@ -46,7 +46,12 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     creditHold: { type: Schema.Types.Mixed, default: null },
     settledCredits: { type: Number },
     error: new Schema(
-      { code: { type: String, required: true }, message: { type: String, required: true } },
+      {
+        code: { type: String, required: true },
+        message: { type: String, required: true },
+        providerStatus: { type: Number },
+        retryAfterSeconds: { type: Number },
+      },
       { _id: false }
     ),
     // Raw provider payloads can be large and are never returned to clients.

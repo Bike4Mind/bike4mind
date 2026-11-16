@@ -6,28 +6,75 @@ import {
   type GenerationJobErrorCode,
   type IGenerationJobDocumentOf,
 } from '@bike4mind/common';
+import { SOUND_GENERATION_TIMEOUT_MS } from '@bike4mind/utils';
 import { mp3DurationSeconds } from '@bike4mind/utils/musicProviders';
 import { ProviderOutputTooLargeError, type ProviderOutput } from '@bike4mind/utils/generationProviders';
-import { storeGeneratedOutput } from '../generationJobs/storeOutput';
+import { FALLBACK_SAVE_BUDGET_MS, storeGeneratedOutput } from '../generationJobs/storeOutput';
 import type { GenerationJobStepContext, StepResult } from '../generationJobs/types';
-import type { AudioJobDeps } from './types';
+import type { AudioJobDeps, CreateAudioJobInput, CreateAudioJobResult, CreateSpeechJobDeps } from './types';
 
 export type AudioJobKind = 'speech' | 'sound_effect';
 type AudioJob = IGenerationJobDocumentOf<AudioJobKind>;
 
 const MP3_CONTENT_TYPE = 'audio/mpeg';
+// A long synthesis on either vendor fits well inside this; there is no per-call deadline to size it from.
+const SPEECH_INLINE_MIN_STEP_MS = 40_000;
 const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
 const BUCKET_FOLDER = 'generated-audio';
+
+/**
+ * The least inline wait to start a step with (runJobInline's minStepMs): one full provider call, so an inline step
+ * never aborts a synthesis mid-call. A function, so suites that mock @bike4mind/utils without the constant still load.
+ */
+export const inlineMinStepMs = (kind: AudioJobKind): number =>
+  kind === 'speech' ? SPEECH_INLINE_MIN_STEP_MS : SOUND_GENERATION_TIMEOUT_MS;
 
 // Neither carries a payload, so each is a step result of any kind.
 type FailedStep = Extract<StepResult, { next: 'failed' }>;
 type BlockedStep = { next: 'blocked'; error: GenerationJobError; rawProviderError?: unknown };
 
-export const failStep = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): FailedStep => ({
+// The Retry-After for a provider 429 that carried no usable hint of its own.
+export const RATE_LIMITED_RETRY_AFTER_SECONDS = 30;
+
+export const failStep = (
+  code: GenerationJobErrorCode,
+  message: string,
+  rawProviderError?: unknown,
+  details: Pick<GenerationJobError, 'providerStatus' | 'retryAfterSeconds'> = {}
+): FailedStep => ({
   next: 'failed',
-  error: { code, message },
+  error: { code, message, ...details },
   rawProviderError,
 });
+
+/**
+ * A provider at capacity. Fails terminally rather than retrying: a sync audio job answers a caller waiting inline,
+ * and the engine's backoff would outlive that wait, so the caller would be told it failed while it went on to bill.
+ */
+export const rateLimitedStep = (
+  message: string,
+  retryAfterSeconds = RATE_LIMITED_RETRY_AFTER_SECONDS,
+  raw?: unknown
+): FailedStep => failStep('provider_error', message, boundRawPayload(raw), { providerStatus: 429, retryAfterSeconds });
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+/** The HTTP status toAudioProviderResult records on a provider's refusal. */
+export const providerStatusOf = (raw: unknown): number | undefined =>
+  isRecord(raw) && typeof raw.status === 'number' ? raw.status : undefined;
+
+/** A provider's definitive refusal, keeping its HTTP status on the job error for the synchronous routes. */
+export const providerFailedStep = (result: { retryable: boolean; message: string; raw?: unknown }): FailedStep => {
+  // Retryable only when the provider definitively generated nothing (a 429).
+  if (result.retryable) return rateLimitedStep(result.message, undefined, result.raw);
+  const providerStatus = providerStatusOf(result.raw);
+  return failStep(
+    'provider_error',
+    result.message,
+    boundRawPayload(result.raw),
+    providerStatus === undefined ? {} : { providerStatus }
+  );
+};
 
 export const contentBlocked = (raw: unknown): BlockedStep => ({
   next: 'blocked',
@@ -94,7 +141,8 @@ export async function storeAudioOutput(
       key: `${BUCKET_FOLDER}/${job.ownerId}/${job.id}.${extension}`,
       bytes,
       contentType,
-      signal,
+      // As storeGeneratedOutput's fallback: an aborted step signal would lose a clip the provider already billed.
+      signal: signal.aborted ? AbortSignal.timeout(FALLBACK_SAVE_BUDGET_MS) : signal,
     });
     return { location: 'generated', s3Key, ...measured };
   }
@@ -127,3 +175,17 @@ export const unreachableStep = (
   deps.logger.error(`${job.kind}_job_unexpected_step`, { jobId: job.id, state: job.state, step });
   return failStep('provider_error', `${job.kind} jobs finish in submit; ${step} is never reached`);
 };
+
+type DailyLimitReached = Extract<CreateAudioJobResult<never>, { code: 'daily_limit_reached' }>;
+
+/** The free-tier daily cap, checked before the hold; it counts credits, so it applies only while they are enforced. */
+export async function dailyLimitRefusal(
+  user: CreateAudioJobInput['user'],
+  enforceCredits: boolean,
+  deps: Pick<CreateSpeechJobDeps, 'checkDailySpendCap'>
+): Promise<DailyLimitReached | undefined> {
+  if (!enforceCredits || !deps.checkDailySpendCap) return undefined;
+  const refusal = await deps.checkDailySpendCap({ userId: user.id, billingOrganizationId: user.organizationId });
+  if (!refusal) return undefined;
+  return { ok: false, status: 429, code: 'daily_limit_reached', ...refusal };
+}

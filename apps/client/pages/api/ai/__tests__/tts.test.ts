@@ -38,6 +38,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 const createSpeechJobDeps = { sentinel: 'createSpeechJobDeps' };
 vi.mock('@bike4mind/services/audioJobs', () => ({
   createSpeechJob: (...a: unknown[]) => mocks.createSpeechJob(...a),
+  inlineMinStepMs: (kind: string) => (kind === 'speech' ? 40_000 : 45_000),
 }));
 vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
   getCreateSpeechJobDeps: () => createSpeechJobDeps,
@@ -136,7 +137,10 @@ describe('POST /api/ai/tts', () => {
       },
       createSpeechJobDeps
     );
-    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', AUDIO_JOB_INLINE_TIMEOUT_MS);
+    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', {
+      timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+      minStepMs: 40_000,
+    });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData()).toEqual(AUDIO);
     expect(res.getHeader('Content-Type')).toBe('audio/mpeg');
@@ -289,9 +293,27 @@ describe('POST /api/ai/tts', () => {
     });
   });
 
+  it('refuses a free-tier user past the daily cap with a classified 429 and Retry-After, before running a job', async () => {
+    mocks.createSpeechJob.mockResolvedValue(
+      refusal(429, 'daily_limit_reached', 'Daily free-tier credit limit reached. Try again tomorrow.', {
+        retryAfterSeconds: 3_600,
+      })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toEqual({
+      error: 'Daily free-tier credit limit reached. Try again tomorrow.',
+      errorCode: 'daily_free_limit_reached',
+      retryAfter: 3_600,
+    });
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  // The job's error carries the status: rawProviderError is never read back from the database.
   it.each([401, 403])('flags a %i credential rejection as provider_rejected (401)', async status => {
     mocks.runAudioJobInline.mockResolvedValue(
-      speechJob({ state: 'failed', error: { code: 'provider_error', message: 'x' }, rawProviderError: { status } })
+      speechJob({ state: 'failed', error: { code: 'provider_error', message: 'x', providerStatus: status } })
     );
     const { res, promise } = run({ text: 'hi' });
     await promise;
@@ -303,21 +325,34 @@ describe('POST /api/ai/tts', () => {
     });
   });
 
-  it('passes a provider rate limit through as 429, including one that used up its retries', async () => {
+  it('passes a provider rate limit through as 429 with the Retry-After the job recorded', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({
+        state: 'failed',
+        error: { code: 'provider_error', message: 'openai_rate_limited', providerStatus: 429, retryAfterSeconds: 12 },
+      })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBe('12');
+    expect(res._getJSONData()).toEqual({ error: 'TTS request rejected by the openai provider', provider: 'openai' });
+  });
+
+  it('no longer reads a rate limit from the error message alone', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
       speechJob({ state: 'failed', error: { code: 'provider_error', message: 'openai_rate_limited' } })
     );
     const { res, promise } = run({ text: 'hi' });
     await promise;
-    expect(res._getStatusCode()).toBe(429);
-    expect(res._getJSONData()).toEqual({ error: 'TTS request rejected by the openai provider', provider: 'openai' });
+    expect(res._getStatusCode()).toBe(502);
   });
 
   it('maps another provider 4xx to a generic 422 without leaking the provider text', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
       speechJob({
         state: 'failed',
-        error: { code: 'provider_error', message: 'openai_http_400' },
+        error: { code: 'provider_error', message: 'openai_http_400', providerStatus: 400 },
         rawProviderError: { status: 400, snippet: 'raw provider detail' },
       })
     );

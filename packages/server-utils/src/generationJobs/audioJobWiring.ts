@@ -8,6 +8,7 @@ import {
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  cacheRepository,
   creditTransactionRepository,
   generationJobRepository,
   organizationRepository,
@@ -16,7 +17,7 @@ import {
   voiceRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { voiceService } from '@bike4mind/services';
+import { runElevenLabsWithCapacity, voiceService } from '@bike4mind/services';
 import {
   createSoundEffectJob,
   createSpeechJob,
@@ -36,6 +37,7 @@ import {
   testSpeechProvider,
 } from '@bike4mind/utils/audioProviders';
 import { assertMediaModelAdmission, isMediaModelAdmitted } from '../billing/assertMediaModelAdmission';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '../billing/freeTierDailyCapGate';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
@@ -164,6 +166,36 @@ const recordSoundEffectUsage: SoundEffectJobDeps['recordUsage'] = async ({
   }
 };
 
+// The shared ElevenLabs key's sound-effect slots, as /api/ai/sound-effects held them before it ran as a job.
+const runSoundEffectWithCapacity: SoundEffectJobDeps['runWithCapacity'] = (apiKey, attempt) =>
+  runElevenLabsWithCapacity(
+    {
+      operation: 'sound',
+      apiKey,
+      db: { adminSettings: adminSettingsRepository, caches: cacheRepository },
+      logger,
+    },
+    attempt
+  );
+
+// The free-tier daily cap the credit reservation applied before these routes ran as jobs (reserveRequestCredits).
+const checkDailySpendCap: CreateSpeechJobDeps['checkDailySpendCap'] = async ({ userId, billingOrganizationId }) => {
+  try {
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId,
+      usageEventRepository,
+      logger,
+    });
+    return undefined;
+  } catch (error) {
+    if (!isFreeTierDailyCapError(error)) throw error;
+    const retryAfter = error.additionalInfo?.retryAfter;
+    return { message: error.message, retryAfterSeconds: typeof retryAfter === 'number' ? retryAfter : 0 };
+  }
+};
+
 const baseDeps = (): AudioJobDeps => ({
   repository: generationJobRepository,
   getSettings: getAudioSettings,
@@ -207,6 +239,7 @@ export const getSoundEffectJobDeps = (): SoundEffectJobDeps => {
       ? { elevenlabs: testSoundEffectProvider }
       : { elevenlabs: createSoundEffectProvider('elevenlabs') },
     resolveApiKey: testAudioProvidersEnabled() ? async () => 'test-key' : resolveAudioApiKey,
+    runWithCapacity: runSoundEffectWithCapacity,
     recordUsage: recordSoundEffectUsage,
   };
   return soundEffectJobDeps;
@@ -216,6 +249,7 @@ export const getCreateSpeechJobDeps = (): CreateSpeechJobDeps => ({
   ...getSpeechJobDeps(),
   assertModelAdmission: assertMediaModelAdmission,
   isModelAdmitted: isMediaModelAdmitted,
+  checkDailySpendCap,
   engine: getGenerationJobEngine(),
   checkStorageFor,
 });
@@ -223,20 +257,21 @@ export const getCreateSpeechJobDeps = (): CreateSpeechJobDeps => ({
 export const getCreateSoundEffectJobDeps = (): CreateSoundEffectJobDeps => ({
   ...getSoundEffectJobDeps(),
   assertModelAdmission: assertMediaModelAdmission,
+  checkDailySpendCap,
   engine: getGenerationJobEngine(),
   checkStorageFor,
 });
 
 /**
  * Steps a just-created speech or sound-effect job in this process and waits for it to end (see runJobInline), for a
- * caller that answers synchronously. Null when it did not end in time; it then finishes, and bills, in the background.
+ * caller that answers synchronously. Null when it did not end in time; the worker then finishes, and bills, it.
  */
-export const runAudioJobInline = (jobId: string, timeoutMs: number) =>
-  runJobInline(
-    jobId,
-    { timeoutMs },
-    { engine: getGenerationJobEngine(), repository: generationJobRepository, now: () => new Date() }
-  );
+export const runAudioJobInline = (jobId: string, options: { timeoutMs: number; minStepMs: number }) =>
+  runJobInline(jobId, options, {
+    engine: getGenerationJobEngine(),
+    repository: generationJobRepository,
+    now: () => new Date(),
+  });
 
 /** The stored clip's bytes, from the Files or the generated bucket as the job recorded. */
 export const readAudioJobOutput = (output: AudioJobOutput): Promise<Buffer> =>

@@ -16,6 +16,7 @@ function job(overrides: Record<string, unknown> = {}, payload: Record<string, un
     kind: 'speech',
     state: 'succeeded',
     payload: {
+      saveToFiles: true,
       output: { location: 'files', s3Key: 'files/clip.mp3', contentType: 'audio/mpeg', bytes: 8 },
       ...payload,
     },
@@ -118,9 +119,11 @@ describe('audio_generation tool', () => {
       idempotencyKey: expect.stringMatching(/^agent:u1:q1:/),
       preferredVoice: 'nova',
     });
-    expect(jobs.runInline).toHaveBeenCalledWith('job-1', AUDIO_JOB_INLINE_TIMEOUT_MS);
+    // A step is started only with room for one full synthesis (inlineMinStepMs).
+    expect(jobs.runInline).toHaveBeenCalledWith('job-1', { timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS, minStepMs: 40_000 });
     expect(jobs.readOutput).toHaveBeenCalledWith(expect.objectContaining({ s3Key: 'files/clip.mp3' }));
-    expect(context.imageGenerateStorage.upload).toHaveBeenCalledWith(AUDIO_BYTES, expect.stringMatching(/\.mp3$/), {
+    // Staged under the job's id, so a replayed success restages the same key rather than a second player.
+    expect(context.imageGenerateStorage.upload).toHaveBeenCalledWith(AUDIO_BYTES, 'job-1.mp3', {
       ContentType: 'audio/mpeg',
     });
     expect(context.statusUpdate).toHaveBeenLastCalledWith({ images: ['stored-key.mp3'] });
@@ -198,14 +201,92 @@ describe('audio_generation tool', () => {
   it('returns any other refusal to the model', async () => {
     jobs.createSpeechJob.mockResolvedValue({
       ok: false,
-      status: 400,
-      code: 'storage_quota_exceeded',
-      message: 'Not enough free file storage for this clip',
-      storage: {} as never,
+      status: 422,
+      code: 'idempotency_key_reused',
+      message: 'That key was used for another request',
     });
+    await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(
+      'Error: speech request refused: That key was used for another request'
+    );
+  });
+
+  const quotaRefusal = {
+    ok: false,
+    status: 400,
+    code: 'storage_quota_exceeded',
+    message: 'Not enough free file storage for this clip',
+    storage: {} as never,
+  } as const;
+
+  it.each([
+    ['speech', 'createSpeechJob'],
+    ['sound_effect', 'createSoundEffectJob'],
+  ] as const)('retries a full Files quota without the saved copy, still showing the %s inline', async (kind, fn) => {
+    const created = await jobs[fn]();
+    jobs[fn].mockReset();
+    jobs[fn].mockResolvedValueOnce(quotaRefusal).mockResolvedValueOnce({
+      ...created,
+      job: { ...created.job, payload: { ...created.job.payload, saveToFiles: false } },
+    });
+    jobs.runInline.mockResolvedValue(
+      job(
+        { kind },
+        {
+          saveToFiles: false,
+          output: { location: 'generated', s3Key: 'g/job-1.mp3', contentType: 'audio/mpeg', bytes: 8 },
+        }
+      )
+    );
+    await expect(run(context, { kind, text: 'hello' }, { jobs })).resolves.toMatch(/^Successfully generated/);
+    expect(jobs[fn].mock.calls.map(([input]) => input.saveToFiles)).toEqual([true, false]);
+    expect(context.statusUpdate).toHaveBeenLastCalledWith({ images: ['stored-key.mp3'] });
+  });
+
+  it('returns a second full-quota refusal to the model', async () => {
+    jobs.createSpeechJob.mockResolvedValue(quotaRefusal);
     await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(
       'Error: speech request refused: Not enough free file storage for this clip'
     );
+    expect(jobs.createSpeechJob).toHaveBeenCalledTimes(2);
+    expect(jobs.runInline).not.toHaveBeenCalled();
+  });
+
+  it('returns the free-tier daily cap refusal to the model without running a job', async () => {
+    jobs.createSoundEffectJob.mockResolvedValue({
+      ok: false,
+      status: 429,
+      code: 'daily_limit_reached',
+      message: 'Daily free-tier credit limit reached. Try again tomorrow.',
+      retryAfterSeconds: 3_600,
+    });
+    await expect(run(context, { kind: 'sound_effect', text: 'boom' }, { jobs })).resolves.toBe(
+      'Error: Daily free-tier credit limit reached. Try again tomorrow. Do not call audio_generation again today.'
+    );
+    expect(jobs.runInline).not.toHaveBeenCalled();
+  });
+
+  it.each(['failed', 'blocked', 'cancelled'])(
+    'tells the model an identical request already ended when the create replays a %s job',
+    async state => {
+      jobs.createSpeechJob.mockResolvedValue({
+        ok: true,
+        created: false,
+        job: job({ state, error: state === 'cancelled' ? undefined : { code: 'provider_error', message: 'x' } }),
+      });
+      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toMatch(
+        /^Error: speech generation failed \((provider_error|cancelled)\): an identical request already ended without audio\. Change the text/
+      );
+      expect(jobs.runInline).not.toHaveBeenCalled();
+      expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    }
+  );
+
+  it('restages a replayed success under the same job-derived name', async () => {
+    jobs.createSpeechJob.mockResolvedValue({ ok: true, created: false, job: job() });
+    await run(context, { kind: 'speech', text: 'hello' }, { jobs });
+    await run(context, { kind: 'speech', text: 'hello' }, { jobs });
+    const names = context.imageGenerateStorage.upload.mock.calls.map(([, name]) => name);
+    expect(names).toEqual(['job-1.mp3', 'job-1.mp3']);
   });
 
   it('returns a free-tier admission refusal as the result, and rethrows anything else', async () => {
@@ -236,6 +317,33 @@ describe('audio_generation tool', () => {
       expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     }
   );
+
+  it('tells the model the provider is busy when the job failed on a rate limit', async () => {
+    jobs.runInline.mockResolvedValue(
+      job(
+        {
+          state: 'failed',
+          error: { code: 'provider_error', message: 'busy', providerStatus: 429, retryAfterSeconds: 5 },
+        },
+        { output: undefined }
+      )
+    );
+    await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(
+      'Error: The audio provider is busy right now. Please try again shortly.'
+    );
+  });
+
+  it('says the clip may still be generating when the inline run throws', async () => {
+    jobs.runInline.mockRejectedValue(new Error('database down'));
+    await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toMatch(
+      /^The speech is still generating\. It will be saved to the user's Files/
+    );
+    expect(context.logger.error).toHaveBeenCalledWith(
+      '[audio_generation] inline run failed',
+      expect.objectContaining({ jobId: 'job-1', error: 'database down' })
+    );
+    expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+  });
 
   it('says the clip is still generating when the inline run times out', async () => {
     jobs.runInline.mockResolvedValue(null);

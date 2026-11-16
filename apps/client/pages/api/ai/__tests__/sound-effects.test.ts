@@ -38,6 +38,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 const createSoundEffectJobDeps = { sentinel: 'createSoundEffectJobDeps' };
 vi.mock('@bike4mind/services/audioJobs', () => ({
   createSoundEffectJob: (...a: unknown[]) => mocks.createSoundEffectJob(...a),
+  inlineMinStepMs: (kind: string) => (kind === 'speech' ? 40_000 : 45_000),
 }));
 vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
   getCreateSoundEffectJobDeps: () => createSoundEffectJobDeps,
@@ -140,7 +141,10 @@ describe('POST /api/ai/sound-effects', () => {
       },
       createSoundEffectJobDeps
     );
-    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', AUDIO_JOB_INLINE_TIMEOUT_MS);
+    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', {
+      timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+      minStepMs: 45_000,
+    });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData()).toEqual(AUDIO);
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
@@ -247,14 +251,10 @@ describe('POST /api/ai/sound-effects', () => {
       'failed',
       {
         state: 'failed',
-        error: { code: 'provider_error', message: 'elevenlabs_http_400' },
-        rawProviderError: { status: 400 },
+        error: { code: 'provider_error', message: 'elevenlabs_http_400', providerStatus: 400 },
       },
     ],
-    [
-      'credential-rejected',
-      { state: 'failed', error: { code: 'provider_error', message: 'x' }, rawProviderError: { status: 401 } },
-    ],
+    ['credential-rejected', { state: 'failed', error: { code: 'provider_error', message: 'x', providerStatus: 401 } }],
     ['cancelled', { state: 'cancelled' }],
   ])('maps a %s job to 502 with a generic body', async (_label, overrides) => {
     mocks.runAudioJobInline.mockResolvedValue(soundJob(overrides));
@@ -265,14 +265,42 @@ describe('POST /api/ai/sound-effects', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
-  it('maps a job that used up its retries against a rate-limiting provider to 429 with Retry-After', async () => {
+  it('maps a rate-limited job to the provider-busy 429 with the Retry-After the job recorded', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
-      soundJob({ state: 'failed', error: { code: 'provider_error', message: 'elevenlabs_rate_limited' } })
+      soundJob({
+        state: 'failed',
+        error: {
+          code: 'provider_error',
+          message: 'elevenlabs is at capacity (slots_exhausted); retry in 5s',
+          providerStatus: 429,
+          retryAfterSeconds: 5,
+        },
+      })
     );
     const { res, promise } = run({ text: 'door creak' });
     await promise;
     expect(res._getStatusCode()).toBe(429);
-    expect(res._getJSONData()).toMatchObject({ retryAfter: expect.any(Number) });
+    expect(res._getJSONData()).toEqual({
+      error: 'The generation service is busy. Please try again in a moment.',
+      retryAfter: 5,
+    });
+  });
+
+  it('refuses a free-tier user past the daily cap with a classified 429, before running a job', async () => {
+    mocks.createSoundEffectJob.mockResolvedValue(
+      refusal(429, 'daily_limit_reached', 'Daily free-tier credit limit reached. Try again tomorrow.', {
+        retryAfterSeconds: 3_600,
+      })
+    );
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toEqual({
+      error: 'Daily free-tier credit limit reached. Try again tomorrow.',
+      errorCode: 'daily_free_limit_reached',
+      retryAfter: 3_600,
+    });
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
   });
 
   it('answers 502 and logs the job id when the job does not finish in time', async () => {

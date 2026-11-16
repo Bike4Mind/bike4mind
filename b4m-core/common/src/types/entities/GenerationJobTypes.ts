@@ -69,7 +69,17 @@ export const GENERATION_JOB_ERROR_CODES = [
 ] as const;
 export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number];
 
-export type GenerationJobError = { code: GenerationJobErrorCode; message: string };
+export type GenerationJobError = {
+  code: GenerationJobErrorCode;
+  message: string;
+  /**
+   * The provider's HTTP status, when it answered with one. Kept here because rawProviderError is never read back
+   * (select: false), and the synchronous audio routes map it to their response status.
+   */
+  providerStatus?: number;
+  /** For a provider at capacity (providerStatus 429): how long the caller should wait before retrying. */
+  retryAfterSeconds?: number;
+};
 
 export type VideoJobOutput = {
   location: 'files' | 'generated';

@@ -62,6 +62,16 @@ describe('publishGenerationJobReadyPush', () => {
     expect(deps.publish).not.toHaveBeenCalled();
   });
 
+  it.each(['speech', 'sound_effect'])(
+    'does not push a succeeded %s job, whose requester is waiting on it',
+    async kind => {
+      const deps = jobDeps({ ...videoJob, kind, payload: { request: { text: 'Hello' }, sessionId: 'session-1' } });
+      await publishGenerationJobReadyPush('job-1', deps, logger);
+      expect(deps.findJob).toHaveBeenCalledWith('job-1');
+      expect(deps.publish).not.toHaveBeenCalled();
+    }
+  );
+
   it('links a music job to its notebook', async () => {
     const deps = jobDeps({ ...videoJob, kind: 'music', payload: { sessionId: 's1', request: {} } });
     await publishGenerationJobReadyPush('job-1', deps, logger);

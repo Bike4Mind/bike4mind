@@ -13,7 +13,7 @@ import {
   type VoiceGenerationVendor,
   type VoiceOutputFormat,
 } from '@bike4mind/common';
-import { createSpeechJob } from '@bike4mind/services/audioJobs';
+import { createSpeechJob, inlineMinStepMs } from '@bike4mind/services/audioJobs';
 import {
   getCreateSpeechJobDeps,
   readAudioJobOutput,
@@ -24,8 +24,10 @@ import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrg
 import {
   AUDIO_JOB_INLINE_TIMEOUT_MS,
   createAudioJobKeepingAudioOnFullQuota,
+  dailyLimitError,
   isRateLimitedFailure,
   providerStatusOf,
+  retryAfterSecondsOf,
   savedCopyOf,
 } from '@server/generations/syncAudioJob';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
@@ -105,12 +107,17 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         return res
           .status(401)
           .json({ error: result.message, errorCode: 'provider_not_configured' satisfies ApiErrorCode });
+      case 'daily_limit_reached':
+        throw dailyLimitError(result);
       default:
         throw new UnprocessableEntityError(result.message);
     }
   }
 
-  const job = await runAudioJobInline(result.job.id, AUDIO_JOB_INLINE_TIMEOUT_MS);
+  const job = await runAudioJobInline(result.job.id, {
+    timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+    minStepMs: inlineMinStepMs('speech'),
+  });
   if (!job || !isGenerationJobOfKind(job, 'speech')) {
     req.logger.warn('TTS job did not finish in time; it continues, and bills, in the background', {
       jobId: result.job.id,
@@ -129,6 +136,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       if (failure.status === 502) {
         req.logger.error('TTS synthesis failed', { jobId: job.id, error: job.error, provider: vendor });
       }
+      if (failure.status === 429) res.setHeader('Retry-After', String(retryAfterSecondsOf(job)));
       return res.status(failure.status).json(failure.body);
     }
     default:

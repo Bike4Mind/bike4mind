@@ -279,9 +279,71 @@ describe('speech job handler submit', () => {
       const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
       expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
         next: 'failed',
-        error: { code: 'provider_error', message: 'openai key bad' },
+        error: { code: 'provider_error', message: 'openai key bad', providerStatus: 401 },
         rawProviderError: { status: 401 },
       });
+    });
+
+    it('reports the earlier credential rejection when the alternate then refuses the request', async () => {
+      const openai = providerReturning({ ...rejectedKey, message: 'openai key bad', raw: { status: 403 } });
+      const elevenlabs = providerReturning({
+        status: 'failed',
+        retryable: false,
+        message: 'elevenlabs_http_422',
+        raw: { status: 422, snippet: 'bad voice' },
+      });
+      const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+      expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toEqual({
+        next: 'failed',
+        error: { code: 'provider_error', message: 'openai key bad', providerStatus: 403 },
+        rawProviderError: { status: 403 },
+      });
+    });
+
+    it('reports the credential rejection over an earlier candidate that had no key', async () => {
+      const elevenlabs = providerReturning({ ...rejectedKey, message: 'elevenlabs key bad' });
+      const { handler } = setup({
+        providers: { openai: testSpeechProvider, elevenlabs: elevenlabs.provider },
+        resolveApiKey: vi.fn(async vendor => (vendor === 'openai' ? null : 'el-key')),
+      });
+      expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
+        next: 'failed',
+        error: { message: 'elevenlabs key bad', providerStatus: 401 },
+      });
+    });
+
+    it('still reports a block from the alternate after a credential rejection', async () => {
+      const openai = providerReturning(rejectedKey);
+      const elevenlabs = providerReturning({ status: 'blocked', reason: 'stop', raw: {} });
+      const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+      expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
+        next: 'blocked',
+        error: { code: 'content_blocked' },
+      });
+    });
+
+    it('fails as rate limited when the alternate answers 429 after a credential rejection', async () => {
+      const openai = providerReturning(rejectedKey);
+      const elevenlabs = providerReturning({
+        status: 'failed',
+        retryable: true,
+        message: 'elevenlabs_rate_limited',
+        raw: { status: 429 },
+      });
+      const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+      expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
+        next: 'failed',
+        error: { providerStatus: 429, retryAfterSeconds: 30 },
+      });
+    });
+
+    it('lets an alternate whose call throws propagate as an unknown outcome', async () => {
+      const openai = providerReturning(rejectedKey);
+      const elevenlabs = providerReturning(() => {
+        throw new Error('socket hang up');
+      });
+      const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+      await expect(handler.submit(makeJob(fallbackPayload()), stepContext())).rejects.toThrow('socket hang up');
     });
 
     it('treats an expired key sentinel as no key', async () => {
@@ -342,12 +404,18 @@ describe('speech job handler submit', () => {
     expect(elevenlabs.generate).not.toHaveBeenCalled();
   });
 
-  it('retries a retryable failure', async () => {
+  it('fails a rate limit at once, as a 429 with a Retry-After, instead of retrying past the inline wait', async () => {
     const { handler } = setup();
     const job = makeJob({ request: { text: 'x [retry]', provider: 'openai' } });
     expect(await handler.submit(job, stepContext())).toEqual({
-      next: 'retry',
-      reason: 'test provider rate limited',
+      next: 'failed',
+      error: {
+        code: 'provider_error',
+        message: 'test provider rate limited',
+        providerStatus: 429,
+        retryAfterSeconds: 30,
+      },
+      rawProviderError: { text: 'x [retry]' },
     });
   });
 
