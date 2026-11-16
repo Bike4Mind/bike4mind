@@ -205,18 +205,8 @@ const DLQ_REGISTRY = [
     replayNote:
       'Nothing records that the Slack announcement went out, so a replay regenerates the note and posts again. Only a human-edited note is left alone.',
     owner: 'Release notes',
-    describe: entityAt('Release', 'releaseTag'),
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    description: "Builds the weekly What's New highlights and posts them to Slack.",
-    replay: 'unsafe',
-    replayNote: 'Nothing records an earlier Slack post, so a replay posts the highlights again.',
-    owner: 'Release notes',
-    describe: entityAt('Highlights run', 'correlationId'),
+    // One DLQ for both kinds of whatsNewJob message: a release names its tag, a highlights run its correlation id.
+    describe: firstEntity(entityAt('Release', 'releaseTag'), entityAt('Highlights run', 'correlationId')),
   },
   {
     label: 'notebook-curation',

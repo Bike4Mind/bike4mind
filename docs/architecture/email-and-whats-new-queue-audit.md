@@ -14,7 +14,7 @@ Merge two queues into one queue + one consumer Lambda only where **consumer prof
 |---|---|---|---|
 | Email job / batch | `emailJobQueue`, `emailBatchQueue` | Keep | Memory class, timeout, batch shape and queue visibility all differ, and the two handlers are a fan-out producer and a sender. |
 | Email ingestion / analysis | `emailIngestionQueue`, `emailAnalysisQueue` | Keep | IAM differs (`bedrock:*` plus SES vs `bedrock:InvokeModel`), timeout differs (5 vs 2 minutes), and the parser is an S3-event consumer while the analyzer takes `{ emailId }`. |
-| Release notes / highlights | `whatsNewGenerationQueue`, `whatsNewHighlightsQueue` | Merge (follow-up: https://github.com/Bike4Mind/bike4mind/issues/5662) | The two subscriptions match field for field (timeout, links, permissions, files, batch shape) and both use retry 3 with identical 14-day encrypted DLQs. |
+| Release notes / highlights | `whatsNewGenerationQueue`, `whatsNewHighlightsQueue` | Merged (https://github.com/Bike4Mind/bike4mind/issues/5662): `whatsNewGenerationQueue` and `whatsNewJob.dispatch` serve both kinds; the highlights queue is removed | The two subscriptions match field for field (timeout, links, permissions, files, batch shape) and both use retry 3 with identical 14-day encrypted DLQs. |
 
 Not covered: the Tavern and Analytics candidates and the queue-per-consumer CLAUDE.md rule from the issue's original description. The tightened acceptance dropped them.
 
@@ -61,6 +61,8 @@ Scaling: neither queue sets reserved concurrency (`infra/emailIngestion.ts`); th
 Memory, runtime and retry match. Timeout, queue visibility (5 vs 3 minutes), batch shape, IAM and links do not. Merging would give the LLM analyzer the SES send permission and a wider Bedrock grant, and would let a slow analysis hold up parsing of inbound mail. **Verdict: keep.** Reason: the pair fails the profile criterion on IAM and timeout, so a merge widens the analyzer's permissions.
 
 ## 3. What's New
+
+**Status: merged.** `whatsNewGenerationQueue` is the only What's New queue; `whatsNewJob.dispatch` routes on `kind` (`release-notes` or `highlights`), and `whatsNewHighlightsQueue`, its DLQ and its subscription are removed. The table and checklist below record the state before the merge.
 
 Evidence: `infra/queues.ts` (release notes on the legacy `whatsNewGenerationQueue` name; highlights as `whatsNewHighlightsQueue`).
 

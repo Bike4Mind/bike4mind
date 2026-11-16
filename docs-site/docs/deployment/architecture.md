@@ -268,7 +268,7 @@ For database setup, see [DocumentDB Setup](/databases/documentdb-setup).
 | imageGenerationQueue | AI image creation |
 | imageEditQueue | Image manipulation |
 | researchEngineQueue | Research tasks |
-| whatsNewGenerationQueue | Feature announcements |
+| whatsNewGenerationQueue | Release notes and What's New highlights |
 | notebookCurationQueue | Content curation |
 | agentProactiveMessageQueue | Proactive agent messages |
 | slackExportQueue | Slack channel exports |

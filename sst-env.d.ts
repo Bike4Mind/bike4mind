@@ -504,7 +504,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhook-delivery": string
       "release-notes": string
-      "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
       "type": "sst.aws.Queue"
@@ -750,7 +749,6 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "webhookDeliveryQueue": string
       "whatsNewGenerationQueue": string
-      "whatsNewHighlightsQueue": string
     }
     "sreFixQueue": {
       "type": "sst.aws.Queue"
@@ -801,14 +799,6 @@ declare module "sst" {
       "url": string
     }
     "whatsNewGenerationQueueDLQ": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueue": {
-      "type": "sst.aws.Queue"
-      "url": string
-    }
-    "whatsNewHighlightsQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
     }
