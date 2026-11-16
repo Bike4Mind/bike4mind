@@ -4,6 +4,7 @@ import {
   type ForbiddenError,
   type ISessionDocument,
   type ModelInfo,
+  type SpendFreezeSubject,
   type TooManyRequestsError,
 } from '@bike4mind/common';
 import {
@@ -179,6 +180,20 @@ function resolveRefusalReason({
 }
 
 /**
+ * The refusal verdict for a frozen subject, or null. A read failure is not defaulted to allow: it throws,
+ * which the assert variant surfaces and the filter variant turns into excluding the sessions.
+ */
+async function spendFreezeRefusal(subject: SpendFreezeSubject): Promise<SessionOperationalCreditVerdict | null> {
+  try {
+    await creditService.assertSpendNotFrozen(subject, { db: { spendFreezes: spendFreezeRepository } });
+    return null;
+  } catch (err) {
+    if (isSpendFrozenError(err)) return { allowed: false, reason: err.message, frozenError: err };
+    throw err;
+  }
+}
+
+/**
  * Credit pre-flight for the request handlers that queue session operational work. That work
  * settles asynchronously through `recordSessionOperationalUsage` -> `recordOperationalUsage`,
  * which is debit-capable but deliberately exempt from the per-member cap (#1651) because it must
@@ -242,25 +257,19 @@ export async function checkSessionOperationalCredits({
       '[sessionOperationalCreditPreflight] gate disabled: failed to resolve user/organization for billing',
       err
     );
-    return { allowed: true };
+    // The credit gate fails open here, but the freeze does not: the payer id is known without the holder
+    // reads, and settlement may still charge.
+    return (await spendFreezeRefusal({ userId })) ?? { allowed: true };
   }
 
   // No user means nothing to attribute or bill: recordSessionOperationalUsage skips the same
-  // case, so there is no spend for this gate to guard.
-  if (!billingUser) return { allowed: true };
+  // case, so there is no spend for this gate to guard. The freeze is still read so every admit path checks it.
+  if (!billingUser) return (await spendFreezeRefusal({ userId })) ?? { allowed: true };
 
   // The freeze comes before the credits-enforced and billing-enabled gates below: a freeze stops spend even
-  // where nothing is metered, as at the reservation gates. Ahead of the free-tier cap too. A read failure is
-  // not defaulted to allow: the assert variant throws it, and the filter variant excludes the session.
-  try {
-    await creditService.assertSpendNotFrozen(
-      { userId: billingUser.id, organizationId: billingOrg?.id },
-      { db: { spendFreezes: spendFreezeRepository } }
-    );
-  } catch (err) {
-    if (isSpendFrozenError(err)) return { allowed: false, reason: err.message, frozenError: err };
-    throw err;
-  }
+  // where nothing is metered, as at the reservation gates. Ahead of the free-tier cap too.
+  const frozen = await spendFreezeRefusal({ userId: billingUser.id, organizationId: billingOrg?.id });
+  if (frozen) return frozen;
 
   // A deployment that does not meter credits never bills this work, so skip the holder reads.
   // Inside the fail-open boundary: AdminSettingsCache awaits findAll() on a cache miss with no

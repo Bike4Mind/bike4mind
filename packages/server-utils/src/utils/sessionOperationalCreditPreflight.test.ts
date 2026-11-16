@@ -339,6 +339,36 @@ describe('checkSessionOperationalCredits', () => {
       expect(verdict).toMatchObject({ allowed: false });
     });
 
+    // The holder reads fail open for the credit gate, but the payer id alone is enough to read the freeze.
+    it.each([
+      ['the user read fails', () => mockFindUserById.mockRejectedValue(new Error('mongo down'))],
+      [
+        'the org read fails',
+        () => {
+          mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000, organizationId: ORG_ID });
+          mockFindOrgById.mockRejectedValue(new Error('mongo down'));
+        },
+      ],
+      ['the owner no longer exists', () => mockFindUserById.mockResolvedValue(null)],
+    ])('refuses a frozen payer when %s', async (_label, arrange) => {
+      billingOn();
+      arrange();
+      mockFindFreeze.mockResolvedValueOnce(freeze);
+
+      const verdict = await preflight({ logger: { warn: vi.fn(), error: vi.fn() } as never });
+
+      expect(verdict).toMatchObject({ allowed: false });
+      expect(mockFindFreeze).toHaveBeenCalledWith({ userId: USER_ID });
+    });
+
+    it('propagates a freeze read failure when the holder reads also failed', async () => {
+      billingOn();
+      mockFindUserById.mockRejectedValue(new Error('users down'));
+      mockFindFreeze.mockRejectedValueOnce(new Error('freezes down'));
+
+      await expect(preflight({ logger: { warn: vi.fn(), error: vi.fn() } as never })).rejects.toThrow('freezes down');
+    });
+
     it('refuses a frozen payer even when credits are not enforced', async () => {
       mockCreditsEnforced.mockResolvedValueOnce(false);
       mockFindFreeze.mockResolvedValueOnce(freeze);
@@ -648,6 +678,22 @@ describe('filterSessionIdsByOperationalCredits', () => {
     );
     expect(allowed).toEqual(new Set(['s2']));
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('excludes the sessions when the holder reads fail and the freeze cannot be read either', async () => {
+    mockFindUserById.mockRejectedValue(new Error('users down'));
+    mockFindFreeze.mockRejectedValueOnce(new Error('freezes down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: '' },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s2']));
   });
 
   it('skips all billing reads for an empty batch', async () => {
