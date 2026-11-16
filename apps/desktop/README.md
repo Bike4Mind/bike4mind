@@ -1176,15 +1176,16 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
-"Approve for me" and "Full access" ask before a shell command Desktop cannot parse at all. A
-command the scan can parse but not fully follow runs, as do outbound calls and commands that follow
-web, MCP, browser or skill content: Approve for me only stops for the specific reasons listed above
+"Approve for me" and "Full access" ask before a shell command Desktop cannot parse or fully follow.
+Known-safe Git forms retain their proved ref-change exception. Readable outbound calls and commands
+that follow web, MCP, browser or skill content run: Approve for me only stops for the specific reasons listed above
 (writes outside the shared folders, protected settings, `.env` reads, repeated calls). Explicit user
 permission rules retain precedence. Commands run as the user without an OS sandbox, so these checks
 are not filesystem confinement.
 
 Credit-spending tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
-limits remain. Protected paths, irreversible actions and opening a signed-in site keep their own checks.
+limits remain. Protected paths and irreversible actions keep their own checks. Imported-cookie page content needs consent
+for its actual origin, including arrivals by redirect or tab switch; standing origin consent covers later reads and actions.
 
 Settings -> Permissions also shows the local capability ledger: active grants for files,
 tools, browser origins, imported identity, project trust and credit-spending actions,

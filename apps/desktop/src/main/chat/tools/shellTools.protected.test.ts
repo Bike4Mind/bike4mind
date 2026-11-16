@@ -243,15 +243,16 @@ describe('shell commands that reach a protected location', () => {
       expect(await judge(command, 'P')).toEqual(refusedEverywhere);
     });
 
-    it('does not ask about an opaque write whose words do not name the settings', async () => {
+    it('asks about an opaque write even when its words do not name the settings', async () => {
       const prompt = await shellApproval(
         'bash_execute',
         { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: proj },
         { roots: [proj], workingDirectory: proj, signal: new AbortController().signal, protectedPaths: [userData] }
       );
-      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull }).toEqual({
-        askInAuto: undefined,
-        askInFull: undefined,
+      expect({ askInAuto: prompt.askInAuto, askInFull: prompt.askInFull, unchecked: prompt.unchecked }).toEqual({
+        askInAuto: true,
+        askInFull: true,
+        unchecked: true,
       });
     });
 

@@ -1223,8 +1223,8 @@ export type ChatSessionMode = 'chat' | 'code';
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
  *           command that writes outside the granted folders, a read of a `.env` file, a
  *           command that writes permission settings, or the same call a third time in a row.
- *           Commands that cannot be parsed also ask; explicit user rules still apply.
- *  - 'full' commands run as the user without OS confinement. Unparsed commands, protected paths,
+ *           Commands that cannot be parsed or fully followed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
  *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
  *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *

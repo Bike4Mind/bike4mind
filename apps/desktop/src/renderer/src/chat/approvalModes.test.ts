@@ -39,12 +39,13 @@ describe('approval mode copy', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/write outside this project/i);
     expect(approvalModeOption('auto').description).toMatch(/write protected settings/i);
-    expect(approvalModeOption('auto').description).not.toMatch(/cannot follow|external content/i);
+    expect(approvalModeOption('auto').description).toMatch(/cannot fully follow/i);
+    expect(approvalModeOption('auto').description).not.toMatch(/external content/i);
   });
 
-  it('says approve-for-me and full access ask only for commands Desktop cannot parse', () => {
+  it('says approve-for-me and full access ask for commands Desktop cannot parse or fully follow', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/ask before a command Desktop cannot parse at all/);
+    expect(notes).toMatch(/ask before a command Desktop cannot parse or fully follow/);
     expect(notes).toMatch(/only reads outside your folders runs/i);
     expect(notes).toMatch(/explicit user permission rules still apply/i);
     expect(notes).not.toMatch(/after a reply reads web/i);

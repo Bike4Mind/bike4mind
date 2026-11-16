@@ -286,10 +286,10 @@ describe('ChatService agent browser', () => {
     expect(await evaluateInFullAccess(await codeSession())).toBe(false);
   });
 
-  it('runs a script on a signed-in site without asking, in full access', async () => {
+  it('asks before a script on an unconsented imported-cookie origin in full access', async () => {
     imported = ['app.example.com'];
     pageUrl = 'https://app.example.com/inbox';
-    expect(await evaluateInFullAccess(await codeSession())).toBe(false);
+    expect(await evaluateInFullAccess(await codeSession())).toBe(true);
   });
 
   /**
@@ -339,16 +339,25 @@ describe('ChatService agent browser', () => {
   }
 
   it.each(['auto', 'full'] as const)(
-    'reads a page already open on a signed-in site without asking in %s',
+    'asks for an unconsented signed-in page, then reuses only standing origin consent in %s',
     async mode => {
       imported = ['mail.example.com'];
       pageUrl = 'https://mail.example.com/inbox';
       const id = await codeSession();
       await store.setApprovalMode(id, mode);
 
-      const round = await snapshotRound(id, undefined);
-      expect(round.asked).toBe(false);
-      expect(round.result).toContain('123456');
+      const once = await snapshotRound(id, 'once');
+      expect(once.asked).toBe(true);
+      expect(once.result).toContain('123456');
+      const always = await snapshotRound(id, 'always');
+      expect(always.asked).toBe(true);
+      expect(always.result).toContain('123456');
+      const covered = await snapshotRound(id, undefined);
+      expect(covered.asked).toBe(false);
+      expect(covered.result).toContain('123456');
+      pageUrl = 'https://mail.example.com:444/inbox';
+      const otherOrigin = await snapshotRound(id, 'once');
+      expect(otherOrigin.asked).toBe(true);
     }
   );
 

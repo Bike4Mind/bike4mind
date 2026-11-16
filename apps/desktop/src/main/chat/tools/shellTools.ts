@@ -542,6 +542,12 @@ export async function shellApproval(
   const envScript = scan.envFiles.some(path => !partEnvFiles.has(path));
   // A part that can send data out says so on the card but does not stop auto mode.
   const parts = scan.commands.map(entry => partAsk(entry));
+  const gitUnlisted = [...new Set(scan.commands.flatMap(entry => entry.gitUnlisted ?? []))];
+  const opaque =
+    gitUnlisted.length > 0 ||
+    scan.unreadScript === true ||
+    (scan.unread === true && !scan.commands.some(entry => entry.refsMovedOnly)) ||
+    scan.commands.some(entry => entry.unread && !entry.refsMovedOnly);
   const unchecked =
     scan.unread === true ||
     scan.unreadScript === true ||
@@ -550,6 +556,7 @@ export async function shellApproval(
   const uncheckedSettingsWrite = unchecked && !scan.readOnly && namesRuleFile(command);
   const runsSessionCode = !!script || scriptCheckFailed;
   const scriptAsks =
+    opaque ||
     envScript ||
     !!gitProgram ||
     scan.gitPathUnplaced === true ||
@@ -560,6 +567,7 @@ export async function shellApproval(
     uncheckedSettingsWrite ||
     writesWhileUnresolved;
   const scriptAsksInFull =
+    opaque ||
     (writesProtected && !scan.readOnly) ||
     uncheckedSettingsWrite ||
     secret ||
@@ -590,6 +598,12 @@ export async function shellApproval(
     ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
     ...(touchesProtected || secret
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
+      : []),
+    ...(scan.unread
+      ? ['Runs a program or builds a path that Desktop cannot follow, so where it acts cannot be checked.']
+      : []),
+    ...(gitUnlisted.length > 0
+      ? [`Runs git in a form Desktop does not list as safe (${gitUnlisted.join(', ')}).`]
       : []),
     ...(uncheckedSettingsWrite
       ? ['Names a permission or hook settings file in a command Desktop cannot follow, so it may write there.']

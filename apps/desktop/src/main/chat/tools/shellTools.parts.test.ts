@@ -60,10 +60,12 @@ describe('shellApproval per part', () => {
     expect(parts(prompt).map(part => part.kinds)).toEqual([[], []]);
   });
 
-  it('does not ask about a part with an unread operand', async () => {
+  it('asks about the whole script when a part has an unread operand', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
-    expect(prompt.askInAuto).toBeUndefined();
-    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
+    expect(prompt.unchecked).toBe(true);
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ coverable: false, kinds: [] }),
@@ -97,8 +99,9 @@ describe('shellApproval per part', () => {
 
   it('keeps a substitution in program position opaque to the part that runs it', async () => {
     const prompt = await approve('git status && $(which node) -v');
-    expect(prompt.askInAuto).toBeUndefined();
-    expect(prompt.askInFull).toBeUndefined();
+    expect(prompt.byPart).toBeUndefined();
+    expect(prompt.askInAuto).toBe(true);
+    expect(prompt.askInFull).toBe(true);
     expect(parts(prompt)[0]).toEqual({ text: 'git status', coverable: true, kinds: [] });
     expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false }));
   });
@@ -128,11 +131,11 @@ describe('shellApproval per part', () => {
       expect(prompt.always?.commands.every(command => !command.coverable)).toBe(true);
     });
 
-    it('a cd that CDPATH may redirect before a part it cannot read does not ask by itself', async () => {
+    it('a cd that CDPATH may redirect before a part it cannot read', async () => {
+      vi.stubEnv('CDPATH', undefined);
+      whole(await approve('cd src && rm "$TARGET" && git status'));
       vi.stubEnv('CDPATH', '/elsewhere');
-      const prompt = await approve('cd src && rm "$TARGET" && git status');
-      expect(prompt.askInAuto).toBeUndefined();
-      expect(prompt.askInFull).toBeUndefined();
+      whole(await approve('cd src && rm "$TARGET" && git status'));
     });
 
     it('a part that runs after a directory change the scan lost', async () => {

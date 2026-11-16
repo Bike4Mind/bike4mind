@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { MAX_BROWSER_TABS } from '@shared/browserTabs';
 import type { ChatMedia } from '@shared/chat';
 import {
+  browserBack,
   browserClick,
   browserEvaluate,
   browserNavigate,
+  browserPress,
   browserScreenshot,
   browserScroll,
   browserSnapshot,
@@ -179,11 +181,7 @@ describe('browser tools', () => {
     });
   });
 
-  /**
-   * The url bar means the user can sign in to anything in this cookie jar, so a script on a real
-   * site is asked about in EVERY mode, and under a key of its own: "always allow clicking here"
-   * must never also mean "and run whatever JavaScript you like here".
-   */
+  /** Anonymous and consented-origin scripts follow the mode, independently of click allowances. */
   it('gates a script on a real site like a click: only "Ask for approval" asks', async () => {
     const local = contextFor(fakePage('http://localhost:3080/app'));
     expect(await browserEvaluate.needsApproval!({ expression: '1' }, local.context)).toBe(false);
@@ -196,6 +194,7 @@ describe('browser tools', () => {
     expect(plain.askInFull).toBeUndefined();
 
     const imported = contextFor(fakePage('https://app.example.com/inbox'), ['app.example.com']);
+    imported.context.isStanding = key => key === 'browser-open-as-you:https://app.example.com';
     const signedIn = await browserEvaluate.approval!({ expression: '1' }, imported.context);
     expect(signedIn.askInAuto).toBeUndefined();
     expect(signedIn.askInFull).toBeUndefined();
@@ -214,8 +213,9 @@ describe('browser tools', () => {
       });
     });
 
-    it('does not ask again to act on, read or script it', async () => {
+    it('does not ask again to act on, read or script an origin with standing consent', async () => {
       const { context } = contextFor(fakePage('https://shop.example.com/checkout'), ['shop.example.com']);
+      context.isStanding = key => key === 'browser-open-as-you:https://shop.example.com';
       for (const prompt of [
         await browserClick.approval!({ ref: '1' }, context),
         await browserEvaluate.approval!({ expression: '1' }, context),
@@ -224,7 +224,7 @@ describe('browser tools', () => {
         expect(prompt.askInFull).toBeUndefined();
         expect(prompt.detail).not.toMatch(/signed/i);
       }
-      expect(browserSnapshot.needsApproval).toBeUndefined();
+      expect(await browserSnapshot.needsApproval!({}, context)).toBe(false);
     });
 
     it('leaves a local dev server free to open and act on, even with imported cookies for it', async () => {
@@ -522,5 +522,155 @@ describe('browser tabs', () => {
     expect(active.navigate).toHaveBeenCalledWith('http://localhost:3080/c');
     expect(open).toHaveLength(MAX_BROWSER_TABS);
     expect(result).toMatch(/^This conversation already has 10 tabs open.*opened in the active tab instead/);
+  });
+});
+
+describe('consent before disclosing an arrived imported-cookie origin', () => {
+  const privateUrl = 'https://mail.example.com/inbox?token=private-token';
+  const consentKey = 'browser-open-as-you:https://mail.example.com';
+
+  it.each(['navigate', 'click', 'back'] as const)(
+    'withholds a private arrival through %s before snapshotting',
+    async action => {
+      const page = fakePage('http://localhost:3000');
+      const { context } = contextFor(page, ['mail.example.com']);
+      page.events.push('private-token in an event');
+      const arrive = async () => {
+        page.url = privateUrl;
+      };
+      vi.mocked(page.navigate).mockImplementationOnce(async () => {
+        await arrive();
+        return { url: privateUrl, title: 'Private mailbox', status: 200 };
+      });
+      vi.mocked(page.click).mockImplementationOnce(async () => {
+        await arrive();
+        return 'Open mail';
+      });
+      vi.mocked(page.back).mockImplementationOnce(arrive);
+
+      const result =
+        action === 'navigate'
+          ? await browserNavigate.run({ url: 'http://localhost:3000' }, context)
+          : action === 'click'
+            ? await browserClick.run({ ref: '1' }, context)
+            : await browserBack.run({}, context);
+
+      expect(result).toContain('https://mail.example.com');
+      expect(result).not.toMatch(/private-token|Private mailbox|Typed page model/);
+      expect(page.snapshot).not.toHaveBeenCalled();
+      expect(page.events).toEqual([]);
+      const prompt = await browserSnapshot.approval!({}, context);
+      expect(prompt).toMatchObject({ key: consentKey, askInAuto: true, askInFull: true });
+    }
+  );
+
+  it('hides an unconsented tab title/path and gates selection and evaluation', async () => {
+    const page = fakePage(privateUrl);
+    const { context, labels } = contextFor(page, ['mail.example.com']);
+    expect(await browserTabs.run({ action: 'list' }, context)).not.toMatch(/private-token|Home/);
+    expect(await browserTabs.needsApproval!({ action: 'select', id: 1 }, context)).toBe(true);
+    expect(await browserTabs.approval!({ action: 'select', id: 1 }, context)).toMatchObject({
+      key: consentKey,
+      askInFull: true,
+    });
+    expect(await browserTabs.run({ action: 'select', id: 1 }, context)).not.toContain('private-token');
+    expect(labels.join(' ')).not.toContain('Home');
+    expect(await browserEvaluate.approval!({ expression: 'document.cookie' }, context)).toMatchObject({
+      key: consentKey,
+      askInAuto: true,
+      askInFull: true,
+    });
+    expect(await browserEvaluate.run({ expression: 'document.cookie' }, context)).not.toContain('private-token');
+    expect(page.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('withholds a script result if navigation completes on an unconsented origin before execution', async () => {
+    const page = fakePage('http://localhost:3000');
+    const { context } = contextFor(page, ['mail.example.com']);
+    vi.mocked(page.evaluate).mockImplementationOnce(async () => {
+      page.url = privateUrl;
+      return { session: 'private-token' };
+    });
+
+    const result = await browserEvaluate.run({ expression: 'document.cookie' }, context);
+
+    expect(result).toContain('https://mail.example.com');
+    expect(result).not.toMatch(/private-token|session/);
+  });
+
+  it.each(['click', 'scroll'] as const)('withholds page-derived %s labels after a private arrival', async action => {
+    const page = fakePage('http://localhost:3000');
+    const { context, labels } = contextFor(page, ['mail.example.com']);
+    const privateResult = async () => {
+      page.url = privateUrl;
+      return 'private-token';
+    };
+    vi.mocked(page.click).mockImplementationOnce(privateResult);
+    vi.mocked(page.scroll).mockImplementationOnce(privateResult);
+
+    const result =
+      action === 'click'
+        ? await browserClick.run({ ref: '1' }, context)
+        : await browserScroll.run({ ref: '1' }, context);
+
+    expect(result).not.toContain('private-token');
+    expect(labels.join(' ')).not.toContain('private-token');
+    expect(page.snapshot).not.toHaveBeenCalled();
+  });
+
+  it('refuses key dispatch to an unconsented origin reached after approval', async () => {
+    const page = fakePage(privateUrl);
+    const { context } = contextFor(page, ['mail.example.com']);
+    context.approvedKey = 'browser-act:http://localhost:3000';
+
+    expect(await browserPress.run({ key: 'Enter' }, context)).not.toContain('private-token');
+    expect(page.press).not.toHaveBeenCalled();
+  });
+
+  it('withholds if the page changes origin during the snapshot', async () => {
+    const page = fakePage('http://localhost:3000');
+    const { context } = contextFor(page, ['mail.example.com']);
+    const snapshot = await page.snapshot(100);
+    vi.mocked(page.snapshot).mockClear();
+    vi.mocked(page.snapshot).mockImplementationOnce(async () => {
+      page.url = privateUrl;
+      return { ...snapshot, url: privateUrl, title: 'Private mailbox', text: 'private-token' };
+    });
+    expect(await browserSnapshot.run({}, context)).not.toMatch(/private-token|Private mailbox/);
+  });
+
+  it.each([false, true])('withholds framed screenshots (frame arrives during capture: %s)', async duringCapture => {
+    const page = fakePage('http://localhost:3000');
+    const { context, images, media } = contextFor(page, ['mail.example.com']);
+    vi.mocked(page.frameUrls).mockReturnValue(duringCapture ? [page.url] : [page.url, privateUrl]);
+    vi.mocked(page.screenshot).mockImplementationOnce(async () => {
+      vi.mocked(page.frameUrls).mockReturnValue([page.url, privateUrl]);
+      return Buffer.from('private-token');
+    });
+    const result = await browserScreenshot.run({}, context);
+    expect(result).toContain('https://mail.example.com');
+    expect(result).not.toContain('private-token');
+    expect(images).toEqual([]);
+    expect(media).toEqual([]);
+    expect(page.screenshot).toHaveBeenCalledTimes(duringCapture ? 1 : 0);
+  });
+
+  it('permits only the explicitly approved origin, and keeps a one-call approval distinct from always', async () => {
+    const page = fakePage(privateUrl);
+    const { context } = contextFor(page, ['mail.example.com']);
+    context.approvedKey = consentKey;
+    expect(await browserSnapshot.run({}, context)).toContain('Typed page model');
+    context.approvedKey = undefined;
+    expect(await browserSnapshot.needsApproval!({}, context)).toBe(true);
+    context.isStanding = key => key === consentKey;
+    expect(await browserSnapshot.needsApproval!({}, context)).toBe(false);
+    for (const tool of [browserClick, browserEvaluate]) {
+      const prompt = await tool.approval!({ ref: '1', expression: '1' }, context);
+      expect(prompt.askInAuto).toBeUndefined();
+      expect(prompt.askInFull).toBeUndefined();
+    }
+    expect(await browserSnapshot.run({}, context)).toContain('Typed page model');
+    page.url = 'https://mail.example.com:444/inbox';
+    expect(await browserSnapshot.run({}, context)).not.toContain('Typed page model');
   });
 });
