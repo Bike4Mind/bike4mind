@@ -13,11 +13,13 @@ import {
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
-import { useGetOrganizationUsers, useGetPendingOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
+import { useShareDocument } from '@client/app/hooks/data/invites';
+import { useGetOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
+import { canViewOrgBilling, OrganizationTabs } from '@client/app/routes/organizations/orgTabAccess';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
-import { Box, Button, Card, Chip, Stack, Typography } from '@mui/joy';
+import { Box, Button, Card, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import debounce from 'lodash/debounce';
 import AddIcon from '@mui/icons-material/Add';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
@@ -35,11 +37,10 @@ import OrganizationMfaPolicy from './OrganizationMfaPolicy';
 import MemberRoster from './MemberRoster';
 import { getMemberCreditUsage } from './memberCreditBudget';
 import { getMemberRole } from './memberRosterView';
-import {
-  useOrganizationInvites,
-  useOrganizationSeats,
-  useResendOrganizationInvite,
-} from '@client/app/hooks/data/organizations';
+import OrgSeatSummary from './OrgSeatSummary';
+import PendingInvitationsTable from './PendingInvitationsTable';
+import { summarizeInviteResults } from './inviteResultSummary';
+import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 import { z } from 'zod';
 
@@ -55,14 +56,15 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
     refetch: refetchMembers,
   } = useGetOrganizationUsers(organization.id);
   const { currentUser } = useUser();
-  const { data: pendingUsers } = useGetPendingOrganizationUsers(organization.id);
-  const { maxSeats, currentSeats, availableSeats } = useOrganizationSeats(organization.id);
+  const { maxSeats, availableSeats } = useOrganizationSeats(organization.id);
   const { data: pendingInvites, isError: pendingInvitesError } = useOrganizationInvites(organization.id);
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const hasAvailableSeats = maxSeats === 0 || availableSeats > 0;
-  const seatUsagePercentage = maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 100;
+  // Seats are bought on the Billing tab, which only the owner can open (orgTabAccess.canViewOrgBilling).
+  const canAddSeats = canViewOrgBilling(currentUser, organization);
 
   // For the add members modal
   const [modalSearch, setModalSearch] = useState('');
@@ -84,29 +86,39 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   // Mirrors the server gate in sharingService.createInvite: only the owner tier may invite an admin.
   const canGrantAdmin = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
-  const shareDocument = useShareDocument({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
-      queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
+  // Results are reported once per batch by sendInvites, so the hook's per-request toasts are muted.
+  const shareDocument = useShareDocument({ onSuccess: () => {}, onError: () => {} });
+  const [sending, setSending] = useState(false);
 
-      setModalSearch('');
-      setSelectedUserIds([]);
-      toast.success(t('organizations.modals.members.invited', 'Member invited to team'));
+  // One request per recipient, so one refused invite does not sink the rest; one summary toast.
+  const sendInvites = useCallback(
+    async (recipients: string[]) => {
+      setSending(true);
+      try {
+        const results = await Promise.allSettled(
+          recipients.map(recipient =>
+            shareDocument.mutateAsync({
+              recipients: [recipient],
+              id: organization.id,
+              type: InviteType.Organization,
+              permissions: [...ORG_INVITE_ROLES[role]],
+            })
+          )
+        );
+        const summary = summarizeInviteResults(results);
+        toast[summary.kind](summary.message);
+        if (summary.kind !== 'error') {
+          setModalSearch('');
+          setSelectedUserIds([]);
+        }
+      } finally {
+        setSending(false);
+        queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
+        queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
+      }
     },
-    onError: err => {
-      toast.error(err.message);
-    },
-  });
-
-  const resendEmailInvite = useResendOrganizationInvite(organization.id);
-  const cancelEmailInvite = useCancelInvite({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
-      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
-      toast.success('Invitation cancelled');
-    },
-    onError: error => toast.error(error.message),
-  });
+    [organization.id, queryClient, role, shareDocument]
+  );
 
   const debouncedModalSearch = useMemo(() => debounce(setModalSearch, 300), []);
 
@@ -122,25 +134,9 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         creditUsage: showUsage ? getMemberCreditUsage(organization, u.id) : null,
       };
     });
-    const pending = (pendingUsers ?? [])
-      .filter(user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id)))
-      .map(user => {
-        const email = user.email?.toLowerCase();
-        const invite = pendingInvites?.find(candidate =>
-          candidate.recipients?.pending?.some(
-            recipient => recipient === user.id || (!!email && recipient.toLowerCase() === email)
-          )
-        );
-        return {
-          ...user,
-          status: 'pending' as const,
-          permissions: invite && 'permissions' in invite ? invite.permissions : [],
-          role: 'member' as const,
-          creditUsage: null,
-        };
-      });
-    return [...accepted, ...pending];
-  }, [users, pendingUsers, pendingInvites, organization, currentUser]);
+    // Pending invites are listed once, in PendingInvitationsTable, not as roster rows.
+    return accepted;
+  }, [users, organization, currentUser]);
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
@@ -177,20 +173,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   // For the add members modal
   const modalUsers = useMemo(() => (usersData?.users ?? []).filter(u => u.id !== ownerId), [usersData?.users, ownerId]);
 
-  const handleAddMembers = useCallback(
-    (selectedUserIds: string[]) => {
-      selectedUserIds.forEach(id => {
-        shareDocument.mutate({
-          description: `You've been invited to join the team`,
-          recipients: [id],
-          id: organization.id,
-          type: InviteType.Organization,
-          permissions: [...ORG_INVITE_ROLES[role]],
-        });
-      });
-    },
-    [organization.id, role, shareDocument]
-  );
+  const handleAddMembers = useCallback((ids: string[]) => void sendInvites(ids), [sendInvites]);
 
   const pendingEmails = useMemo(
     () =>
@@ -217,16 +200,8 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
           {canInvite && (
             <Button
               data-testid="organization-invite-by-email-btn"
-              loading={shareDocument.isPending}
-              onClick={() =>
-                shareDocument.mutate({
-                  description: "You've been invited to join the team",
-                  recipients: [email],
-                  id: organization.id,
-                  type: InviteType.Organization,
-                  permissions: [...ORG_INVITE_ROLES[role]],
-                })
-              }
+              loading={sending}
+              onClick={() => void sendInvites([email])}
             >
               Invite {email} by email
             </Button>
@@ -241,15 +216,9 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
       pendingEmails,
       canInviteMembers,
       hasAvailableSeats,
-      shareDocument,
-      organization.id,
-      role,
+      sending,
+      sendInvites,
     ]
-  );
-  const pendingEmailInvites = (pendingInvites ?? []).flatMap(invite =>
-    (invite.recipients?.pending ?? [])
-      .filter(recipient => z.email().safeParse(recipient).success || recipient.includes('***@'))
-      .map(email => ({ inviteId: invite.id, email }))
   );
 
   const alreadyInvitedUsers = useMemo(() => {
@@ -305,94 +274,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         height: '100%',
       }}
     >
-      {/* Seats Management Section: read-only, shown to anyone who can change the roster */}
-      {(canInviteMembers || canRevokeMembers) && (
-        <Card
-          className="organization-members-seats-card"
-          data-testid="organization-members-seats-card"
-          variant="outlined"
-          sx={{ mx: { xs: 0, sm: '20px' } }}
-        >
-          <Stack spacing={2} p={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
-              <Typography className="organization-members-seats-title" level="title-sm">
-                Seat Management
-              </Typography>
-              {maxSeats === 0 ? (
-                <Chip className="organization-members-no-plan-chip" size="sm" color="danger" variant="soft">
-                  No Active Plan
-                </Chip>
-              ) : (
-                <Chip
-                  className="organization-members-seats-chip"
-                  size="sm"
-                  color={seatUsagePercentage >= 90 ? 'danger' : seatUsagePercentage >= 75 ? 'warning' : 'success'}
-                  variant="soft"
-                >
-                  {availableSeats} seats available
-                </Chip>
-              )}
-            </Stack>
-
-            <Stack spacing={1}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography
-                  className="organization-members-seats-count"
-                  data-testid="organization-members-seats-count"
-                  level="body-sm"
-                >
-                  {currentSeats} of {maxSeats || '∞'} seats used
-                </Typography>
-                <Typography
-                  className="organization-members-seats-percentage"
-                  level="body-sm"
-                  color={seatUsagePercentage >= 90 ? 'danger' : 'neutral'}
-                >
-                  {maxSeats > 0 ? `${Math.round(seatUsagePercentage)}%` : '-'}
-                </Typography>
-              </Stack>
-              {maxSeats > 0 && (
-                <Box
-                  className="organization-members-seats-progress-container"
-                  sx={{
-                    width: '100%',
-                    bgcolor: 'background.level2',
-                    borderRadius: 'sm',
-                    height: '6px',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <Box
-                    className="organization-members-seats-progress-bar"
-                    sx={{
-                      width: `${seatUsagePercentage}%`,
-                      bgcolor:
-                        seatUsagePercentage >= 90
-                          ? 'danger.500'
-                          : seatUsagePercentage >= 75
-                            ? 'warning.500'
-                            : 'success.500',
-                      height: '100%',
-                      transition: 'width 0.3s ease',
-                    }}
-                  />
-                </Box>
-              )}
-            </Stack>
-
-            {!hasAvailableSeats && (
-              <Typography
-                className="organization-members-seats-limit"
-                data-testid="organization-members-seats-limit"
-                level="body-sm"
-                color="danger"
-              >
-                You&apos;ve reached your seat limit. Upgrade your plan to add more members.
-              </Typography>
-            )}
-          </Stack>
-        </Card>
-      )}
+      <OrgSeatSummary organizationId={organization.id} />
 
       <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
       {canManageBudgetAlerts && <OrgBudgetAlertsCard organizationId={organization.id} />}
@@ -431,7 +313,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 searchPlaceholder={t('common.search_users', 'Search users')}
                 searchMinLength={3}
                 onAdd={handleAddMembers}
-                isPending={shareDocument.isPending}
+                isPending={sending}
                 renderItem={renderUserItem}
                 isItemDisabled={user => !!getInviteStatus(user)}
                 renderNoResults={renderNoResults}
@@ -447,20 +329,44 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 }
               />
             ) : (
-              <Button
-                className="organization-members-add-button"
-                data-testid="organization-members-add-no-seats-btn"
-                size="sm"
-                variant="outlined"
-                color="danger"
-                startDecorator={<AddIcon />}
-                onClick={() =>
-                  toast.error(t('organizations.errors.no_seats', 'No seats available. Please upgrade your plan.'))
-                }
-                sx={{ opacity: 0.75 }}
-              >
-                {t('organizations.modals.members.button_label', 'Add Member')}
-              </Button>
+              <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Button
+                  data-testid="organization-members-add-no-seats-btn"
+                  size="sm"
+                  variant="outlined"
+                  startDecorator={<AddIcon />}
+                  disabled
+                  aria-describedby="organization-members-seats-limit"
+                >
+                  {t('organizations.modals.members.button_label', 'Add Member')}
+                </Button>
+                <Typography
+                  id="organization-members-seats-limit"
+                  data-testid="organization-members-seats-limit"
+                  level="body-sm"
+                  color="neutral"
+                >
+                  All seats are in use.{' '}
+                  {canAddSeats ? (
+                    <Link
+                      component="button"
+                      data-testid="organization-members-add-seats-link"
+                      onClick={() =>
+                        navigate({
+                          to: '/organizations/$id',
+                          params: { id: organization.id },
+                          search: { tab: OrganizationTabs.Billing },
+                          replace: true,
+                        })
+                      }
+                    >
+                      Add seats
+                    </Link>
+                  ) : (
+                    'Ask the team owner to add seats.'
+                  )}
+                </Typography>
+              </Stack>
             ))}
           {canInviteMembers && hasAvailableSeats && (
             <Button
@@ -486,46 +392,14 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
 
       {canInviteMembers && <InviteLinksPanel organizationId={organization.id} isOwnerTier={canGrantAdmin} />}
 
-      {pendingInvitesError && (
-        <Typography color="danger" data-testid="organization-pending-invites-error">
-          Pending invitations could not be loaded. Try again.
-        </Typography>
-      )}
-      {pendingEmailInvites.length > 0 && (
-        <Stack spacing={1} data-testid="organization-pending-email-invites">
-          <Typography level="title-sm">Pending email invitations</Typography>
-          {pendingEmailInvites.map(({ inviteId, email }) => (
-            <Stack key={`${inviteId}:${email}`} direction="row" spacing={1} alignItems="center">
-              <Typography level="body-sm">{email}</Typography>
-              {canInviteMembers && !email.includes('*') && (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  data-testid="organization-cancel-email-invite-btn"
-                  loading={cancelEmailInvite.isPending}
-                  onClick={() =>
-                    cancelEmailInvite.mutate({ id: organization.id, type: InviteType.Organization, email })
-                  }
-                >
-                  Cancel invitation
-                </Button>
-              )}
-              {canInviteMembers && !email.includes('*') && (
-                <Button
-                  size="sm"
-                  variant="plain"
-                  data-testid="organization-resend-email-invite-btn"
-                  aria-label={`Resend invitation to ${email}`}
-                  disabled={resendEmailInvite.isPending}
-                  onClick={() => resendEmailInvite.mutate({ email })}
-                >
-                  Resend
-                </Button>
-              )}
-            </Stack>
-          ))}
-        </Stack>
-      )}
+      <PendingInvitationsTable
+        organizationId={organization.id}
+        invites={pendingInvites}
+        isError={pendingInvitesError}
+        canManage={canInviteMembers}
+        canGrantAdmin={canGrantAdmin}
+        currentUserId={currentUser?.id}
+      />
       <MemberRoster
         organization={organization}
         members={members}
@@ -533,7 +407,6 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         isError={membersError}
         onRetry={() => refetchMembers()}
         currentUserId={currentUser?.id}
-        canInviteMembers={canInviteMembers}
         canRevokeMembers={canRevokeMembers}
         canRevokeMember={userId => !!currentUser && canRevokeOrgMember(currentUser, organization, userId)}
         canManageCreditBudgets={canManageCreditBudgets}

@@ -236,7 +236,8 @@ test.describe('Teams - Stripe checkout (staging only)', () => {
       await expect(page.getByTestId('subscription-status-card')).toContainText('Team Plan', {
         timeout: TIMEOUTS.VISIBLE,
       });
-      await expect(page.getByTestId('seats-utilization-card')).toContainText(`/ ${seats}`);
+      await teamsPage.openTab('Members');
+      await expect(page.getByTestId('organization-members-seats-count')).toContainText(`of ${seats} seats used`);
     });
   });
 });

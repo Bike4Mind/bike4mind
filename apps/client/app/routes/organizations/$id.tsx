@@ -25,11 +25,8 @@ import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
-import {
-  SubscriptionOwnerType,
-  isDelinquentSubscriptionStatus,
-  pickDisplayedSubscription,
-} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SubscriptionOwnerType, pickDisplayedSubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { getOrgPlanState, isLiveOrgPlan, orgPlanChipColor } from '@client/app/components/organizations/orgPlanState';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
@@ -39,7 +36,6 @@ import {
   Card,
   Chip,
   CircularProgress,
-  LinearProgress,
   Stack,
   Tab,
   TabList,
@@ -149,7 +145,7 @@ const OrganizationPage: FC = () => {
   const { t } = useTranslation();
   const { id } = useParams({ strict: false });
   const { data: organization, isLoading, isError, error, refetch } = useGetOrganization(id as string);
-  const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
+  const { currentSeats, pendingSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const { currentUser } = useUser();
@@ -421,10 +417,8 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             <TabPanel value={OrganizationTabs.Members}>
-              {header(OrganizationTabs.Members, {
-                count: currentSeats,
-                description: t('organization.descriptions.members', { current: currentSeats, max: maxSeats }),
-              })}
+              {/* Seat numbers live only in the tab's seat summary (OrgSeatSummary). */}
+              {header(OrganizationTabs.Members, { count: currentSeats - pendingSeats })}
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {access.canManageGroups && (
@@ -541,10 +535,8 @@ const OrganizationHeader: FC<{
   const { t } = useTranslation();
   const { name, description } = organization;
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
-  const subscription = pickDisplayedSubscription(subscriptions ?? []);
-  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
-  const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
-  const { currentSeats } = useOrganizationSeats(organization.id);
+  const planState = getOrgPlanState(pickDisplayedSubscription(subscriptions ?? []));
+  const { currentSeats, pendingSeats } = useOrganizationSeats(organization.id);
 
   return (
     <Card variant="outlined" sx={{ mx: 3, p: 3 }}>
@@ -571,7 +563,7 @@ const OrganizationHeader: FC<{
           </Typography>
           <Stack direction="row" spacing={2} mt={1}>
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
-              {t('organization.x_members', { count: currentSeats })}
+              {t('organization.x_members', { count: currentSeats - pendingSeats })}
             </Chip>
             <Chip
               size="sm"
@@ -583,14 +575,10 @@ const OrganizationHeader: FC<{
             <Chip
               size="sm"
               variant="soft"
-              color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
+              color={orgPlanChipColor(planState)}
               startDecorator={<WorkspacePremiumOutlinedIcon sx={{ fontSize: 14 }} />}
             >
-              {paymentIssue
-                ? t('organization.payment_issue')
-                : hasActiveSubscription
-                  ? t('organization.team_plan')
-                  : t('organization.no_active_plan')}
+              {t(`organization.plan_states.${planState}`)}
             </Chip>
           </Stack>
         </Stack>
@@ -601,12 +589,12 @@ const OrganizationHeader: FC<{
 
 const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const { t, i18n } = useTranslation();
-  const { currentSeats, maxSeats, pendingSeats, availableSeats } = useOrganizationSeats(organization.id);
+  const { currentSeats, pendingSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
-  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
-  const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
+  const planState = getOrgPlanState(subscription);
+  const activeSubscription = subscription && isLiveOrgPlan(planState) ? subscription : undefined;
   // Format next billing date
   const formatDate = (date: Date | string | undefined) => {
     if (!date) return t('organization.overview.not_available');
@@ -622,7 +610,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
             <Typography level="body-xs" color="neutral">
               {t('organization.overview.total_members')}
             </Typography>
-            <Typography level="h2">{currentSeats}</Typography>
+            <Typography level="h2">{currentSeats - pendingSeats}</Typography>
           </Stack>
         </Card>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
@@ -652,16 +640,8 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                 <Typography level="body-sm" color="neutral">
                   {t('organization.overview.plan')}
                 </Typography>
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={paymentIssue ? 'danger' : activeSubscription ? 'success' : 'neutral'}
-                >
-                  {paymentIssue
-                    ? t('organization.payment_issue')
-                    : activeSubscription
-                      ? t('organization.team_plan')
-                      : t('organization.no_active_plan')}
+                <Chip size="sm" variant="soft" color={orgPlanChipColor(planState)}>
+                  {t(`organization.plan_states.${planState}`)}
                 </Chip>
               </Stack>
               {activeSubscription && (
@@ -671,7 +651,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                       {t('organization.overview.status')}
                     </Typography>
                     <Typography level="body-sm">
-                      {activeSubscription.canceledAt
+                      {planState === 'ending'
                         ? t('organization.overview.canceling')
                         : t('organization.overview.active')}
                     </Typography>
@@ -685,40 +665,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                   </Stack>
                 </>
               )}
-            </Stack>
-          </Stack>
-        </Card>
-
-        {/* Seats Utilization Card */}
-        <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="seats-utilization-card">
-          <Stack spacing={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography level="title-md" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 20 }} />}>
-                {t('organization.overview.seats_utilization')}
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {currentSeats} / {maxSeats}
-              </Typography>
-            </Stack>
-            <LinearProgress
-              determinate
-              value={maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 0}
-              color={currentSeats >= maxSeats ? 'danger' : currentSeats > maxSeats * 0.8 ? 'warning' : 'primary'}
-              sx={{ '--LinearProgress-thickness': '8px' }}
-              aria-label={t('organization.overview.seats_utilization_label', { current: currentSeats, max: maxSeats })}
-            />
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              <Chip size="sm" variant="soft" color="primary">
-                {t('organization.overview.x_active', { count: currentSeats - pendingSeats })}
-              </Chip>
-              {pendingSeats > 0 && (
-                <Chip size="sm" variant="soft" color="warning">
-                  {t('organization.overview.x_pending', { count: pendingSeats })}
-                </Chip>
-              )}
-              <Chip size="sm" variant="soft" color="neutral">
-                {t('organization.overview.x_available', { count: availableSeats })}
-              </Chip>
             </Stack>
           </Stack>
         </Card>

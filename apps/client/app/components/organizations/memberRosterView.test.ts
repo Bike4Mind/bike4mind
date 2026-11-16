@@ -14,13 +14,12 @@ const usage = (used: number) => ({ tracked: true, used, cap: null, isOverride: f
 const row = (overrides: Partial<RosterMember> & { id: string }): RosterMember => ({
   name: overrides.id,
   email: `${overrides.id}@example.test`,
-  status: 'accepted',
   role: 'member',
   creditUsage: null,
   ...overrides,
 });
 
-const allFilters: RosterFilters = { search: '', role: 'all', status: 'all' };
+const allFilters: RosterFilters = { search: '', role: 'all' };
 const ids = (members: RosterMember[]) => members.map(m => m.id);
 
 describe('getMemberRole', () => {
@@ -42,7 +41,7 @@ describe('getMemberRole', () => {
 describe('filterMembers', () => {
   const members = [
     row({ id: 'ada', name: 'Ada Lovelace', email: 'ada@math.test', role: 'member' }),
-    row({ id: 'bob', name: 'Bob', email: null, status: 'pending' }),
+    row({ id: 'bob', name: 'Bob', email: null }),
     row({ id: 'cy', name: 'Cy', email: undefined, role: 'manager' }),
   ];
 
@@ -66,13 +65,9 @@ describe('filterMembers', () => {
     expect(ids(filterMembers(members, { ...allFilters, role: 'manager' }))).toEqual(['cy']);
   });
 
-  it('filters by status', () => {
-    expect(ids(filterMembers(members, { ...allFilters, status: 'pending' }))).toEqual(['bob']);
-    expect(ids(filterMembers(members, { ...allFilters, status: 'accepted' }))).toEqual(['ada', 'cy']);
-  });
-
   it('combines every filter', () => {
-    expect(filterMembers(members, { search: 'ada', role: 'member', status: 'pending' })).toEqual([]);
+    expect(filterMembers(members, { search: 'ada', role: 'manager' })).toEqual([]);
+    expect(ids(filterMembers(members, { search: 'ada', role: 'member' }))).toEqual(['ada']);
   });
 });
 

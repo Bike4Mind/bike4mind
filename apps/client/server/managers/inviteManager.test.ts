@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // inviteManager imports these at module load; stub them so the helpers load
 // without pulling the real DB graph.
+const { userFind } = vi.hoisted(() => ({ userFind: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   Group: {},
   Organization: {},
   Session: {},
-  User: {},
+  User: { find: userFind },
   fabFileRepository: {},
   sessionRepository: {},
   projectRepository: {},
@@ -271,5 +272,47 @@ describe('canViewInvite', () => {
     const named = linkInvite({ recipients: { pending: ['VIEWER@x.com'], accepted: [], refused: [] } });
     await expect(canViewInvite(user, named)).resolves.toBe('allowed');
     expect(authorizeByInviteType).not.toHaveBeenCalled();
+  });
+});
+
+describe('toSharerInviteViews inviter names', () => {
+  const INVITER_ID = '64b7f0a1c2d3e4f5a6b7c8d9';
+  const findResult = (users: unknown[]) => {
+    const query = { collation: () => query, lean: () => Promise.resolve(users) };
+    return query;
+  };
+
+  beforeEach(() => {
+    userFind.mockReset();
+    userFind.mockImplementation(() => findResult([{ _id: INVITER_ID, name: 'Ada Owner' }]));
+  });
+
+  it('names the inviter on an Organization invite', async () => {
+    const [view] = await toSharerInviteViews(
+      [{ id: 'inv1', type: 'Organization', inviterId: INVITER_ID, remaining: 1 }],
+      { id: 'admin', email: 'a@x.com', isAdmin: true }
+    );
+    expect(view.inviterName).toBe('Ada Owner');
+    expect(userFind).toHaveBeenCalledWith({ _id: { $in: [INVITER_ID] } }, expect.anything());
+  });
+
+  it('leaves other invite types without an inviter name and skips the lookup', async () => {
+    const [view] = await toSharerInviteViews([{ id: 'inv1', type: 'Project', inviterId: INVITER_ID, remaining: 1 }], {
+      id: 'admin',
+      email: 'a@x.com',
+      isAdmin: true,
+    });
+    expect(view).not.toHaveProperty('inviterName');
+    expect(userFind).not.toHaveBeenCalled();
+  });
+
+  it('skips the lookup for an invite minted before inviterId existed', async () => {
+    const [view] = await toSharerInviteViews([{ id: 'inv1', type: 'Organization', remaining: 1 }], {
+      id: 'admin',
+      email: 'a@x.com',
+      isAdmin: true,
+    });
+    expect(view).not.toHaveProperty('inviterName');
+    expect(userFind).not.toHaveBeenCalled();
   });
 });

@@ -87,7 +87,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         id: organization.id,
         // Built here rather than through createInviteBodySchema, whose recipient cap is the
         // single-invite one; this route's own row cap and the org-bulk send bucket bound it instead.
-        body: { permissions, recipients, description: "You've been invited to join the organization" },
+        // No message: the team invite email names the team on its own (inviteNotificationEmail.ts).
+        body: { permissions, recipients },
         typedAddressBucket: 'orgBulk',
       });
       // createDocumentInvite returns the sharer view, typed as a loose record.

@@ -74,9 +74,12 @@ export interface IGetInvitesRequest {
 /**
  * An invite as the sharer-facing routes return it (server/managers/inviteManager.toSharerInviteViews):
  * a `recipients` entry the viewer did not type is a user id, named in `recipientUsers`, or a masked
- * address.
+ * address. `inviterName` is set on Organization invites only.
  */
-export type ISharerInviteView = IInviteDocumentWithDetails & { recipientUsers?: { userId: string; name: string }[] };
+export type ISharerInviteView = IInviteDocumentWithDetails & {
+  recipientUsers?: { userId: string; name: string }[];
+  inviterName?: string;
+};
 
 export interface IGetInvitesResponse {
   data: ISharerInviteView[];

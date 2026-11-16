@@ -91,7 +91,12 @@ export class TeamsPage extends BasePage {
     return this.page.getByTestId('organization-user-card');
   }
 
-  /** "X of N seats used" from the Seat Management card, as numbers. */
+  /** A row of the Pending invitations table (PendingInvitationsTable), by the invitee's label. */
+  pendingInviteRow(label: string): Locator {
+    return this.page.getByTestId('organization-pending-invite-row').filter({ hasText: label });
+  }
+
+  /** "X of N seats used" from the Members tab seat summary (OrgSeatSummary), as numbers. */
   async seatsUsed(): Promise<{ used: number; max: number }> {
     const text = await this.page.getByTestId('organization-members-seats-count').innerText();
     const match = text.match(/(\d+) of (\d+) seats used/);

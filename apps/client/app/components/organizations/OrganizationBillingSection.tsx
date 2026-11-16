@@ -49,6 +49,8 @@ import SeatCountInput from './SeatCountInput';
 import ContactSalesNote from './ContactSalesNote';
 import OrganizationInvoiceList from './OrganizationInvoiceList';
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { getOrgPlanState } from './orgPlanState';
 
 type OrganizationBillingSectionProps = {
   organization: IOrganizationDocument;
@@ -302,6 +304,8 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const teamPlanAvailable = useTeamPlanAvailable();
   const subscription = pickDisplayedSubscription(subscriptions.data ?? []);
+  const { t } = useTranslation();
+  const planState = getOrgPlanState(subscription);
   // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
@@ -412,7 +416,12 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
               >
                 <Box>
                   <Typography level="title-lg" sx={{ mb: 1 }} className="organization-billing-plan-title">
-                    {!!subscription ? 'Team Plan' : 'No Active Subscription'}
+                    {/* The status beside the title already reports a payment issue or a cancel. */}
+                    {!subscription
+                      ? 'No Active Subscription'
+                      : t(
+                          `organization.plan_states.${planState === 'none' || planState === 'payment_issue' ? 'active' : planState}`
+                        )}
                   </Typography>
                   <Typography level="body-md" color="neutral" className="organization-billing-plan-price">
                     {subscription ? (

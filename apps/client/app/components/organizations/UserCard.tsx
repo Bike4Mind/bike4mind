@@ -1,13 +1,5 @@
-import {
-  InviteType,
-  IUserDocument,
-  Permission,
-  IOrganizationDocument,
-  orgAclRowConfersMembership,
-} from '@bike4mind/common';
+import { IUserDocument, Permission, IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
-import { useCancelInvite } from '@client/app/hooks/data/invites';
-import { useResendOrganizationInvite } from '@client/app/hooks/data/organizations';
 import { getAppFileUrl } from '@client/app/utils/s3';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import {
@@ -29,8 +21,6 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   useLeaveOrganization,
@@ -44,14 +34,12 @@ import OffboardMemberDialog from './OffboardMemberDialog';
 import { formatMemberCredits, formatMemberCreditUsage } from './memberCreditBudget';
 import { RosterMember, rosterGridColumns, ROSTER_TABLE_QUERY } from './memberRosterView';
 
-/** A roster row: the safe user shape plus its org standing. `creditUsage` is null for a pending invite. */
+/** A roster row: the safe user shape plus its org standing. Pending invites are not rows (PendingInvitationsTable). */
 export type OrganizationRosterRow = IUserDocument & RosterMember & { permissions: Permission[] };
 
 interface OrganizationUserCardProps {
   organization: IOrganizationDocument;
   user: OrganizationRosterRow;
-  /** Viewer may cancel a pending invite (`isOrgMember` and `isOrgOwnerOrCurrentAdmin`, the invite routes' gates). */
-  canInviteMembers: boolean;
   /** Viewer may revoke a member (`canRevokeOrgMember`, the DELETE member route's gate). */
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
@@ -79,7 +67,6 @@ const ExplainedDash: FC<{ explanation: string; testId: string }> = ({ explanatio
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   organization,
   user,
-  canInviteMembers,
   canRevokeMembers,
   canManageCreditBudgets,
   canManageManagers,
@@ -92,47 +79,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
   const { id: organizationId } = organization;
-  const queryClient = useQueryClient();
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
-  const resendInvite = useResendOrganizationInvite(organizationId);
-  const { mutateAsync: cancelInvite } = useCancelInvite({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId, 'pending'] });
-      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
-      toast.success('Invite cancelled successfully');
-    },
-    onError: err => {
-      toast.error(err.message);
-    },
-  });
   const isOwner = user.role === 'owner';
   const isManager = user.role === 'manager';
   const isSelf = currentUser?.id === user.id;
-  const isPending = user.status === 'pending';
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
   const confirm = useConfirmation();
   const [offboarding, setOffboarding] = useState(false);
 
   const handleRemoveMember = useCallback(() => setOffboarding(true), []);
-
-  const handleCancelInvite = useCallback(() => {
-    confirm({
-      title: 'Cancel invite',
-      description: `Cancel the invite to ${user.name}? They will no longer be able to join with it.`,
-      okLabel: 'Cancel invite',
-      cancelLabel: 'Keep invite',
-      onOk: async () => {
-        await cancelInvite({
-          id: organizationId,
-          type: InviteType.Organization,
-          // By id: the pending-users list carries no address for non-admins, and a cancel
-          // naming nobody would cancel every open invite to the organization.
-          userId: user.id,
-        });
-      },
-    });
-  }, [confirm, cancelInvite, organizationId, user.id, user.name]);
 
   const handleLeaveOrganization = useCallback(() => {
     confirm({
@@ -149,15 +105,14 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
 
   // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
   // the pool is capped like anyone's. Your own row offers Leave team, never Remove member.
-  const canRevoke = canRevokeMembers && !isPending && !isOwner && !isSelf;
-  const canLeave = !isPending && !isOwner && isSelf;
-  const canCancelInvite = isPending && canInviteMembers;
+  const canRevoke = canRevokeMembers && !isOwner && !isSelf;
+  const canLeave = !isOwner && isSelf;
   // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
   const canToggleManager =
-    canManageManagers && !isPending && !isOwner && (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
+    canManageManagers && !isOwner && (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
   const setManager = useSetOrganizationManager();
-  const canSetCreditLimit = canManageCreditBudgets && !isPending;
-  const hasOtherActions = canSetCreditLimit || canToggleManager || canCancelInvite || canRevoke;
+  const canSetCreditLimit = canManageCreditBudgets;
+  const hasOtherActions = canSetCreditLimit || canToggleManager || canRevoke;
 
   const [editingLimit, setEditingLimit] = useState(false);
   const setOverride = useSetMemberCreditOverride();
@@ -177,10 +132,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       )}
     </Typography>
   ) : (
-    <ExplainedDash
-      testId="organization-user-card-credit-usage"
-      explanation={isPending ? 'No usage yet: this invite is still pending' : 'Only team managers can see member usage'}
-    />
+    <ExplainedDash testId="organization-user-card-credit-usage" explanation="Only team managers can see member usage" />
   );
 
   const lastActiveTitle = formatLastActiveTitle(user.lastActiveAt);
@@ -203,11 +155,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       {user.isBanned && (
         <Chip size="sm" variant="soft" color="danger">
           Deactivated
-        </Chip>
-      )}
-      {isPending && (
-        <Chip size="sm" variant="soft" color="warning" data-testid="organization-user-card-pending-chip">
-          Pending
         </Chip>
       )}
     </>
@@ -269,21 +216,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
             data-testid={isManager ? 'organization-user-card-remove-manager' : 'organization-user-card-make-manager'}
           >
             {isManager ? 'Remove manager' : 'Make manager'}
-          </MenuItem>
-        )}
-        {!isOwner && canCancelInvite && (
-          <MenuItem
-            onClick={() => resendInvite.mutate({ userId: user.id })}
-            disabled={resendInvite.isPending}
-            data-testid="organization-user-card-resend-invite"
-            aria-label={`Resend invitation to ${user.name || user.username || user.id}`}
-          >
-            Resend Invite
-          </MenuItem>
-        )}
-        {!isOwner && canCancelInvite && (
-          <MenuItem onClick={handleCancelInvite} data-testid="organization-user-card-cancel-invite">
-            Cancel invite
           </MenuItem>
         )}
         {canRevoke && (

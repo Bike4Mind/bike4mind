@@ -17,20 +17,30 @@ const mocks = vi.hoisted(() => ({
   search: vi.fn(),
   cancel: vi.fn(),
   resend: vi.fn(),
-  invitations: [] as { id: string; recipients?: { pending?: string[] }; permissions?: string[] }[],
+  invitations: [] as {
+    id: string;
+    recipients?: { pending?: string[] };
+    recipientUsers?: { userId: string; name: string }[];
+    permissions?: string[];
+  }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
   members: [] as { id: string; name: string }[],
-  pending: [] as { id: string; name: string }[],
   searchUsers: [] as { id: string; name: string; username?: string; email?: string; pendingInvite?: boolean }[],
-  seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
+  seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 } as {
+    maxSeats: number;
+    currentSeats: number;
+    availableSeats: number;
+    pendingSeats?: number;
+  },
   membersState: { isLoading: false, isError: false },
   refetch: vi.fn(),
   invitesError: false,
   searchMissing: false,
   shareOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
   cancelOptions: undefined as { onSuccess: () => void; onError: (err: Error) => void } | undefined,
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+  navigate: vi.fn(),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => mocks.confirm }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
@@ -44,7 +54,6 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: mocks.members, ...mocks.membersState, refetch: mocks.refetch }),
-  useGetPendingOrganizationUsers: () => ({ data: mocks.pending }),
   useGetUsers: (parameters: unknown) => {
     mocks.search(parameters);
     return { data: mocks.searchMissing ? undefined : { users: mocks.searchUsers }, isFetching: false };
@@ -53,11 +62,11 @@ vi.mock('@client/app/hooks/data/user', () => ({
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: (options: typeof mocks.shareOptions) => {
     mocks.shareOptions = options;
-    return { mutate: mocks.share, isPending: false };
+    return { mutate: mocks.share, mutateAsync: mocks.share, isPending: false };
   },
   useCancelInvite: (options: typeof mocks.cancelOptions) => {
     mocks.cancelOptions = options;
-    return { mutate: mocks.cancel, isPending: false };
+    return { mutate: mocks.cancel, mutateAsync: mocks.cancel, isPending: false };
   },
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
@@ -78,22 +87,20 @@ vi.mock('./BulkInviteModal', () => ({
     </div>
   ),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('./UserCard', () => ({
   default: (p: {
-    user: { id: string; role: string; status: string; creditUsage: { used: number } | null; permissions: string[] };
-    canInviteMembers: boolean;
+    user: { id: string; role: string; creditUsage: { used: number } | null; permissions: string[] };
     canRevokeMembers: boolean;
     canManageManagers: boolean;
   }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
-      data-invite={String(p.canInviteMembers)}
       data-revoke={String(p.canRevokeMembers)}
       data-manage-managers={String(p.canManageManagers)}
       data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
       data-role={p.user.role}
-      data-status={p.user.status}
       data-permissions={p.user.permissions.join(',')}
     />
   ),
@@ -189,7 +196,6 @@ describe('OrganizationMembers credit budget control', () => {
     mocks.viewerId = 'viewer';
     mocks.viewer = undefined;
     mocks.members = [];
-    mocks.pending = [];
     mocks.searchUsers = [];
     mocks.invitations = [];
     mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
@@ -308,19 +314,15 @@ describe('OrganizationMembers roster controls', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'viewer', isAdmin: false };
     mocks.members = [{ id: 'm1', name: 'Member One' }];
-    mocks.pending = [{ id: 'p1', name: 'Pending One' }];
     mocks.searchUsers = [];
-    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1'] } }];
+    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1@example.test'] } }];
     mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
   });
 
   const expectControls = ({ invite, revoke }: { invite: boolean; revoke: boolean }) => {
     expect(screen.queryByTestId('member-add-modal') !== null).toBe(invite);
-    for (const id of ['m1', 'p1']) {
-      const card = screen.getByTestId(`member-card-${id}`);
-      expect(card.getAttribute('data-invite')).toBe(String(invite));
-      expect(card.getAttribute('data-revoke')).toBe(String(revoke));
-    }
+    expect(screen.queryByTestId('organization-pending-invite-cancel-btn') !== null).toBe(invite);
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-revoke')).toBe(String(revoke));
   };
 
   it('gives a share/update member neither Add, Cancel Invite nor Revoke', () => {
@@ -358,7 +360,6 @@ describe('OrganizationMembers roster controls', () => {
       })
     );
     expect(screen.getByTestId('member-card-m1').getAttribute('data-revoke')).toBe('false');
-    expect(screen.getByTestId('member-card-p1').getAttribute('data-revoke')).toBe('true');
   });
 
   it('gives a stale manager entry with no users[] row nothing', () => {
@@ -403,18 +404,18 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: false, revoke: false });
   });
 
-  it('hides the no-seats Add Member button and seat card from a share/update member', () => {
+  it('hides the no-seats Add Member button from a share/update member, who still sees the seat summary', () => {
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
     renderMembers(buildOrg({ users: [shareUpdateRow('viewer')] as IOrganizationDocument['users'] }));
     expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
-    expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
+    expect(screen.getByTestId('organization-members-seats-card')).toHaveTextContent('1 of 1 seats used');
   });
 
   it('shows the no-seats Add Member button to the owner', () => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeTruthy();
+    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
     expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
   });
@@ -424,7 +425,6 @@ describe('OrganizationMembers email invitations', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.members = [];
-    mocks.pending = [];
     mocks.searchUsers = [];
     mocks.invitations = [];
     mocks.seats = { maxSeats: 3, currentSeats: 1, availableSeats: 2 };
@@ -448,11 +448,16 @@ describe('OrganizationMembers email invitations', () => {
     );
   });
 
-  it('shows and cancels pending email invitations', () => {
+  it('shows and cancels pending email invitations after a confirmation', async () => {
     mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+    mocks.confirm.mockClear();
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('new@example.test');
-    fireEvent.click(screen.getByTestId('organization-cancel-email-invite-btn'));
+    expect(screen.getByTestId('organization-pending-invites')).toHaveTextContent('new@example.test');
+    fireEvent.click(screen.getByTestId('organization-pending-invite-cancel-btn'));
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    const confirmation = mocks.confirm.mock.calls.at(-1)?.[0];
+    if (!confirmation) throw new Error('Missing cancel confirmation');
+    await act(async () => confirmation.onOk());
     expect(mocks.cancel).toHaveBeenCalledWith({ id: 'org1', type: 'Organization', email: 'new@example.test' });
   });
 
@@ -466,21 +471,28 @@ describe('OrganizationMembers email invitations', () => {
   it('does not offer cancellation with another inviter masked address', () => {
     mocks.invitations = [{ id: 'invite1', recipients: { pending: ['n***@example.test'] } }];
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('n***@example.test');
-    expect(screen.queryByTestId('organization-cancel-email-invite-btn')).toBeNull();
-    expect(screen.queryByTestId('organization-resend-email-invite-btn')).toBeNull();
+    expect(screen.getByTestId('organization-pending-invites')).toHaveTextContent('n***@example.test');
+    expect(screen.queryByTestId('organization-pending-invite-cancel-btn')).toBeNull();
+    expect(screen.queryByTestId('organization-pending-invite-resend-btn')).toBeNull();
   });
 
-  it('shows a typed email invite once even after the account appears in pending users', () => {
-    mocks.pending = [{ id: 'new-user', name: 'New User' }];
-    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+  it('lists each pending invite exactly once, never as a roster row', () => {
+    mocks.invitations = [
+      {
+        id: 'invite1',
+        recipients: { pending: ['new@example.test', 'new-user'] },
+        recipientUsers: [{ userId: 'new-user', name: 'New User' }],
+      },
+    ];
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('new@example.test');
+    const rows = screen.getAllByTestId('organization-pending-invite-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('new@example.test');
+    expect(rows[1]).toHaveTextContent('New User');
     expect(screen.queryByTestId('member-card-new-user')).toBeNull();
   });
 
-  it('lets an existing user with only an expired legacy pending row be invited again', () => {
-    mocks.pending = [{ id: 'expired-user', name: 'Expired User' }];
+  it('lets an existing user with no open invitation be invited again', () => {
     mocks.searchUsers = [{ id: 'expired-user', name: 'Expired User', username: 'expired-user' }];
     renderMembers(buildOrg({}));
     const candidate = screen.getByTestId('candidate-expired-user');
@@ -526,7 +538,6 @@ describe('OrganizationMembers manager controls', () => {
   beforeEach(() => {
     mocks.viewer = undefined;
     mocks.members = [{ id: 'member1', name: 'Member One' }];
-    mocks.pending = [];
   });
 
   const org = () =>
@@ -570,13 +581,12 @@ describe('OrganizationMembers roster wiring', () => {
       { id: 'owner1', name: 'Owner' },
       { id: 'e1', name: 'Member One' },
     ];
-    mocks.pending = [{ id: 'p1', name: 'Pending One' }];
-    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1'] } }];
+    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1@example.test'] } }];
     mocks.membersState = { isLoading: false, isError: false };
     mocks.refetch.mockReset();
   });
 
-  it('derives each row role and status from the organization', () => {
+  it('derives each row role from the organization and keeps pending invites off the roster', () => {
     renderMembers(
       buildOrg({
         users: [{ userId: 'e1', permissions: [Permission.read, Permission.update] }] as IOrganizationDocument['users'],
@@ -584,8 +594,8 @@ describe('OrganizationMembers roster wiring', () => {
     );
     expect(screen.getByTestId('member-card-owner1')).toHaveAttribute('data-role', 'owner');
     expect(screen.getByTestId('member-card-e1')).toHaveAttribute('data-role', 'member');
-    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-role', 'member');
-    expect(screen.getByTestId('member-card-p1')).toHaveAttribute('data-status', 'pending');
+    expect(screen.queryAllByTestId(/^member-card-/)).toHaveLength(2);
+    expect(screen.getByTestId('organization-pending-invite-row')).toHaveTextContent('p1@example.test');
   });
 
   it('retries a failed member load', () => {
@@ -603,7 +613,6 @@ describe('OrganizationMembers roster wiring', () => {
 
   it('builds an empty roster when no member data has arrived', () => {
     mocks.members = undefined as unknown as typeof mocks.members;
-    mocks.pending = undefined as unknown as typeof mocks.pending;
     renderMembers(buildOrg({}));
     expect(screen.getByTestId('organization-members-empty')).toBeTruthy();
   });
@@ -613,7 +622,6 @@ describe('OrganizationMembers invite plumbing', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.members = [];
-    mocks.pending = [];
     mocks.searchUsers = [];
     mocks.invitations = [];
     mocks.invitesError = false;
@@ -622,14 +630,38 @@ describe('OrganizationMembers invite plumbing', () => {
     mocks.seats = { maxSeats: 4, currentSeats: 1, availableSeats: 2 };
     mocks.toast.success.mockReset();
     mocks.toast.error.mockReset();
+    mocks.toast.warning.mockReset();
+    mocks.share.mockReset();
   });
 
-  it('reports invite and cancel outcomes', () => {
+  it('reports a multi-select invite with one summary toast, even when some fail', async () => {
+    mocks.seats = { maxSeats: 10, currentSeats: 1, availableSeats: 9 };
+    mocks.share
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('Organization is full'))
+      .mockResolvedValueOnce({});
     renderMembers(buildOrg({}));
-    act(() => mocks.shareOptions?.onSuccess());
-    expect(mocks.toast.success).toHaveBeenCalledWith('organizations.modals.members.invited');
+    fireEvent.click(screen.getByTestId('select-three'));
+    await act(async () => fireEvent.click(screen.getByTestId('add-selected')));
+    expect(mocks.share).toHaveBeenCalledTimes(3);
+    expect(mocks.toast.warning).toHaveBeenCalledExactlyOnceWith(
+      '2 of 3 invitations sent; 1 failed. Organization is full'
+    );
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('mutes the per-request share toasts', () => {
+    renderMembers(buildOrg({}));
+    mocks.shareOptions?.onSuccess();
     mocks.shareOptions?.onError(new Error('share failed'));
-    expect(mocks.toast.error).toHaveBeenCalledWith('share failed');
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('reports the cancel outcome', () => {
+    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+    renderMembers(buildOrg({}));
     mocks.cancelOptions?.onSuccess();
     expect(mocks.toast.success).toHaveBeenCalledWith('Invitation cancelled');
     mocks.cancelOptions?.onError(new Error('cancel failed'));
@@ -651,19 +683,42 @@ describe('OrganizationMembers invite plumbing', () => {
   });
 
   it.each([
-    [{ maxSeats: 4, currentSeats: 3, availableSeats: 1 }, '1 seats available'],
-    [{ maxSeats: 10, currentSeats: 9, availableSeats: 1 }, '1 seats available'],
+    [{ maxSeats: 4, currentSeats: 3, availableSeats: 1 }, '1 available'],
+    [{ maxSeats: 10, currentSeats: 9, availableSeats: 1 }, '1 available'],
   ])('shows the seat chip for %o', (seats, text) => {
     mocks.seats = seats;
     renderMembers(buildOrg({}));
     expect(screen.getByText(text)).toBeTruthy();
   });
 
-  it('explains a full plan when Add Member is pressed', () => {
+  it('disables Add Member at the seat limit and sends the owner to Billing to add seats', () => {
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    mocks.navigate.mockReset();
     renderMembers(buildOrg({}));
-    fireEvent.click(screen.getByTestId('organization-members-add-no-seats-btn'));
-    expect(mocks.toast.error).toHaveBeenCalledWith('organizations.errors.no_seats');
+    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent('All seats are in use.');
+    fireEvent.click(screen.getByTestId('organization-members-add-seats-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/organizations/$id', params: { id: 'org1' }, search: { tab: 'billing' } })
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('tells a manager at the seat limit to ask the owner, with no Billing link', () => {
+    mocks.viewer = { id: 'manager1', isAdmin: false };
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['manager1'],
+        users: [{ userId: 'manager1', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
+      'All seats are in use. Ask the team owner to add seats.'
+    );
+    expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+    expect(screen.queryByText(/upgrade/i)).toBeNull();
   });
 
   it('says when pending invitations fail to load', () => {
@@ -676,14 +731,15 @@ describe('OrganizationMembers invite plumbing', () => {
     mocks.invitations = [{ id: 'blank' }, { id: 'empty', recipients: {} }];
     mocks.searchMissing = true;
     renderMembers(buildOrg({}));
-    expect(screen.queryByTestId('organization-pending-email-invites')).toBeNull();
+    expect(screen.queryByTestId('organization-pending-invites')).toBeNull();
   });
 
   it('renders before pending invitations have loaded', () => {
     mocks.invitations = undefined as unknown as typeof mocks.invitations;
-    mocks.pending = [{ id: 'p1', name: 'Pending One' }];
+    mocks.members = [{ id: 'm1', name: 'Member One' }];
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('member-card-p1')).toBeTruthy();
+    expect(screen.getByTestId('member-card-m1')).toBeTruthy();
+    expect(screen.queryByTestId('organization-pending-invites')).toBeNull();
   });
 
   it('keeps an accepted member accepted when an old invite still lists them', () => {
@@ -727,7 +783,6 @@ describe('OrganizationMembers organization identity', () => {
     mocks.viewerId = 'viewer';
     mocks.viewer = undefined;
     mocks.members = [{ id: 'shared', name: 'Shared Member' }];
-    mocks.pending = [];
     mocks.invitations = [];
     mocks.membersState = { isLoading: false, isError: false };
     mocks.removeMember.mockClear();
@@ -764,7 +819,6 @@ describe('OrganizationMembers invite role', () => {
   beforeEach(() => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.members = [];
-    mocks.pending = [];
     mocks.searchUsers = [{ id: 'candidate1', name: 'Candidate', username: 'candidate' }];
     mocks.invitations = [];
     mocks.seats = { maxSeats: 5, currentSeats: 1, availableSeats: 4 };
@@ -825,13 +879,16 @@ describe('OrganizationMembers invite role', () => {
     expect(screen.queryByRole('option', { name: 'Admin' })).toBeNull();
   });
 
-  it('shows a pending member the role their invite carries', () => {
-    mocks.pending = [{ id: 'pending1', name: 'Pending' }];
+  it('shows a pending invite with the role it carries', () => {
     mocks.invitations = [
-      { id: 'invite1', recipients: { pending: ['pending1'] }, permissions: [Permission.read, Permission.update] },
+      {
+        id: 'invite1',
+        recipients: { pending: ['pending@example.test'] },
+        permissions: [Permission.read, Permission.update],
+      },
     ];
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('member-card-pending1').getAttribute('data-permissions')).toBe('read,update');
+    expect(screen.getByTestId('organization-pending-invite-row')).toHaveTextContent('Editor');
   });
 });
 
@@ -840,7 +897,6 @@ describe('OrganizationMembers bulk invite', () => {
     mocks.viewer = { id: 'owner1', isAdmin: false };
     mocks.members = [];
     mocks.invitations = [];
-    mocks.pending = [];
   });
 
   it('opens the bulk invite modal with the available seat count and closes it', () => {
@@ -878,7 +934,6 @@ describe('OrganizationMembers MFA policy save ownership', () => {
     mocks.get.mockReset();
     mocks.viewer = undefined;
     mocks.members = [];
-    mocks.pending = [];
     mocks.invitations = [];
     mocks.viewerId = 'owner1';
     mocks.get.mockResolvedValue({ data: { members: [] } });
