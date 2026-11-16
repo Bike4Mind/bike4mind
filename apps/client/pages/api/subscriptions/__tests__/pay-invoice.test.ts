@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import Stripe from 'stripe';
-import { BadRequestError, ConflictError } from '@bike4mind/common';
+import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/common';
 
 const baseApiMock = vi.hoisted(() => {
   const state: { options?: unknown } = {};
@@ -121,7 +121,7 @@ describe('POST /api/subscriptions/pay-invoice', () => {
 
   it('refuses another user without touching Stripe', async () => {
     await expect(run({ id: 'user_2', stripeCustomerId: 'cus_2' })).rejects.toMatchObject({
-      constructor: BadRequestError,
+      constructor: NotFoundError,
       message: 'Subscription not found',
     });
     expect(mockRetrieve).not.toHaveBeenCalled();
@@ -140,7 +140,7 @@ describe('POST /api/subscriptions/pay-invoice', () => {
 
   it('answers an unknown subscription exactly like one owned by someone else', async () => {
     mockFindByStripeId.mockResolvedValue(null);
-    await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });
+    await expect(run()).rejects.toMatchObject({ constructor: NotFoundError, message: 'Subscription not found' });
   });
 
   it('pays an org invoice for the org owner against the org customer', async () => {
@@ -159,7 +159,7 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     mockFindByStripeId.mockResolvedValue(userRow({ ownerType: 'Organization', ownerId: 'org_1' }));
     mockOrgFindById.mockResolvedValue({ id: 'org_1', userId: 'owner_9', stripeCustomerId: 'cus_org' });
 
-    await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });
+    await expect(run()).rejects.toMatchObject({ constructor: NotFoundError, message: 'Subscription not found' });
     expect(mockRetrieve).not.toHaveBeenCalled();
     expect(mockPay).not.toHaveBeenCalled();
   });
@@ -191,32 +191,31 @@ describe('POST /api/subscriptions/pay-invoice', () => {
       stripeCustomerId: 'cus_org',
     });
 
-    await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });
+    await expect(run()).rejects.toMatchObject({ constructor: NotFoundError, message: 'Subscription not found' });
     expect(mockRetrieve).not.toHaveBeenCalled();
     expect(mockPay).not.toHaveBeenCalled();
   });
 
-  it('refuses a platform admin who is not the org owner', async () => {
+  it('pays an org invoice for a platform admin who holds no role in the org', async () => {
     mockFindByStripeId.mockResolvedValue(userRow({ ownerType: 'Organization', ownerId: 'org_1' }));
     mockOrgFindById.mockResolvedValue({ id: 'org_1', userId: 'owner_9', stripeCustomerId: 'cus_org' });
+    mockRetrieve.mockResolvedValue(liveSubscription({ customer: 'cus_org' }));
 
-    await expect(run({ id: 'user_1', stripeCustomerId: 'cus_1', isAdmin: true })).rejects.toMatchObject({
-      constructor: BadRequestError,
-      message: 'Subscription not found',
-    });
-    expect(mockRetrieve).not.toHaveBeenCalled();
-    expect(mockPay).not.toHaveBeenCalled();
+    const res = await run({ id: 'user_1', stripeCustomerId: 'cus_1', isAdmin: true });
+
+    expect(mockPay).toHaveBeenCalledWith('in_1');
+    expect(res._getJSONData()).toEqual({ status: 'paid' });
   });
 
   it('refuses when the Stripe subscription belongs to a different customer', async () => {
     mockRetrieve.mockResolvedValue(liveSubscription({ customer: { id: 'cus_other' } }));
 
-    await expect(run()).rejects.toMatchObject({ constructor: BadRequestError, message: 'Subscription not found' });
+    await expect(run()).rejects.toMatchObject({ constructor: NotFoundError, message: 'Subscription not found' });
     expect(mockPay).not.toHaveBeenCalled();
   });
 
   it('refuses when the owner has no Stripe customer on file', async () => {
-    await expect(run({ id: 'user_1', stripeCustomerId: null })).rejects.toBeInstanceOf(BadRequestError);
+    await expect(run({ id: 'user_1', stripeCustomerId: null })).rejects.toBeInstanceOf(NotFoundError);
     expect(mockPay).not.toHaveBeenCalled();
   });
 
@@ -332,5 +331,71 @@ describe('POST /api/subscriptions/pay-invoice', () => {
     mockPay.mockRejectedValue(apiError);
 
     await expect(run()).rejects.toBe(apiError);
+  });
+
+  describe('org subscription role matrix (manageBilling)', () => {
+    const ORG = '650000000000000000000abc';
+    const MISSING_ORG = '650000000000000000000999';
+    const OWNER = '650000000000000000000111';
+    const BILLING_MANAGER = '650000000000000000000222';
+    const MANAGER = '650000000000000000000333';
+    const MEMBER = '650000000000000000000444';
+    const OUTSIDER = '650000000000000000000555';
+
+    const org = {
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [MANAGER],
+      billingManagerUserIds: [BILLING_MANAGER],
+      users: [{ userId: MANAGER }, { userId: BILLING_MANAGER }, { userId: MEMBER }],
+      stripeCustomerId: 'cus_org',
+    };
+    const orgRow = (ownerId: string) => userRow({ ownerType: 'Organization', ownerId });
+
+    const attempt = async (user: Record<string, unknown>) => {
+      const { req, res } = makeReq({ stripeCustomerId: 'cus_caller', ...user });
+      return (handler as HandlerFn)(req, res).then(
+        () => ({ res, error: undefined }),
+        (error: unknown) => ({ res, error })
+      );
+    };
+
+    beforeEach(() => {
+      mockFindByStripeId.mockResolvedValue(orgRow(ORG));
+      mockOrgFindById.mockImplementation(async (id: string) => (id === ORG ? org : null));
+      mockRetrieve.mockResolvedValue(liveSubscription({ customer: 'cus_org' }));
+    });
+
+    it.each([
+      ['the owner', { id: OWNER, isAdmin: false }],
+      ['a billing manager', { id: BILLING_MANAGER, isAdmin: false }],
+      ['a platform admin who is not a member', { id: OUTSIDER, isAdmin: true }],
+    ])('pays for %s against the org customer', async (_label, user) => {
+      const { res, error } = await attempt(user);
+
+      expect(error).toBeUndefined();
+      expect(res.statusCode).toBe(200);
+      expect(mockPay).toHaveBeenCalledWith('in_1');
+    });
+
+    it.each([
+      ['a plain member', { id: MEMBER, isAdmin: false }, ORG],
+      ['a manager', { id: MANAGER, isAdmin: false }, ORG],
+      ['an outsider', { id: OUTSIDER, isAdmin: false }, ORG],
+      ['a nonexistent org behind the subscription row', { id: OWNER, isAdmin: false }, MISSING_ORG],
+    ])('answers %s exactly like a missing subscription and pays nothing', async (_label, user, ownerId) => {
+      mockFindByStripeId.mockResolvedValueOnce(null);
+      const { error: missingRow } = await attempt({ id: OWNER, isAdmin: false });
+      mockFindByStripeId.mockResolvedValue(orgRow(ownerId));
+
+      const { error } = await attempt(user);
+
+      expect(error).toBeInstanceOf(NotFoundError);
+      expect(error).toMatchObject({ statusCode: 404, message: 'Subscription not found' });
+      expect(error).toEqual(missingRow);
+      expect(mockRetrieve).not.toHaveBeenCalled();
+      expect(mockListInvoices).not.toHaveBeenCalled();
+      expect(mockPay).not.toHaveBeenCalled();
+    });
   });
 });

@@ -99,7 +99,7 @@ export const orgRoleHasPermission = (role: OrganizationMemberRole, permission: O
 
 /**
  * Does `userId`'s own role grant `permission`? No platform-admin arm: use this only where a platform
- * admin must not act as the team (the Stripe billing portal, the Billing tab).
+ * admin must not act as the team (the Billing tab).
  */
 export const orgMemberHasPermission = (org: OrgRoleSubject, userId: string, permission: OrgPermission): boolean => {
   const role = organizationMemberRole(org, userId);

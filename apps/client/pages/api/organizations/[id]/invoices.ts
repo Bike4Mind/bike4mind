@@ -1,6 +1,4 @@
 import type Stripe from 'stripe';
-import { orgMemberHasPermission } from '@bike4mind/common';
-import { NotFoundError } from '@bike4mind/utils';
 import { getStripe, isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
@@ -31,17 +29,14 @@ const EMPTY: OrgInvoicesResponse = { invoices: [], hasMore: false };
 
 /**
  * GET /api/organizations/:id/invoices - the org's most recent Stripe invoices for its Billing tab.
- * `manageBilling` without the platform-admin arm, like the tab (orgTabAccess `canViewOrgBilling`) and the billing portal route: platform
- * admins get 404 here too and use the admin subscription page instead. An org with no Stripe customer
- * has no invoices. First-party only (`jwtOnly`), so it needs no public API contract.
+ * Gated on `manageBilling` like every org billing route (owner, billing manager, platform admin). An org
+ * with no Stripe customer has no invoices. First-party only (`jwtOnly`), so it needs no public API contract.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: ORG_INVOICES_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'org-invoices' }))
   .get(async (req, res) => {
     const organizationId = typeof req.query.id === 'string' ? req.query.id : '';
     const org = await verifyOrgPermission(req.user!, organizationId, 'manageBilling');
-    // verifyOrgPermission admits platform admins; like the portal, this list is the team's own.
-    if (!orgMemberHasPermission(org, req.user!.id, 'manageBilling')) throw new NotFoundError('Organization not found');
 
     res.setHeader('Cache-Control', 'private, no-store');
     if (!org.stripeCustomerId || !isStripeConfigured()) return res.status(200).json(EMPTY);

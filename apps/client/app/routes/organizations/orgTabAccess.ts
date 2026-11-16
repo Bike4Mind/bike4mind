@@ -3,7 +3,6 @@
 import {
   canReadOrganizationAudit,
   hasOrgPermission,
-  orgMemberHasPermission,
   Permission,
   type OrgPermission,
   type OrgRoleSubject,
@@ -130,18 +129,12 @@ export const canManageOrgApiKeys = permissionGate('manageKeys');
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
  * - Pay invoice      pages/api/subscriptions/pay-invoice.ts
- * Must stay in sync with those four.
- *
- * A platform admin who holds no role is deliberately excluded, though the first two routes would
- * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
- * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
- * is the same split the page already makes for member management.
+ * Must stay in sync with those four, which all gate on `manageBilling` and so admit a platform admin.
  *
  * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
  * the Overview tab and the page header, which every member sees.
  */
-export const canViewOrgBilling = (currentUser: TabViewer, organization: TabOrg): boolean =>
-  !!currentUser && !!organization && orgMemberHasPermission(organization, currentUser.id, 'manageBilling');
+export const canViewOrgBilling = permissionGate('manageBilling');
 
 /**
  * Who may see the Domains tab: the same `manageMembers` check `loadOrgForDomainAdmin` runs for the

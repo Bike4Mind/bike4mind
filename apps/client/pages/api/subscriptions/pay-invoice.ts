@@ -1,5 +1,5 @@
 import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError, ConflictError, HTTPError, orgMemberHasPermission } from '@bike4mind/common';
+import { BadRequestError, ConflictError, HTTPError, hasOrgPermission, NotFoundError } from '@bike4mind/common';
 import {
   SubscriptionOwnerType,
   SubscriptionSource,
@@ -49,18 +49,18 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const { subscriptionId } = PayInvoiceSchema.parse(req.body);
 
     const row = await subscriptionRepository.findByStripeSubscriptionId(subscriptionId);
-    if (!row) throw new BadRequestError(NOT_FOUND_MESSAGE);
+    if (!row) throw new NotFoundError(NOT_FOUND_MESSAGE);
 
     let customerId: string | null;
     if (row.ownerType === SubscriptionOwnerType.Organization) {
       const organization = await organizationRepository.findById(row.ownerId);
-      // The caller's own manageBilling, with no platform-admin arm, matching the billing portal.
-      if (!organization || !orgMemberHasPermission(organization, user.id, 'manageBilling')) {
-        throw new BadRequestError(NOT_FOUND_MESSAGE);
+      // The same manageBilling gate as every org billing route (owner, billing manager, platform admin).
+      if (!organization || !hasOrgPermission(user, organization, 'manageBilling')) {
+        throw new NotFoundError(NOT_FOUND_MESSAGE);
       }
       customerId = organization.stripeCustomerId ?? null;
     } else {
-      if (row.ownerId !== user.id) throw new BadRequestError(NOT_FOUND_MESSAGE);
+      if (row.ownerId !== user.id) throw new NotFoundError(NOT_FOUND_MESSAGE);
       customerId = user.stripeCustomerId ?? null;
     }
 
@@ -72,7 +72,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const live = await stripe.subscriptions.retrieve(subscriptionId);
     if (!customerId || idOf(live.customer) !== customerId) {
       req.logger.warn(`pay-invoice: customer mismatch on subscription ${subscriptionId}`);
-      throw new BadRequestError(NOT_FOUND_MESSAGE);
+      throw new NotFoundError(NOT_FOUND_MESSAGE);
     }
 
     // Not just latest_invoice: a subscription left delinquent across a renewal keeps the older failed

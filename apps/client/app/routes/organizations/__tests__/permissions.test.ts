@@ -121,11 +121,9 @@ describe('Organization Permissions', () => {
       expect(canViewOrgBilling({ id: 'manager456' }, org)).toBe(false);
     });
 
-    // Narrower than canViewOrgUsage on purpose: portal.ts has no admin bypass, so an admin who is
-    // not the owner would get a Billing Portal button that rejects them. Admin -> Organizations is
-    // where a platform admin acts on an org's billing.
-    it('denies a platform admin who is not the owner', () => {
-      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(false);
+    // Every billing route gates on manageBilling, which a platform admin holds.
+    it('allows a platform admin who is not the owner', () => {
+      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
     });
 
     it('denies a stranger', () => {

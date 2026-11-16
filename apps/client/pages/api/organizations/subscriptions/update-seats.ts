@@ -1,11 +1,11 @@
-import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { z } from 'zod';
-import { hasOrgPermission, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import dayjs from 'dayjs';
@@ -33,15 +33,9 @@ const handler = baseApi()
     const teamPlan = await getTeamPlanSettings();
     assertSeatsWithinPlan(seats, teamPlan);
 
-    const organization = await organizationRepository.findById(organizationId);
-    if (!organization) throw new NotFoundError('Organization not found');
-
-    // IDOR guard: only a holder of manageBilling (the owner, a billing manager, or a platform admin) may mutate seats.
-    // Without this, any authenticated user could pass another tenant's org id
-    // and trigger stripe.subscriptions.update() against their payment method.
-    if (!hasOrgPermission(req.user, organization, 'manageBilling')) {
-      throw new ForbiddenError('Not authorized to change seats for this organization');
-    }
+    // Only a manageBilling holder (owner, billing manager, platform admin) may change seats; a missing
+    // org and one the caller may not bill both answer 404.
+    const organization = await verifyOrgPermission(req.user, organizationId, 'manageBilling');
 
     // Admin-granted orgs do not flow through this endpoint - convert-to-paid
     // is the only sanctioned path to enable Stripe billing for them.
