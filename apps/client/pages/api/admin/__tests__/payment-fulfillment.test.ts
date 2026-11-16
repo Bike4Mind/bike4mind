@@ -52,7 +52,7 @@ describe('payment fulfillment endpoint', () => {
     const res = await call({}, { id: ADMIN.id, isAdmin: false, adminPermissions: ['support:read'] });
     expect(res._getJSONData()).toMatchObject({ availability: 'unavailable' });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
-    expect(mocks.read).toHaveBeenCalledWith({ days: 7, limit: 10 }, logger);
+    expect(mocks.read).toHaveBeenCalledWith({ source: 'payments', days: 7, limit: 10 }, logger);
   });
   it('rejects malformed or unbounded input before provider calls', async () => {
     for (const query of [{ days: '999' }, { limit: '100' }, { state: 'nonsense' }, { cursor: 'abc' }]) {

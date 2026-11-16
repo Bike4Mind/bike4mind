@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   org: vi.fn(),
   find: vi.fn(),
   lean: vi.fn(),
+  invoices: vi.fn(),
+  invoiceEvidence: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   CreditTransaction: { find: mocks.find },
@@ -22,9 +24,11 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
     paymentIntents: { list: mocks.payments },
     refunds: { list: mocks.refunds },
     disputes: { list: mocks.disputes },
+    invoices: { list: mocks.invoices },
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test-stage' } }));
+vi.mock('./invoices', () => ({ invoiceEvidence: mocks.invoiceEvidence }));
 import { readPaymentFulfillment } from './read';
 const logger = { error: vi.fn() };
 const read = (query: Parameters<typeof readPaymentFulfillment>[0]) => readPaymentFulfillment(query, logger);
@@ -133,8 +137,28 @@ describe('read-only provider reconciliation', () => {
     expect(mocks.refunds).not.toHaveBeenCalled();
   });
   it('validates bounded periods, limits and stable provider cursors', () => {
-    for (const query of [{ days: 91 }, { limit: 26 }, { cursor: 'not-a-provider-id' }, { state: 'duplicate' }]) {
+    for (const query of [
+      { days: 91 },
+      { limit: 26 },
+      { cursor: 'not-a-provider-id' },
+      { source: 'invoices', cursor: 'pi_wrong' },
+    ]) {
       expect(PaymentFulfillmentQuery.safeParse(query).success).toBe(false);
     }
+  });
+  it('paginates invoice reads independently and preserves unavailable on lookup failure', async () => {
+    mocks.invoices.mockResolvedValue({ data: [{ id: 'in_next' }], has_more: true });
+    mocks.invoiceEvidence.mockResolvedValue(null);
+    const query = PaymentFulfillmentQuery.parse({ source: 'invoices', cursor: 'in_previous', limit: 5 });
+    expect(await read(query)).toMatchObject({
+      availability: 'available',
+      nextCursor: 'in_next',
+      scanned: 1,
+      items: [],
+    });
+    expect(mocks.invoices).toHaveBeenCalledWith(expect.objectContaining({ starting_after: 'in_previous', limit: 5 }));
+    mocks.invoiceEvidence.mockRejectedValue(new Error('invoice provider unavailable'));
+    expect(await read(query)).toMatchObject({ availability: 'unavailable', items: [], nextCursor: null });
+    expect(logger.error).toHaveBeenCalled();
   });
 });

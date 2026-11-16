@@ -106,4 +106,53 @@ describe('payment fulfillment review', () => {
     );
     expect(screen.getByTestId('payment-review-timeline')).toHaveTextContent('tx1');
   });
+  it('shows invoice evidence, exact subscription links, and page counts matching the rows', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        ...page,
+        items: [
+          {
+            id: 'in_1',
+            state: 'duplicate',
+            explanation: 'Two stable keys match one invoice',
+            createdAt: page.from,
+            settledAt: page.from,
+            amount: 0,
+            currency: 'usd',
+            livemode: false,
+            product: 'subscription',
+            expectedCredits: null,
+            owner: { id: 'user1', type: 'User' },
+            rows: [],
+            refunds: [],
+            dispute: null,
+            invoice: {
+              id: 'in_1',
+              subscriptionId: 'sub_1',
+              subscriptionRecordId: 'local1',
+              billingReason: 'subscription_cycle',
+              paymentIntentIds: ['pi_1'],
+              expectsGrant: true,
+            },
+          },
+        ],
+      },
+    });
+    renderReview();
+    expect(await screen.findByTestId('payment-review-row')).toHaveTextContent('subscription_cycle');
+    expect(screen.getByTestId('payment-review-counts')).toHaveTextContent('duplicate: 1');
+    expect(screen.getAllByTestId('payment-review-row')).toHaveLength(1);
+    expect(screen.getByTestId('payment-review-provider-link')).toHaveAttribute(
+      'href',
+      'https://dashboard.stripe.com/test/invoices/in_1'
+    );
+    fireEvent.click(screen.getByTestId('payment-review-subscription-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith({
+      to: '/admin/subscriptions/$subscriptionId',
+      params: { subscriptionId: 'local1' },
+      search: { tab: 'timeline' },
+    });
+    fireEvent.click(screen.getByTestId('payment-review-owner-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'user1' } });
+  });
 });

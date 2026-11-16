@@ -110,6 +110,7 @@ export const ADMIN_TAB_PARAMS = {
     'paymentState',
     'paymentOwner',
     'paymentCursor',
+    'paymentSource',
   ],
   [ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG]: SIGNUP_RISK_REVIEW_TAB_PARAMS,
   [ADMIN_ANALYTICS_TAB_SLUG]: ANALYTICS_TAB_PARAMS,

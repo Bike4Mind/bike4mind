@@ -9,6 +9,7 @@ import type {
 import { classifyPayment } from './classify';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import type { Logger } from '@bike4mind/observability';
+import { invoiceEvidence } from './invoices';
 
 type LedgerRow = Omit<FulfillmentLedgerRow, 'id' | 'createdAt' | 'reversedAt'> & {
   _id: { toString(): string };
@@ -32,6 +33,27 @@ export async function readPaymentFulfillment(
   };
   if (!isStripeConfigured()) return page;
   try {
+    if (query.source === 'invoices') {
+      const invoices = await stripe.invoices.list({
+        created: { gte: Math.floor(from.getTime() / 1000), lte: Math.floor(now.getTime() / 1000) },
+        limit: query.limit,
+        starting_after: query.cursor,
+      });
+      const evidence = await Promise.all(invoices.data.map(invoiceEvidence));
+      return {
+        ...page,
+        availability: 'available',
+        scanned: invoices.data.length,
+        nextCursor: invoices.has_more ? (invoices.data.at(-1)?.id ?? null) : null,
+        items: evidence
+          .filter(item => item !== null)
+          .map(item => classifyPayment(item, now))
+          .filter(
+            item =>
+              (!query.state || item.state === query.state) && (!query.ownerType || item.owner?.type === query.ownerType)
+          ),
+      };
+    }
     const payments = await stripe.paymentIntents.list({
       created: { gte: Math.floor(from.getTime() / 1000), lte: Math.floor(now.getTime() / 1000) },
       limit: query.limit,
@@ -70,7 +92,9 @@ export async function readPaymentFulfillment(
             ...(dispute ? [{ stripeDisputeId: dispute.id }] : []),
           ],
         })
-          .select('type ownerId ownerType credits createdAt status stripeRefundId stripeDisputeId reversedAt')
+          .select(
+            'type ownerId ownerType credits createdAt status stripeRefundId stripeDisputeId reversedAt stripePaymentIntentId'
+          )
           .limit(102)
           .maxTimeMS(3000)
           .lean<LedgerRow[]>();

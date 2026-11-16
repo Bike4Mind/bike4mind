@@ -81,4 +81,45 @@ describe('payment fulfillment evidence', () => {
     expect(state({ succeeded: false, rows: [] })).toBe('pending');
     expect(state({ refunds: [{ id: 're_1', amount: 1000, status: 'failed', createdAt: old }] })).toBe('consistent');
   });
+  it('reviews won disputes with remaining deductions instead of reporting all-clear', () => {
+    expect(
+      state({
+        dispute: { id: 'dp_1', status: 'won', createdAt: old },
+        rows: [grant, { ...grant, id: 'deduct', type: 'generic_deduct', credits: -100, stripeDisputeId: 'dp_1' }],
+      })
+    ).toBe('reversal');
+  });
+  it('distinguishes missing renewals, historical uncertainty and stable alternate-key duplicate candidates', () => {
+    const invoice = {
+      id: 'in_1',
+      subscriptionId: 'sub_1',
+      subscriptionRecordId: 's1',
+      billingReason: 'subscription_cycle',
+      paymentIntentIds: ['pi_1'],
+      expectsGrant: true,
+    };
+    const base = { product: 'subscription' as const, expectedCredits: null, invoice };
+    expect(state({ ...base, rows: [] })).toBe('unmatched');
+    expect(state({ ...base, rows: [], settledAt: recent })).toBe('pending');
+    expect(state({ ...base, rows: [{ ...grant, type: 'subscription' }] })).toBe('unknown');
+    expect(
+      state({
+        ...base,
+        rows: [
+          { ...grant, type: 'subscription', stripePaymentIntentId: 'pi_1' },
+          { ...grant, id: 'tx2', type: 'subscription', stripePaymentIntentId: 'in_1' },
+        ],
+      })
+    ).toBe('duplicate');
+    expect(
+      state({ ...base, rows: [], invoice: { ...invoice, billingReason: 'subscription_create', expectsGrant: false } })
+    ).toBe('unknown');
+    expect(
+      state({ ...base, rows: [], invoice: { ...invoice, billingReason: 'subscription_update', expectsGrant: false } })
+    ).toBe('unknown');
+    expect(state({ ...base, rows: [], complete: false })).toBe('unknown');
+    expect(state({ ...base, refunds: [{ id: 're_sub', amount: 100, status: 'succeeded', createdAt: old }] })).toBe(
+      'reversal'
+    );
+  });
 });

@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import {
   FULFILLMENT_STATES,
   PaymentFulfillmentQuery,
+  fulfillmentCounts,
   type PaymentFulfillmentPage,
 } from '@client/app/utils/paymentFulfillment';
 import { EmptyState, ErrorState, SectionCard } from '../shared';
@@ -43,7 +44,7 @@ export function PaymentFulfillmentReview() {
     <SectionCard title="Payment fulfillment reconciliation" body="custom" data-testid="payment-review">
       <Stack gap={2} sx={{ p: 2 }}>
         <Typography level="body-sm">
-          Read-only ledger review. Covers payment intents, not invoice-only grants or independent balance delivery.
+          Read-only ledger review of payments and subscription invoices, including zero-dollar and invoice-only cycles.
           Subscription amounts remain unknown without historical entitlement evidence.
         </Typography>
         <Link
@@ -54,6 +55,15 @@ export function PaymentFulfillmentReview() {
           Subscription findings and timelines
         </Link>
         <Stack direction="row" gap={1} flexWrap="wrap">
+          <Select
+            value={params.source}
+            onChange={(_, value) => filter('source', value ?? 'payments')}
+            aria-label="Evidence source"
+            data-testid="payment-review-source-select"
+          >
+            <Option value="payments">Payment intents</Option>
+            <Option value="invoices">Subscription invoices</Option>
+          </Select>
           <Select
             value={String(params.days)}
             onChange={(_, value) => filter('days', value ?? '7')}
@@ -124,6 +134,12 @@ export function PaymentFulfillmentReview() {
                 on this page; showing {query.data.items.length} after server-side filters. Not an account-wide total.
                 Settlement grace: 72 hours.
               </Typography>
+              <Typography level="body-sm" data-testid="payment-review-counts">
+                This page:{' '}
+                {Object.entries(fulfillmentCounts(query.data.items))
+                  .map(([state, count]) => `${state}: ${count}`)
+                  .join('; ')}
+              </Typography>
               {query.data.items.length === 0 && (
                 <EmptyState
                   title="No matching records on this page"
@@ -141,6 +157,31 @@ export function PaymentFulfillmentReview() {
                     {item.state}: {item.id}
                   </Typography>
                   <Typography level="body-sm">{item.explanation}</Typography>
+                  {item.invoice && (
+                    <>
+                      <Typography level="body-sm">
+                        Invoice {item.invoice.id}; {item.invoice.billingReason}; subscription{' '}
+                        {item.invoice.subscriptionId}. Payment keys:{' '}
+                        {item.invoice.paymentIntentIds.join(', ') || 'invoice-only'}. Expected grant:{' '}
+                        {item.invoice.expectsGrant ? 'positive renewal grant; amount unknown' : 'unknown'}.
+                      </Typography>
+                      {item.invoice.subscriptionRecordId && (
+                        <Link
+                          component="button"
+                          data-testid="payment-review-subscription-link"
+                          onClick={() =>
+                            void navigate({
+                              to: '/admin/subscriptions/$subscriptionId',
+                              params: { subscriptionId: item.invoice!.subscriptionRecordId! },
+                              search: { tab: 'timeline' },
+                            })
+                          }
+                        >
+                          Open subscription timeline and findings
+                        </Link>
+                      )}
+                    </>
+                  )}
                   <Typography level="body-sm">
                     {item.product}; {item.amount} {item.currency.toUpperCase()} minor units; expected credits:{' '}
                     {item.expectedCredits ?? 'unknown'}
@@ -162,7 +203,7 @@ export function PaymentFulfillmentReview() {
                     </Link>
                   )}
                   <Link
-                    href={`https://dashboard.stripe.com/${item.livemode ? '' : 'test/'}payments/${item.id}`}
+                    href={`https://dashboard.stripe.com/${item.livemode ? '' : 'test/'}${item.invoice ? 'invoices' : 'payments'}/${item.id}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     data-testid="payment-review-provider-link"
@@ -177,7 +218,7 @@ export function PaymentFulfillmentReview() {
                       ...item.rows.map(row => ({
                         id: row.id,
                         at: row.createdAt,
-                        text: `${row.type}: ${row.credits} credits; ${row.status ?? 'no purchase status'}; owner ${row.ownerType}/${row.ownerId}`,
+                        text: `${row.type}: ${row.credits} credits; key ${row.stripePaymentIntentId ?? 'unknown'}; ${row.status ?? 'no purchase status'}; owner ${row.ownerType}/${row.ownerId}`,
                       })),
                       ...item.refunds.map(refund => ({
                         id: refund.id,

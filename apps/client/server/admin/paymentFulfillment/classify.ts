@@ -7,7 +7,11 @@ export function classifyPayment(e: FulfillmentEvidence, now: Date): FulfillmentF
   if (!e.complete) return finding('unknown', 'Provider or ledger evidence is incomplete.');
   if (!e.succeeded) return finding('pending', 'Provider payment has not succeeded; no issuance is inferred.');
   const grants = e.rows.filter(row => row.type === 'purchase' || row.type === 'subscription');
-  if (grants.length > 1) return finding('unknown', 'Multiple issuance rows require independent review.');
+  if (grants.length > 1)
+    return finding(
+      e.invoice ? 'duplicate' : 'unknown',
+      'Multiple issuance rows match the same provider invoice and payment identifiers; review as a duplicate candidate.'
+    );
   if (!e.owner) return finding('unknown', 'Payment ownership cannot be established in this environment.');
   if (grants.some(row => row.ownerId !== e.owner?.id || row.ownerType !== e.owner.type)) {
     return finding('unmatched', 'The issuance owner differs from the provider-linked owner.');
@@ -16,11 +20,20 @@ export function classifyPayment(e: FulfillmentEvidence, now: Date): FulfillmentF
   if (e.dispute && e.dispute.status !== 'won') {
     return finding('reversal', 'Dispute requires review; a payment match does not establish dispute settlement.');
   }
+  if (e.dispute && e.rows.some(row => row.stripeDisputeId === e.dispute?.id)) {
+    return finding(
+      'reversal',
+      'Won dispute still has a credit deduction; restoration evidence requires manual review.'
+    );
+  }
   for (const refund of e.refunds) {
     if (refund.status === 'failed' || refund.status === 'canceled') continue;
     if (refund.status !== 'succeeded') return finding('pending', 'Provider refund is still pending.');
     if (e.product !== 'credit_pack' || e.expectedCredits === null || e.amount <= 0) {
-      return finding('unknown', 'Refund allocation cannot be inferred for this product.');
+      return finding(
+        'reversal',
+        'Refund requires review: historical credit allocation cannot be inferred for this product.'
+      );
     }
     const expected = Math.round((e.expectedCredits * refund.amount) / e.amount);
     const deductions = e.rows.filter(row => row.stripeRefundId === refund.id);
@@ -48,6 +61,21 @@ export function classifyPayment(e: FulfillmentEvidence, now: Date): FulfillmentF
     return finding('reversal', 'Fully refunded purchase has no local reversal marker.');
   }
   if (e.product !== 'credit_pack' || e.expectedCredits === null) {
+    if (e.invoice?.expectsGrant && e.settledAt && grants.length === 0) {
+      return finding(
+        withinGrace(e.settledAt) ? 'pending' : 'unmatched',
+        'Paid subscription renewal has no issuance under its invoice or payment-intent keys. Expected amount remains unknown.'
+      );
+    }
+    if (e.invoice && grants.some(row => row.type !== 'subscription' || row.credits <= 0)) {
+      return finding('unmatched', 'Invoice issuance has the wrong type or a non-positive credit amount.');
+    }
+    if (e.invoice && grants.length === 1) {
+      return finding(
+        'unknown',
+        'One subscription grant matches the invoice/payment keys and owner. Historical amount is not independently verifiable; no current plan settings were substituted.'
+      );
+    }
     return finding(
       'unknown',
       'Subscription credits depend on historical plan, cooldown, custom cycle and seat rules; no amount is inferred.'
