@@ -99,6 +99,18 @@ describe('ArtifactLibrary', () => {
     expect(screen.queryByTestId('artifact-library-load-more-btn')).toBeNull();
   });
 
+  it('shows a row once when it shifts onto the next page between loads', async () => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => artifact(index));
+    h.get
+      .mockResolvedValueOnce(page(firstPage, 0, true))
+      .mockResolvedValueOnce(page([artifact(19), artifact(20)], 20, false));
+    renderLibrary();
+
+    fireEvent.click(await screen.findByTestId('artifact-library-load-more-btn'));
+
+    await waitFor(() => expect(screen.getAllByTestId('artifact-library-item-link')).toHaveLength(21));
+  });
+
   it('sends the search term to the list endpoint', async () => {
     h.get.mockResolvedValue(page([], 0, false));
     renderLibrary();

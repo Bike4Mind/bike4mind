@@ -10,6 +10,7 @@ const ARTIFACT_ID = 'artifact_html_desktop-mods_1700000000000_1';
 const h = vi.hoisted(() => ({
   artifactResult: {} as Record<string, unknown>,
   versionCalls: [] as Array<[string | null, number | null]>,
+  versionError: null as Error | null,
 }));
 
 vi.mock('@tanstack/react-router', async () => {
@@ -25,6 +26,7 @@ vi.mock('@client/app/hooks/data/artifacts', () => ({
   useArtifact: () => h.artifactResult,
   useArtifactVersionContent: (artifactId: string | null, version: number | null) => {
     h.versionCalls.push([artifactId, version]);
+    if (version && h.versionError) return { isPending: false, error: h.versionError };
     return version
       ? { data: { version, content: `<p>version ${version}</p>` }, isPending: false }
       : { isPending: false };
@@ -73,6 +75,7 @@ const loaded = (artifact: Record<string, unknown>) => ({
 describe('ArtifactPage', () => {
   beforeEach(() => {
     h.versionCalls = [];
+    h.versionError = null;
   });
 
   it('shows a spinner while the artifact loads', () => {
@@ -114,5 +117,15 @@ describe('ArtifactPage', () => {
     fireEvent.click(screen.getByTestId('version-2-btn'));
     expect(screen.getByTestId('artifact-content')).toHaveTextContent('<p>current</p>');
     expect(h.versionCalls.at(-1)).toEqual([null, null]);
+  });
+
+  it('shows an error instead of an empty state when an older version fails to load', () => {
+    h.artifactResult = loaded({});
+    h.versionError = new Error('boom');
+    renderPage();
+
+    fireEvent.click(screen.getByTestId('version-1-btn'));
+    expect(screen.getByTestId('artifact-page-version-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('artifact-page-no-content')).toBeNull();
   });
 });

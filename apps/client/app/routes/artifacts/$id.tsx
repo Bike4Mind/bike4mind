@@ -22,10 +22,11 @@ const ArtifactPage: React.FC = () => {
 
   const artifact = data?.artifact;
   const isViewingOlderVersion = pinnedVersion !== null && pinnedVersion !== artifact?.version;
-  const { data: olderVersion, isPending: olderVersionPending } = useArtifactVersionContent(
-    isViewingOlderVersion ? id : null,
-    isViewingOlderVersion ? pinnedVersion : null
-  );
+  const {
+    data: olderVersion,
+    isPending: olderVersionPending,
+    error: olderVersionError,
+  } = useArtifactVersionContent(isViewingOlderVersion ? id : null, isViewingOlderVersion ? pinnedVersion : null);
 
   const source = artifact ? getArtifactSource(artifact) : null;
   const content = isViewingOlderVersion ? olderVersion?.content : data?.content?.content;
@@ -40,6 +41,13 @@ const ArtifactPage: React.FC = () => {
       );
     }
     if (isViewingOlderVersion && olderVersionPending) return <CenteredSpinner />;
+    if (isViewingOlderVersion && olderVersionError) {
+      return (
+        <Alert color="danger" data-testid="artifact-page-version-error">
+          Could not load this version.
+        </Alert>
+      );
+    }
     if (content === undefined) {
       return (
         <Alert color="warning" data-testid="artifact-page-no-content">

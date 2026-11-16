@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Link as RouterLink } from '@tanstack/react-router';
 import {
   Alert,
@@ -27,7 +27,15 @@ export const ArtifactLibrary: React.FC = () => {
     search: debouncedSearch.trim(),
   });
 
-  const artifacts = data?.pages.flatMap(page => page.artifacts) ?? [];
+  // Offset paging over an updatedAt sort can return a row twice if it is edited between page loads.
+  const artifacts = useMemo(() => {
+    const seen = new Set<string>();
+    return (data?.pages.flatMap(page => page.artifacts) ?? []).filter(artifact => {
+      if (seen.has(artifact.id)) return false;
+      seen.add(artifact.id);
+      return true;
+    });
+  }, [data]);
 
   return (
     <Stack spacing={2} data-testid="artifact-library">
