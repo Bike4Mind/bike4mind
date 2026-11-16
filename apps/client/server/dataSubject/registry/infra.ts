@@ -157,6 +157,44 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'reviewer.userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['reviewer.name'] }],
   },
+  // Quarterly admin access review: who held admin access and who confirmed or revoked it.
+  AdminAccessReview: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'decisions.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.email'],
+      },
+      {
+        path: 'decisions.reviewer.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decisions.reviewer.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'startedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['startedBy.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'completedBy.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['completedBy.name'],
+        exportScope: 'reference',
+      },
+    ],
+    unmatchedPaths: { 'decisions.email': 'The reviewed admin, kept with the decision; matched by decisions.userId.' },
+  },
   // Expires on its own (TTL index) once the admin's gated action has written its audit rows.
   AdminGateReservation: {
     kind: 'holder',
