@@ -1,7 +1,7 @@
 import { hashKey, type QueryClient } from '@tanstack/react-query';
 import { MODEL_LIST_REVISION_MEMO_MS, settingsMap } from '@bike4mind/common';
 import type { ModelCatalog } from '@client/app/utils/llm';
-import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
+import { activeCatalogQueryKey, MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
 
 /**
  * Spreads the refetch one bump sets off across every connected tab. It starts after MODEL_LIST_REVISION_MEMO_MS,
@@ -29,7 +29,7 @@ function watchOf(queryClient: QueryClient): RevisionWatch {
 }
 
 const listedRevision = (queryClient: QueryClient) =>
-  queryClient.getQueryData<ModelCatalog>(MODEL_CATALOG_QUERY_KEY)?.modelListRevision;
+  queryClient.getQueryData<ModelCatalog>(activeCatalogQueryKey())?.modelListRevision;
 
 /**
  * Refetch the model list when it was built under a revision other than the last one pushed (written by
@@ -53,7 +53,7 @@ function reconcile(queryClient: QueryClient, random: () => number): void {
       watch.refetchedFor = target;
       void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY }).then(() => {
         // A failed refetch has not used up the revision: the next push or landing tries again.
-        if (queryClient.getQueryState(MODEL_CATALOG_QUERY_KEY)?.status === 'error') watch.refetchedFor = undefined;
+        if (queryClient.getQueryState(activeCatalogQueryKey())?.status === 'error') watch.refetchedFor = undefined;
       });
     },
     MODEL_LIST_REVISION_MEMO_MS + random() * MODEL_LIST_REFETCH_JITTER_MS
@@ -79,10 +79,9 @@ export function handleModelListRevisionSetting(
 
 /** Re-checks the pushed revision each time the model list lands. Returns the unsubscribe. */
 export function watchModelListArrivals(queryClient: QueryClient, random: () => number = Math.random): () => void {
-  const catalogHash = hashKey(MODEL_CATALOG_QUERY_KEY);
   return queryClient.getQueryCache().subscribe(event => {
     if (event.type !== 'updated' || event.action.type !== 'success') return;
-    if (event.query.queryHash !== catalogHash) return;
+    if (event.query.queryHash !== hashKey(activeCatalogQueryKey())) return;
     reconcile(queryClient, random);
   });
 }

@@ -152,7 +152,9 @@ describe('POST /api/v1/agent-executions', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (startHandler as any)(req, res);
 
-    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger);
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger, {
+      organizationId: null,
+    });
     expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ model: 'allowlisted-model' }), logger);
     expect(res._getJSONData().model).toBe('allowlisted-model');
   });

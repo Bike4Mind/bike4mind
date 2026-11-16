@@ -19,10 +19,13 @@ import {
   reasoningChannelOf,
   type IMessage,
   type ModelInfo,
+  readOrgModelPolicy,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
 import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
+import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
   resolveQuestErrorCode,
   buildSharedTools,
@@ -243,6 +246,8 @@ async function buildEmbedServerTools(args: {
    * per-member credit side-table and can lag membership (a member may have no row yet).
    */
   ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
+  /** The embed key's org policy; governs the models a tool may call (createToolModelAdmission). */
+  orgToolPolicy: ReadOrgModelPolicy;
   /**
    * Resolved once on the request path for the reasoning-channel model gate, which runs
    * before this. Passed in rather than re-derived: both are per-request work, and the gate
@@ -261,6 +266,7 @@ async function buildEmbedServerTools(args: {
     actorUser,
     hydrated,
     ownerOrg,
+    orgToolPolicy,
     apiKeys: toolApiKeys,
     models,
     modelId,
@@ -350,6 +356,7 @@ async function buildEmbedServerTools(args: {
     enabledTools,
     getAbortSignal,
     toolAvailability,
+    orgToolPolicy,
     // Leave imageUrlSigningSecret unset: the embed widget has no card renderer
     // (server/embed/embedWidgetPage.ts appends reply text verbatim into a text bubble) and no
     // JWT for an anonymous visitor to hit the (jwtOnly) image proxy with, so a signed secret here
@@ -616,7 +623,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
-      const serverTools = await buildEmbedServerTools({
+      // The embed key's organization owns the agent, so its policy governs the turn's tools and model
+      // even when an identified end user pays personally (see governingOrgModelPolicy below).
+      const orgToolPolicy = readOrgModelPolicy(org?.modelPolicy);
+      const builtServerTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
         modelId: embedModelId,
@@ -626,9 +636,15 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
         ownerOrg: ownedByOrg ? org : null,
+        orgToolPolicy,
         logger,
         getAbortSignal: () => abortController.signal,
       });
+      const orgFiltered = builtServerTools ? applyOrgToolPolicy(builtServerTools, orgToolPolicy) : undefined;
+      if (orgFiltered && orgFiltered.stripped.length > 0) {
+        logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: orgFiltered.stripped });
+      }
+      const serverTools = orgFiltered && orgFiltered.tools.length > 0 ? orgFiltered.tools : undefined;
 
       // --- All gates passed: open the SSE stream ---
       res.setHeader('Content-Type', 'text/event-stream');
@@ -684,7 +700,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           scopeActor: ctx.adminRoleWithheld && !ctx.endUserId ? withholdAdminRole : undefined,
           // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
           // omitted, so executeCompletion bills the acting user's own balance.
-          ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),
+          ...(ctx.endUserId
+            ? { governingOrgModelPolicy: org?.modelPolicy }
+            : { billingOrganizationId: ctx.organizationId }),
           // Meter usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
           // Server-side tool execution (KB scoped to the agent's project; see

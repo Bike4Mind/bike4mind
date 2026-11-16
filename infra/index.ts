@@ -37,6 +37,7 @@ export * from './accountCreationAlarms';
 export * from './analyticsRollup';
 export * from './llmSpend';
 export * from './youngAccountSpendAlert';
+export * from './providerAdminKeys';
 export * from './providerSpend';
 export * from './authAbuseAlarms';
 export * from './apiProbeDetector';

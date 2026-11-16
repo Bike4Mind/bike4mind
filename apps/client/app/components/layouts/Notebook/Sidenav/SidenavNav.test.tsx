@@ -510,7 +510,7 @@ describe('SidenavNav More overflow', () => {
   it('draws no More row at exactly the limit', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
-    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
     const { container } = renderNav();
     expect(navRowIds(container)).toHaveLength(8);
     expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
@@ -534,6 +534,7 @@ describe('SidenavNav More overflow', () => {
       'sidenav-more-premium-launch',
       'sidenav-more-premium-forge',
       'sidenav-more-projects',
+      'sidenav-more-artifacts',
       'sidenav-more-published',
       'sidenav-more-skill-market',
     ]);
@@ -542,12 +543,12 @@ describe('SidenavNav More overflow', () => {
   it('never folds a single row: one over the limit moves two', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
-    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
     useVideoModelsMock.mockReturnValue({ data: [{ id: 'v' }] });
     const { container } = renderNav();
 
     expect(navRowIds(container)).toHaveLength(8);
-    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-skill-market']);
+    expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-artifacts']);
   });
 
   it('navigates from a More item', () => {
