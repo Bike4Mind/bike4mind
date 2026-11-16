@@ -1,8 +1,8 @@
 import type { IMFAConfig, IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 
-// What toSafeOrganization leaves on an org: no stripeCustomerId for anyone; billingContact is
-// present only for the org owner or a site admin; per-member credit fields in userDetails are
-// present only for owners, current managers and site admins (a member keeps their own row's).
+// What toSafeOrganization leaves on an org for its full view (owner, manager or site admin, the
+// only viewers of this admin list): no stripeCustomerId for anyone; billingContact only for the
+// org owner or a site admin. Plain members get ORGANIZATION_MEMBER_VISIBLE_FIELDS instead.
 export type SafeOrganization = Omit<IOrganizationDocument, 'stripeCustomerId' | 'billingContact'> &
   Partial<Pick<IOrganizationDocument, 'billingContact'>>;
 

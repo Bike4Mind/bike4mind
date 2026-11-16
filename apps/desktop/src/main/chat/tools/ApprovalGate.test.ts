@@ -357,7 +357,7 @@ describe('ApprovalGate', () => {
   });
 
   describe('allowances decided per part', () => {
-    const outbound: ApprovalPart['ask'] = { mode: 'auto', reason: 'sends', kinds: ['outbound'] };
+    const outbound: ApprovalPart['ask'] = { mode: 'auto', reason: 'reads secrets', kinds: ['env'] };
     const part = (text: string, pattern: string, extra: Partial<ApprovalPart> = {}): ApprovalPart => ({
       text,
       pattern,

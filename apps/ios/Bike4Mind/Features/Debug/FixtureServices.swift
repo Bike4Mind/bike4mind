@@ -17,6 +17,7 @@
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
     static let account: any AccountAPI = FixtureAccountAPI()
+    static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
@@ -35,6 +36,25 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
+    /// `resolved` (answered elsewhere) or `offline`; the default is success.
+    private struct FixturePendingActionAPI: PendingActionAPI {
+      func respond(
+        to target: PendingActionTarget, decision: PendingActionDecision
+      ) async throws
+        -> PendingActionResult
+      {
+        try await Task.sleep(for: .seconds(1))
+        switch ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_APPROVAL"] {
+        case "replaced": throw PendingActionFailure.replaced
+        case "expired": throw PendingActionFailure.expired
+        case "resolved": throw PendingActionFailure.alreadyResolved
+        case "offline": throw PendingActionFailure.api(.offline)
+        default: return PendingActionResult(decision: decision)
+        }
+      }
     }
 
     /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.

@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self
+    // The server selects this category with `aps.category` on an approval push; it must exist before one arrives.
+    UNUserNotificationCenter.current().setNotificationCategories([ApprovalNotificationCategory.makeCategory()])
     return true
   }
 
@@ -56,10 +58,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping @Sendable () -> Void
   ) {
-    let isDefaultTap = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+    let actionIdentifier = response.actionIdentifier
+    let isDefaultTap = actionIdentifier == UNNotificationDefaultActionIdentifier
     let payload = NotificationPayload(userInfo: response.notification.request.content.userInfo)
     Task { @MainActor in
-      if isDefaultTap { Self.services?.events.didTapNotification(payload) }
+      if isDefaultTap {
+        Self.services?.events.didTapNotification(payload)
+      } else {
+        // Approve/deny buttons: answered here, with the result posted back as a local notification.
+        await Self.services?.approvalNotifications.handle(actionIdentifier: actionIdentifier, payload: payload)
+      }
       completionHandler()
     }
   }

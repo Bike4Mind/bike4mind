@@ -55,6 +55,9 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 import '@pages/api/organizations/[id]/webhooks/github';
 
 const ORG_ID = '507f1f77bcf86cd799439011';
@@ -132,6 +135,15 @@ describe('PUT /api/organizations/[id]/webhooks/github', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(orgWebhookConfigRepository.update).toHaveBeenCalledTimes(1);
     expect(orgWebhookConfigRepository.update.mock.calls[0][0]).toStrictEqual({ id: 'cfg1', enabled: false });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.webhook.updated',
+        actorScope: 'organization',
+        changes: [{ field: 'enabled', before: true, after: false }],
+        details: { webhookConfigId: 'cfg1' },
+      })
+    );
   });
 
   it('writes only subscribedEvents when only subscribedEvents is sent', async () => {

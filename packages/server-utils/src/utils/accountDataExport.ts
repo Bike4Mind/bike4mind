@@ -6,6 +6,9 @@
 /** How long a built export stays downloadable. The fabFileBucket `exports/` lifecycle rule deletes it after. */
 export const ACCOUNT_DATA_EXPORT_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Maximum delayed retries while another export holds the subject's account lease. */
+export const MAX_ACCOUNT_EXPORT_LEASE_WAITS = 15;
+
 export const ACCOUNT_DATA_EXPORT_FILENAME = 'account-data.zip';
 
 // Must stay under `exports/` so the fabFileBucket expire-notebook-exports rule (infra/buckets.ts) reaps it.
