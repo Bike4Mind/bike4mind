@@ -1,22 +1,33 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { DATA_HOLDER_REGISTRY } from '@server/dataSubject/registry';
 import { ACCOUNT_ARCHIVE_METADATA_MODELS } from './accountDataExportCollections';
 import { accountArchiveFilter, accountArchiveMetadata } from './accountDataExportCollections';
 
 describe('account archive coverage', () => {
-  it('requires an explicit adapter policy for every direct purge-listed model', () => {
+  it('archives every metadata model as a record the erasure registry deletes with its owner', () => {
+    for (const model of ACCOUNT_ARCHIVE_METADATA_MODELS) {
+      const holder = DATA_HOLDER_REGISTRY[model];
+      expect(holder?.kind, model).toBe('holder');
+      const actions = holder?.kind === 'holder' ? holder.references.map(reference => reference.action) : [];
+      expect(actions, model).toContain('deleteDocument');
+    }
+  });
+
+  it('requires an explicit adapter policy for every model the purge deletes by personal workspace', () => {
     const purge = readFileSync(
       new URL('../../../../packages/server-utils/src/users/purgeAccountContent.ts', import.meta.url),
       'utf8'
     );
     const loops = [
       ...purge.matchAll(
-        /for \(const model of \[([^\]]*)\]\) \{\s*await assertLease\(\);\s*await collectionFor\(model\)\.deleteMany\((personalFilter|ownerFilter)\(userId/g
+        /for \(const model of \[([^\]]*)\]\) \{\s*await assertLease\(\);\s*await collectionFor\(model\)\.deleteMany\(\{ organizationId: \{ \$in: personalOrganizationIds \} \}\)/g
       ),
     ];
-    expect(loops).toHaveLength(3);
+    expect(loops).toHaveLength(1);
     const models = loops.flatMap(([, body]) => [...body.matchAll(/'([A-Za-z]+)'/g)].map(([, name]) => name));
-    expect(new Set(models)).toEqual(new Set(ACCOUNT_ARCHIVE_METADATA_MODELS));
+    expect(models.length).toBeGreaterThan(0);
+    expect(ACCOUNT_ARCHIVE_METADATA_MODELS).toEqual(expect.arrayContaining(models));
   });
 
   it('excludes organization-owned content while retaining personal-workspace content', () => {

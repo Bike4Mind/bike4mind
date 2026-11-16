@@ -70,7 +70,11 @@ async function seedUser(due = false) {
 const complete = (userId: string) =>
   completeAccountDeletion(userId, {
     logger,
-    erasureRegistry: { scope: async () => [], audit: async () => ({ remaining: [], unclassified: [] }) },
+    erasureRegistry: {
+      scope: async () => [],
+      erase: async () => {},
+      audit: async () => ({ remaining: [], unclassified: [] }),
+    },
   });
 
 describe('shared export and strict erasure fences with Mongo', () => {

@@ -62,7 +62,8 @@ vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', () => ({
   NO_SUBSCRIPTIONS_CANCELED: { canceled: [], failed: [] },
 }));
 
-import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let database: MongoMemoryReplSet;
@@ -91,12 +92,6 @@ beforeEach(async () => {
   effects.sendCompleteEmail.mockResolvedValue(undefined);
   for (const modelName of mongoose.modelNames()) await collection(modelName).deleteMany({});
 });
-
-// These purges are self-serve, so the erasure registry is never consulted.
-const erasureRegistry: ErasureRegistry = {
-  scope: async () => [],
-  audit: async () => ({ remaining: [], unclassified: [] }),
-};
 
 import { cleanupOrganizationRetention } from './retentionCleanup';
 
