@@ -174,6 +174,8 @@ final class AppServices {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
         let (_, response) = try await URLSession.shared.upload(for: request, from: data)
         guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
           throw APIError.malformedResponse

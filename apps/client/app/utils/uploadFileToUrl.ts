@@ -13,6 +13,9 @@ import { api } from '@client/app/contexts/ApiContext';
  * (filesAPICalls) upload paths so they can't diverge - they did, and self-host uploads 401'd
  * against the proxy. Pairs with the server-side resolveBrowserUploadUrl, which decides the URL
  * shape. `config` forwards axios options (signal, onUploadProgress); Content-Type is always set here.
+ *
+ * Every upload is create-only (`If-None-Match: *`): each caller's URL names a freshly minted key, and
+ * a presign signed with IfNoneMatch (createFabFile) is refused without the header.
  */
 export async function uploadFileToUrl(
   url: string,
@@ -22,7 +25,7 @@ export async function uploadFileToUrl(
 ): Promise<void> {
   const putConfig: AxiosRequestConfig = {
     ...config,
-    headers: { 'Content-Type': contentType || file.type || 'application/octet-stream' },
+    headers: { 'Content-Type': contentType || file.type || 'application/octet-stream', 'If-None-Match': '*' },
   };
   // Same-origin proxy path (self-host) needs the app's Bearer via `api`; an absolute S3 presign
   // authorizes via its own signature and must use raw axios. Exclude protocol-relative '//host/...'
