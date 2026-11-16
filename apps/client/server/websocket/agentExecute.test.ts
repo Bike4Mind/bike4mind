@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@server/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
@@ -111,7 +111,7 @@ import {
   checkRateLimit,
 } from '@bike4mind/server-utils/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';

@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveActivityPushEvent } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ publish: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
+vi.mock('./eventBus', () => ({
   NotificationEvents: { LiveActivity: { publish: h.publish } },
 }));
 const pushDelivery = vi.hoisted(() => ({ configured: true }));
-vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
+vi.mock('./pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 

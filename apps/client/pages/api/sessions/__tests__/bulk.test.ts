@@ -23,7 +23,7 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
 );
 
 const mockPurgeMedia = vi.hoisted(() => vi.fn());
-vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
   purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
 }));
 

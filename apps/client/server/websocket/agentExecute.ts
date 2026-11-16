@@ -21,7 +21,7 @@ import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalR
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { recordUserActivity } from '@server/users/recordUserActivity';
-import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { reopenLowConfidenceAnswer } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
@@ -40,7 +40,7 @@ import {
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
   type ExecutorTarget,
-} from '@server/utils/dispatchAgentExecution';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';

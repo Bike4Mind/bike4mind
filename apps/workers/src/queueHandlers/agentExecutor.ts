@@ -362,7 +362,7 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // Single source for the gate defaults: the schema defaults in common.
 const CONFIDENCE_GATE_FALLBACK = OrchestrationDefaultsSchema.parse({});
 
-// `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
+// `persistRunAsQuest` lives in `@bike4mind/server-utils/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
 // write contract - both code paths produce identical Quest docs.
 

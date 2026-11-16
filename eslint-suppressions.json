@@ -82,7 +82,7 @@
   "apps/client/server/memory/reembedMementos.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/middlewares/clientUsage.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/modelAccess/modelAccessStore.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "apps/client/server/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/qa/evaluateAlarm.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/services/publish/restrictDuplicatePublications.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/services/publish/settlePublication.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -3439,7 +3439,7 @@
       "count": 3
     }
   },
-  "apps/client/server/models/UserSubscription.ts": {
+  "packages/server-utils/src/models/UserSubscription.ts": {
     "b4m/require-update-validators": { "count": 1 },
     "@typescript-eslint/no-explicit-any": {
       "count": 1

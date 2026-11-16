@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   recordAdminAction: vi.fn(),
 }));
 
+vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 vi.mock('@bike4mind/database', () => ({
   User: {
     find: (...args: unknown[]) => ({ limit: () => ({ lean: () => h.find(...args) }) }),
@@ -22,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   userRepository: {},
 }));
-vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
+vi.mock('../entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: () => Promise.resolve({ matched: false }),
 }));
 const settingsValues = vi.hoisted(() => ({ values: {} as Record<string, unknown> }));
@@ -37,7 +38,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import { MintPersonaRequestSchema } from '@bike4mind/common';
-import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 import {
   PERSONA_LOGIN_CODE_TTL_MS,
   canMintPersonas,

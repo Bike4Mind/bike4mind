@@ -76,7 +76,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 // The gate_response handler re-invokes the executor through here; the test plays the queue.
-vi.mock('@server/utils/dispatchAgentExecution', () => ({
+vi.mock('@bike4mind/server-utils/utils/dispatchAgentExecution', () => ({
   AgentExecutorRejectedError: class extends Error {},
   resolveAgentExecutorTarget: () => ({ kind: 'lambda', functionName: 'agent-executor' }),
   dispatchAgentExecution: async (payload: Record<string, unknown>) => {

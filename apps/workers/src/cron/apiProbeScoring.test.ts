@@ -14,7 +14,7 @@ import {
   type ProbeRow,
   type ProbeSignalCounts,
 } from './apiProbeScoring';
-import { INGEST_TOKEN_REFUSED_MESSAGE } from '@server/security/ingestToken';
+import { INGEST_TOKEN_REFUSED_MESSAGE } from '@bike4mind/server-utils/security/ingestToken';
 
 const counts = (overrides: Partial<ProbeSignalCounts> = {}): ProbeSignalCounts => ({
   refusedFetch: 0,
