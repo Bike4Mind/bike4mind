@@ -6,7 +6,6 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
-import { COOKIE_BANNER_HEIGHT_VAR } from '@client/app/utils/themes/customizations/modal';
 import { CONSENT_VENDORS, loadConsentVendors } from '@client/app/utils/consentVendors';
 import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
@@ -106,8 +105,6 @@ export function CookieConsentBanner() {
   const closeSettings = useCookieSettings(s => s.close);
   const firstActionRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const bannerRef = useRef<HTMLDivElement>(null);
-  const visible = asking || settingsOpen;
 
   useEffect(() => {
     const consent = resolveConsent();
@@ -138,22 +135,7 @@ export function CookieConsentBanner() {
     if (trigger && document.activeElement === document.body) trigger.focus();
   }, [settingsOpen]);
 
-  // Publishes the bar's height for the modal theme (customizations/modal.ts), tracking reflows.
-  useEffect(() => {
-    const banner = bannerRef.current;
-    if (!visible || !banner) return;
-    const root = document.documentElement;
-    const publish = () => root.style.setProperty(COOKIE_BANNER_HEIGHT_VAR, `${banner.offsetHeight}px`);
-    publish();
-    const observer = new ResizeObserver(publish);
-    observer.observe(banner);
-    return () => {
-      observer.disconnect();
-      root.style.removeProperty(COOKIE_BANNER_HEIGHT_VAR);
-    };
-  }, [visible]);
-
-  if (!visible) return null;
+  if (!asking && !settingsOpen) return null;
 
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
@@ -172,7 +154,6 @@ export function CookieConsentBanner() {
   return (
     // A region, not a dialog: a dialog would also need a focus trap.
     <Box
-      ref={bannerRef}
       data-testid="cookie-consent-banner"
       role="region"
       aria-label="Cookie settings"
@@ -181,7 +162,9 @@ export function CookieConsentBanner() {
         bottom: 0,
         left: 0,
         right: 0,
-        zIndex: 9999,
+        // Just under the modal layer: an open dialog covers the bar instead of the bar covering the
+        // dialog's bottom actions (a pay button on a phone). The bar is back once the dialog closes.
+        zIndex: theme => theme.zIndex.modal - 1,
         p: 2,
         bgcolor: 'background.surface',
         borderTop: '1px solid',

@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
@@ -104,33 +104,14 @@ describe('CookieConsentBanner', () => {
     expect(document.body).toHaveFocus();
   });
 
-  // Modals end above the bar through this variable (themes/customizations/modal.ts).
-  it('publishes its height while asking and withdraws it once answered', () => {
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(260);
-    try {
-      render(
-        <TestWrapper>
-          <CookieConsentBanner />
-        </TestWrapper>
-      );
-      expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('260px');
-
-      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
-      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
-      expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('');
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it('never publishes a height when no question is asked', () => {
-    localStorageMock.setItem('cookie_consent', 'granted');
+  it('sits under the modal layer so an open dialog is never covered by it', () => {
     render(
       <TestWrapper>
         <CookieConsentBanner />
       </TestWrapper>
     );
-    expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('');
+    const { zIndex } = getComputedStyle(screen.getByTestId('cookie-consent-banner'));
+    expect(Number(zIndex)).toBe(extendTheme().zIndex.modal - 1);
   });
 
   it('hides banner when consent was previously granted', () => {

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiCreateThrowawayUser } from './helpers/api';
@@ -18,6 +18,16 @@ import { BasePage } from './pages/BasePage';
 test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@launch-readiness', '@A6.1'] }, () => {
   test.skip(isProductionEnv(), 'Mints test users through /api/test/create-user, which production refuses');
 
+  async function isCreditsEnforced(request: APIRequestContext, accessToken: string): Promise<boolean> {
+    const apiUrl = process.env.API_URL || 'http://localhost:3000';
+    const resp = await request.get(`${apiUrl}/api/settings/fetch`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(resp.ok(), 'settings fetch succeeds').toBe(true);
+    const rows = (await resp.json()) as { settingName: string; settingValue: unknown }[];
+    return rows.some(row => row.settingName === 'enforceCredits' && row.settingValue === true);
+  }
+
   // A user lands on the app first and clears whatever greets them, then opens billing. Anything that
   // opens after that and covers the button is what this gate is about, so it is not dismissed.
   async function landAndOpenBilling(page: Page, goto: (path: string) => Promise<void>, path: string) {
@@ -25,7 +35,7 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
     await new BasePage(page).dismissModals();
     await goto(path);
     const billing = page.getByTestId('billing-modal');
-    await expect(billing, 'billing opens (needs the enforceCredits setting on)').toBeVisible({
+    await expect(billing, 'billing opens').toBeVisible({
       timeout: TIMEOUTS.TEST,
     });
     await expectNoHorizontalOverflow(page);
@@ -40,6 +50,10 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
     test.slow();
     // A near-empty balance is the state a first purchase starts from, low-balance banners included.
     const user = await apiCreateThrowawayUser(request, 'a61buy', { initialCredits: 1, includePredefinedTags: false });
+    test.skip(
+      !(await isCreditsEnforced(request, user.accessToken)),
+      'enforceCredits is off on this stage, so there is no credit purchase surface'
+    );
     const { page, goto, close } = await openShortScreenPageAs(browser, baseURL, user);
     try {
       const billing = await landAndOpenBilling(page, goto, '/billing/credits');
@@ -85,8 +99,13 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
       await card.locator('input[name="number"]').fill('4242424242424242', { timeout: TIMEOUTS.TEST });
       await card.locator('input[name="expiry"]').fill('12 / 34');
       await card.locator('input[name="cvc"]').fill('123');
+      // Stripe adds a postal code field only for some countries, and it can render after the card fields.
       const postalCode = card.locator('input[name="postalCode"]');
-      if (await postalCode.isVisible()) await postalCode.fill('10001');
+      const hasPostalCode = await postalCode
+        .waitFor({ state: 'visible', timeout: 5_000 }) // ms, on the slow link
+        .then(() => true)
+        .catch(() => false);
+      if (hasPostalCode) await postalCode.fill('10001');
 
       // Filling the form must not push Pay now out of reach (an error line or expanded field can).
       await expectReachable(payNow, 'Pay now button after card entry');

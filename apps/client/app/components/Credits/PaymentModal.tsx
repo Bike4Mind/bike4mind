@@ -29,8 +29,9 @@ const PaymentModal = ({
       <ModalDialog
         data-testid="payment-modal-dialog"
         sx={{
-          minWidth: '400px',
-          maxWidth: '600px',
+          // A fixed 400px floor overflows a 375px phone; there the dialog fills the width instead.
+          minWidth: { xs: 'auto', sm: '400px' },
+          maxWidth: { xs: 'calc(100vw - 32px)', sm: '600px' },
           borderRadius: 'md',
           p: 3,
           boxShadow: 'lg',
