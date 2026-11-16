@@ -943,6 +943,23 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
         expect(mockInvoke).not.toHaveBeenCalled();
       });
 
+      it("hands the key's billing owner type to the QuestMaster completion meter", async () => {
+        const { req, res } = fire();
+        await handler(req, res);
+        const { createCompletionMeter: createMeter } = invokeOptions.value as {
+          createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
+        };
+        createMeter({ organizationId: orgId, featureLabel: 'QuestMaster planning' });
+
+        const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
+        expect(createCompletionMeter).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          'QuestMaster planning',
+          expect.objectContaining({ apiKeyId: 'k1', apiKeyBillingOwnerType: CreditHolderType.Organization })
+        );
+      });
+
       it('checks the freeze against the key org and key, never the holder', async () => {
         mockFindActiveFreeze.mockResolvedValueOnce({
           scopeType: 'Organization',

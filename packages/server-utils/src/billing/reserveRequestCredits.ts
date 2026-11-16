@@ -18,7 +18,7 @@ import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
 import { attributeToRequestApiKey } from './attributeToRequestApiKey';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
-import { spendFreezeSubjectForRequest } from './spendFreezeSubject';
+import { spendFreezeSubjectForRequest, type SpendFreezeApiKey } from './spendFreezeSubject';
 import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
@@ -88,6 +88,12 @@ type ReserveRequestCreditsParams = {
   billingOrganizationId?: string | null;
   /** How long the hold may stay unsettled before the sweep refunds it; defaults to CREDIT_HOLD_TTL_MS. */
   holdTtlMs?: number;
+  /**
+   * The key behind work that has no request of its own (a queued or in-turn meter). It joins the spend
+   * freeze subject only and never changes the billing owner; a request that authenticated with a key
+   * uses `req.apiKeyInfo` instead.
+   */
+  spendFreezeApiKey?: SpendFreezeApiKey;
 };
 
 /**
@@ -114,6 +120,7 @@ export async function reserveRequestCredits({
   featureLabel,
   billingOrganizationId: explicitBillingOrgId,
   holdTtlMs = CREDIT_HOLD_TTL_MS,
+  spendFreezeApiKey,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   // Before the enforceCredits short-circuit: a moderated user is refused with credits on or off.
@@ -125,9 +132,13 @@ export async function reserveRequestCredits({
 
   // Also before the enforceCredits short-circuit, and ahead of the free-tier cap so a frozen subject is
   // never told to wait for UTC midnight.
-  await creditService.assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
-    db: { spendFreezes: spendFreezeRepository },
-  });
+  await creditService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(
+      { user: req.user, apiKeyInfo: req.apiKeyInfo ?? spendFreezeApiKey },
+      billingOrganizationId ?? null
+    ),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
 
   // Daily cap check for free-tier accounts (no-op when enforceCredits is off).
   await checkFreeTierDailySpendCap({

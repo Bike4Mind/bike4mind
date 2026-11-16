@@ -267,6 +267,7 @@ async function handleChat(
         sessionId,
         organizationId,
         apiKeyId: req.apiKeyInfo?.keyId,
+        apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {

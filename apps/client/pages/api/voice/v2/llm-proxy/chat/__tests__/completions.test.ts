@@ -316,6 +316,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
       reasoningModelId: 'test-model',
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
+      apiKeyBillingOwnerType: 'Organization',
       voiceHoldStartedAt: recentHold(),
     });
 
@@ -330,7 +331,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
       expect.anything(),
       expect.anything(),
       'QuestMaster planning',
-      expect.objectContaining({ apiKeyId: 'key-1' })
+      expect.objectContaining({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization' })
     );
   });
 

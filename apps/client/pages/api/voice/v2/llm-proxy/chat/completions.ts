@@ -166,6 +166,7 @@ async function runFullPipeline(
         sessionId: sessionCtx.sessionId,
         organizationId,
         apiKeyId: sessionCtx.apiKeyId,
+        apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,

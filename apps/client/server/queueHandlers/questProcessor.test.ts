@@ -195,7 +195,14 @@ describe('processQuest', () => {
     const { processQuest } = await import('./questProcessor');
     const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
-    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, apiKeyId: 'k1' };
+    const params = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      questId: 'quest-1',
+      params: {},
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: 'Organization',
+    };
 
     await processQuest(params as never, logger as never);
     const options = processOptions.mock.calls.at(-1)?.[0] as {
@@ -207,6 +214,7 @@ describe('processQuest', () => {
       sessionId: 'session-1',
       organizationId: 'org-1',
       apiKeyId: 'k1',
+      apiKeyBillingOwnerType: 'Organization',
     });
   });
 

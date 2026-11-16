@@ -6,7 +6,7 @@ import {
   type ModelInfo,
   type ReadOrgModelPolicy,
 } from '@bike4mind/common';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
@@ -377,6 +377,55 @@ describe('meterPlatformCompletion credits', () => {
       expect.anything()
     );
     expect(m.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k-queued' }));
+  });
+
+  describe("an in-turn meter's spend freeze subject", () => {
+    type Subject = { userId?: string | null; organizationId?: string | null; apiKeyId?: string | null };
+    const frozenWhen = (matches: (subject: Subject) => boolean) =>
+      m.findFreeze.mockImplementation(async (...args: unknown[]) =>
+        matches(args[0] as Subject) ? { scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') } : null
+      );
+    const meterFor = (apiKeyBillingOwnerType?: CreditHolderType.User | CreditHolderType.Organization) =>
+      createRequestCompletionMeter(req(), 'QuestMaster planning', {
+        organizationId: 'o1',
+        apiKeyId: 'k-org',
+        apiKeyBillingOwnerType,
+      })(model, [], 1000, [model]);
+
+    beforeEach(() => {
+      // The freeze runs ahead of the enforceCredits short-circuit, so no hold is needed to reach it.
+      m.enforceCredits = false;
+      m.findBySettingName.mockResolvedValue(null);
+    });
+    // clearAllMocks keeps implementations, so the freeze stub would leak into later describes.
+    afterEach(() => m.findFreeze.mockImplementation(async () => null));
+
+    it("does not refuse an org-billed key's turn when only its creator is frozen", async () => {
+      frozenWhen(subject => subject.userId === 'u1');
+
+      await expect(meterFor(CreditHolderType.Organization)).resolves.toBeDefined();
+      expect(m.findFreeze).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: null, organizationId: 'o1', apiKeyId: 'k-org' })
+      );
+    });
+
+    it.each([
+      ['the key', (subject: Subject) => subject.apiKeyId === 'k-org'],
+      ['the org', (subject: Subject) => subject.organizationId === 'o1'],
+    ])("refuses an org-billed key's turn when %s is frozen", async (_label, matches) => {
+      frozenWhen(matches);
+
+      await expect(meterFor(CreditHolderType.Organization)).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'spend_frozen' },
+      });
+    });
+
+    it('keeps the creator in the subject when the key billing owner type is unknown', async () => {
+      frozenWhen(subject => subject.userId === 'u1');
+
+      await expect(meterFor(undefined)).rejects.toMatchObject({ additionalInfo: { errorCode: 'spend_frozen' } });
+    });
   });
 
   it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {

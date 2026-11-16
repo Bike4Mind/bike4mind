@@ -414,6 +414,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
           sessionId: params.sessionId,
           organizationId,
           apiKeyId: params.apiKeyId,
+          apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
         }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });

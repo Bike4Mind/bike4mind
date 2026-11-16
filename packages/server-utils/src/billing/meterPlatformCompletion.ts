@@ -15,6 +15,7 @@ import {
   type IMessage,
   type IUserDocument,
   type ModelInfo,
+  type ApiKeyBillingOwnerType,
   type ApiKeyCompletionSource,
   type ReadOrgModelPolicy,
   type SpendFreezeSubject,
@@ -57,7 +58,7 @@ import { recordPaidPlanRefusal } from './userLimitEvents';
 import { getUserEntitlements } from '../entitlements/index';
 import { resolveRequestUsageSource } from '../utils/resolveRequestUsageSource';
 import { reserveRequestCredits, resolveRequestBillingOrgId, type CreditReservation } from './reserveRequestCredits';
-import { spendFreezeSubjectForRequest } from './spendFreezeSubject';
+import { spendFreezeSubjectForRequest, type SpendFreezeApiKey } from './spendFreezeSubject';
 
 /**
  * Metering for routes that run a text completion outside ChatCompletionInvoke (so nothing else
@@ -180,13 +181,20 @@ export async function reserveCompletionCredits(
   req: MeteredRequest,
   usd: number,
   featureLabel: string,
-  { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
+  {
+    organizationId,
+    holdTtlMs,
+    spendFreezeApiKey,
+  }: { organizationId?: string | null; holdTtlMs?: number; spendFreezeApiKey?: SpendFreezeApiKey } = {}
 ): Promise<CreditReservation> {
   // Access gate and freeze run ahead of the restricted-tier cap so a moderated or paused caller is told so
   // and spends no daily token budget; reserveRequestCredits repeats both, which is harmless.
   if (req.user) assertAiAccessAllowed(req.user);
   await creditService.assertSpendNotFrozen(
-    spendFreezeSubjectForRequest(req, resolveRequestBillingOrgId(req, organizationId) ?? null),
+    spendFreezeSubjectForRequest(
+      { user: req.user, apiKeyInfo: req.apiKeyInfo ?? spendFreezeApiKey },
+      resolveRequestBillingOrgId(req, organizationId) ?? null
+    ),
     { db: { spendFreezes: spendFreezeRepository } }
   );
 
@@ -213,6 +221,7 @@ export async function reserveCompletionCredits(
     featureLabel,
     billingOrganizationId: organizationId,
     holdTtlMs,
+    spendFreezeApiKey,
   });
 }
 
@@ -331,8 +340,16 @@ type CompletionMeterOptions = {
   sessionId?: string;
   organizationId?: string | null;
   systemModel?: boolean;
-  /** The UserApiKey behind queued work that has no request; ledger attribution only, never the billing owner. */
+  /**
+   * The UserApiKey behind queued work that has no request: ledger attribution and the spend freeze subject,
+   * never the billing owner.
+   */
   apiKeyId?: string;
+  /**
+   * That key's billing owner type. Only `Organization` drops the user from the freeze subject; unset keeps
+   * the user, so a caller that cannot tell over-checks rather than skips.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
 };
 
 /**
@@ -369,6 +386,9 @@ export function createRequestCompletionMeter(
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
       organizationId: opts.organizationId,
+      spendFreezeApiKey: opts.apiKeyId
+        ? { keyId: opts.apiKeyId, billingOwnerType: opts.apiKeyBillingOwnerType }
+        : undefined,
     });
     return {
       refund: () => reservation.refund(),

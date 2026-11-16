@@ -5,11 +5,13 @@ import { CreditHolderType, type SpendFreezeSubject } from '@bike4mind/common';
  * money, so it carries the key and org but not its creator: a frozen creator must not stop the org's
  * integration. Every other caller carries the user.
  */
+// Structural slice of Express.ApiKeyInfo, whose augmentation lives in apps/client/global.d.ts.
+export type SpendFreezeApiKey = { billingOwnerType?: CreditHolderType; keyId?: string };
+
 export function spendFreezeSubjectForRequest(
   req: {
     user?: { id: string };
-    // Structural slice of Express.ApiKeyInfo, whose augmentation lives in apps/client/global.d.ts.
-    apiKeyInfo?: { billingOwnerType?: CreditHolderType; keyId?: string };
+    apiKeyInfo?: SpendFreezeApiKey;
   },
   billingOrganizationId: string | null
 ): SpendFreezeSubject {
