@@ -532,6 +532,30 @@ describe('LocalLoopScheduler', () => {
     expect(chat.turns).toHaveLength(1);
   });
 
+  it("shows a run its loop's open directives and the loops it oversees", async () => {
+    make({ oversees: ['loop-2'] });
+    store.putLoop(testLoop({ id: 'loop-2', name: 'Docs worker', status: 'paused' }));
+    store.putDirective({
+      id: 'd1',
+      loopId: 'loop-1',
+      fromLoopId: 'loop-3',
+      fromLoopName: 'Boss',
+      runId: 'r',
+      instruction: 'Fix the flaky test first',
+      reason: 'It blocks PRs',
+      state: 'open',
+      replies: [],
+      createdAt: '',
+      updatedAt: '',
+    });
+    ticket('a');
+    scheduler.start();
+    await settle();
+    expect(chat.turns[0].text).toContain('Directive id: d1');
+    expect(chat.turns[0].text).toContain('"Fix the flaky test first"');
+    expect(chat.turns[0].text).toContain('You oversee these loops: "Docs worker" (loop-2)');
+  });
+
   describe('watchdog, sleep and power', () => {
     const MIN = 60_000;
     const project = (id: string) => ({

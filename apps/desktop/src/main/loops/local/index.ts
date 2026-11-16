@@ -4,12 +4,13 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Notification, app, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
 import { z } from 'zod';
-import { BadRequestError, startOfUtcDay } from '@bike4mind/common';
+import { BadRequestError, LOOP_DIRECTIVE_TRANSITIONS, startOfUtcDay } from '@bike4mind/common';
 import { UNSURE_PREFIX } from '@bike4mind/common/loops';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { loopNeedsYouCount } from '@shared/needsYou';
 import {
   answerLocalEventSchema,
+  overrideLocalDirectiveSchema,
   createLocalLoopSchema,
   createLocalTicketSchema,
   setLocalBudgetSchema,
@@ -172,8 +173,10 @@ export function registerLocalLoops(
       tickets: store.tickets(id),
       runs: store.runs(id).slice(0, 200),
       events: store.events(id).slice(0, 200),
+      directives: store.directives(id).slice(0, 50),
     };
   };
+  const loopIds = () => new Set(store.loops().map(loop => loop.id));
   const loopOf = (id: string): LocalLoop => {
     const loop = store.loop(id);
     if (!loop) throw new BadRequestError('Loop not found.');
@@ -226,7 +229,7 @@ export function registerLocalLoops(
       errorStreak: 0,
       createdAt: now,
       updatedAt: now,
-      ...(checkedFields(request, undefined, pickedFolders) as Pick<
+      ...(checkedFields(request, undefined, pickedFolders, loopIds()) as Pick<
         LocalLoop,
         'name' | 'goal' | 'stages' | 'model' | 'directory'
       >),
@@ -238,11 +241,15 @@ export function registerLocalLoops(
   handle(IPC_CHANNELS.localLoopsUpdateLoop, async input => {
     const { id, ...request } = updateLocalLoopSchema.parse(input);
     // Validated before git runs in the requested folder; the real check is redone on the fresh read below.
-    checkedFields(request, loopOf(id), pickedFolders);
+    checkedFields(request, loopOf(id), pickedFolders, loopIds());
     // Resolved before the read, so the write below cannot undo what the scheduler stored meanwhile.
     const repo = request.directory !== undefined ? repoSlug(await originOf(request.directory)) : undefined;
     const current = loopOf(id);
-    const next = { ...current, ...checkedFields(request, current, pickedFolders), updatedAt: new Date().toISOString() };
+    const next = {
+      ...current,
+      ...checkedFields(request, current, pickedFolders, loopIds()),
+      updatedAt: new Date().toISOString(),
+    };
     if (request.directory !== undefined) {
       if (repo) next.repo = repo;
       else delete next.repo;
@@ -330,6 +337,32 @@ export function registerLocalLoops(
     scheduler.poke();
     return detail(event.loopId);
   });
+  handle(IPC_CHANNELS.localLoopsOverrideDirective, input => {
+    const { id, action, note } = overrideLocalDirectiveSchema.parse(input);
+    const directive = store.directive(id);
+    if (!directive || directive.action) throw new BadRequestError('Directive not found.');
+    if (!LOOP_DIRECTIVE_TRANSITIONS[action].includes(directive.state))
+      throw new BadRequestError(`The directive is ${directive.state.replace('_', ' ')}.`);
+    const at = new Date().toISOString();
+    const trimmed = note?.trim();
+    store.putDirective({
+      ...directive,
+      // Overruled goes back to open: the worker's next run sees it again, marked "owner insists".
+      state: action === 'withdraw' ? 'withdrawn' : 'open',
+      replies: [
+        ...directive.replies,
+        {
+          by: 'owner',
+          outcome: action === 'withdraw' ? 'withdrawn' : 'overruled',
+          ...(trimmed && { note: trimmed }),
+          at,
+        },
+      ],
+      updatedAt: at,
+    });
+    scheduler.poke();
+    return detail(directive.loopId);
+  });
   handle(IPC_CHANNELS.localLoopsGetBudget, async () => {
     await refreshBudget();
     return { dailyCredits: store.setting<number | null>(ALL_LOOPS_CAP) ?? null };
@@ -372,4 +405,5 @@ const LOCAL_LOOP_HANDLERS = [
   IPC_CHANNELS.localLoopsGetBudget,
   IPC_CHANNELS.localLoopsSetBudget,
   IPC_CHANNELS.localLoopsPickFolder,
+  IPC_CHANNELS.localLoopsOverrideDirective,
 ];

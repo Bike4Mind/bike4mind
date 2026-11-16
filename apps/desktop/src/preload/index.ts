@@ -28,6 +28,7 @@ import type { DevLogRecord } from '@shared/devLog';
 import type { LoopApproveRequest, LoopRunnerSettings, LoopRunnerState } from '@shared/loopRunner';
 import type {
   AnswerLocalEventRequest,
+  OverrideLocalDirectiveRequest,
   CreateLocalLoopRequest,
   CreateLocalTicketRequest,
   UpdateLocalLoopRequest,
@@ -109,6 +110,8 @@ const api: DesktopApi = {
     updateTicket: (request: UpdateLocalTicketRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.localLoopsUpdateTicket, request),
     answerEvent: (request: AnswerLocalEventRequest) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsAnswerEvent, request),
+    overrideDirective: (request: OverrideLocalDirectiveRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.localLoopsOverrideDirective, request),
     getBudget: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsGetBudget),
     setBudget: (dailyCredits: number | null) => ipcRenderer.invoke(IPC_CHANNELS.localLoopsSetBudget, { dailyCredits }),
     pickFolder: () => ipcRenderer.invoke(IPC_CHANNELS.localLoopsPickFolder),

@@ -46,3 +46,17 @@ describe('checkedFields optional fields', () => {
     expect(stored.budgetCreditsPerDay).toBe(50);
   });
 });
+
+describe('checkedFields oversees', () => {
+  it('takes other existing loops, deduped, and refuses itself or an unknown id', () => {
+    const current = testLoop({ id: 'boss' });
+    const ids = new Set(['boss', 'worker']);
+    expect(checkedFields({ oversees: ['worker', 'worker'] }, current, new Set(), ids).oversees).toEqual(['worker']);
+    expect(() => checkedFields({ oversees: ['boss'] }, current, new Set(), ids)).toThrow(
+      'A loop can oversee only other Desktop loops.'
+    );
+    expect(() => checkedFields({ oversees: ['gone'] }, current, new Set(), ids)).toThrow(
+      'A loop can oversee only other Desktop loops.'
+    );
+  });
+});

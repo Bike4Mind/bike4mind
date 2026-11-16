@@ -53,6 +53,21 @@ const detail = (patch: Partial<LocalLoopDetail['loop']> = {}): LocalLoopDetail =
     },
   ],
   events: [{ id: 'e', loopId: 'loop-1', kind: 'asked', reason: SECRET, createdAt: '' }],
+  directives: [
+    {
+      id: 'd',
+      loopId: 'loop-1',
+      fromLoopId: 'loop-2',
+      fromLoopName: SECRET,
+      runId: 'r',
+      instruction: SECRET,
+      reason: SECRET,
+      state: 'open',
+      replies: [],
+      createdAt: '',
+      updatedAt: '',
+    },
+  ],
 });
 
 describe('scrubLoop', () => {

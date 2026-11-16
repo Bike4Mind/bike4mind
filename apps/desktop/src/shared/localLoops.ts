@@ -1,12 +1,15 @@
-import type {
-  LoopMergePolicy,
-  LoopRunOutcome,
-  LoopSmokeCheck,
-  WorkItemBlocker,
-  WorkItemPriority,
-  WorkItemPrioritySetter,
-  WorkItemStageBy,
-  WorkItemStatus,
+import {
+  LOOP_DIRECTIVE_NOTE_MAX,
+  type LoopDirectiveAction,
+  type LoopDirectiveState,
+  type LoopMergePolicy,
+  type LoopRunOutcome,
+  type LoopSmokeCheck,
+  type WorkItemBlocker,
+  type WorkItemPriority,
+  type WorkItemPrioritySetter,
+  type WorkItemStageBy,
+  type WorkItemStatus,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import type { LoopApprovalMode } from './loopRunner';
@@ -62,6 +65,8 @@ export interface LocalLoop {
   memory: { notes: string; nextAction: string };
   /** Runs in a row that ended in an error; three put the loop in `error`. */
   errorStreak: number;
+  /** Other Desktop loops this one oversees (main/loops/local/overseerTools.ts); absent on loops saved before. */
+  oversees?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -133,6 +138,30 @@ export interface LocalLoopEvent {
   createdAt: string;
 }
 
+/**
+ * A note one Desktop loop (the overseer) sent another (the worker), or an action it took on it (`action`, logged
+ * `done`). The server's ILoopDirective, local: same states and moves (LOOP_DIRECTIVE_TRANSITIONS).
+ */
+export interface LocalLoopDirective {
+  id: string;
+  /** The worker loop. */
+  loopId: string;
+  fromLoopId: string;
+  fromLoopName: string;
+  /** The overseer run that sent it. */
+  runId: string;
+  instruction: string;
+  reason: string;
+  state: LoopDirectiveState;
+  action?: LoopDirectiveAction;
+  replies: (
+    | { by: 'worker'; outcome: 'accepted' | 'pushed_back' | 'done'; note?: string; runId: string; at: string }
+    | { by: 'owner'; outcome: 'withdrawn' | 'overruled'; note?: string; at: string }
+  )[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LocalLoopSummary {
   loop: LocalLoop;
   lanesBusy: number;
@@ -148,6 +177,8 @@ export interface LocalLoopDetail extends LocalLoopSummary {
   tickets: LocalTicket[];
   runs: LocalRun[];
   events: LocalLoopEvent[];
+  /** Sent to this loop and from it, newest first. */
+  directives: LocalLoopDirective[];
 }
 
 export type LocalLoopsResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -177,6 +208,7 @@ const loopFields = {
   directory: z.string().min(1),
   approvalMode: z.enum(['auto', 'full']).optional(),
   mirror: z.boolean().optional(),
+  oversees: z.array(z.string()).max(10).optional(),
 };
 
 export const createLocalLoopSchema = z.object(loopFields);
@@ -224,5 +256,13 @@ export const answerLocalEventSchema = z.object({
   note: z.string().max(2000).optional(),
 });
 export type AnswerLocalEventRequest = z.infer<typeof answerLocalEventSchema>;
+
+/** The owner on a directive: withdraw it, or overrule a push-back (back to open, "owner insists"). */
+export const overrideLocalDirectiveSchema = z.object({
+  id: z.string(),
+  action: z.enum(['withdraw', 'overrule']),
+  note: z.string().max(LOOP_DIRECTIVE_NOTE_MAX).optional(),
+});
+export type OverrideLocalDirectiveRequest = z.infer<typeof overrideLocalDirectiveSchema>;
 
 export const setLocalBudgetSchema = z.object({ dailyCredits: z.number().min(0).nullable() });

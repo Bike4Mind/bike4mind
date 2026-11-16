@@ -8,6 +8,8 @@ import {
   chooseRunModel,
   laneCreditCap,
   LOOP_PROMPT_ANSWERS,
+  LOOP_PROMPT_DIRECTIVES,
+  type LoopOversight,
   MIN_ITERATION_CREDITS,
   pacedLanes,
   parseLoopMemory,
@@ -47,6 +49,7 @@ import {
   type LoopSessionChat,
 } from '../session';
 import { localAdmission } from './admission';
+import { openDirectivesFor } from './overseerTools';
 import { applyTicketPatch, type LocalLoopStore } from './LocalLoopStore';
 import { runTicketTool, type ToolRun } from './ticketTools';
 import { idleAlarms, laneChecks, RESTART_LIMIT, RestartBudget, schedulerStalled } from './watchdog';
@@ -536,12 +539,17 @@ export class LocalLoopScheduler {
     lane.run = store.putRun({ ...lane.run, sessionId: opened.sessionId });
 
     const prompt = ticket
-      ? buildLoopQuery(loop.goal, loop.memory, {
-          item: { id: ticket.id, title: ticket.title, description: ticket.description, stage: ticket.stage },
-          stages: loop.stages,
-          answers: this.answers(loop.id, ticket.id),
-          ...(stage.instructions ? { instructions: stage.instructions } : {}),
-        })
+      ? buildLoopQuery(
+          loop.goal,
+          loop.memory,
+          {
+            item: { id: ticket.id, title: ticket.title, description: ticket.description, stage: ticket.stage },
+            stages: loop.stages,
+            answers: this.answers(loop.id, ticket.id),
+            ...(stage.instructions ? { instructions: stage.instructions } : {}),
+          },
+          this.oversight(loop)
+        )
       : buildTriageQuery(loop, work.kind === 'triage' ? work.tickets : []);
     const started = await startLoopTurn(this.deps.chat, opened.sessionId, prompt, {
       kind: 'local-loop',
@@ -552,6 +560,19 @@ export class LocalLoopScheduler {
     });
     if (!started.ok) await this.finish(lane, { outcome: 'failed', reason: started.error });
     return true;
+  }
+
+  /** Directives sent to the loop and the loops it oversees, for its run's prompt (as the server's). */
+  private oversight(loop: LocalLoop): LoopOversight {
+    const { store } = this.deps;
+    return {
+      // Shaped as the server's directives; the prompt reads only state, text and the last reply's outcome and note.
+      directives: openDirectivesFor(store, loop.id, LOOP_PROMPT_DIRECTIVES) as unknown as LoopOversight['directives'],
+      overseen: (loop.oversees ?? []).flatMap(id => {
+        const watched = store.loop(id);
+        return watched ? [{ id: watched.id, name: watched.name }] : [];
+      }),
+    };
   }
 
   /** The owner's answers to the ticket's questions, newest first, for its next run's prompt. */
@@ -649,10 +670,17 @@ export class LocalLoopScheduler {
   ticketTool(sessionId: string, tool: string, input: Record<string, unknown>): string {
     const lane = this.laneOf(sessionId);
     if (!lane) throw new Error('This session is not working for a loop.');
-    const result = runTicketTool(this.deps.store, lane.tool, tool, input, (ticket, question) => {
-      const loop = this.deps.store.loop(ticket.loopId);
-      if (loop) this.raise(loop, { kind: 'asked', ticketId: ticket.id, runId: lane.run.id, reason: question });
-    });
+    const result = runTicketTool(
+      this.deps.store,
+      lane.tool,
+      tool,
+      input,
+      (ticket, question) => {
+        const loop = this.deps.store.loop(ticket.loopId);
+        if (loop) this.raise(loop, { kind: 'asked', ticketId: ticket.id, runId: lane.run.id, reason: question });
+      },
+      loop => this.summary(loop)
+    );
     this.poke();
     return result;
   }

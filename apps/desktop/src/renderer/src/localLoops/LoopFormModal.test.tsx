@@ -97,6 +97,32 @@ it('creates a loop from the typed fields and the picked folder', async () => {
   expect(onSaved).toHaveBeenCalledWith('new-loop');
 });
 
+it('lets a loop oversee the other Desktop loops, never itself', async () => {
+  await act(async () =>
+    root.render(
+      <CssVarsProvider theme={desktopTheme}>
+        <LoopFormModal
+          models={[{ id: 'm1', name: 'Model one' }]}
+          loops={[{ id: 'l2', name: 'Docs worker' }]}
+          onClose={() => undefined}
+          onSaved={onSaved}
+        />
+      </CssVarsProvider>
+    )
+  );
+  await act(async () => type('local-loops-form-name', 'Overseer'));
+  await act(async () => type('local-loops-form-goal', 'Keep the docs loop moving'));
+  await choose('local-loops-form-model', 'Model one');
+  await choose('local-loops-form-oversees', 'Docs worker');
+  await act(async () => byTestId('local-loops-form-folder-btn')!.click());
+  await act(async () => byTestId('local-loops-form-save-btn')!.click());
+  expect(api.createLoop).toHaveBeenCalledWith(expect.objectContaining({ oversees: ['l2'] }));
+});
+
+it('shows no Oversees field when there is no other loop', () => {
+  expect(byTestId('local-loops-form-oversees')).toBeNull();
+});
+
 it('validates like main does', () => {
   expect(validateLoopForm(baseValues())).toEqual({});
   expect(validateLoopForm({ ...baseValues(), name: '' }).name).toBeDefined();
@@ -127,5 +153,6 @@ function baseValues() {
     approvalMode: 'auto' as const,
     mirror: true,
     directory: '/Users/me/repo',
+    oversees: [],
   };
 }

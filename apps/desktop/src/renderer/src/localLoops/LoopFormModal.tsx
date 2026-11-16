@@ -51,6 +51,7 @@ interface Values {
   approvalMode: LoopApprovalMode;
   mirror: boolean;
   directory: string;
+  oversees: string[];
 }
 
 type Errors = Partial<Record<'name' | 'goal' | 'stages' | 'model' | 'maxConcurrent' | 'budget' | 'directory', string>>;
@@ -81,6 +82,7 @@ function valuesOf(loop?: LocalLoop): Values {
     approvalMode: loop?.approvalMode ?? 'auto',
     mirror: loop?.mirror ?? true,
     directory: loop?.directory ?? '',
+    oversees: loop?.oversees ?? [],
   };
 }
 
@@ -167,6 +169,7 @@ function requestOf(values: Values): CreateLocalLoopRequest {
     directory: values.directory,
     approvalMode: values.approvalMode,
     mirror: values.mirror,
+    oversees: values.oversees,
   };
 }
 
@@ -211,11 +214,14 @@ function ModelSelect({
 export function LoopFormModal({
   loop,
   models,
+  loops = [],
   onClose,
   onSaved,
 }: {
   loop?: LocalLoop;
   models: readonly ChatModelOption[];
+  /** The Desktop loops; any but this one can be overseen by it. */
+  loops?: readonly Pick<LocalLoop, 'id' | 'name'>[];
   onClose: () => void;
   onSaved: (loopId: string) => void;
 }) {
@@ -550,6 +556,30 @@ export function LoopFormModal({
                 <Option value="full">Full: every action runs</Option>
               </Select>
             </FormControl>
+            {loops.some(other => other.id !== loop?.id) && (
+              <FormControl>
+                <FormLabel>Oversees</FormLabel>
+                <Select
+                  size="sm"
+                  multiple
+                  placeholder="No loops"
+                  value={values.oversees}
+                  onChange={(_event, ids) => set('oversees', ids)}
+                  slotProps={{ button: { 'data-testid': 'local-loops-form-oversees' } }}
+                >
+                  {loops
+                    .filter(other => other.id !== loop?.id)
+                    .map(other => (
+                      <Option key={other.id} value={other.id} data-testid={`local-loops-form-oversees-${other.id}`}>
+                        {other.name}
+                      </Option>
+                    ))}
+                </Select>
+                <FormHelperText>
+                  Its runs can check these loops, send them directives, run them now or resume them after an error.
+                </FormHelperText>
+              </FormControl>
+            )}
             <Switch
               size="sm"
               checked={values.mirror}

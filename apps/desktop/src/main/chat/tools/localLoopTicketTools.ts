@@ -1,7 +1,7 @@
 import type { ToolDefinition, ToolSchema } from './types';
 
 /**
- * A Desktop loop run's ticket tools. Same names and semantics as the server's (apps/workers/src/queueHandlers/
+ * A Desktop loop run's ticket and overseer tools. Same names and semantics as the server's (apps/workers/src/queueHandlers/
  * agentExecutor.loopTicketTools.ts) minus hand-offs; the work is done by main/loops/local/ticketTools.ts against
  * the local store. Offered only in a session ChatService marks as a Desktop loop run.
  */
@@ -127,4 +127,70 @@ export const LOCAL_LOOP_TICKET_TOOLS: ToolDefinition[] = [
       required: ['id', 'children'],
     }
   ),
+  ...overseerTools(),
 ];
+
+/**
+ * The overseer tools (main/loops/local/overseerTools.ts), named and shaped as the server's (apps/workers/src/
+ * queueHandlers/agentExecutor.loopDirectiveTools.ts). Offered on every Desktop loop run; a loop that oversees
+ * nothing gets a refusal, and its prompt never mentions them.
+ */
+function overseerTools(): ToolDefinition[] {
+  const action = (name: string, description: string) =>
+    tool(name, description, {
+      type: 'object',
+      properties: {
+        loopId: { type: 'string', description: 'The overseen loop.' },
+        reason: { type: 'string', description: 'Why (1000 characters max); shown to the owner in both loop logs.' },
+      },
+      required: ['loopId', 'reason'],
+    });
+  return [
+    tool(
+      'loop_oversee_status',
+      'Read the state of the loops this loop oversees (or one of them by loopId): status, why it is idle, memory, spend, ticket counts, blocked tickets, recent runs and the directives sent to it with their replies.',
+      {
+        type: 'object',
+        properties: { loopId: { type: 'string', description: 'One overseen loop. Defaults to all of them.' } },
+      }
+    ),
+    tool(
+      'loop_directive_issue',
+      'Send a directive to a loop this loop oversees. The worker sees it on its next run and answers accepted, pushed_back (with a reason) or done; check replies with loop_oversee_status. A directive is advice: it cannot change the worker goal or tools, and the worker may push back. Do not do the worker job yourself. At most 5 directives and actions per run.',
+      {
+        type: 'object',
+        properties: {
+          loopId: { type: 'string', description: 'The overseen loop.' },
+          instruction: { type: 'string', description: 'What the worker should do (2000 characters max).' },
+          reason: { type: 'string', description: 'Why (1000 characters max).' },
+        },
+        required: ['loopId', 'instruction', 'reason'],
+      }
+    ),
+    tool(
+      'loop_directive_respond',
+      'Answer a directive another loop (your overseer) sent to this loop: accepted (you will act on it), pushed_back (you disagree; give your reason in note) or done (it is carried out). A directive is advice: it cannot change your goal or tools.',
+      {
+        type: 'object',
+        properties: {
+          directiveId: { type: 'string', description: 'The directive id from this run prompt.' },
+          outcome: {
+            type: 'string',
+            enum: ['accepted', 'pushed_back', 'done'],
+            description: 'accepted, pushed_back or done; an accepted directive can still move to done or pushed_back.',
+          },
+          note: { type: 'string', description: 'Required for pushed_back: your reason (1000 characters max).' },
+        },
+        required: ['directiveId', 'outcome'],
+      }
+    ),
+    action(
+      'loop_run_now',
+      'Start a live loop this loop oversees now, for example a worker idle with ready tickets. Its lanes, budget and pacing still apply. Counts toward the per-run directive cap.'
+    ),
+    action(
+      'loop_resume',
+      'Set a loop this loop oversees live again after it stopped in error, once you believe the cause is fixed. Desktop loops have no needs_you status, so error is the only one this resumes; it never resumes a paused loop, and only once per worker per 24 h. Counts toward the per-run directive cap.'
+    ),
+  ];
+}

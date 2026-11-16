@@ -4,6 +4,7 @@ import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktree
 import type { LoopApproveRequest, LoopApproveResult, LoopRunnerSettings, LoopRunnerState } from './loopRunner';
 import type {
   AnswerLocalEventRequest,
+  OverrideLocalDirectiveRequest,
   CreateLocalLoopRequest,
   CreateLocalTicketRequest,
   LocalLoopDetail,
@@ -414,6 +415,7 @@ export const IPC_CHANNELS = {
   /** Edit, move, re-prioritize, block, close or delete a ticket. */
   localLoopsUpdateTicket: 'localloops:update-ticket',
   localLoopsAnswerEvent: 'localloops:answer-event',
+  localLoopsOverrideDirective: 'localloops:override-directive',
   localLoopsGetBudget: 'localloops:get-budget',
   localLoopsSetBudget: 'localloops:set-budget',
   /** Native folder picker for a loop's checkout; create/update accept only a folder picked here. */
@@ -807,6 +809,7 @@ export interface DesktopApi {
     createTicket(request: CreateLocalTicketRequest): Promise<LocalLoopsResult<LocalTicket>>;
     updateTicket(request: UpdateLocalTicketRequest): Promise<LocalLoopsResult<LocalTicket | null>>;
     answerEvent(request: AnswerLocalEventRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
+    overrideDirective(request: OverrideLocalDirectiveRequest): Promise<LocalLoopsResult<LocalLoopDetail>>;
     getBudget(): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
     setBudget(dailyCredits: number | null): Promise<LocalLoopsResult<{ dailyCredits: number | null }>>;
     /** null: the owner cancelled. */

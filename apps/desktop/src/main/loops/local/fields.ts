@@ -26,12 +26,17 @@ const optional = <T, R>(value: T | null | undefined, check: (value: T) => R): { 
 /**
  * A loop request's fields, validated. `picked` holds the folders the owner chose in the native picker
  * (localloops:pick-folder): a directory is taken only from there, never as a path the renderer typed.
+ * `loopIds` are the Desktop loops that exist: a loop oversees only other ones of those.
  */
 export function checkedFields(
   request: Omit<UpdateLocalLoopRequest, 'id'>,
   current: LocalLoop | undefined,
-  picked: ReadonlySet<string>
+  picked: ReadonlySet<string>,
+  loopIds: ReadonlySet<string> = new Set()
 ): Partial<LocalLoop> {
+  const oversees = request.oversees && [...new Set(request.oversees)];
+  if (oversees?.some(id => id === current?.id || !loopIds.has(id)))
+    throw new BadRequestError('A loop can oversee only other Desktop loops.');
   const escalationModel = optional(request.escalationModel, validateLoopModel);
   const fallbackModel = optional(request.fallbackModel, validateLoopModel);
   const budgetCreditsPerDay = optional(request.budgetCreditsPerDay, validateLoopBudget);
@@ -60,5 +65,6 @@ export function checkedFields(
     ...(request.directory !== undefined && { directory: request.directory }),
     ...(request.approvalMode !== undefined && { approvalMode: request.approvalMode }),
     ...(request.mirror !== undefined && { mirror: request.mirror }),
+    ...(oversees && { oversees }),
   };
 }

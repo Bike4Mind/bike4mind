@@ -122,6 +122,43 @@ describe('registerLocalLoops handlers', () => {
     expect(await call(IPC_CHANNELS.localLoopsPickFolder)).toEqual({ ok: false, error: 'Pick a local git checkout.' });
   });
 
+  it('lets the owner overrule a push-back (back to open) and withdraw a directive, but not an action', async () => {
+    const { store } = register();
+    store.putLoop(testLoop());
+    const base = {
+      loopId: 'loop-1',
+      fromLoopId: 'boss',
+      fromLoopName: 'Boss',
+      runId: 'r',
+      instruction: 'x',
+      reason: 'y',
+      replies: [],
+      createdAt: '',
+      updatedAt: '',
+    };
+    store.putDirective({ ...base, id: 'd1', state: 'pushed_back' });
+    store.putDirective({ ...base, id: 'd2', state: 'done', action: 'run_now' });
+    expect(
+      await call(IPC_CHANNELS.localLoopsOverrideDirective, { id: 'd1', action: 'overrule', note: 'Do it anyway' })
+    ).toMatchObject({ ok: true });
+    expect(store.directive('d1')).toMatchObject({
+      state: 'open',
+      replies: [{ by: 'owner', outcome: 'overruled', note: 'Do it anyway' }],
+    });
+    expect(await call(IPC_CHANNELS.localLoopsOverrideDirective, { id: 'd1', action: 'overrule' })).toEqual({
+      ok: false,
+      error: 'The directive is open.',
+    });
+    expect(await call(IPC_CHANNELS.localLoopsOverrideDirective, { id: 'd1', action: 'withdraw' })).toMatchObject({
+      ok: true,
+    });
+    expect(store.directive('d1')?.state).toBe('withdrawn');
+    expect(await call(IPC_CHANNELS.localLoopsOverrideDirective, { id: 'd2', action: 'withdraw' })).toEqual({
+      ok: false,
+      error: 'Directive not found.',
+    });
+  });
+
   it('holds the scheduler while the machine sleeps and wakes it on resume', () => {
     register();
     mocks.power.get('suspend')!();

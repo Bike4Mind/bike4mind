@@ -68,10 +68,24 @@ const detail: LocalLoopDetail = {
     },
   ],
   events: [],
+  directives: (['pushed_back', 'open'] as const).map(state => ({
+    id: `d-${state}`,
+    loopId: 'l1',
+    fromLoopId: 'l0',
+    fromLoopName: 'Overseer',
+    runId: 'r0',
+    instruction: `Do the ${state} thing`,
+    reason: 'Because',
+    state,
+    replies: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  })),
 };
 
 const api = {
   get: vi.fn(async () => ({ ok: true, value: detail })),
+  overrideDirective: vi.fn(async () => ({ ok: true, value: detail })),
   onChanged: vi.fn(() => () => undefined),
 };
 let root: Root;
@@ -111,4 +125,12 @@ it('lists the lanes as rows in the Table view: the running run and the free lane
   expect(byTestId('orchestrator-table-row-s1')).not.toBeNull();
   expect(byTestId('orchestrator-table-row-lane:l1:2')).not.toBeNull();
   expect(byTestId('local-loops-card-t1')).toBeNull();
+});
+
+it('offers Overrule only on a pushed-back directive, and Withdraw on any still live', async () => {
+  await act(async () => byTestId('local-loops-tab-activity')!.click());
+  expect(byTestId('local-loops-directive-overrule-d-open')).toBeNull();
+  expect(byTestId('local-loops-directive-withdraw-d-open')).not.toBeNull();
+  await act(async () => byTestId('local-loops-directive-overrule-d-pushed_back')!.click());
+  expect(api.overrideDirective).toHaveBeenCalledWith({ id: 'd-pushed_back', action: 'overrule' });
 });

@@ -11,7 +11,8 @@ const setup = () => {
   const loop = store.putLoop(testLoop());
   const run: ToolRun = { loopId: loop.id, runId: 'run-1', creates: 0 };
   const asked = vi.fn();
-  const call = (tool: string, input: Record<string, unknown>) => runTicketTool(store, run, tool, input, asked);
+  const call = (tool: string, input: Record<string, unknown>) =>
+    runTicketTool(store, run, tool, input, asked, loop => ({ loop, lanesBusy: 0, spentToday: 0, needsYou: 0 }));
   return { store, loop, run, asked, call };
 };
 

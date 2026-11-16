@@ -14,8 +14,9 @@ import {
   UNSURE_PREFIX,
   unsureReason,
 } from '@bike4mind/common/loops';
-import type { LocalLoop, LocalTicket } from '@shared/localLoops';
+import type { LocalLoop, LocalLoopSummary, LocalTicket } from '@shared/localLoops';
 import { applyTicketPatch, type LocalLoopStore } from './LocalLoopStore';
+import { OVERSEER_TOOLS, overseerTool } from './overseerTools';
 
 /**
  * Ticket writes for Desktop loops, with the server's rules: the owner's (IPC) and a run's `loop_ticket_*` tools
@@ -221,10 +222,18 @@ export function runTicketTool(
   run: ToolRun,
   tool: string,
   input: Record<string, unknown>,
-  onAsked: (ticket: LocalTicket, question: string) => void
+  onAsked: (ticket: LocalTicket, question: string) => void,
+  /** The scheduler's loop summary, for loop_oversee_status. */
+  summary: (loop: LocalLoop) => LocalLoopSummary
 ): string {
   try {
-    return JSON.stringify(store.transaction(() => ticketTool(store, run, tool, input, onAsked)));
+    return JSON.stringify(
+      store.transaction(() =>
+        OVERSEER_TOOLS.has(tool)
+          ? overseerTool(store, run, tool, input, summary)
+          : ticketTool(store, run, tool, input, onAsked)
+      )
+    );
   } catch (error) {
     if (error instanceof BadRequestError) return `Error: ${error.message}`;
     throw error;

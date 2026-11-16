@@ -1,10 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import { startOfUtcDay, WORK_ITEM_STAGE_HISTORY_MAX, type WorkItemPatch } from '@bike4mind/common';
-import type { LocalLoop, LocalLoopEvent, LocalRun, LocalTicket } from '@shared/localLoops';
+import type { LocalLoop, LocalLoopDirective, LocalLoopEvent, LocalRun, LocalTicket } from '@shared/localLoops';
 
 const SCHEMA_VERSION = 1;
 
-type Table = 'loops' | 'tickets' | 'runs' | 'events';
+type Table = 'loops' | 'tickets' | 'runs' | 'events' | 'directives';
 
 /**
  * Desktop-owned loops: the source of truth for their loops, tickets, runs and events. `node:sqlite` in userData,
@@ -45,6 +45,10 @@ export class LocalLoopStore {
         CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, scope TEXT NOT NULL, loop_id TEXT NOT NULL,
           started_at TEXT NOT NULL, ended INTEGER NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, scope TEXT NOT NULL, loop_id TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS directives(id TEXT PRIMARY KEY, scope TEXT NOT NULL, loop_id TEXT NOT NULL,
+          from_loop_id TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS directives_loop ON directives(scope, loop_id);
+        CREATE INDEX IF NOT EXISTS directives_from ON directives(scope, from_loop_id);
         CREATE TABLE IF NOT EXISTS settings(scope TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(scope, key));
         CREATE INDEX IF NOT EXISTS tickets_loop ON tickets(scope, loop_id);
         CREATE INDEX IF NOT EXISTS runs_loop ON runs(scope, loop_id, started_at);
@@ -124,7 +128,14 @@ export class LocalLoopStore {
     this.transaction(() => {
       for (const table of ['tickets', 'runs', 'events'] as const)
         this.db.prepare(`DELETE FROM ${table} WHERE scope = ? AND loop_id = ?`).run(scope, id);
+      this.db
+        .prepare('DELETE FROM directives WHERE scope = ? AND (loop_id = ? OR from_loop_id = ?)')
+        .run(scope, id, id);
       this.db.prepare('DELETE FROM loops WHERE scope = ? AND id = ?').run(scope, id);
+      // No overseer keeps watching a loop that is gone.
+      for (const loop of this.loops())
+        if (loop.oversees?.includes(id))
+          this.putLoop({ ...loop, oversees: loop.oversees.filter(other => other !== id) });
       this.touch(id);
     });
   }
@@ -216,6 +227,31 @@ export class LocalLoopStore {
       .run(event.id, scope, event.loopId, JSON.stringify(event));
     this.touch(event.loopId);
     return event;
+  }
+
+  /** Sent to the loop and from it, newest first. */
+  directives(loopId: string): LocalLoopDirective[] {
+    return this.rows<LocalLoopDirective>(
+      'SELECT data FROM directives WHERE scope = ? AND (loop_id = ? OR from_loop_id = ?) ORDER BY rowid DESC',
+      loopId,
+      loopId
+    );
+  }
+
+  directive(id: string): LocalLoopDirective | null {
+    return this.one<LocalLoopDirective>('directives', id);
+  }
+
+  putDirective(directive: LocalLoopDirective): LocalLoopDirective {
+    const scope = this.requireScope();
+    this.db
+      .prepare(
+        'INSERT INTO directives(id, scope, loop_id, from_loop_id, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'
+      )
+      .run(directive.id, scope, directive.loopId, directive.fromLoopId, JSON.stringify(directive));
+    this.touch(directive.loopId);
+    this.touch(directive.fromLoopId);
+    return directive;
   }
 
   setting<T>(key: string): T | undefined {

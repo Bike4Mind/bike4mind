@@ -51,6 +51,7 @@ const detail = (patch: Partial<LocalLoopDetail> & { maxConcurrent?: number }): L
   tickets: [],
   runs: [],
   events: [],
+  directives: [],
   ...patch,
 });
 

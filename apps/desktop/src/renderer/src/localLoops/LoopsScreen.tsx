@@ -14,7 +14,14 @@ import TabList from '@mui/joy/TabList';
 import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import type { LocalLoopDetail, LocalLoopSummary } from '@shared/localLoops';
+import { LOOP_DIRECTIVE_TRANSITIONS } from '@bike4mind/common';
+import type {
+  LocalLoop,
+  LocalLoopDetail,
+  LocalLoopDirective,
+  LocalLoopSummary,
+  OverrideLocalDirectiveRequest,
+} from '@shared/localLoops';
 import { ArrowLeftIcon } from '../chat/icons';
 import { LoopRunnerSettings, useLoopRunnerState } from '../chat/LoopRunnerSettings';
 import { OrchestratorStage, type AgentActions } from '../chat/orchestrator/OrchestratorStage';
@@ -149,10 +156,111 @@ function MachinePanel() {
   );
 }
 
-function LoopActivity({ detail }: { detail: LocalLoopDetail }) {
+/** One directive between overseer and worker, with the owner's Withdraw / Overrule. Actions are log-only. */
+function DirectiveRow({
+  directive,
+  loopId,
+  loopNames,
+  onOverride,
+}: {
+  directive: LocalLoopDirective;
+  loopId: string;
+  loopNames: ReadonlyMap<string, string>;
+  onOverride: (request: OverrideLocalDirectiveRequest) => void;
+}) {
+  const [note, setNote] = useState('');
+  const sent = directive.fromLoopId === loopId;
+  const canWithdraw = !directive.action && LOOP_DIRECTIVE_TRANSITIONS.withdraw.includes(directive.state);
+  const canOverrule = !directive.action && LOOP_DIRECTIVE_TRANSITIONS.overrule.includes(directive.state);
+  const override = (action: OverrideLocalDirectiveRequest['action']) =>
+    onOverride({ id: directive.id, action, ...(note.trim() && { note: note.trim() }) });
+  return (
+    <Stack
+      spacing={0.5}
+      data-testid={`local-loops-directive-${directive.id}`}
+      sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 'sm' }}
+    >
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography level="body-xs" sx={{ flex: 1 }}>
+          {sent ? `To ${loopNames.get(directive.loopId) ?? 'a deleted loop'}` : `From ${directive.fromLoopName}`} -{' '}
+          {new Date(directive.createdAt).toLocaleString()}
+        </Typography>
+        <Chip size="sm" variant="soft" color={directive.state === 'pushed_back' ? 'warning' : 'neutral'}>
+          {directive.state.replace('_', ' ')}
+        </Chip>
+      </Stack>
+      <Typography level="body-sm">{directive.instruction}</Typography>
+      <Typography level="body-xs" textColor="text.tertiary">
+        Why: {directive.reason}
+      </Typography>
+      {directive.replies.map((reply, index) => (
+        <Typography key={index} level="body-xs">
+          {reply.by === 'owner' ? 'You' : 'Worker'}: {reply.outcome.replace('_', ' ')}
+          {reply.note ? ` - ${reply.note}` : ''}
+        </Typography>
+      ))}
+      {(canWithdraw || canOverrule) && (
+        <Stack direction="row" spacing={1}>
+          <Input
+            size="sm"
+            placeholder="Note (optional)"
+            value={note}
+            onChange={event => setNote(event.target.value)}
+            sx={{ flex: 1 }}
+          />
+          {canOverrule && (
+            <Button
+              size="sm"
+              onClick={() => override('overrule')}
+              data-testid={`local-loops-directive-overrule-${directive.id}`}
+            >
+              Overrule
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="soft"
+            color="neutral"
+            onClick={() => override('withdraw')}
+            data-testid={`local-loops-directive-withdraw-${directive.id}`}
+          >
+            Withdraw
+          </Button>
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function LoopActivity({
+  detail,
+  loopNames,
+  onOverride,
+}: {
+  detail: LocalLoopDetail;
+  loopNames: ReadonlyMap<string, string>;
+  onOverride: (request: OverrideLocalDirectiveRequest) => void;
+}) {
   const titles = new Map(detail.tickets.map(ticket => [ticket.id, ticket.title]));
   return (
     <Stack spacing={0.5} sx={{ p: 1.5, overflowY: 'auto' }} data-testid="local-loops-activity">
+      {detail.directives.length > 0 && (
+        <Stack spacing={1} sx={{ mb: 1.5 }}>
+          <Typography level="title-sm">Directives</Typography>
+          {detail.directives.map(directive => (
+            <DirectiveRow
+              key={directive.id}
+              directive={directive}
+              loopId={detail.loop.id}
+              loopNames={loopNames}
+              onOverride={onOverride}
+            />
+          ))}
+          <Typography level="title-sm" sx={{ pt: 1 }}>
+            Events
+          </Typography>
+        </Stack>
+      )}
       {detail.events.length === 0 && <Typography level="body-sm">Nothing yet.</Typography>}
       {detail.events.map(event => (
         <Typography key={event.id} level="body-xs">
@@ -166,11 +274,13 @@ function LoopActivity({ detail }: { detail: LocalLoopDetail }) {
 
 function LoopPane({
   loopId,
+  loops,
   models,
   onOpenSession,
   onDeleted,
 }: {
   loopId: string;
+  loops: readonly LocalLoop[];
   models: readonly ChatModelOption[];
   onOpenSession: (sessionId: string) => void;
   onDeleted: () => void;
@@ -329,10 +439,17 @@ function LoopPane({
           onResume={() => void act(() => api.setStatus({ id: loop.id, status: 'live' }))}
         />
       )}
-      {tab === 'activity' && <LoopActivity detail={detail} />}
+      {tab === 'activity' && (
+        <LoopActivity
+          detail={detail}
+          loopNames={new Map(loops.map(entry => [entry.id, entry.name]))}
+          onOverride={request => void act(() => api.overrideDirective(request))}
+        />
+      )}
       {editing && (
         <LoopFormModal
           loop={loop}
+          loops={loops}
           models={models}
           onClose={() => setEditing(false)}
           onSaved={() => setEditing(false)}
@@ -431,6 +548,7 @@ export function LoopsScreen({
         <LoopPane
           key={selectedId}
           loopId={selectedId}
+          loops={summaries.map(summary => summary.loop)}
           models={models}
           onOpenSession={onOpenSession}
           onDeleted={() => setSelected(null)}
@@ -439,6 +557,7 @@ export function LoopsScreen({
       {creating && (
         <LoopFormModal
           models={models}
+          loops={summaries.map(summary => summary.loop)}
           onClose={() => setCreating(false)}
           onSaved={loopId => {
             setCreating(false);
