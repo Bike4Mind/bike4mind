@@ -11,6 +11,7 @@ const { mocks } = vi.hoisted(() => ({
     findAdminSetting: vi.fn(),
     cacheFind: vi.fn(),
     cacheCreateOrUpdate: vi.fn(),
+    findOrg: vi.fn(),
   },
 }));
 
@@ -19,6 +20,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: () => ({}),
   getAvailableModels: (...a: unknown[]) => mocks.getAvailableModels(...a),
   getSupersededModels: (...a: unknown[]) => mocks.getSupersededModels(...a),
+  resolveSuccessorChain: (id: string) => (id === 'retired-claude' ? 'claude' : id),
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
@@ -35,6 +37,7 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
+  organizationRepository: { findById: (...a: unknown[]) => mocks.findOrg(...a) },
   cacheRepository: {
     find: (...a: unknown[]) => mocks.cacheFind(...a),
     createOrUpdate: (...a: unknown[]) => mocks.cacheCreateOrUpdate(...a),
@@ -48,6 +51,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 import { Logger } from '@bike4mind/observability';
 import { getCallerModelList, resolveCallerDefaultModel } from './callerModelList';
+import { createModelAdmission as createSharedModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 
 const textModel = (id: string, overrides: Partial<ModelInfo> = {}): ModelInfo =>
   ({
@@ -83,6 +87,7 @@ beforeEach(() => {
   mocks.findAdminSetting.mockResolvedValue(null);
   mocks.cacheFind.mockResolvedValue([]);
   mocks.cacheCreateOrUpdate.mockResolvedValue(undefined);
+  mocks.findOrg.mockResolvedValue(null);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -437,5 +442,180 @@ describe('resolveCallerDefaultModel', () => {
     mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
 
     await expect(resolveDefault()).rejects.toThrow('settings db down');
+  });
+});
+
+describe('org model policy', () => {
+  const claude = textModel('claude', { backend: ModelBackend.Anthropic });
+  const policy = (overrides: Record<string, unknown>) => ({
+    modelPolicy: { allowedProviders: null, allowedModels: null, allowedTools: null, ...overrides },
+  });
+  const orgList = (user: IUserDocument = makeUser()) =>
+    getCallerModelList(user, { log: vi.fn() }, { organizationId: 'org-1' });
+
+  beforeEach(() => {
+    mocks.getAvailableModels.mockResolvedValue([priced, free, claude]);
+  });
+
+  it('moves models off an allowed provider to lockedModels as org_policy', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedProviders: [ModelBackend.Anthropic] }));
+    const list = await orgList();
+
+    expect(mocks.findOrg).toHaveBeenCalledWith('org-1');
+    expect(list.models.map(model => model.id)).toEqual(['claude']);
+    expect(list.lockedModels.map(model => [model.id, model.access?.reason])).toEqual([
+      ['priced', 'org_policy'],
+      ['free', 'org_policy'],
+    ]);
+  });
+
+  it('applies the model allowlist', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['free'] }));
+
+    expect((await orgList()).models.map(model => model.id)).toEqual(['free']);
+  });
+
+  it('locks every model when the stored policy is invalid', async () => {
+    mocks.findOrg.mockResolvedValue({ modelPolicy: { allowedProviders: 'not-a-list' } });
+    const list = await orgList();
+
+    expect(list.models).toEqual([]);
+    expect(list.lockedModels).toHaveLength(3);
+  });
+
+  it('lists everything for an org without a policy, and reads no org without an id', async () => {
+    mocks.findOrg.mockResolvedValue({});
+    expect((await orgList()).models).toHaveLength(3);
+
+    mocks.findOrg.mockClear();
+    expect((await callerList(makeUser())).models).toHaveLength(3);
+    expect(mocks.findOrg).not.toHaveBeenCalled();
+  });
+
+  it('relabels a paid-plan lock the org also disallows, since no upgrade unlocks it', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['priced']));
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['priced', 'claude'] }));
+    const list = await orgList();
+
+    expect(list.models.map(model => model.id)).toEqual(['priced']);
+    expect(list.lockedModels.map(model => [model.id, model.access?.reason])).toEqual([
+      ['free', 'org_policy'],
+      ['claude', 'requires_paid_plan'],
+    ]);
+  });
+
+  it('starts the default on the first allowed text model when the org disallows it', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['claude'] }));
+
+    expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' })).toBe(
+      'claude'
+    );
+    expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() })).toBe('priced');
+  });
+
+  it('reads the org once per default resolution', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['claude'] }));
+    mocks.findOrg.mockClear();
+    await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' });
+    expect(mocks.findOrg).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['disabled', 'unpriced', 'tag-locked', 'entitlement-locked'])(
+    'skips an org-allowed %s preferred/first text candidate',
+    async kind => {
+      const bad = textModel('bad', {
+        ...(kind === 'disabled' ? { disabled: true } : {}),
+        ...(kind === 'unpriced' ? { pricing: {} } : {}),
+      });
+      const good = textModel('good');
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'true' });
+      // Seed the cache so the price check cannot be satisfied merely by the listing's prefilter.
+      mocks.cacheFind.mockResolvedValue([
+        {
+          key: 'model-list:user-1:credits-on',
+          result: { models: [bad, good], supersededModels: [] },
+        },
+      ]);
+      if (kind === 'tag-locked' || kind === 'entitlement-locked') {
+        mocks.findAdminSetting.mockResolvedValue({
+          settingValue: [
+            {
+              id: 'bad',
+              enabled: true,
+              allowedUserTags: kind === 'tag-locked' ? ['beta'] : [],
+              allowedEntitlements: kind === 'entitlement-locked' ? ['pro'] : [],
+            },
+          ],
+        });
+      }
+      mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['bad', 'good'] }));
+      expect(await resolveCallerDefaultModel('bad', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' })).toBe(
+        'good'
+      );
+    }
+  );
+
+  it('shares config, allowlist, entitlement and catalog reads across free-tier and org resolution', async () => {
+    mocks.getAvailableModels.mockResolvedValue([priced, textModel('locked'), textModel('good')]);
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['locked', 'good']));
+    mocks.findAdminSetting.mockResolvedValue({
+      settingValue: [
+        {
+          id: 'locked',
+          enabled: true,
+          allowedEntitlements: ['pro'],
+        },
+      ],
+    });
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['good'] }));
+    expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' })).toBe(
+      'good'
+    );
+    expect(mocks.findOrg).toHaveBeenCalledTimes(1);
+    expect(mocks.findAdminSetting).toHaveBeenCalledTimes(1);
+    expect(mocks.loadFreeTierAllowedModels).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserEntitlements).toHaveBeenCalledTimes(1);
+    expect(mocks.getSettingsMap).toHaveBeenCalledTimes(1);
+    expect(mocks.cacheFind).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the original default for authoritative refusal when all org candidates fail admission', async () => {
+    mocks.getAvailableModels.mockResolvedValue([textModel('bad', { disabled: true })]);
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['bad'] }));
+    const selected = await resolveCallerDefaultModel(
+      'priced',
+      makeUser(),
+      { log: vi.fn() },
+      { organizationId: 'org-1' }
+    );
+    expect(selected).toBe('priced');
+    await expect(
+      createSharedModelAdmission({
+        user: makeUser(),
+        configs: [],
+        orgModelPolicy: { allowedProviders: null, allowedModels: ['bad'], allowedTools: null },
+      }).assert(selected)
+    ).rejects.toMatchObject({ additionalInfo: { errorCode: 'org_model_not_allowed' } });
+  });
+
+  it('does not load the free-tier allowlist for an exempt user whose org still restricts models', async () => {
+    mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('free-tier reader should not run'));
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['claude'] }));
+    expect(
+      await resolveCallerDefaultModel(
+        'priced',
+        makeUser({ isAdmin: true }),
+        { log: vi.fn() },
+        { organizationId: 'org-1' }
+      )
+    ).toBe('claude');
+    expect(mocks.loadFreeTierAllowedModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps offering the successor of an allowlisted retired model', async () => {
+    mocks.findOrg.mockResolvedValue(policy({ allowedModels: ['retired-claude'] }));
+    expect(await resolveCallerDefaultModel('priced', makeUser(), { log: vi.fn() }, { organizationId: 'org-1' })).toBe(
+      'claude'
+    );
   });
 });

@@ -176,7 +176,7 @@ beforeAll(async () => {
   const app = express();
   registerEmbedRoutes(app, () => {});
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       resolve();
     });
@@ -780,6 +780,18 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(params.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
+  // sharedToolBuilder.mcpNarrowing.test.ts proves orgToolPolicy is what refuses a disallowed tool model.
+  it("hands the embed org's model policy to the tool builder, so a tool's own model calls are governed", async () => {
+    const modelPolicy = { allowedProviders: ['openai'] };
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [], modelPolicy });
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { orgToolPolicy: unknown };
+    expect(opts.orgToolPolicy).toEqual(expect.objectContaining({ allowedProviders: ['openai'] }));
+  });
+
   it('a tool outside the curated universe never materializes, even when explicitly allowed', async () => {
     hydrateWith({ allowedTools: ['image_generation', 'delegate_to_agent', 'skill'] });
     await post(CHAT);
@@ -1162,6 +1174,17 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(mockAssertOwnerHasCredits).toHaveBeenCalledWith(END_USER);
     expect(mockAssertOwnerHasCredits).not.toHaveBeenCalledWith(ORG);
     expect(mockGetEffectiveLLMApiKeys.mock.calls[0][0]).toBe(END_USER.id);
+  });
+
+  it("carries the embed org's model policy onto the personally billed turn", async () => {
+    const modelPolicy = { allowedModels: ['other-model'] };
+    mockOrgFindById.mockResolvedValue({ ...ORG, modelPolicy });
+    const res = await postIdentified(CHAT);
+    await res.text();
+
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.billingOrganizationId).toBeUndefined();
+    expect(params.governingOrgModelPolicy).toEqual(modelPolicy);
   });
 
   it("refuses a broke identified user instead of falling back to the org's pool", async () => {

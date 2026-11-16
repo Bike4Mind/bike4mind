@@ -525,6 +525,37 @@ describe('OrchestratorStage', () => {
     });
   });
 
+  it('swaps the view for the Focus panel, whose Open buttons reach the drawer and the parent', async () => {
+    const onParentFocus = vi.fn();
+    const renderFocused = (on: boolean) =>
+      themed.render(
+        <OrchestratorStage
+          agents={FIXTURE}
+          parent={{ status: 'needs-action' }}
+          onParentFocus={onParentFocus}
+          rootId="root"
+          view="table"
+          onViewChange={onViewChange}
+          actions={actions}
+          introPlaying={false}
+          focus={{ on, onToggle: vi.fn() }}
+        />
+      );
+    await renderFocused(true);
+    expect(query('orchestrator-table-row-w1')).toBeNull();
+    const openButtons = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid="orchestrator-focus-open-btn"]'));
+    expect(openButtons()).toHaveLength(2);
+    await act(async () => openButtons()[0].click());
+    expect(onParentFocus).toHaveBeenCalledTimes(1);
+    await act(async () => openButtons()[1].click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+
+    await renderFocused(false);
+    expect(query('orchestrator-focus-panel')).toBeNull();
+    expect(query('orchestrator-table-row-w1')).not.toBeNull();
+  });
+
   it('opens the agent a notice asked for, once, and says it was taken', async () => {
     const onFocusAgentConsumed = vi.fn();
     const renderFocus = (focusAgent: string | null) =>

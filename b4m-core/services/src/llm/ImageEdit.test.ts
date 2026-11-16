@@ -286,6 +286,7 @@ describe('ImageEditService.process model dispatch', () => {
     expect(assertAdmission).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user1' }),
       ImageModels.GPT_IMAGE_1_5,
+      undefined,
       undefined
     );
     expect(creditHolds.hold).not.toHaveBeenCalled();
@@ -313,7 +314,7 @@ describe('ImageEditService.process model dispatch', () => {
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined, undefined);
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -339,12 +340,13 @@ describe('ImageEditService.process model dispatch', () => {
       seed: 12345,
     };
     await service.invoke({ body, userId: 'user1', adminRoleWithheld: true });
-    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true);
+    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true, undefined);
     expect(assertAdmission).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ id: 'user1' }),
       ImageModels.FLUX_PRO_FILL,
-      true
+      true,
+      undefined
     );
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });

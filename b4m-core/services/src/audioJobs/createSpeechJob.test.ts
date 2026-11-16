@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CreditHolderType,
   estimateTtsHoldCredits,
+  ModelBackend,
   insufficientCreditsError,
   TTS_DEFAULT_MODEL,
   type StorageLimitErrorInfo,
@@ -158,7 +159,13 @@ describe('createSpeechJob', () => {
       await expect(
         createSpeechJob({ user: { ...user, adminRoleWithheld: true }, request: validRequest, source: 'api' }, deps)
       ).rejects.toBe(refusal);
-      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', TTS_DEFAULT_MODEL.openai, true);
+      expect(deps.assertModelAdmission).toHaveBeenCalledWith(
+        'u1',
+        TTS_DEFAULT_MODEL.openai,
+        true,
+        null,
+        ModelBackend.OpenAI
+      );
       expect(holdCredits).not.toHaveBeenCalled();
       expect(deps.enqueue).not.toHaveBeenCalled();
     });
@@ -169,7 +176,27 @@ describe('createSpeechJob', () => {
         { user, request: { text: 'hi', provider: 'openai', model: 'tts-1-hd' }, source: 'api' },
         deps
       );
-      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', 'tts-1-hd', undefined);
+      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', 'tts-1-hd', undefined, null, ModelBackend.OpenAI);
+    });
+
+    it("judges the billing org's policy by the dispatch vendor, not the model id", async () => {
+      const { deps } = makeDeps();
+      await createSpeechJob(
+        {
+          user: { id: 'u1', organizationId: 'org1' },
+          request: { text: 'hi', provider: 'elevenlabs', model: 'gpt-4o-mini-tts' },
+          source: 'api',
+        },
+        deps
+      );
+      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', 'gpt-4o-mini-tts', undefined, 'org1', null);
+      expect(deps.isModelAdmitted).toHaveBeenCalledWith(
+        'u1',
+        TTS_DEFAULT_MODEL.openai,
+        undefined,
+        'org1',
+        ModelBackend.OpenAI
+      );
     });
 
     it('lists the requested vendor first, then each usable alternate', async () => {
@@ -229,14 +256,20 @@ describe('createSpeechJob', () => {
         deps
       );
       expect(result).toMatchObject({ ok: true, job: { payload: { candidates: ['openai'] } } });
-      expect(deps.isModelAdmitted).toHaveBeenCalledWith('u1', TTS_DEFAULT_MODEL.elevenlabs, true);
+      expect(deps.isModelAdmitted).toHaveBeenCalledWith('u1', TTS_DEFAULT_MODEL.elevenlabs, true, null, null);
     });
 
     it('does not run the alternate admission check for the requested vendor', async () => {
       const { deps } = makeDeps({ isModelAdmitted: vi.fn(async () => false) });
       const result = await createSpeechJob({ user, request: validRequest, source: 'api' }, deps);
       expect(result).toMatchObject({ ok: true, job: { payload: { candidates: ['openai'] } } });
-      expect(deps.isModelAdmitted).not.toHaveBeenCalledWith('u1', TTS_DEFAULT_MODEL.openai, undefined);
+      expect(deps.isModelAdmitted).not.toHaveBeenCalledWith(
+        'u1',
+        TTS_DEFAULT_MODEL.openai,
+        undefined,
+        null,
+        ModelBackend.OpenAI
+      );
     });
 
     it('drops only the vendor whose key lookup fails', async () => {

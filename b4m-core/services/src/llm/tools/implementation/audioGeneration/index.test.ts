@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getQuestErrorCode,
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   type IGenerationJobDocument,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
@@ -300,6 +301,17 @@ describe('audio_generation tool', () => {
 
     jobs.createSpeechJob.mockRejectedValueOnce(new Error('database down'));
     await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).rejects.toThrow('database down');
+  });
+
+  it("returns the billing org's model-policy refusal as the result, with the org advice", async () => {
+    jobs.createSoundEffectJob.mockRejectedValueOnce(
+      new ForbiddenError('Model "eleven_text_to_sound_v2" is not allowed by your organization', {
+        errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      })
+    );
+    await expect(run(context, { kind: 'sound_effect', text: 'door creak' }, { jobs })).resolves.toMatch(
+      /^Error: Model "eleven_text_to_sound_v2" is not allowed by your organization.*organization allows/
+    );
   });
 
   it('reports a failed job with the sanitized provider message and shows nothing', async () => {

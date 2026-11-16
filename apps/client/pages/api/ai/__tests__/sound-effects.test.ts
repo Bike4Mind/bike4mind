@@ -1,4 +1,10 @@
-import { CreditHolderType, isZodError, SoundEffectGenerationSchema } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  ForbiddenError,
+  isZodError,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  SoundEffectGenerationSchema,
+} from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -225,6 +231,19 @@ describe('POST /api/ai/sound-effects', () => {
     expect(createInput(1).saveToFiles).toBe(false);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'file_too_large' });
+  });
+
+  it('answers 403 when the billing org policy refuses the model, without waiting on a job', async () => {
+    // createSoundEffectJob asserts the org model policy before it holds credits or persists a job.
+    mocks.createSoundEffectJob.mockRejectedValue(
+      new ForbiddenError('Model "eleven_text_to_sound_v2" is not allowed by your organization', {
+        errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      })
+    );
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid body (422) without creating a job', async () => {

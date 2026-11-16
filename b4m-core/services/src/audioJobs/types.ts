@@ -4,6 +4,7 @@ import type {
   GenerationJobSource,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
+  ModelBackend,
   SoundGenerationVendor,
   StorageLimitErrorInfo,
   VoiceGenerationVendor,
@@ -98,7 +99,17 @@ export type SoundEffectJobDeps = AudioJobDeps & {
 export type DailySpendCapRefusal = { message: string; retryAfterSeconds: number };
 
 type CreateAudioJobExtras = {
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  /**
+   * As CreateMusicJobDeps.assertModelAdmission. orgModelBackend is the vendor that actually serves the clip
+   * (resolveAudioVendorBackend), so an org provider allowlist judges the dispatch vendor, not a guess from the model id.
+   */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null,
+    orgModelBackend?: ModelBackend | null
+  ): Promise<void>;
   /**
    * As checkFreeTierDailySpendCap (server-utils billing), checked before the hold when credits are enforced.
    * Absent: no daily cap applies.
@@ -115,7 +126,13 @@ type CreateAudioJobExtras = {
 export type CreateSpeechJobDeps = SpeechJobDeps &
   CreateAudioJobExtras & {
     /** Whether the user may use `modelId`; an alternate vendor whose default model is withheld is not tried. */
-    isModelAdmitted(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<boolean>;
+    isModelAdmitted(
+      userId: string,
+      modelId: string,
+      adminRoleWithheld?: boolean,
+      organizationId?: string | null,
+      orgModelBackend?: ModelBackend | null
+    ): Promise<boolean>;
   };
 
 export type CreateSoundEffectJobDeps = SoundEffectJobDeps & CreateAudioJobExtras;

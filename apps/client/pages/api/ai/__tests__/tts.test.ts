@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CreditHolderType, isZodError, SpeechGenerationSchema } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  ForbiddenError,
+  isZodError,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  SpeechGenerationSchema,
+} from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks } = vi.hoisted(() => ({
@@ -248,6 +254,20 @@ describe('POST /api/ai/tts', () => {
     expect(createInput(1).saveToFiles).toBe(false);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+  });
+
+  it('answers 403 when the billing org policy refuses the model, without waiting on a job', async () => {
+    // createSpeechJob asserts the org model policy before it holds credits or persists a job.
+    mocks.createSpeechJob.mockRejectedValue(
+      new ForbiddenError('Model "tts-1" is not allowed by your organization', {
+        errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      })
+    );
+    const { res, promise } = run({ text: 'hi', organization_id: 'teamOrg' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(createInput().user.organizationId).toBe('teamOrg');
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
   });
 
   it('rejects a moderated user with 403 before creating a job', async () => {

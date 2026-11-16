@@ -1,6 +1,7 @@
 import {
   DEFAULT_SOUND_MODEL_ID,
   isSupportedElevenLabsFormat,
+  resolveAudioVendorBackend,
   soundEffectJobRequestSchema,
   type SoundGenerationVendor,
   type StoredSoundEffectRequest,
@@ -61,7 +62,13 @@ export async function createSoundEffectJob(
     deps
   );
   if (replay) return replay;
-  await deps.assertModelAdmission(input.user.id, DEFAULT_SOUND_MODEL_ID, input.user.adminRoleWithheld);
+  await deps.assertModelAdmission(
+    input.user.id,
+    DEFAULT_SOUND_MODEL_ID,
+    input.user.adminRoleWithheld,
+    input.user.organizationId,
+    resolveAudioVendorBackend(provider)
+  );
   if (!isUsableApiKey(await deps.resolveApiKey(provider, input.user.id))) {
     return { ok: false, status: 422, code: 'model_unavailable', message: `No ${provider} API key configured` };
   }

@@ -40,6 +40,13 @@ const VENDOR_RATES: Record<VoiceGenerationVendor, TtsRateTable> = {
   elevenlabs: ELEVENLABS_TTS_RATES,
 };
 
+/** The vendor whose rate table lists this TTS model id, or undefined for an unknown id. */
+export function ttsVendorOfModel(modelId: string): VoiceGenerationVendor | undefined {
+  return (Object.keys(VENDOR_RATES) as VoiceGenerationVendor[]).find(vendor =>
+    Object.hasOwn(VENDOR_RATES[vendor], modelId)
+  );
+}
+
 /**
  * Fallback USD per 1K chars when the exact model is not in the table. Set to the
  * HIGHEST known rate for the vendor so an unknown or newly-shipped model bills at

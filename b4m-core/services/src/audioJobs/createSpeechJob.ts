@@ -1,5 +1,6 @@
 import {
   DEFAULT_TTS_PROVIDER,
+  resolveAudioVendorBackend,
   estimateTtsHoldCredits,
   speechJobRequestSchema,
   TTS_DEFAULT_MODEL,
@@ -70,7 +71,9 @@ export async function createSpeechJob(
   await deps.assertModelAdmission(
     input.user.id,
     request.model ?? TTS_DEFAULT_MODEL[vendor],
-    input.user.adminRoleWithheld
+    input.user.adminRoleWithheld,
+    input.user.organizationId,
+    resolveAudioVendorBackend(vendor)
   );
 
   const candidates = await usableCandidates(input, request, deps);
@@ -145,7 +148,7 @@ async function usableCandidates(
   request: StoredSpeechRequest,
   deps: CreateSpeechJobDeps
 ): Promise<VoiceGenerationVendor[]> {
-  const { id: userId, adminRoleWithheld } = input.user;
+  const { id: userId, adminRoleWithheld, organizationId } = input.user;
   const checks = ttsCandidates(request.provider, request.text.length).map(async vendor => {
     if (!deps.providers[vendor]) return false;
     try {
@@ -154,7 +157,16 @@ async function usableCandidates(
       deps.logger.warn('TTS candidate key lookup failed', { vendor, error });
       return false;
     }
-    return vendor === request.provider || deps.isModelAdmitted(userId, TTS_DEFAULT_MODEL[vendor], adminRoleWithheld);
+    return (
+      vendor === request.provider ||
+      deps.isModelAdmitted(
+        userId,
+        TTS_DEFAULT_MODEL[vendor],
+        adminRoleWithheld,
+        organizationId,
+        resolveAudioVendorBackend(vendor)
+      )
+    );
   });
   const usable = await Promise.all(checks);
   return ttsCandidates(request.provider, request.text.length).filter((_vendor, index) => usable[index]);

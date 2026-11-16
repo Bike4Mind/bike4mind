@@ -141,9 +141,18 @@ describe('createSoundEffectJob', () => {
       await expect(
         createSoundEffectJob({ user: { ...user, adminRoleWithheld: true }, request: validRequest, source: 'api' }, deps)
       ).rejects.toBe(refusal);
-      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', DEFAULT_SOUND_MODEL_ID, true);
+      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', DEFAULT_SOUND_MODEL_ID, true, null, null);
       expect(holdCredits).not.toHaveBeenCalled();
       expect(deps.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('passes the billing org so its model policy applies, with ElevenLabs outside ModelBackend', async () => {
+      const { deps } = makeDeps();
+      await createSoundEffectJob(
+        { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
+        deps
+      );
+      expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', DEFAULT_SOUND_MODEL_ID, undefined, 'org1', null);
     });
 
     it.each([
