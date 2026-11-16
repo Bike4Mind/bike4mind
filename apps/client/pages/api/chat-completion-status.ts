@@ -1,4 +1,4 @@
-import { Resource } from 'sst';
+import { chatCompletionBaseUrl } from '@server/utils/chatCompletionBaseUrl';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
@@ -30,7 +30,7 @@ const handler = baseApi()
     })
   )
   .get(async (_req, res) => {
-    const url = `${Resource.ChatCompletion.url}/health`;
+    const url = `${chatCompletionBaseUrl()}/health`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     try {

@@ -47,6 +47,17 @@ describe('dispatchQuest', () => {
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-shared-secret');
   });
 
+  it('posts to a single-slash path when the linked URL ends in a slash', async () => {
+    mockResource.ChatCompletion.url = 'https://chat-origin.app.example.test/';
+    fetchMock.mockResolvedValueOnce(res(202));
+    try {
+      await dispatchQuest(params, logger);
+    } finally {
+      mockResource.ChatCompletion.url = 'http://chat-completion.internal';
+    }
+    expect(fetchMock.mock.calls[0][0]).toBe('https://chat-origin.app.example.test/process');
+  });
+
   it('does NOT retry on a 401 (deterministic auth failure)', async () => {
     fetchMock.mockResolvedValueOnce(res(401, 'Unauthorized'));
     await expect(dispatchQuest(params, logger)).rejects.toThrow(/401/);
