@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { downloadRelevantLinks } from './downloadRelevantLinks';
+import {
+  downloadRelevantLinks,
+  MAX_LINKS_PER_RESEARCH_TASK,
+  MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK,
+} from './downloadRelevantLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ResearchTaskType, ResearchTaskStatus, KnowledgeType } from '@bike4mind/common';
 import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
@@ -902,6 +906,129 @@ describe('downloadRelevantLinks', () => {
           status: ResearchTaskStatus.COMPLETED,
         })
       );
+    });
+  });
+
+  describe('per-task download limits', () => {
+    const MAX_FILE = 50 * 1024 * 1024;
+
+    const makeLinks = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        url: `https://example.com/doc${i}.pdf`,
+        text: `Doc ${i}`,
+        relevance: 0.71 + i * 0.001,
+        isDownloadable: true,
+        isRecommended: true,
+        fileType: 'application/pdf',
+      }));
+
+    // Small real buffer that reports a large length, so no big allocation is needed.
+    const bigBuffer = (size: number) => Object.defineProperty(Buffer.from('x'), 'length', { value: size });
+
+    const setup = (links: unknown[]) => {
+      mockResearchTask.discoveredLinks = links;
+      mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+      mockDb.users.findById.mockResolvedValue(mockUser);
+      mockedFileTypeFromBuffer.mockResolvedValue({ mime: 'application/pdf', ext: 'pdf' });
+      mockedFindOrUpdateExistingResearchData.mockResolvedValue(null);
+      mockedFabFilesService.createFabFile.mockResolvedValue({ id: 'f', mimeType: 'application/pdf' });
+    };
+
+    it('keeps only the highest-relevance links when over the count cap', async () => {
+      const links = makeLinks(MAX_LINKS_PER_RESEARCH_TASK + 5);
+      setup([...links].sort((a, b) => (a.url < b.url ? 1 : -1))); // shuffled vs relevance order
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      const expected = links
+        .slice(5)
+        .map(l => l.url)
+        .sort();
+      const called = mockedDownload.mock.calls.map(c => c[0]).sort();
+      expect(called).toEqual(expected);
+      expect(mockDb.researchTasks.addWarning).not.toHaveBeenCalled();
+    });
+
+    it('starts with the highest-relevance links', async () => {
+      const links = makeLinks(6);
+      setup(links);
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      expect(mockedDownload.mock.calls.slice(0, 3).map(c => c[0])).toEqual([links[5].url, links[4].url, links[3].url]);
+    });
+
+    it('stops downloading once the byte budget is spent and warns once', async () => {
+      const links = makeLinks(10);
+      setup(links);
+      mockedDownload.mockImplementation(async (_url, opts) => ({
+        data: bigBuffer(opts?.maxBytes ?? 0),
+        contentType: undefined,
+        finalUrl: '',
+      }));
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      // 250 MiB budget at 50 MiB per file: 5 downloads, the rest skipped.
+      const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
+      expect(mockedDownload).toHaveBeenCalledTimes(fullFiles);
+      expect(mockDb.researchTasks.addWarning).toHaveBeenCalledTimes(1);
+      expect(mockDb.researchTasks.addWarning).toHaveBeenCalledWith(
+        'test-task-id',
+        expect.stringContaining(`skipped ${10 - fullFiles} links`)
+      );
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(expect.stringContaining('download budget reached'), 100);
+    });
+
+    it('caps maxBytes at the remaining budget for the last link', async () => {
+      const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
+      const links = makeLinks(fullFiles + 1);
+      setup(links);
+      // Each file takes 49 MiB, leaving the budget short of a full reserve for the last link.
+      mockedDownload.mockImplementation(async () => ({
+        data: bigBuffer(MAX_FILE - 1024 * 1024),
+        contentType: undefined,
+        finalUrl: '',
+      }));
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      const maxes = mockedDownload.mock.calls.map(c => c[1]?.maxBytes as number);
+      expect(Math.min(...maxes)).toBeLessThan(MAX_FILE);
+      expect(Math.min(...maxes)).toBeGreaterThan(0);
+    });
+
+    it('refunds the reservation when a download fails', async () => {
+      const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
+      const links = makeLinks(fullFiles + 1);
+      setup(links);
+      let first = true;
+      mockedDownload.mockImplementation(async () => {
+        if (first) {
+          first = false;
+          throw new Error('boom');
+        }
+        return { data: bigBuffer(MAX_FILE), contentType: undefined, finalUrl: '' };
+      });
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      // The failed link kept no bytes, so every link still gets a full-size reservation.
+      expect(mockedDownload).toHaveBeenCalledTimes(fullFiles + 1);
+      expect(mockedDownload.mock.calls.every(c => c[1]?.maxBytes === MAX_FILE)).toBe(true);
+      expect(mockDb.researchTasks.addWarning).not.toHaveBeenCalled();
+    });
+
+    it('does not warn or change maxBytes under the limits', async () => {
+      setup(makeLinks(2));
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      expect(mockedDownload).toHaveBeenCalledTimes(2);
+      expect(mockedDownload.mock.calls.every(c => c[1]?.maxBytes === MAX_FILE)).toBe(true);
+      expect(mockDb.researchTasks.addWarning).not.toHaveBeenCalled();
     });
   });
 });
