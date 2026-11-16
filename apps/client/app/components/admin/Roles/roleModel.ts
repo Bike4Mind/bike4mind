@@ -13,6 +13,8 @@ export const isSensitivePermission = (id: AdminPermissionId): boolean =>
 
 export const permissionLabel = (id: AdminPermissionId): string => ADMIN_PERMISSION_LABELS[id].label;
 
+export const permissionDescription = (id: AdminPermissionId): string => ADMIN_PERMISSION_LABELS[id].description;
+
 export const permissionLabels = (ids: readonly AdminPermissionId[]): string =>
   ids.length ? sortAdminPermissions(ids).map(permissionLabel).join(', ') : 'none';
 

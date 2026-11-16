@@ -13,8 +13,14 @@ import { useCreateAdminRole, useUpdateAdminRole, type AdminRoleRow } from '@clie
 import { getErrorMessage } from '@client/app/utils/error';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { ADMIN_REASON_PRESETS, ActionDialog, AdminDialog, ChangePreview, StatusChip } from '../shared';
-import { ADMIN_PERMISSION_LABELS } from '../Users/Profile/userProfileModel';
-import { diffPermissions, isSensitivePermission, permissionLabel, permissionLabels, pluralUsers } from './roleModel';
+import {
+  diffPermissions,
+  isSensitivePermission,
+  permissionDescription,
+  permissionLabel,
+  permissionLabels,
+  pluralUsers,
+} from './roleModel';
 
 type RoleFormDialogProps = { onClose: () => void } & (
   { mode: 'create'; role?: undefined } | { mode: 'edit' | 'view'; role: AdminRoleRow }
@@ -213,7 +219,7 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
                       {isSensitivePermission(id) && <StatusChip tone="neutral" label="Sensitive" />}
                     </Stack>
                     <Typography component="span" level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                      {ADMIN_PERMISSION_LABELS[id].description}
+                      {permissionDescription(id)}
                     </Typography>
                   </Stack>
                 }

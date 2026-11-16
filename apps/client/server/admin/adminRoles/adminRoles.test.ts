@@ -164,15 +164,10 @@ describe('updateAdminRole', () => {
   });
 
   it('records the reason on the audit entry and keeps it off the stored role', async () => {
-    await updateAdminRole(
-      ADMIN,
-      ROLE_ID,
-      { permissions: ['support:read', 'credits:adjust'], reason: 'Billing hire starts Monday' },
-      deps
-    );
+    await updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'], reason: REASON }, deps);
 
     expect(deps.roles.update).toHaveBeenCalledWith(ROLE_ID, { permissions: ['support:read', 'credits:adjust'] });
-    expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Billing hire starts Monday' }));
+    expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ reason: REASON }));
   });
 
   it('writes no audit entry for a no-op edit', async () => {
