@@ -106,7 +106,11 @@ const pushTo = <T>(map: Map<string, T[]>, key: string, value: T) => {
   else map.set(key, [value]);
 };
 
-async function loadActiveDays(batch: CohortMember[], deadlineMs: number): Promise<Map<string, string[]>> {
+/** The UTC days with AI activity per member, from each signup day through the activation window. */
+export async function loadActiveDays(
+  batch: readonly CohortMember[],
+  deadlineMs: number
+): Promise<Map<string, string[]>> {
   const signupDays = batch.map(member => utcDayOf(member.signupAt)).sort();
   const lastDay = utcDayOf(new Date(dayStart(signupDays[signupDays.length - 1]) + ACTIVATION_WINDOW_DAYS * DAY_MS));
   const rows = await AnalyticsUserDay.find(

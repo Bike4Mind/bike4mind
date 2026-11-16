@@ -6,7 +6,7 @@ import {
   attributedSignups,
   conversionOutcomes,
   type AttributedSignup,
-  type MemberOutcome,
+  type CohortOutcome,
 } from '@bike4mind/server-utils/analytics/acquisitionConversion';
 import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
@@ -23,6 +23,9 @@ import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
 
 const emptyMetrics = (): AcquisitionMetrics => ({
   signups: 0,
+  activationSignups: 0,
+  firstAction: 0,
+  cameBack: 0,
   matureSignups: 0,
   converted: 0,
   subscriptionFirst: 0,
@@ -41,10 +44,15 @@ const emptyMetrics = (): AcquisitionMetrics => ({
   renewalUnavailable: 0,
 });
 
-function addOutcome(metrics: AcquisitionMetrics, outcome: MemberOutcome | undefined): void {
+function addOutcome(metrics: AcquisitionMetrics, outcome: CohortOutcome | undefined): void {
   metrics.signups++;
   if (!outcome) return;
-  const { firstPaid, followUp } = outcome;
+  const { firstPaid, followUp, activation } = outcome;
+  if (activation) {
+    metrics.activationSignups++;
+    if (activation !== 'signedUp') metrics.firstAction++;
+    if (activation === 'cameBack') metrics.cameBack++;
+  }
   if (!outcome.mature) {
     if (firstPaid) metrics.provisionalConverted++;
     return;
@@ -87,7 +95,7 @@ function finish<T extends AcquisitionMetrics>(metrics: T): T {
  */
 export function groupAcquisitionRows(
   members: readonly AttributedSignup[],
-  outcomes: ReadonlyMap<string, MemberOutcome> = new Map()
+  outcomes: ReadonlyMap<string, CohortOutcome> = new Map()
 ): {
   rows: AcquisitionRow[];
   totals: AcquisitionMetrics;

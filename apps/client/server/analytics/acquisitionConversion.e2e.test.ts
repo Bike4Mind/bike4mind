@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { GatewayTimeoutError } from '@bike4mind/common';
-import { CreditTransaction, User } from '@bike4mind/database';
+import { AnalyticsUserDay, CreditTransaction, User } from '@bike4mind/database';
 import { acquisitionCohortUserIds } from '@bike4mind/server-utils/analytics/acquisitionConversion';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
@@ -307,6 +307,40 @@ describe('getAcquisitionConversion', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('counts first action and came back per row by the funnel rules, judging only week-old signups', async () => {
+    await Promise.all([User.createIndexes(), AnalyticsUserDay.createIndexes()]);
+    const weekOld = { createdAt: new Date('2026-06-02T10:00:00Z') };
+    const ads = { firstTouch: { source: 'ads' } };
+    const [returning, oneDay, , lateOnly, fresh] = await Promise.all([
+      seedSignup(ads, weekOld),
+      seedSignup(ads, weekOld),
+      seedSignup(ads, weekOld),
+      seedSignup(ads, weekOld),
+      seedSignup(ads),
+    ]);
+    const activeOn = (user: { _id: unknown }, days: string[]) =>
+      Promise.all(
+        days.map(day =>
+          AnalyticsUserDay.collection.insertOne({ day, userId: String(user._id), ownerType: 'User', suspected: false })
+        )
+      );
+    await Promise.all([
+      activeOn(returning, ['2026-06-02', '2026-06-05']),
+      activeOn(oneDay, ['2026-06-02']),
+      activeOn(lateOnly, ['2026-06-12']),
+      activeOn(fresh, ['2026-06-10', '2026-06-11']),
+    ]);
+
+    const result = await rowsOf('first');
+
+    expect(result.rows.find(row => row.key === 'ads|(none)|(none)')).toMatchObject({
+      signups: 5,
+      activationSignups: 4,
+      firstAction: 2,
+      cameBack: 1,
+    });
   });
 
   it('leaves the activation funnel cohort unchanged by the shared eligibility read', async () => {

@@ -41,6 +41,12 @@ export type AcquisitionRowKind = 'touch' | 'unattributed' | 'other';
  */
 export type AcquisitionMetrics = {
   signups: number;
+  /** Signups old enough for the activation funnel to judge their first week (its minimum age). */
+  activationSignups: number;
+  /** Judged signups with AI activity in their first week, by the activation funnel's rules. */
+  firstAction: number;
+  /** Judged signups active again on a later day of that first week. */
+  cameBack: number;
   /** Signups whose conversion window has closed. */
   matureSignups: number;
   /** Mature signups with a personal payment inside the window; split by first payment kind below. */

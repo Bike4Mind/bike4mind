@@ -161,6 +161,9 @@ describe('buildAnalyticsCsvFiles', () => {
   it('adds the acquisition file only for a computed range, defusing formula campaigns', () => {
     const metrics = {
       signups: 4,
+      activationSignups: 4,
+      firstAction: 3,
+      cameBack: 2,
       matureSignups: 3,
       converted: 1,
       subscriptionFirst: 1,
@@ -194,7 +197,7 @@ describe('buildAnalyticsCsvFiles', () => {
     const rows = fileNamed(buildAnalyticsCsvFiles(overview, topAccounts, acquisition), 'acquisition-conversion.csv');
     expect(rows[0]).toContain('Converted within (days)');
     expect(rows[1]).toBe(
-      "Campaign,ads,cpc,'=cmd(),last,4,3,1,1,33.33,yes,1,0,0,0,1,1,0,0,1,0,0,30,90,subscription-state,100"
+      "Campaign,ads,cpc,'=cmd(),last,4,4,3,2,3,1,1,33.33,yes,1,0,0,0,1,1,0,0,1,0,0,30,90,subscription-state,100"
     );
     expect(rows[2]).toMatch(/^Total,,,,last,4,/);
     expect(

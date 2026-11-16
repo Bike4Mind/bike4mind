@@ -87,6 +87,20 @@ const columnsOf = (onSelectRow: Props['onSelectRow'], updating: boolean): DataCo
   { id: 'source', label: 'Source / medium / campaign', render: row => <SourceCell row={row} /> },
   { id: 'signups', label: 'Signups', numeric: true, render: row => formatCount(row.signups) },
   {
+    id: 'firstAction',
+    label: 'First action',
+    numeric: true,
+    help: 'Signups with AI activity in their first week, by the activation funnel rules, out of the signups at least a week old.',
+    render: row => `${formatCount(row.firstAction)} of ${formatCount(row.activationSignups)}`,
+  },
+  {
+    id: 'cameBack',
+    label: 'Came back',
+    numeric: true,
+    help: 'Of those week-old signups, the ones active again on a later day of their first week.',
+    render: row => formatCount(row.cameBack),
+  },
+  {
     id: 'converted',
     label: 'Converted',
     numeric: true,

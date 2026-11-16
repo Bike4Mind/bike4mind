@@ -15,6 +15,9 @@ const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider them
 
 const metrics = (patch: Partial<AcquisitionMetrics> = {}): AcquisitionMetrics => ({
   signups: 10,
+  activationSignups: 10,
+  firstAction: 6,
+  cameBack: 3,
   matureSignups: 10,
   converted: 2,
   subscriptionFirst: 1,

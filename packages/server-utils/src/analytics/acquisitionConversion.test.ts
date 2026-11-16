@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { addBillingInterval, conversionWindowClosed, deriveRenewal, memberOutcome } from './acquisitionConversion';
+import {
+  activationStep,
+  addBillingInterval,
+  conversionWindowClosed,
+  deriveRenewal,
+  memberOutcome,
+} from './acquisitionConversion';
 import { paidWithinDays, type LedgerPayment, type PaymentLedger } from './paymentLedger';
 
 const d = (iso: string) => new Date(iso);
@@ -152,5 +158,21 @@ describe('memberOutcome', () => {
       opts('2026-06-01T00:00:00Z')
     );
     expect(outcome).toMatchObject({ firstPaid: null, orgBuyer: true, retained: false, followUp: null });
+  });
+});
+
+describe('activationStep', () => {
+  const signupAt = d('2026-01-01T09:00:00Z');
+  const now = d('2026-01-08T09:00:00Z');
+
+  it('leaves a signup younger than the funnel minimum age unjudged', () => {
+    expect(activationStep(signupAt, ['2026-01-01'], d('2026-01-08T08:59:59Z'))).toBeNull();
+  });
+
+  it('applies the funnel first-week rules', () => {
+    expect(activationStep(signupAt, [], now)).toBe('signedUp');
+    expect(activationStep(signupAt, ['2026-01-09'], now)).toBe('signedUp');
+    expect(activationStep(signupAt, ['2026-01-01'], now)).toBe('firstAction');
+    expect(activationStep(signupAt, ['2026-01-01', '2026-01-08'], now)).toBe('cameBack');
   });
 });

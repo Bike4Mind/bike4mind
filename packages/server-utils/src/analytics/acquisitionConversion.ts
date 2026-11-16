@@ -5,7 +5,14 @@ import {
   type AttributedTouch,
   type StoredAcquisition,
 } from '../app/utils/acquisitionTouch';
-import { COHORT_MAX_TIME_MS, findEligibleSignups, withinBudget } from './activationFunnel';
+import {
+  ACTIVATION_MIN_AGE_MS,
+  COHORT_MAX_TIME_MS,
+  findEligibleSignups,
+  funnelStepOf,
+  loadActiveDays,
+  withinBudget,
+} from './activationFunnel';
 import {
   classifyFirstPaid,
   loadPaymentLedger,
@@ -144,20 +151,40 @@ export function memberOutcome(
   };
 }
 
-/** Each member's conversion outcome, reading payment ledgers in batches. */
+export type ActivationStep = 'signedUp' | 'firstAction' | 'cameBack';
+
+/**
+ * How far the member got in the activation funnel's first week, by the same rules and minimum age the funnel
+ * uses (activationFunnel.ts funnelStepOf); null while the signup is too new to judge.
+ */
+export function activationStep(signupAt: Date, activeDays: Iterable<string>, now: Date): ActivationStep | null {
+  if (signupAt.getTime() > now.getTime() - ACTIVATION_MIN_AGE_MS) return null;
+  const step = funnelStepOf({ signupAt, activeDays, paid: false });
+  return step === 'paid' ? 'cameBack' : step;
+}
+
+export type CohortOutcome = MemberOutcome & { activation: ActivationStep | null };
+
+/** Each member's activation and conversion outcome, reading activity days and payment ledgers in batches. */
 export async function conversionOutcomes(
   members: readonly AttributedSignup[],
   options: ConversionOptions & { maxTimeMS: () => number }
-): Promise<Map<string, MemberOutcome>> {
-  const outcomes = new Map<string, MemberOutcome>();
+): Promise<Map<string, CohortOutcome>> {
+  const outcomes = new Map<string, CohortOutcome>();
   for (let i = 0; i < members.length; i += LEDGER_BATCH) {
     const batch = members.slice(i, i + LEDGER_BATCH);
-    const ledgers = await loadPaymentLedger(
-      batch.map(member => member.id),
-      { until: options.now, maxTimeMS: options.maxTimeMS }
-    );
+    const [ledgers, activeDays] = await Promise.all([
+      loadPaymentLedger(
+        batch.map(member => member.id),
+        { until: options.now, maxTimeMS: options.maxTimeMS }
+      ),
+      loadActiveDays(batch, options.maxTimeMS()),
+    ]);
     for (const member of batch)
-      outcomes.set(member.id, memberOutcome(member.signupAt, ledgers.get(member.id), options));
+      outcomes.set(member.id, {
+        ...memberOutcome(member.signupAt, ledgers.get(member.id), options),
+        activation: activationStep(member.signupAt, activeDays.get(member.id) ?? [], options.now),
+      });
   }
   return outcomes;
 }
