@@ -7,7 +7,6 @@ const mockSendToQueue = vi.fn();
 const mockGetSettingsValue = vi.fn();
 const mockGetConfiguredRepoSlugs = vi.fn();
 const mockResolveFullConfig = vi.fn();
-const mockClassifyError = vi.fn();
 const mockNotifyEventLogsToSlack = vi.fn();
 
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
@@ -40,15 +39,6 @@ vi.mock('@bike4mind/utils', () => ({
   notifyEventLogsToSlack: (...args: unknown[]) => mockNotifyEventLogsToSlack(...args),
 }));
 
-vi.mock('@bike4mind/server-utils/services/liveopsFingerprint', () => ({
-  extractErrorType: vi.fn(() => 'TypeError'),
-  normalizeErrorMessage: vi.fn((m: string) => m),
-}));
-
-vi.mock('./logToSlackClassify', () => ({
-  classifyError: (...args: unknown[]) => mockClassifyError(...args),
-}));
-
 vi.mock('@bike4mind/common', () => ({
   SreClassification: { HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW', SKIP: 'SKIP' },
   SreSourceType: { CLOUDWATCH: 'CLOUDWATCH', GITHUB_ISSUE: 'GITHUB_ISSUE' },
@@ -67,7 +57,7 @@ vi.mock('@bike4mind/observability', async importOriginal => {
   };
 });
 
-import { ingest } from './logToSlack';
+import { ingest, stripRequestPrefix } from './logToSlack';
 
 /** Build a CloudWatch Logs event the way AWS delivers it: base64(gzip(JSON)). */
 function makeCwEvent(message: string, logGroup = '/aws/lambda/dev-fn'): CloudWatchLogsEvent {
@@ -80,6 +70,26 @@ const ctx = {} as Context;
 // CloudWatch log line: timestamp\trequestId\tlevel\tjsonPayload
 const errorLine = `2026-01-01\treq-1\tERROR\t${JSON.stringify({ message: 'TypeError: boom', functionName: 'dev-fn' })}`;
 
+describe('stripRequestPrefix', () => {
+  it('handles long whitespace runs promptly', () => {
+    const message = `GET ${' '.repeat(100_000)}x`;
+    const start = performance.now();
+    expect(stripRequestPrefix(message)).toBe(message);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it.each(['\u2192', '->'])('normalizes the %s prefix', arrow => {
+    expect(stripRequestPrefix(`GET /route ${arrow} 500: TypeError: failed\n    at handler.ts:42`)).toBe(
+      'TypeError: failed\n    at handler.ts:42'
+    );
+  });
+
+  it('does not consume a prefix tail on a later line', () => {
+    const message = 'GET /route\n \u2192 500: TypeError: failed';
+    expect(stripRequestPrefix(message)).toBe(message);
+  });
+});
+
 describe('logToSlack.ingest — SRE dispatch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,7 +100,6 @@ describe('logToSlack.ingest — SRE dispatch', () => {
       dryRun: false,
       sources: { cloudwatch: { enabled: true } },
     });
-    mockClassifyError.mockReturnValue('MEDIUM');
   });
 
   it('dispatches a classified CloudWatch error to sreJobQueue tagged jobType: analysis', async () => {
@@ -111,6 +120,7 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     const fargateLine = JSON.stringify({
       severity: 'error',
       message: 'Drain window expired with in-flight quests',
+      stack: 'Error: Drain window expired\n    at drain (worker.ts:10:2)',
       functionName: 'chatCompletion',
     });
 
@@ -119,6 +129,7 @@ describe('logToSlack.ingest — SRE dispatch', () => {
     expect(mockSendToQueue).toHaveBeenCalledTimes(1);
     const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
     expect(payload.errorMessage).toBe('Drain window expired with in-flight quests');
+    expect(payload.classification).toBe('LOW');
     expect(payload.functionName).toBe('chatCompletion');
     expect(payload.logGroup).toBe('/sst/cluster/dev/ChatCompletion');
   });
@@ -149,11 +160,118 @@ describe('logToSlack.ingest — SRE dispatch', () => {
   });
 
   it('does not dispatch when the error classifies as SKIP', async () => {
-    mockClassifyError.mockReturnValue('SKIP');
+    await ingest(makeCwEvent('Request aborted'), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('ignores a request prefix when structured=%s', async structured => {
+    const message = 'GET /TypeError/ZodError \u2192 500: Not available';
+    const line = structured ? JSON.stringify({ message, path: '/ReferenceError' }) : message;
+
+    await ingest(makeCwEvent(line), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ZodError: invalid input', 'HIGH'],
+    ['TypeError: invalid value', 'MEDIUM'],
+  ])('dispatches %s with only message and stack context', async (message, classification) => {
+    const stack = `${message}\n    at handle (handler.ts:10:2)`;
+    const line = JSON.stringify({
+      message: `POST /request-metadata \u2192 500: ${message}`,
+      error: { stack, path: '/nested-metadata', headers: { note: 'nested context' } },
+      path: '/request-metadata',
+      headers: { note: 'request context' },
+    });
+
+    await ingest(makeCwEvent(line), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledTimes(1);
+    const [, payload] = mockSendToQueue.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload).toMatchObject({ errorMessage: message, classification, stackTrace: `${message}\n${stack}` });
+    const fingerprint = payload.fingerprint;
+    mockSendToQueue.mockClear();
+    await ingest(makeCwEvent(JSON.stringify({ message, error: { stack } })), ctx);
+    expect(mockSendToQueue.mock.calls[0][1].fingerprint).toBe(fingerprint);
+  });
+
+  it.each([
+    { path: '/TypeError', message: 'Not available' },
+    { path: '/ZodError' },
+    { message: { detail: 'TypeError' }, stack: { detail: 'ZodError' } },
+    null,
+    ['TypeError'],
+    'TypeError',
+  ])('does not classify non-error JSON fields: %j', async value => {
+    await ingest(makeCwEvent(JSON.stringify(value)), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it.each(['stack', 'stackTrace'])('includes a top-level %s string', async field => {
+    const stack = 'ReferenceError: missing\n    at handle (handler.ts:10:2)';
+    await ingest(makeCwEvent(JSON.stringify({ errorMessage: 'Handler failed', [field]: stack })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        errorMessage: 'Handler failed',
+        classification: 'MEDIUM',
+        stackTrace: `Handler failed\n${stack}`,
+      })
+    );
+  });
+
+  it('skips JSON whose classifier keyword exists only in metadata', async () => {
+    await ingest(makeCwEvent(JSON.stringify({ message: 'Handler failed', path: '/TypeError' })), ctx);
+
+    expect(mockSendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('uses the first non-empty stack line for a missing message', async () => {
+    await ingest(makeCwEvent(JSON.stringify({ err: { stack: '\n  TypeError: failed\n    at handler.ts:42' } })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ errorMessage: 'TypeError: failed' })
+    );
+  });
+
+  it('includes a serialized err stack without its other fields', async () => {
+    const stack = 'TypeError: failed\n    at handle (handler.ts:10:2)';
+    await ingest(makeCwEvent(JSON.stringify({ message: 'Failed', err: { stack, path: '/metadata' } })), ctx);
+
+    expect(mockSendToQueue).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ stackTrace: `Failed\n${stack}`, classification: 'MEDIUM' })
+    );
+  });
+
+  it.each(['err', 'error'])('derives distinct messages and fingerprints from %s stacks', async field => {
+    for (const message of ['TypeError: failed to load settings', 'ReferenceError: handler is missing']) {
+      const stack = `${message}\n    at handle (handler.ts:10:2)`;
+      await ingest(makeCwEvent(JSON.stringify({ [field]: { stack }, path: '/metadata' })), ctx);
+    }
+
+    expect(mockSendToQueue).toHaveBeenCalledTimes(2);
+    const first = mockSendToQueue.mock.calls[0][1];
+    const second = mockSendToQueue.mock.calls[1][1];
+    expect(first.errorMessage).toBe('TypeError: failed to load settings');
+    expect(second.errorMessage).toBe('ReferenceError: handler is missing');
+    expect(first.fingerprint).not.toBe(second.fingerprint);
+    expect(first.stackTrace).not.toContain('/metadata');
+  });
+
+  it.each([undefined, {}, { repos: [] }])('does not dispatch with unset or empty config: %j', async config => {
+    mockGetSettingsValue.mockResolvedValue(config);
+    mockGetConfiguredRepoSlugs.mockReturnValue([]);
 
     await ingest(makeCwEvent(errorLine), ctx);
 
     expect(mockSendToQueue).not.toHaveBeenCalled();
+    expect(mockResolveFullConfig).not.toHaveBeenCalled();
   });
 
   it('does not dispatch when no repo has CloudWatch intake enabled', async () => {
