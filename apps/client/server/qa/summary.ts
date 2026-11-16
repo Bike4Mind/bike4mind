@@ -1,7 +1,7 @@
 import type { QaCounts, QaMetric, QaRunStatus } from '@bike4mind/common';
 
 /**
- * Period summary for the /status "Summary" section (weekly ops report). Pure, so the
+ * Period summary for the /status "Scheduled runs summary" section (weekly ops report). Pure, so the
  * definitions are unit-tested without a database; getQaSummary in reads.ts feeds it scheduled
  * runs only.
  *

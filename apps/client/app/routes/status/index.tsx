@@ -54,7 +54,8 @@ const QaStatusPage: FC = () => {
         {(overview.isError || runs.isError || summary.isError) && (
           <Alert color="danger">Could not load QA status.</Alert>
         )}
-        {summary.data && (
+        {/* Waits for the product list so the swatch colors do not change once it arrives. */}
+        {summary.data && !allFacets.isLoading && (
           <StatusSummary
             summary={summary.data}
             range={resolveRange(effective)}

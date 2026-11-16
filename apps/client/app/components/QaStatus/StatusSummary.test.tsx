@@ -23,6 +23,8 @@ describe('formatPercent', () => {
     expect(formatPercent(0.98765)).toBe('98.8%');
     expect(formatPercent(1)).toBe('100.0%');
     expect(formatPercent(null)).toBe('-');
+    expect(formatPercent(1999 / 2000)).toBe('99.9%');
+    expect(formatPercent(0.99949)).toBe('99.9%');
   });
 });
 
@@ -45,6 +47,7 @@ describe('StatusSummary', () => {
     expect(e2eA).toHaveTextContent('E2E98.8%7 of 13 runs with no failures');
     expect(e2eB).toHaveTextContent('E2E100.0%1 of 1 run with no failures');
     expect(screen.getAllByTestId('qa-summary-latency')).toHaveLength(1);
+    expect(screen.queryAllByRole('heading')).toEqual([]);
     expect(screen.getByTestId('qa-summary-latency')).toHaveTextContent('Latency100.0%1 of 1 run passed');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent(
       'Scheduled runs summary7 days (Nov 10 - Nov 16) . branch main . all envs . all products'

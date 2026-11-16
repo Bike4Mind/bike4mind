@@ -5,9 +5,11 @@ import type { QaSummary } from '@client/app/hooks/data/qaStatus';
 import { parseIsoDay, spanDays, type DayRange } from './dateRange';
 import { seriesColor } from './qaSeriesColors';
 
-/** 0.98765 -> "98.8%"; null -> "-". */
+/** 0.98765 -> "98.8%"; null -> "-". Only a perfect rate reads 100.0%, so 1999/2000 is "99.9%". */
 export function formatPercent(rate: number | null): string {
-  return rate === null ? '-' : `${(rate * 100).toFixed(1)}%`;
+  if (rate === null) return '-';
+  const pct = (rate * 100).toFixed(1);
+  return rate < 1 && pct === '100.0' ? '99.9%' : `${pct}%`;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -41,8 +43,8 @@ const Figure: FC<{ label: string; value: string; detail: ReactNode; testId: stri
     <Typography level="body-sm" textColor="text.tertiary">
       {label}
     </Typography>
-    {/* Two figures share a card; at 320px each column is ~90px, too narrow for "100.0%" at h2 size. */}
-    <Typography level="h2" fontWeight="md" sx={{ my: 0.5, fontSize: { xs: 'xl2', sm: 'xl3' } }}>
+    {/* A figure, not a heading. Two share a card; at 320px each column is ~90px, too narrow for "100.0%" at h2 size. */}
+    <Typography level="h2" component="p" fontWeight="md" sx={{ my: 0.5, fontSize: { xs: 'xl2', sm: 'xl3' } }}>
       {value}
     </Typography>
     <Typography level="body-sm" textColor="text.tertiary" sx={{ '& b': { color: 'text.primary' } }}>

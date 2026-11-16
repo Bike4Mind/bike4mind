@@ -46,7 +46,7 @@ export const QA_SERIES_MAX_RUNS = 2000;
 const FLAKY_ROWS = 10;
 const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
-/** Per product; a 30-day range holds well under this today. */
+/** Per product; a full 366-day range of scheduled runs holds well under this today. */
 export const QA_SUMMARY_MAX_RUNS = 5000;
 const BASELINE_DAYS = 7;
 const BASELINE_MAX_RUNS = 200;
