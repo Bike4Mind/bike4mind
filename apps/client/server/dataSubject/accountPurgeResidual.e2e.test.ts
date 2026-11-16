@@ -31,6 +31,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
 import { erasureRegistry } from './erasureRegistry';
+import { SubjectErasurePlan } from './subjectErasurePlan';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -56,7 +57,7 @@ async function insert(model: string, doc: Record<string, unknown>) {
   return cast._id as InstanceType<typeof ObjectId>;
 }
 
-async function seedAccount() {
+async function seedAccount(source: 'self' | 'admin' = 'admin') {
   const subject = new ObjectId();
   const admin = new ObjectId();
   const other = new ObjectId();
@@ -69,8 +70,8 @@ async function seedAccount() {
     deletion: {
       requestedAt: new Date(now.getTime() - 60_000),
       scheduledFor: now,
-      source: 'admin',
-      requestedBy: String(admin),
+      source,
+      ...(source === 'admin' ? { requestedBy: String(admin) } : {}),
     },
   });
   await insert('User', { _id: admin, username: `admin-${admin}`, email: `admin-${admin}@example.test` });
@@ -146,7 +147,7 @@ async function seedAccount() {
   // Soft-deleted rows still name the person and must go too.
   await insert('Project', { name: 'Trashed project', userId, deletedAt: new Date() });
   await insert('DeepAgentEpisode', { agentId, deletedAt: new Date() });
-  return { userId, sharedNotebook };
+  return { userId, email: `erase-${userId}@example.test`, sharedNotebook };
 }
 
 describe('admin erasure against the real data holder registry', () => {
@@ -171,5 +172,36 @@ describe('admin erasure against the real data holder registry', () => {
     expect(await mongoose.model(Session.modelName).collection.findOne({ _id: sharedNotebook })).toMatchObject({
       users: [],
     });
+  });
+});
+
+/** What the registry finds naming a subject once their account is gone, per collection. */
+async function leftNaming(subject: { userId: string; email: string }) {
+  const collections = await new SubjectErasurePlan(subject).collections();
+  return collections.map(({ model, deleted, anonymized, retained }) => ({ model, deleted, anonymized, retained }));
+}
+
+describe('self-serve deletion and admin erasure', () => {
+  it('leave the same rows naming the person from identical accounts', async () => {
+    const self = await seedAccount('self');
+    const admin = await seedAccount('admin');
+    for (const { userId } of [self, admin]) {
+      await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+        deleted: true,
+      });
+    }
+
+    for (const subject of [self, admin]) {
+      await expect(erasureRegistry.audit(subject)).resolves.toEqual({ remaining: [], unclassified: [] });
+    }
+    const [selfLeft, adminLeft] = await Promise.all([leftNaming(self), leftNaming(admin)]);
+    // The admin path alone records the erasure check (user.erasure.completed) against the person's id.
+    const withoutAuditLog = (rows: Awaited<ReturnType<typeof leftNaming>>) =>
+      rows.filter(row => row.model !== 'AdminAuditLog');
+    expect(withoutAuditLog(selfLeft)).toEqual(withoutAuditLog(adminLeft));
+    expect(withoutAuditLog(selfLeft).length).toBeGreaterThan(0);
+    const auditRows = (rows: Awaited<ReturnType<typeof leftNaming>>) =>
+      rows.find(row => row.model === 'AdminAuditLog')?.retained ?? 0;
+    expect(auditRows(adminLeft)).toBe(auditRows(selfLeft) + 1);
   });
 });
