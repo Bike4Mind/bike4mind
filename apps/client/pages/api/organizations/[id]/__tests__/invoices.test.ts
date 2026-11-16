@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   getStripe: () => ({ invoices: { list: mockRefs.invoicesList } }),
 }));
 
-// The gate (verifyOrgOwner) runs for real against a stubbed repository, so these tests pin who the
+// The gate (verifyOrgPermission + orgMemberHasPermission, manageBilling) runs for real against a stubbed repository, so these tests pin who the
 // route admits rather than asserting a mocked helper.
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: (...args: unknown[]) => mockRefs.orgFindById(...args) },

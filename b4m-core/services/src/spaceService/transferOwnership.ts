@@ -7,7 +7,7 @@ import {
   ISpaceRepository,
   IUserDocument,
   IUserRepository,
-  canAdministerOrganization,
+  hasOrgPermission,
   isSpaceOwner,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -58,7 +58,7 @@ export async function transferOwnership(
   let clearParent = false;
   if (space.parentOrganizationId) {
     const parent = await db.organizations.findById(space.parentOrganizationId);
-    clearParent = !parent || !canAdministerOrganization(newOwner, parent);
+    clearParent = !parent || !hasOrgPermission(newOwner, parent, 'manageContent');
   }
 
   const updated = await db.spaces.transferOwnership(spaceId, user.id, newOwnerId, { clearParent });

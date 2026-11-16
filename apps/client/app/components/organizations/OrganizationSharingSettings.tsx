@@ -12,7 +12,7 @@ import {
   Typography,
 } from '@mui/joy';
 import {
-  isOrgOwnerOrCurrentAdmin,
+  hasOrgPermission,
   organizationSharingPolicy,
   OrganizationSharingPolicySchema,
   type IOrganizationDocument,
@@ -39,7 +39,7 @@ function OrganizationSharingSettingsForm({ organization }: { organization: IOrga
     });
     setDomains(persistedDomains);
   }, [persisted.allowPublicLinks, persisted.allowExternalSharing, persistedDomains]);
-  const canEdit = !!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  const canEdit = !!currentUser && hasOrgPermission(currentUser, organization, 'managePolicies');
   const parsed = OrganizationSharingPolicySchema.safeParse({
     ...policy,
     allowedDomains: [...new Set(domains.split(/[\s,]+/).filter(Boolean))],

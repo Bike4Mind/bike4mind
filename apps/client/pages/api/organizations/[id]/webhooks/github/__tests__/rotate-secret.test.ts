@@ -67,7 +67,7 @@ describe('POST /api/organizations/[id]/webhooks/github/rotate-secret', () => {
     h.findByOrganizationId.mockResolvedValue({ ...storedConfig });
     h.update.mockImplementation(async (partial: Record<string, unknown>) => ({ ...storedConfig, ...partial }));
     h.countByOrganization.mockResolvedValue(0);
-    h.verifyOrgOwner.mockResolvedValue({ id: 'org-1', name: 'Acme' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'org-1', name: 'Acme' });
   });
 
   it('writes exactly the new encrypted secret and reveals the plain one once', async () => {
