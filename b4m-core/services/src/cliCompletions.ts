@@ -20,6 +20,8 @@ import {
   PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
+  ISpendFreezeRepository,
+  type ApiKeyBillingOwnerType,
   ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   IAdminSettingsRepository,
@@ -85,6 +87,8 @@ import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { assertSpendNotFrozen } from './spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from './spendFreezeService/spendFreezeSubjectForHold';
 import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
@@ -203,6 +207,8 @@ export interface CompletionParams {
     cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
     /** Records each credit refusal for the admin user timeline; must not throw (see ChatCompletionFeatures). */
     recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
+    /** Required so every completion surface wires the freeze check. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
@@ -230,6 +236,10 @@ export interface CompletionParams {
    * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
    */
   governingOrgModelPolicy?: unknown;
+  /** Whether the authenticating key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The caller already ran assertSpendNotFrozen for this request (ahead of its own cap checks); skips the second lookup. */
+  spendFreezeChecked?: boolean;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -729,6 +739,19 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     freeTierAllowedModels,
     orgModelPolicy,
   }).assert(model);
+
+  // After the access gate and before every cap and hold, and whether or not credits are enforced.
+  if (!params.spendFreezeChecked) {
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId: params.billingOrganizationId ?? null,
+        apiKeyId: apiKeyInfo?.keyId,
+        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
+      }),
+      { db: { spendFreezes: db.spendFreezes } }
+    );
+  }
 
   if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
     throw new BadRequestError(

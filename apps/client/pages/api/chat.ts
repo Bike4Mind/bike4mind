@@ -289,6 +289,7 @@ async function handleChat(
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
@@ -330,6 +331,7 @@ async function handleChat(
               userId: req.user.id,
               // Mirrors invoke() above: process() reads the tool context's auth from this body only.
               ...turnAuth,
+              apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
               embeddingModel: currentEmbeddingModel,
               queryComplexity: 'simple',
               // Optional schema fields - declared for QuestStartBodySchema type conformance

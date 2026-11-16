@@ -115,8 +115,10 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
   embedConversationRepository: mockEmbedConversationRepository,
+  spendFreezeRepository: { findActiveForSubject: (...args: unknown[]) => mockFindActiveFreeze(...args) },
 }));
 
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockReauthorizeIdentifiedSession = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', () => ({
   reauthorizeIdentifiedSession: mockReauthorizeIdentifiedSession,
@@ -1195,6 +1197,30 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(res.status).toBe(422);
     expect((await res.json()).error).toBe('insufficient_credits');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen identified user with 403 spend_frozen before any stream bytes', async () => {
+    mockFindActiveFreeze.mockResolvedValueOnce({
+      scopeType: 'User',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal',
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'spend_frozen', code: 'spend_frozen', frozenScope: 'user' });
+    expect(JSON.stringify(body)).not.toContain('internal');
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(expect.objectContaining({ userId: END_USER.id }));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the org and key, not the key owner, for an anonymous visitor', async () => {
+    const res = await post(CHAT);
+    await res.text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: null, apiKeyId: expect.any(String) })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeChecked: true }));
   });
 
   it("is not blocked by the org key's spend cap, which bounds only org-paid turns", async () => {

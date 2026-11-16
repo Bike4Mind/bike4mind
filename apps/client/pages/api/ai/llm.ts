@@ -165,6 +165,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       // The visit the question was asked in, so the turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,

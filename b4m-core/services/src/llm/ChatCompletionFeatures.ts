@@ -5,7 +5,7 @@ import {
   embeddingBackendForModel,
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
-import type { UserLimitEventKind } from '@bike4mind/common';
+import type { ISpendFreezeRepository, UserLimitEventKind } from '@bike4mind/common';
 
 export type LimitEventRecord = {
   userId: string;
@@ -257,6 +257,8 @@ interface DatabaseAdapters {
   mcpServers: IMcpServerRepository;
   /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
   newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Required so every construction site wires the freeze check; the turn is refused before any reservation. */
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   /**
    * Records a refusal or a settlement that left the balance negative, for the admin user timeline
    * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails

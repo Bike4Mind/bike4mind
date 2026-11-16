@@ -78,6 +78,7 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 const mockFindCompletionRun = vi.hoisted(() => vi.fn());
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
 vi.mock('@bike4mind/database', () => ({
@@ -91,6 +92,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   cacheRepository: {},
   completionRunRepository: { findById: mockFindCompletionRun },
+  spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
 }));
@@ -179,6 +181,7 @@ beforeAll(async () => {
 afterAll(() => server?.close());
 
 beforeEach(() => {
+  mockFindActiveFreeze.mockResolvedValue(null);
   mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
   mockResolveContractAuth.mockResolvedValue({
     method: 'apiKey',
@@ -852,6 +855,46 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     const body = await expectJsonError(await post(), 422);
     expect(body.errorCode).toBe('spend_cap_exceeded');
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('answers a frozen caller with 403 spend_frozen, its scope, and no reason, before the cap or the provider', async () => {
+    mockFindActiveFreeze.mockResolvedValue({
+      scopeType: 'apiKey',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal note',
+    });
+    const body = await expectJsonError(await post(), 403);
+    expect(body).toMatchObject({
+      errorCode: 'spend_frozen',
+      frozenScope: 'api_key',
+      frozenAt: '2026-11-16T00:00:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('internal note');
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the user, billing org and key, and tells executeCompletion the freeze was already checked', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: 'key-1' });
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ spendFreezeChecked: true, apiKeyBillingOwnerType: 'User' })
+    );
+  });
+
+  it('leaves the key creator out of the subject for an org-billed key', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: null, organizationId: 'org-1', apiKeyId: 'key-1' });
   });
 
   it('answers a catalogued model without a backend with 503 provider_not_configured', async () => {

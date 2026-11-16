@@ -1,6 +1,7 @@
 import {
   assertAuthOriginMatchesApiKey,
   type AuthOrigin,
+  type ApiKeyBillingOwnerType,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
   hasAutoNamePlaceholderName,
@@ -103,6 +104,7 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    apiKeyBillingOwnerType,
     adminRoleWithheld,
     visitId,
   }: {
@@ -112,6 +114,8 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** Server-derived from `req.apiKeyInfo`; see QuestStartBodySchema.apiKeyBillingOwnerType. */
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     /** See QuestStartBodySchema.adminRoleWithheld. */
     adminRoleWithheld?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
@@ -577,6 +581,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        ...(apiKeyBillingOwnerType ? { apiKeyBillingOwnerType } : {}),
         ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         ...(visitId ? { visitId } : {}),
         systemPrompt,
