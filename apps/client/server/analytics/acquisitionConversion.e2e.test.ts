@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { User } from '@bike4mind/database';
+import { CreditTransaction, User } from '@bike4mind/database';
+import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { classifyFunnelCohort } from '@bike4mind/server-utils/analytics/activationFunnel';
 import { acquisitionQuerySchema, ACQUISITION_UNATTRIBUTED_LABEL } from '@client/app/utils/acquisitionConversion';
@@ -138,6 +139,95 @@ describe('getAcquisitionConversion', () => {
   it('refuses a range longer than the Users drill-down accepts', async () => {
     const result = await getAcquisitionConversion(acquisitionQuerySchema.parse({ range: '12m' }), NOW);
     expect(result).toEqual({ status: 'rangeTooLong', maxDays: 93 });
+  });
+
+  it('reports conversion, provisional cohorts, retention and derived renewals per row', async () => {
+    await User.createIndexes();
+    const april = { createdAt: new Date('2026-04-01T08:00:00Z') };
+    const ads = { firstTouch: { source: 'ads' } };
+    const refunded = await seedSignup(ads, april);
+    const renewing = await seedSignup(ads, april);
+    const noInterval = await seedSignup(ads, april);
+    const fresh = await seedSignup(
+      { firstTouch: { source: 'fresh' } },
+      { createdAt: new Date('2026-06-10T08:00:00Z') }
+    );
+    await seedSignup({}, april);
+
+    const paidAt = new Date('2026-04-02T12:00:00Z');
+    const purchase = (ownerId: string, createdAt: Date, extra: Record<string, unknown> = {}) =>
+      CreditTransaction.collection.insertOne({
+        ownerId,
+        ownerType: 'User',
+        credits: 500,
+        type: 'purchase',
+        status: 'completed',
+        stripePaymentIntentId: `pi_${ownerId}`,
+        createdAt,
+        updatedAt: createdAt,
+        ...extra,
+      });
+    const subscription = (ownerId: string, fields: Record<string, unknown>) =>
+      Subscription.collection.insertOne({
+        ownerType: 'User',
+        ownerId,
+        subscriptionId: `sub_${ownerId}`,
+        priceId: 'price_1',
+        status: 'active',
+        source: 'stripe',
+        quantity: 1,
+        createdAt: paidAt,
+        ...fields,
+      });
+    await purchase(String(refunded._id), paidAt, { reversedAt: new Date('2026-04-10T00:00:00Z') });
+    await subscription(String(renewing._id), {
+      interval: 'month',
+      intervalCount: 1,
+      periodStartsAt: new Date('2026-06-02T12:00:00Z'),
+    });
+    await subscription(String(noInterval._id), { periodStartsAt: paidAt });
+    await purchase(String(fresh._id), new Date('2026-06-11T12:00:00Z'));
+
+    const result = await getAcquisitionConversion(
+      acquisitionQuerySchema.parse({
+        range: 'custom',
+        from: '2026-04-01',
+        to: '2026-06-15',
+        signups: 'all',
+        followUp: '60',
+      }),
+      NOW
+    );
+    if (result.status !== 'ok') throw new Error(`unexpected status ${result.status}`);
+
+    expect(result).toMatchObject({ conversionWindowDays: 30, followUpDays: 60, renewalBasis: 'subscription-state' });
+    const byKey = Object.fromEntries(result.rows.map(row => [row.key, row]));
+    expect(byKey['ads|(none)|(none)']).toMatchObject({
+      signups: 3,
+      matureSignups: 3,
+      converted: 3,
+      creditFirst: 1,
+      subscriptionFirst: 2,
+      conversionPct: 100,
+      provisional: false,
+      retained: 2,
+      followUpBuyers: 3,
+      followUpPending: 0,
+      repeatCredit: 0,
+      renewalDue: 1,
+      renewed: 1,
+      renewalUnavailable: 1,
+    });
+    expect(byKey['fresh|(none)|(none)']).toMatchObject({
+      signups: 1,
+      matureSignups: 0,
+      converted: 0,
+      provisionalConverted: 1,
+      conversionPct: null,
+      provisional: true,
+    });
+    expect(byKey.unattributed).toMatchObject({ signups: 1, matureSignups: 1, converted: 0, conversionPct: 0 });
+    expect(result.totals).toMatchObject({ signups: 5, matureSignups: 4, converted: 3, provisionalConverted: 1 });
   });
 
   it('leaves the activation funnel cohort unchanged by the shared eligibility read', async () => {
