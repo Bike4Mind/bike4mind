@@ -6,8 +6,9 @@ import { UNPAID_SUBSCRIPTION_STATUSES } from './activationFunnel';
 
 /**
  * Each person's own Stripe payments, for the acquisition section's conversion metrics: completed credit-pack
- * purchases (one per payment intent) and Stripe-billed subscriptions, each marked reversed when refunded or
- * lost to a dispute. Payments on an organization the person owns only set `orgBuyerAt`; they never enter the
+ * purchases (one per payment intent) and Stripe-billed subscriptions. A credit purchase is marked reversed when
+ * refunded or disputed; a subscription only when disputed, since a refund is recorded on credit purchases
+ * alone. Payments on an organization the person owns only set `orgBuyerAt`; they never enter the
  * personal subscription/credit split.
  */
 
@@ -18,7 +19,7 @@ export type LedgerPaymentKind = 'subscription' | 'credit';
 export type LedgerPayment = {
   kind: LedgerPaymentKind;
   at: Date;
-  /** Refunded, or under an open or lost dispute. */
+  /** Under an open or lost dispute, or (credit purchases only) refunded. */
   reversed: boolean;
   subscription?: {
     status: string;
@@ -64,11 +65,18 @@ type DisputeRow = {
   subject: string;
   subjectId?: string | null;
   state: string;
+  stripeStatus?: string;
   openedAt: Date;
+  closedAt?: Date | null;
   resolution?: { outcome?: string } | null;
 };
 
-const countsAsReversal = (dispute: DisputeRow) => dispute.state === 'open' || dispute.resolution?.outcome === 'lost';
+// A dispute Stripe closed as anything but won or lost keeps state 'open' for an admin (StripeDisputeModel
+// recordClosed), so `closedAt` and Stripe's own status decide whether it is still pending.
+const countsAsReversal = (dispute: DisputeRow) =>
+  dispute.resolution?.outcome === 'lost' ||
+  dispute.stripeStatus === 'lost' ||
+  (dispute.state === 'open' && !dispute.closedAt);
 
 const purchasesOf = (ownerType: CreditHolderType, ownerIds: string[], until: Date, maxTimeMS: number) =>
   CreditTransaction.find({
@@ -138,22 +146,27 @@ export async function loadPaymentLedger(
         { subject: 'user', subjectId: { $in: ids } },
       ],
     })
-      .select('paymentIntentId subject subjectId state openedAt resolution')
+      .select('paymentIntentId subject subjectId state stripeStatus openedAt closedAt resolution')
       .maxTimeMS(maxTimeMS())
       .lean<DisputeRow[]>(),
   ]);
 
   const reversingDisputes = disputes.filter(countsAsReversal);
   const disputedIntents = new Set(reversingDisputes.map(d => d.paymentIntentId).filter(Boolean));
+  const purchaseIntents = new Set(paymentIntentIds);
+  // The webhook files a credit-purchase dispute under the user too; it already reverses that purchase, so
+  // only a user dispute on no known purchase is held against the subscription.
   const userDisputesOpened = new Map<string, Date[]>();
   for (const dispute of reversingDisputes) {
     if (dispute.subject !== 'user' || !dispute.subjectId) continue;
+    if (dispute.paymentIntentId && purchaseIntents.has(dispute.paymentIntentId)) continue;
     const list = userDisputesOpened.get(dispute.subjectId) ?? [];
     list.push(new Date(dispute.openedAt));
     userDisputesOpened.set(dispute.subjectId, list);
   }
 
-  // A retried webhook can write the same payment intent twice; legacy rows without one stand alone.
+  // The unique sparse index on stripePaymentIntentId keeps one row per intent, so this merge is only a
+  // safeguard; legacy rows without an intent stand alone.
   const byIntent = new Map<string, { ownerId: string; at: Date; reversed: boolean }>();
   for (const row of purchases) {
     const key = row.stripePaymentIntentId || `row:${String(row._id)}`;
@@ -173,7 +186,12 @@ export async function loadPaymentLedger(
 
   for (const sub of subscriptions) {
     if (resolveSubscriptionSource(sub) !== SubscriptionSource.Stripe) continue;
-    const at = new Date(sub.createdAt);
+    // A trial collects its first payment when it ends, and never when it was cancelled before then.
+    const createdAt = new Date(sub.createdAt);
+    const trialEnd = sub.trialEndsAt && new Date(sub.trialEndsAt) > createdAt ? new Date(sub.trialEndsAt) : null;
+    if (trialEnd && sub.canceledAt && new Date(sub.canceledAt) <= trialEnd) continue;
+    if (trialEnd && trialEnd >= until) continue;
+    const at = trialEnd ?? createdAt;
     const reversed = (userDisputesOpened.get(sub.ownerId) ?? []).some(openedAt => openedAt >= at);
     ledgers.get(sub.ownerId)?.payments.push({
       kind: 'subscription',

@@ -146,6 +146,70 @@ describe('loadPaymentLedger', () => {
     expect(ledgers.get(disputed)!.payments).toEqual([expect.objectContaining({ reversed: true })]);
   });
 
+  it('holds a credit-purchase dispute against that purchase only, not an earlier subscription', async () => {
+    const buyer = newId();
+    await seedSubscription('User', buyer);
+    await seedPurchase(buyer, at('2026-05-22'), 'pi_credit');
+    await openDispute('dp_credit', { paymentIntentId: 'pi_credit', subjectId: buyer });
+
+    const ledger = (await loadPaymentLedger([buyer], opts)).get(buyer)!;
+
+    expect(ledger.payments.map(p => [p.kind, p.reversed])).toEqual([
+      ['subscription', false],
+      ['credit', true],
+    ]);
+  });
+
+  it('stops counting a dispute Stripe closed as neither won nor lost', async () => {
+    const warned = newId();
+    const lostClose = newId();
+    await seedPurchase(warned, at('2026-05-11'), 'pi_warned');
+    await openDispute('dp_warned', { paymentIntentId: 'pi_warned', subjectId: warned });
+    await seedPurchase(lostClose, at('2026-05-11'), 'pi_lost_close');
+    await openDispute('dp_lost_close', { paymentIntentId: 'pi_lost_close', subjectId: lostClose });
+    const closeAs = (id: string, pi: string, subjectId: string, stripeStatus: string) =>
+      stripeDisputeRepository.recordClosed(
+        {
+          stripeDisputeId: id,
+          chargeId: null,
+          paymentIntentId: pi,
+          amount: 1000,
+          currency: 'usd',
+          reason: 'fraudulent',
+          stripeStatus,
+          subject: 'user',
+          subjectId,
+          openedAt: at('2026-05-25'),
+        },
+        at('2026-06-01')
+      );
+    await closeAs('dp_warned', 'pi_warned', warned, 'warning_closed');
+    await closeAs('dp_lost_close', 'pi_lost_close', lostClose, 'lost');
+
+    const ledgers = await loadPaymentLedger([warned, lostClose], opts);
+
+    expect(ledgers.get(warned)!.payments).toEqual([expect.objectContaining({ reversed: false })]);
+    expect(ledgers.get(lostClose)!.payments).toEqual([expect.objectContaining({ reversed: true })]);
+  });
+
+  it('dates a trial subscription at its trial end and skips one cancelled during the trial', async () => {
+    const converted = newId();
+    const cancelled = newId();
+    const stillTrialing = newId();
+    const trial = { createdAt: at('2026-05-20'), trialEndsAt: at('2026-05-27') };
+    await seedSubscription('User', converted, trial);
+    await seedSubscription('User', cancelled, { ...trial, status: 'canceled', canceledAt: at('2026-05-24') });
+    await seedSubscription('User', stillTrialing, { ...trial, trialEndsAt: new Date('2026-07-05T00:00:00Z') });
+
+    const ledgers = await loadPaymentLedger([converted, cancelled, stillTrialing], opts);
+
+    expect(ledgers.get(converted)!.payments).toEqual([
+      expect.objectContaining({ kind: 'subscription', at: at('2026-05-27') }),
+    ]);
+    expect(ledgers.get(cancelled)!.payments).toEqual([]);
+    expect(ledgers.get(stillTrialing)!.payments).toEqual([]);
+  });
+
   it('keeps organization payments out of the personal split but flags the owner as an org buyer', async () => {
     const owner = newId();
     const orgOnly = newId();
