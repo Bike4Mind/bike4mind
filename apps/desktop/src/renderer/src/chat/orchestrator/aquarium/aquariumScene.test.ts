@@ -25,6 +25,17 @@ describe('placeFish', () => {
     }
   });
 
+  it('wraps a crowded zone into rows instead of piling fish on top of each other', () => {
+    const placements = placeFish(Array.from({ length: 19 }, (_, n) => viewAgentFixture(`done-${n}`, 'done')));
+    const rows = new Map<number, number[]>();
+    for (const { x, y } of placements) rows.set(y, [...(rows.get(y) ?? []), x]);
+    expect(rows.size).toBeGreaterThan(1);
+    for (const xs of rows.values()) {
+      const sorted = [...xs].sort((a, b) => a - b);
+      sorted.slice(1).forEach((x, index) => expect(x - sorted[index]).toBeGreaterThanOrEqual(8));
+    }
+  });
+
   it('keeps a resting fish in its spot while fish in other zones come and go', () => {
     const sleeper = viewAgentFixture('s', 'idle');
     const alone = placeFish([sleeper]).find(placement => placement.agent.id === 's');

@@ -17,12 +17,17 @@ const STATE_PLACE: Record<AgentState, { pose: FishPose; zone: FishZone }> = {
   idle: { pose: 'sleep', zone: 'sand' },
 };
 
-/** Each resting zone's horizontal span (of fish centres) and its fish's baseline. */
-const ZONE_BOX: Record<Exclude<FishZone, 'midwater'>, { from: number; to: number; y: number }> = {
-  glass: { from: 30, to: 70, y: 80 },
-  low: { from: 24, to: 76, y: 72 },
-  sand: { from: 18, to: 82, y: 93 },
+/**
+ * Each resting zone's horizontal span (of fish centres), its first row's baseline, and how far up each
+ * further row sits when the zone holds more fish than one row has room for.
+ */
+const ZONE_BOX: Record<Exclude<FishZone, 'midwater'>, { from: number; to: number; y: number; rowStep: number }> = {
+  glass: { from: 30, to: 70, y: 80, rowStep: 14 },
+  low: { from: 24, to: 76, y: 72, rowStep: 8 },
+  sand: { from: 18, to: 82, y: 93, rowStep: 6 },
 };
+/** The closest two fish in a row may be, percent of the scene width; past that a zone starts another row. */
+const ROW_GAP = 8;
 /** Swimmers go back and forth across the open water between the plants, one lane each. */
 export const MIDWATER_LANE = { from: 20, to: 80 };
 /** Lanes spread over this band, top to bottom. */
@@ -80,7 +85,16 @@ export function placeFish(agents: readonly ViewAgent[]): FishPlacement[] {
         return;
       }
       const box = ZONE_BOX[zone];
-      placements.push({ agent, pose, zone, x: spread(ordered.length, index, box.from, box.to), y: box.y });
+      const perRow = Math.max(1, Math.floor((box.to - box.from) / ROW_GAP));
+      const row = Math.floor(index / perRow);
+      const inRow = Math.min(perRow, ordered.length - row * perRow);
+      placements.push({
+        agent,
+        pose,
+        zone,
+        x: spread(inRow, index % perRow, box.from, box.to),
+        y: box.y - row * box.rowStep,
+      });
     });
   }
   return placements;
