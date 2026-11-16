@@ -329,6 +329,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
             .apply(eips => $util.all(eips.map(e => e.publicIp)))
             .apply(ips => ips.map(ip => `${ip}/32`));
 
+      // The description is immutable, so a new value replaces the group: the load balancer moves
+      // to a complete ingress set instead of having its live rules revoked and re-authorized.
+      sgArgs.description = 'ChatCompletion load balancer: CloudFront edge and VPC NAT, ports 80-443';
       // One rule per source spanning the listener ports: the CloudFront prefix list counts its
       // full entry limit against the group's rule quota for every rule that references it, so a
       // rule per port does not fit.
