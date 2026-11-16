@@ -73,6 +73,17 @@ describe('OrgCustomMcpPolicySection', () => {
     state.reset.mockReset();
   });
 
+  it('gives every connector policy switch an accessible name', () => {
+    renderSection();
+    for (const name of [
+      'Custom connectors enabled',
+      'Require approval before every tool call',
+      'Allow tools that are not marked read-only',
+      'Allow servers that need no sign-in',
+    ])
+      expect(screen.getByRole('switch', { name })).toBeInTheDocument();
+  });
+
   it('saves mode off when the kill switch is turned off, keeping the rest of the policy', () => {
     renderSection();
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();
