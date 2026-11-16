@@ -69,7 +69,8 @@ describe('spaceService', () => {
       findAllByDocumentId: vi.fn(async () => [] as unknown[]),
       cancelPendingRecipient: vi.fn(),
     };
-    return { spaces, organizations, users, invites };
+    const orgDomainClaims = { deleteBySpace: vi.fn(async () => 1) };
+    return { spaces, organizations, users, invites, orgDomainClaims };
   };
   let db: ReturnType<typeof buildAdapters>;
 
@@ -178,6 +179,7 @@ describe('spaceService', () => {
       await run(owner);
       expect(db.spaces.softDelete).toHaveBeenCalledWith('space1', 'owner');
       expect(db.invites.revokeAllForDocument).toHaveBeenCalledWith('space1', InviteType.Space);
+      expect(db.orgDomainClaims.deleteBySpace).toHaveBeenCalledWith('space1');
       await expect(run(admin)).rejects.toBeInstanceOf(ForbiddenError);
       await expect(run(stranger)).rejects.toBeInstanceOf(NotFoundError);
       expectNoOrgOrUserWrite();
@@ -187,6 +189,7 @@ describe('spaceService', () => {
       db.spaces.softDelete.mockResolvedValueOnce(false);
       await expect(run(owner)).rejects.toBeInstanceOf(NotFoundError);
       expect(db.invites.revokeAllForDocument).not.toHaveBeenCalled();
+      expect(db.orgDomainClaims.deleteBySpace).not.toHaveBeenCalled();
     });
   });
 

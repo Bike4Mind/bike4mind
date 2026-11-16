@@ -6,6 +6,7 @@ import {
   ConflictError,
   ForbiddenError,
   DISALLOWED_SIGNUP_RULE_DOMAINS,
+  InboxType,
   MAX_ORG_DOMAIN_CLAIMS,
   NotFoundError,
   normalizeSignupRuleDomain,
@@ -15,19 +16,29 @@ import {
   type IOrgDomainClaimDocument,
   type IOrgDomainClaimView,
   type IOrganizationDocument,
+  type ISpaceDocument,
   type OrgAuthorityActor,
+  type OrgDomainClaimOwner,
   type OrgDomainJoinSuggestion,
   type UpdateOrgDomainPolicyInput,
+  type UpdateSpaceDomainPolicyInput,
 } from '@bike4mind/common';
 import {
   disposableDomainRepository,
+  inboxRepository,
   organizationRepository,
   orgDomainClaimRepository,
   partnerSignupRuleRepository,
+  spaceRepository,
   userRepository,
+  withTransaction,
 } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { organizationService, userService } from '@bike4mind/services';
 import { isSelfHost } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import { notifySpaceDomainReleasedByEmail } from '@server/utils/spaceDomainNotifier';
+
+const logger = new Logger({ metadata: { service: 'orgDomainClaims' } });
 
 export const TXT_RECORD_PREFIX = '_b4m-verify';
 const TXT_VALUE_PREFIX = 'b4m-domain-verification=';
@@ -64,31 +75,64 @@ async function enabledPartnerRule(domain: string) {
   return rule?.enabled ? rule : null;
 }
 
+type OrgDomainClaim = IOrgDomainClaimDocument & { organizationId: string };
+
+const isOrgClaim = (claim: IOrgDomainClaimDocument): claim is OrgDomainClaim => claim.organizationId !== undefined;
+
 function sameOrganizationId(left: string, right: string): boolean {
   const first = orgDomainPathIdSchema.safeParse(left);
   const second = orgDomainPathIdSchema.safeParse(right);
   return first.success && second.success && first.data === second.data;
 }
 
-/** Rules every claim must pass on add, and again on verify (state can change in between). */
-async function assertDomainClaimable(organizationId: string, domain: string): Promise<void> {
+/**
+ * Rules every claim must pass on add, and again on verify (state can change in between). An org
+ * outranks a Space: a verified Space holder does not block an org, which takes the domain at verify.
+ */
+async function assertDomainClaimable(owner: OrgDomainClaimOwner, domain: string): Promise<void> {
   const verified = await orgDomainClaimRepository.findVerifiedByDomain(domain);
-  if (verified && !sameOrganizationId(verified.organizationId, organizationId)) {
-    throw new ConflictError('Domain already claimed by another organization');
+  if (verified) {
+    if (isOrgClaim(verified)) {
+      const sameOrg =
+        owner.organizationId !== undefined && sameOrganizationId(verified.organizationId, owner.organizationId);
+      if (!sameOrg) {
+        throw new ConflictError(
+          owner.organizationId !== undefined
+            ? 'Domain already claimed by another organization'
+            : 'Domain already claimed by an organization'
+        );
+      }
+    } else if (owner.spaceId !== undefined && verified.spaceId !== owner.spaceId) {
+      throw new ConflictError('Domain already claimed by another Space');
+    }
   }
-  // A platform partner rule that routes this domain into another org owns the domain's joins.
+  // A platform partner rule that routes this domain into an org owns the domain's joins.
   const partnerRule = await enabledPartnerRule(domain);
-  if (partnerRule?.organizationId && !sameOrganizationId(partnerRule.organizationId, organizationId)) {
+  if (
+    partnerRule?.organizationId &&
+    (owner.organizationId === undefined || !sameOrganizationId(partnerRule.organizationId, owner.organizationId))
+  ) {
     throw new ConflictError('Domain is reserved by a platform signup rule');
   }
 }
 
-export async function addDomainClaim(
-  rawOrganizationId: string,
+const claimsOf = (owner: OrgDomainClaimOwner) =>
+  owner.organizationId !== undefined
+    ? orgDomainClaimRepository.listByOrganization(owner.organizationId)
+    : orgDomainClaimRepository.listBySpace(owner.spaceId);
+
+const findClaimOf = (claimId: string, owner: OrgDomainClaimOwner) =>
+  owner.organizationId !== undefined
+    ? orgDomainClaimRepository.findByIdForOrg(claimId, owner.organizationId)
+    : orgDomainClaimRepository.findByIdForSpace(claimId, owner.spaceId);
+
+const ownerLabel = (owner: OrgDomainClaimOwner) => (owner.organizationId !== undefined ? 'organization' : 'Space');
+
+async function addClaimForOwner(
+  owner: OrgDomainClaimOwner,
   actorId: string,
   rawDomain: string
 ): Promise<IOrgDomainClaimDocument> {
-  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
   const domain = normalizeSignupRuleDomain(rawDomain);
   if (DISALLOWED_SIGNUP_RULE_DOMAINS.includes(domain)) {
     throw new BadRequestError('Public mail providers cannot be claimed');
@@ -97,18 +141,19 @@ export async function addDomainClaim(
   if (disposableSources.length > 0 || userService.isDisposableEmail(`user@${domain}`)) {
     throw new BadRequestError('Disposable email domains cannot be claimed');
   }
-  await assertDomainClaimable(organizationId, domain);
-  const existingClaims = await orgDomainClaimRepository.listByOrganization(organizationId);
+  await assertDomainClaimable(owner, domain);
+  const existingClaims = await claimsOf(owner);
   if (existingClaims.some(claim => claim.domain === domain)) {
-    throw new ConflictError('This organization has already added that domain');
+    throw new ConflictError(`This ${ownerLabel(owner)} has already added that domain`);
   }
   if (existingClaims.length >= MAX_ORG_DOMAIN_CLAIMS) {
-    throw new BadRequestError(`An organization can claim at most ${MAX_ORG_DOMAIN_CLAIMS} domains`);
+    const subject = owner.organizationId !== undefined ? 'An organization' : 'A Space';
+    throw new BadRequestError(`${subject} can claim at most ${MAX_ORG_DOMAIN_CLAIMS} domains`);
   }
 
   try {
     return await orgDomainClaimRepository.create({
-      organizationId,
+      ...owner,
       domain,
       status: 'pending',
       verificationToken: crypto.randomBytes(16).toString('hex'),
@@ -118,10 +163,26 @@ export async function addDomainClaim(
     });
   } catch (err) {
     if ((err as { code?: unknown })?.code === 11000) {
-      throw new ConflictError('This organization has already added that domain');
+      throw new ConflictError(`This ${ownerLabel(owner)} has already added that domain`);
     }
     throw err;
   }
+}
+
+export function addDomainClaim(
+  rawOrganizationId: string,
+  actorId: string,
+  rawDomain: string
+): Promise<IOrgDomainClaimDocument> {
+  return addClaimForOwner({ organizationId: orgDomainPathIdSchema.parse(rawOrganizationId) }, actorId, rawDomain);
+}
+
+export function addSpaceDomainClaim(
+  spaceId: string,
+  actorId: string,
+  rawDomain: string
+): Promise<IOrgDomainClaimDocument> {
+  return addClaimForOwner({ spaceId }, actorId, rawDomain);
 }
 
 export type VerifyDomainClaimResult =
@@ -134,21 +195,48 @@ function lookupFailureReason(err: unknown): string {
   return 'DNS lookup failed';
 }
 
+/** Inbox notice to a Space owner. Best-effort: the release has already committed. */
+async function notifyOwnerInbox(receiverId: string, title: string, message: string): Promise<void> {
+  try {
+    await inboxRepository.createInboxMessage({ type: InboxType.COMMON, title, message, receiverId, userId: 'SYSTEM' });
+  } catch (error) {
+    logger.error(`[SPACE_DOMAIN] inbox notice failed receiver=${receiverId}`, error);
+  }
+}
+
+/** Tells each released Space's owner. Names the Space and the domain, never the org that took it. */
+async function notifyReleasedSpaceOwners(released: IOrgDomainClaimDocument[]): Promise<void> {
+  for (const claim of released) {
+    try {
+      const space = claim.spaceId ? await spaceRepository.findLiveById(claim.spaceId) : null;
+      if (!space) continue;
+      await notifyOwnerInbox(
+        space.ownerUserId,
+        `${space.name} no longer holds ${claim.domain}`,
+        `Another party verified ownership of ${claim.domain}, so your Space no longer holds it. ` +
+          'People who already joined through that domain stay. New domain joins have stopped.'
+      );
+      await notifySpaceDomainReleasedByEmail(space.ownerUserId, space.name, claim.domain, logger);
+    } catch (error) {
+      logger.error(`[SPACE_DOMAIN] release notice failed space=${claim.spaceId}`, error);
+    }
+  }
+}
+
 /**
  * Proves DNS control of the claim's exact domain (no subdomain or parent inheritance) by matching
  * the TXT record at `recordNameFor(domain)`. Re-verifying an already verified claim is a no-op success.
  */
-export async function verifyDomainClaim(
-  rawOrganizationId: string,
+async function verifyClaimForOwner(
+  owner: OrgDomainClaimOwner,
   claimId: string,
   resolver?: TxtResolver
 ): Promise<VerifyDomainClaimResult> {
-  const organizationId = orgDomainPathIdSchema.parse(rawOrganizationId);
-  const claim = await orgDomainClaimRepository.findByIdForOrg(claimId, organizationId);
+  const claim = await findClaimOf(claimId, owner);
   if (!claim) throw new NotFoundError('Domain claim not found');
   if (claim.status === 'verified') return { verified: true, claim };
 
-  await assertDomainClaimable(organizationId, claim.domain);
+  await assertDomainClaimable(owner, claim.domain);
 
   const resolve = resolver ?? getTxtResolver(claim);
   let records: string[][];
@@ -162,10 +250,39 @@ export async function verifyDomainClaim(
     return { verified: false, reason: 'TXT record does not match the expected value' };
   }
 
-  const result = await orgDomainClaimRepository.markVerified(claimId, organizationId);
-  if (result === 'conflict') throw new ConflictError('Domain already claimed by another organization');
+  // An org outranks a Space: its verify releases the Space claims on the domain in the same
+  // transaction, so the one-verified-holder index never sees both.
+  const { result, released } = await withTransaction(async () => {
+    const released =
+      owner.organizationId !== undefined ? await orgDomainClaimRepository.deleteSpaceClaimsByDomain(claim.domain) : [];
+    return { result: await orgDomainClaimRepository.markVerified(claimId, owner), released };
+  });
+  if (result === 'conflict') {
+    throw new ConflictError(
+      owner.organizationId !== undefined
+        ? 'Domain already claimed by another organization'
+        : 'Domain already claimed by another owner'
+    );
+  }
   if (!result) throw new NotFoundError('Domain claim not found');
+  await notifyReleasedSpaceOwners(released);
   return { verified: true, claim: result };
+}
+
+export function verifyDomainClaim(
+  rawOrganizationId: string,
+  claimId: string,
+  resolver?: TxtResolver
+): Promise<VerifyDomainClaimResult> {
+  return verifyClaimForOwner({ organizationId: orgDomainPathIdSchema.parse(rawOrganizationId) }, claimId, resolver);
+}
+
+export function verifySpaceDomainClaim(
+  spaceId: string,
+  claimId: string,
+  resolver?: TxtResolver
+): Promise<VerifyDomainClaimResult> {
+  return verifyClaimForOwner({ spaceId }, claimId, resolver);
 }
 
 export function toOrgDomainClaimView(claim: IOrgDomainClaimDocument): IOrgDomainClaimView {
@@ -213,6 +330,22 @@ export async function updateDomainClaimPolicy(
   return { before, after };
 }
 
+/** Same gate as the org policy update. A Space never takes `auto-join`, so the input type excludes it. */
+export async function updateSpaceDomainClaimPolicy(
+  spaceId: string,
+  claimId: string,
+  update: UpdateSpaceDomainPolicyInput
+): Promise<{ before: IOrgDomainClaimDocument; after: IOrgDomainClaimDocument }> {
+  const before = await orgDomainClaimRepository.findByIdForSpace(claimId, spaceId);
+  if (!before) throw new NotFoundError('Domain claim not found');
+  if (update.policy !== 'off' && before.status !== 'verified') {
+    throw new BadRequestError('Verify the domain before turning on a join policy');
+  }
+  const after = await orgDomainClaimRepository.updatePolicyForSpace(claimId, spaceId, update);
+  if (!after) throw new NotFoundError('Domain claim not found');
+  return { before, after };
+}
+
 export type OrgDomainMembershipOutcome =
   | { joined: true; organizationId: string }
   | {
@@ -247,7 +380,7 @@ type DomainJoinUser = {
  * in sync with applyPartnerRuleMembership (b4m-core/services organizationService).
  */
 async function addMemberViaClaim(
-  claim: IOrgDomainClaimDocument,
+  claim: OrgDomainClaim,
   user: DomainJoinUser
 ): Promise<
   Exclude<OrgDomainMembershipOutcome, { reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' }>
@@ -297,7 +430,7 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
   if (!domain) return { joined: false, reason: 'no-claim' };
 
   const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
-  if (!claim) return { joined: false, reason: 'no-claim' };
+  if (!claim || !isOrgClaim(claim)) return { joined: false, reason: 'no-claim' };
   if (claim.policy !== 'auto-join') return { joined: false, reason: 'not-auto-join' };
 
   // Re-read rather than trust the caller's copy, which may predate email verification.
@@ -320,11 +453,11 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
  * The verified, joinable claim on the email's exact domain, unless a partner rule routes that domain
  * into a different org (partner rules take precedence, as at signup).
  */
-async function joinableClaimForEmail(email: string | null | undefined): Promise<IOrgDomainClaimDocument | null> {
+async function joinableClaimForEmail(email: string | null | undefined): Promise<OrgDomainClaim | null> {
   const domain = emailDomain(email);
   if (!domain) return null;
   const claim = await orgDomainClaimRepository.findVerifiedJoinableByDomain(domain);
-  if (!claim) return null;
+  if (!claim || !isOrgClaim(claim)) return null;
   const partnerRule = await enabledPartnerRule(domain);
   if (partnerRule?.organizationId && !sameOrganizationId(partnerRule.organizationId, claim.organizationId)) return null;
   return claim;
@@ -376,4 +509,46 @@ export async function joinOrgViaDomain(
   if (outcome.reason === 'already-member') return { joined: false, organization };
   if (outcome.reason === 'org-missing') throw new NotFoundError('Organization not found');
   throw new ConflictError('Organization is at full capacity');
+}
+
+async function ownerAdministersParent(space: ISpaceDocument, organizationId: string): Promise<boolean> {
+  const [owner, organization] = await Promise.all([
+    userRepository.findById(space.ownerUserId),
+    organizationRepository.findById(organizationId),
+  ]);
+  return Boolean(owner && organization && canAdministerOrganization(owner, organization));
+}
+
+/**
+ * A Space's joinable domains are its own verified `suggest` claim and its parent org's verified,
+ * joinable claim. Inheritance holds only while the Space's current owner administers that parent,
+ * re-checked here at read time.
+ */
+export async function isDomainJoinable(space: ISpaceDocument, email: string): Promise<boolean> {
+  const domain = emailDomain(email);
+  if (!domain) return false;
+  const own = await orgDomainClaimRepository.findVerifiedSpaceClaimByDomain(domain);
+  if (own?.spaceId === space.id) return true;
+  if (!space.parentOrganizationId) return false;
+  const inherited = await joinableClaimForEmail(email);
+  if (!inherited || !sameOrganizationId(inherited.organizationId, space.parentOrganizationId)) return false;
+  return ownerAdministersParent(space, space.parentOrganizationId);
+}
+
+/** Ids of the Spaces the address may join: its own `suggest` claim, plus child Spaces of a joinable org claim. */
+export async function joinableSpaceIdsForEmail(email: string): Promise<string[]> {
+  const domain = emailDomain(email);
+  if (!domain) return [];
+  const ids = new Set<string>();
+  const own = await orgDomainClaimRepository.findVerifiedSpaceClaimByDomain(domain);
+  if (own?.spaceId) ids.add(own.spaceId);
+
+  const inherited = await joinableClaimForEmail(email);
+  if (inherited) {
+    const children = await spaceRepository.listLiveByParentOrganization(inherited.organizationId);
+    for (const space of children) {
+      if (await ownerAdministersParent(space, inherited.organizationId)) ids.add(space.id);
+    }
+  }
+  return [...ids];
 }

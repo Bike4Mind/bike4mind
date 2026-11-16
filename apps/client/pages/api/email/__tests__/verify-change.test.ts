@@ -63,13 +63,22 @@ vi.mock('@bike4mind/database', () => ({
     existsOtherUserWithEmail: (...a: unknown[]) => mockExistsOtherUserWithEmail(...a),
     update: vi.fn(),
   },
+  spaceRepository: { name: 'spaceRepository' },
+}));
+const mockIsDomainJoinable = vi.fn();
+vi.mock('@server/organizations/orgDomainClaims', () => ({
+  isDomainJoinable: (...a: unknown[]) => mockIsDomainJoinable(...a),
 }));
 
 const mockVerifyEmailChange = vi.fn();
+const mockRecheckDomainMembers = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   userService: {
     EMAIL_NO_LONGER_AVAILABLE_MESSAGE: 'This email address is no longer available.',
     verifyEmailChange: (...a: unknown[]) => mockVerifyEmailChange(...a),
+  },
+  spaceService: {
+    recheckDomainMembers: (...a: unknown[]) => mockRecheckDomainMembers(...a),
   },
 }));
 
@@ -90,7 +99,46 @@ describe('POST /api/email/verify-change', () => {
     mockFindByPendingToken.mockResolvedValue(USER);
     mockVerifyEmailChange.mockResolvedValue('changed');
     mockSessionEnded.mockResolvedValue(undefined);
+    mockRecheckDomainMembers.mockResolvedValue(undefined);
     mockIsEligibleForFreeCredits.mockResolvedValue(true);
+  });
+
+  it('rechecks domain-joined Spaces against the new address inside the change', async () => {
+    const order: string[] = [];
+    mockVerifyEmailChange.mockImplementation(async () => {
+      order.push('verify');
+      return 'changed';
+    });
+    mockRecheckDomainMembers.mockImplementation(async () => {
+      order.push('recheck');
+    });
+    mockSessionEnded.mockImplementation(async () => {
+      order.push('session-end');
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(mockRecheckDomainMembers).toHaveBeenCalledWith('user-1', 'new@example.com', {
+      db: { spaces: { name: 'spaceRepository' } },
+      isDomainJoinable: expect.any(Function),
+    });
+    expect(order).toEqual(['verify', 'recheck', 'session-end']);
+  });
+
+  it('skips the Space recheck when the change did not apply', async () => {
+    mockVerifyEmailChange.mockResolvedValue('unavailable');
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ConflictError);
+    expect(mockRecheckDomainMembers).not.toHaveBeenCalled();
+  });
+
+  it('fails the change when the Space recheck fails, so the transaction rolls both back', async () => {
+    mockRecheckDomainMembers.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toThrow('db down');
+    expect(mockSessionEnded).not.toHaveBeenCalled();
   });
 
   it('refuses a deletion-pending account and leaves its email untouched', async () => {

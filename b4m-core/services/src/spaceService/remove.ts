@@ -1,6 +1,7 @@
 import {
   ForbiddenError,
   IInviteRepository,
+  IOrgDomainClaimRepository,
   ISpaceRepository,
   IUserDocument,
   InviteType,
@@ -18,10 +19,11 @@ interface RemoveAdapters {
   db: {
     spaces: Pick<ISpaceRepository, 'findLiveById' | 'softDelete'>;
     invites: Pick<IInviteRepository, 'revokeAllForDocument'>;
+    orgDomainClaims: Pick<IOrgDomainClaimRepository, 'deleteBySpace'>;
   };
 }
 
-/** Owner only. Soft-deletes the Space, then revokes every live invite for it. Caller wraps in withTransaction. */
+/** Owner only. Soft-deletes the Space, revokes every live invite and frees its domain claims. Caller wraps in withTransaction. */
 export async function remove(
   user: IUserDocument,
   parameters: RemoveParameters,
@@ -35,4 +37,5 @@ export async function remove(
 
   if (!(await db.spaces.softDelete(spaceId, user.id))) throw new NotFoundError('Space not found');
   await db.invites.revokeAllForDocument(spaceId, InviteType.Space);
+  await db.orgDomainClaims.deleteBySpace(spaceId);
 }

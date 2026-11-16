@@ -6,12 +6,14 @@ export type OrgDomainClaimStatus = 'pending' | 'verified';
 export type OrgDomainJoinPolicy = 'off' | 'suggest' | 'auto-join';
 
 /**
- * An organization's claim on an email domain. A claim is `pending` until the org proves DNS control
- * with a TXT record carrying `verificationToken`; at most one org holds a verified claim per domain
- * (enforced by a partial unique index in `OrgDomainClaimModel`).
+ * An organization's or a Space's claim on an email domain; it holds exactly one of `organizationId`
+ * or `spaceId`. A claim is `pending` until the owner proves DNS control with a TXT record carrying
+ * `verificationToken`; at most one owner holds a verified claim per domain (enforced by a partial
+ * unique index in `OrgDomainClaimModel`).
  */
 export interface IOrgDomainClaim {
-  organizationId: string;
+  organizationId?: string;
+  spaceId?: string;
   /** Normalized lowercase bare domain. */
   domain: string;
   status: OrgDomainClaimStatus;
@@ -47,6 +49,10 @@ export interface OrgDomainJoinSuggestion {
   claimId: string;
 }
 
+/** Who a claim belongs to: an organization or a Space, never both. */
+export type OrgDomainClaimOwner =
+  { organizationId: string; spaceId?: never } | { spaceId: string; organizationId?: never };
+
 export type MarkOrgDomainClaimVerifiedResult = IOrgDomainClaimDocument | 'conflict' | null;
 
 export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainClaimDocument> {
@@ -56,8 +62,14 @@ export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainCla
   findVerifiedByDomain: (domain: string) => Promise<IOrgDomainClaimDocument | null>;
   /** The verified claim for `domain` whose policy is not `off`, if any. */
   findVerifiedJoinableByDomain: (domain: string) => Promise<IOrgDomainClaimDocument | null>;
-  /** `'conflict'` when another org already holds the verified claim; `null` when the claim is gone. */
-  markVerified: (id: string, organizationId: string) => Promise<MarkOrgDomainClaimVerifiedResult>;
+  /** The verified claim for `domain` whose owner is a Space and whose policy is `suggest`, if any. */
+  findVerifiedSpaceClaimByDomain: (domain: string) => Promise<IOrgDomainClaimDocument | null>;
+  /** Every verified Space claim on `domain`, whatever its policy. */
+  findVerifiedSpaceClaimsByDomain: (domain: string) => Promise<IOrgDomainClaimDocument[]>;
+  /** Deletes the verified Space claims on `domain` and returns them. Pending Space claims stay. */
+  deleteSpaceClaimsByDomain: (domain: string) => Promise<IOrgDomainClaimDocument[]>;
+  /** `'conflict'` when another owner already holds the verified claim; `null` when the claim is gone. */
+  markVerified: (id: string, owner: OrgDomainClaimOwner) => Promise<MarkOrgDomainClaimVerifiedResult>;
   updatePolicy: (
     id: string,
     organizationId: string,
@@ -65,4 +77,14 @@ export interface IOrgDomainClaimRepository extends IBaseRepository<IOrgDomainCla
   ) => Promise<IOrgDomainClaimDocument | null>;
   deleteForOrg: (id: string, organizationId: string) => Promise<boolean>;
   deleteByOrganization: (organizationId: string) => Promise<number>;
+  listBySpace: (spaceId: string) => Promise<IOrgDomainClaimDocument[]>;
+  countBySpace: (spaceId: string) => Promise<number>;
+  findByIdForSpace: (id: string, spaceId: string) => Promise<IOrgDomainClaimDocument | null>;
+  updatePolicyForSpace: (
+    id: string,
+    spaceId: string,
+    update: { policy: OrgDomainJoinPolicy }
+  ) => Promise<IOrgDomainClaimDocument | null>;
+  deleteForSpace: (id: string, spaceId: string) => Promise<boolean>;
+  deleteBySpace: (spaceId: string) => Promise<number>;
 }

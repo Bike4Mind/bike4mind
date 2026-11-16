@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository } from '@bike4mind/database';
+import { spaceRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userService } from '@bike4mind/services';
+import { spaceService, userService } from '@bike4mind/services';
 import { commitWithSessionEnd } from '@server/auth/endUserSessions';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -11,6 +11,7 @@ import { calculateTokenAge } from '@bike4mind/server-utils/utils/auditLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
+import { isDomainJoinable } from '@server/organizations/orgDomainClaims';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { accountDeletionPendingError } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { z } from 'zod';
@@ -58,8 +59,8 @@ const handler = baseApi({ auth: false })
         // the user to sign in again with the new address.
         const outcome = await commitWithSessionEnd(
           req,
-          () =>
-            userService.verifyEmailChange(
+          async () => {
+            const changeOutcome = await userService.verifyEmailChange(
               { token },
               {
                 db: {
@@ -71,7 +72,16 @@ const handler = baseApi({ auth: false })
                   },
                 },
               }
-            ),
+            );
+            // Runs whatever EnableSpaces says: domain membership must stay correct while the flag is off.
+            if (changeOutcome === 'changed' && newEmail) {
+              await spaceService.recheckDomainMembers(user.id, newEmail, {
+                db: { spaces: spaceRepository },
+                isDomainJoinable,
+              });
+            }
+            return changeOutcome;
+          },
           outcome => (outcome === 'changed' ? { userId: user.id, reason: 'email_changed' } : undefined)
         );
         if (outcome === 'unavailable') throw new ConflictError(userService.EMAIL_NO_LONGER_AVAILABLE_MESSAGE);

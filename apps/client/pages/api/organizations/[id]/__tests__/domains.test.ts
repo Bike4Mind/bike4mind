@@ -38,6 +38,7 @@ const claims = vi.hoisted(() => ({
   findByIdForOrg: vi.fn(),
   findVerifiedByDomain: vi.fn(),
   markVerified: vi.fn(),
+  deleteSpaceClaimsByDomain: vi.fn().mockResolvedValue([]),
   updatePolicy: vi.fn(),
   deleteForOrg: vi.fn(),
 }));
@@ -51,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: orgs,
   partnerSignupRuleRepository: partnerRules,
   disposableDomainRepository: disposable,
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { isDisposableEmail: () => false } }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
@@ -310,7 +312,9 @@ describe('POST /api/organizations/[id]/domains/[claimId]/verify', () => {
     await run();
 
     expect(resolveTxt).toHaveBeenCalledWith('_b4m-verify.acme.com');
-    expect(claims.markVerified).toHaveBeenCalledWith('cccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(claims.markVerified).toHaveBeenCalledWith('cccccccccccccccccccccccc', {
+      organizationId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ verified: true, claim: { status: 'verified', recordValue: null } });
   });
@@ -353,7 +357,7 @@ it('uses verified canonical organization IDs for uppercase domain route inputs a
   expect(claims.listByOrganization).toHaveBeenCalledWith(ORG.id);
   expect(claims.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG.id }));
   expect(claims.findByIdForOrg).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
-  expect(claims.markVerified).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
+  expect(claims.markVerified).toHaveBeenCalledWith('c'.repeat(24), { organizationId: ORG.id });
   expect(claims.updatePolicy).toHaveBeenCalledWith('c'.repeat(24), ORG.id, { policy: 'off' });
   expect(claims.deleteForOrg).toHaveBeenCalledWith('c'.repeat(24), ORG.id);
   for (const [, action] of vi.mocked(recordAdminActionFromRequest).mock.calls) {
