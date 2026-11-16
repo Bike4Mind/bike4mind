@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
-import { AdminAuditLogModel, mongoose } from '@bike4mind/database';
+import { AdminAuditLogModel, Session, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
@@ -33,21 +33,6 @@ import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeA
 import { erasureRegistry } from './erasureRegistry';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-
-/**
- * Collections the registry still finds naming an erased admin-requested subject after the purge, as
- * the purge stands today. Each entry is a place the registry and the account purge disagree.
- */
-const KNOWN_RESIDUAL: { model: string; deleted: number; anonymized: number }[] = [
-  // The message the person sent: the purge deletes only what they received.
-  { model: 'Inbox', deleted: 0, anonymized: 1 },
-  // The tombstoned organization they owned keeps its userId and billingContact.
-  { model: 'Organization', deleted: 0, anonymized: 1 },
-  // The organization-owned project: it stays with the organization, but the purge leaves its userId.
-  { model: 'Project', deleted: 0, anonymized: 1 },
-  // Another account's referredByUserId, throttle.changedBy and signupLanding.notebookOwnerId.
-  { model: 'User', deleted: 0, anonymized: 1 },
-];
 
 const { ObjectId } = mongoose.Types;
 let database: MongoMemoryReplSet;
@@ -141,15 +126,32 @@ async function seedAccount() {
   await insert('DeepAgentEpisode', { agentId });
   await insert('GitHubLakeAuthGrant', { userId });
   await insert('CreditTransaction', { ownerId: userId, ownerType: 'User', type: 'purchase', credits: 10 });
+  // Rows the account purge used to delete itself and now leaves to the registry erasure.
+  await insert('AuthSession', { userId });
+  await insert('ApiKey', { userId, type: 'openai', apiKey: 'ciphertext', deletedAt: new Date() });
+  await insert('UserActivityCounter', { userId });
+  await insert('FeedbackNote', { userId, body: 'private account note' });
+  await insert('Friendship', { requester: userId, recipient: String(other) });
+  await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
+  await insert('Activity', { ownerType: 'User', ownerId: userId });
+  await insert('TaskSchedule', { payload: { userId } });
+  await insert('DataLakeAccessGrant', {
+    dataLakeId: 'lake',
+    principalType: 'user',
+    principalId: userId,
+    role: 'reader',
+  });
+  const sharedNotebook = await insert(Session.modelName, { userId: String(other), users: [{ userId }] });
   // Soft-deleted rows still name the person and must go too.
   await insert('Project', { name: 'Trashed project', userId, deletedAt: new Date() });
   await insert('DeepAgentEpisode', { agentId, deletedAt: new Date() });
-  return { userId };
+  return { userId, sharedNotebook };
 }
 
 describe('admin erasure against the real data holder registry', () => {
-  it('leaves only the known residual and no unclassified model', async () => {
-    const { userId } = await seedAccount();
+  it('leaves nothing naming the user outside the stated retentions, and no unclassified model', async () => {
+    const { userId, sharedNotebook } = await seedAccount();
     await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
       deleted: true,
     });
@@ -165,6 +167,9 @@ describe('admin erasure against the real data holder registry', () => {
       deleted,
       anonymized,
     }));
-    expect(remaining).toEqual(KNOWN_RESIDUAL);
+    expect(remaining).toEqual([]);
+    expect(await mongoose.model(Session.modelName).collection.findOne({ _id: sharedNotebook })).toMatchObject({
+      users: [],
+    });
   });
 });

@@ -62,6 +62,10 @@ const erasureRegistry: ErasureRegistry = {
     h.assertClassified(['Alpha', 'Beta']);
     return h.collections(assertLease);
   },
+  async erase(_subject, assertLease) {
+    await assertLease();
+    h.order.push('erase');
+  },
   async audit() {
     const collections: { deleted: number; anonymized: number }[] = await h.collections();
     const remaining = collections.filter(collection => collection.deleted + collection.anonymized > 0);
@@ -160,7 +164,7 @@ describe('completeAccountDeletion', () => {
         },
       }
     );
-    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'delete', 'audit', 'email']);
+    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'erase', 'delete', 'audit', 'email']);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }

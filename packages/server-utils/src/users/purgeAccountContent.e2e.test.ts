@@ -96,6 +96,7 @@ beforeEach(async () => {
 // These purges are self-serve, so the erasure registry is never consulted.
 const erasureRegistry: ErasureRegistry = {
   scope: async () => [],
+  erase: async () => {},
   audit: async () => ({ remaining: [], unclassified: [] }),
 };
 
@@ -197,8 +198,6 @@ describe('permanent personal-content purge', () => {
     await collection('Artifact').insertOne({ id: 'personal-artifact', userId: ownerId });
     await collection('ArtifactContent').insertOne({ artifactId: 'personal-artifact', content: 'private content' });
     await collection('ArtifactVersion').insertOne({ artifactId: 'personal-artifact', content: 'old private content' });
-    await collection('AuthSession').insertOne({ userId: ownerId });
-    await collection('CounterLog').insertOne({ userId: ownerId, metadata: { title: 'private title' } });
     await collection('UsageEvent').insertMany([
       { userId: ownerId, ownerType: 'User', ownerId, requestId: 'personal-usage' },
       {
@@ -240,15 +239,6 @@ describe('permanent personal-content purge', () => {
       action: 'revoke',
       expiresAt: new Date('2027-01-01'),
     });
-    for (const modelName of [
-      'UserActivityCounter',
-      'UserUsagePatternSignals',
-      'AdminUserNote',
-      'AdminUserNoteRevision',
-      'FeedbackNote',
-    ]) {
-      await collection(modelName).insertOne({ userId: ownerId, body: 'private account note' });
-    }
 
     await purgeAccountContent(ownerId, { logger, assertLease });
 
@@ -258,8 +248,6 @@ describe('permanent personal-content purge', () => {
     expect(await collection('Artifact').countDocuments({ userId: ownerId })).toBe(0);
     expect(await collection('ArtifactContent').countDocuments({ artifactId: 'personal-artifact' })).toBe(0);
     expect(await collection('ArtifactVersion').countDocuments({ artifactId: 'personal-artifact' })).toBe(0);
-    expect(await collection('AuthSession').countDocuments({ userId: ownerId })).toBe(0);
-    expect(await collection('CounterLog').countDocuments({ userId: ownerId })).toBe(0);
     expect(await collection('UsageEvent').countDocuments({ ownerType: 'User', ownerId })).toBe(0);
     expect(await collection('UsageEvent').countDocuments({ ownerId: String(personalOrganizationId) })).toBe(0);
     const organizationUsage = await collection('UsageEvent').findOne({ ownerId: 'org-1' });
@@ -267,7 +255,6 @@ describe('permanent personal-content purge', () => {
     expect(organizationUsage?.requestId).not.toBe('org-usage');
     for (const field of ['sessionId', 'dataLakeId', 'apiKeyId']) expect(organizationUsage).not.toHaveProperty(field);
     for (const modelName of ['GenerationJob', 'Activity']) {
-      expect(await collection(modelName).countDocuments({ ownerId })).toBe(0);
       expect(await collection(modelName).countDocuments({ ownerId: String(personalOrganizationId) })).toBe(0);
       expect(await collection(modelName).countDocuments({ ownerId: 'org-1' })).toBe(1);
     }
@@ -275,19 +262,9 @@ describe('permanent personal-content purge', () => {
       deletedAt: expect.any(Date),
     });
     expect(await collection('UserApiKeyAuditLog').countDocuments({ actorUserId: ownerId })).toBe(1);
-    for (const modelName of [
-      'UserActivityCounter',
-      'UserUsagePatternSignals',
-      'AdminUserNote',
-      'AdminUserNoteRevision',
-      'FeedbackNote',
-    ]) {
-      expect(await collection(modelName).countDocuments({ userId: ownerId })).toBe(0);
-    }
     expect(await collection('Project').countDocuments({ userId: ownerId, organizationId: null })).toBe(0);
     expect(await collection('Project').countDocuments({ organizationId: String(personalOrganizationId) })).toBe(0);
     expect(await collection('Project').findOne({ organizationId: 'org-1' })).not.toBeNull();
-    expect(await collection(Session.modelName).findOne({ _id: otherNotebookId })).toMatchObject({ users: [] });
     expect(await collection('Quest').findOne({ sessionId: String(otherNotebookId) })).not.toBeNull();
     expect(
       await collection('MemoryPrincipalKey').findOne({ principalKind: 'user', principalId: ownerId })
@@ -354,7 +331,7 @@ describe('permanent personal-content purge', () => {
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('audit-retry@example.test');
   });
 
-  it('removes provider keys, project-minted grants and Slack selections of removed agents', async () => {
+  it('removes project-minted grants and Slack selections of removed agents', async () => {
     const projectId = new mongoose.Types.ObjectId();
     const otherProjectId = new mongoose.Types.ObjectId();
     const orgFileId = new mongoose.Types.ObjectId();
@@ -362,10 +339,6 @@ describe('permanent personal-content purge', () => {
     const agentId = new mongoose.Types.ObjectId();
     const orgAgentId = new mongoose.Types.ObjectId();
     const memberId = new mongoose.Types.ObjectId().toString();
-    await collection('ApiKey').insertMany([
-      { userId: ownerId, type: 'openai', apiKey: 'ciphertext', deletedAt: new Date() },
-      { userId: otherOwnerId, type: 'openai', apiKey: 'other ciphertext' },
-    ]);
     await collection('Project').insertMany([
       { _id: projectId, userId: ownerId, name: 'shared project', users: [{ userId: memberId }] },
       { _id: otherProjectId, userId: otherOwnerId, name: 'other project' },
@@ -399,8 +372,6 @@ describe('permanent personal-content purge', () => {
     await purgeAccountContent(ownerId, { logger, assertLease });
     await purgeAccountContent(ownerId, { logger, assertLease });
 
-    expect(await collection('ApiKey').countDocuments({ userId: ownerId })).toBe(0);
-    expect(await collection('ApiKey').countDocuments({ userId: otherOwnerId })).toBe(1);
     expect(await collection('Project').findOne({ _id: projectId })).toBeNull();
     const survivingGrants = [{ userId: memberId, projectId: String(otherProjectId) }, { userId: memberId }];
     expect(await collection('FabFile').findOne({ _id: orgFileId })).toMatchObject({ users: survivingGrants });

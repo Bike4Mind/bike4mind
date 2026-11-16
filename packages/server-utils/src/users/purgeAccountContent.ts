@@ -452,7 +452,6 @@ async function purgePersonalUsage(
   assertLease: () => Promise<void>
 ) {
   await assertLease();
-  await collectionFor('CounterLog').deleteMany(ownerFilter(userId));
   const usage = collectionFor('UsageEvent');
   await usage.deleteMany({
     $or: [
@@ -497,10 +496,11 @@ async function purgePersonalMemory(
 }
 
 /**
- * Strict, resumable removal for a claimed self-serve deletion. No catch converts a failed purge
- * into completion; the User deletion marker remains until every step resolves. Ownership predicates
- * remove the user's personal originals, while organization-owned records and other owners' copies
- * survive. Auth/security audit records follow their existing TTL and are not swept here.
+ * Strict, resumable removal for a claimed account deletion. No catch converts a failed purge
+ * into completion; the User deletion marker remains until every step resolves. Covers what needs more
+ * than a row write (storage, CDN, memory keys, grant cascades, lake transfers); the rows that merely
+ * name the person are erased afterwards from the data holder registry (ErasureRegistry.erase in
+ * completeAccountDeletion.ts). Auth/security audit records follow their existing TTL and are not swept here.
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
@@ -529,88 +529,12 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await purgePersonalProjects(userId, personalOrganizationIds, assertLease);
   await purgePersonalAgents(userId, personalOrganizationIds, assertLease);
 
-  for (const model of [
-    'ToolModel',
-    'Memento',
-    'ResearchAgent',
-    'ResearchTask',
-    'WorkItem',
-    'AgentExecution',
-    'Favorite',
-    'Tag',
-    'BriefcasePrompt',
-    'ImageGenerationTemplate',
-    'ResearchData',
-    'StockPortfolio',
-    'StockTrade',
-    'TavernQuest',
-    'QuestMasterPlan',
-    'QuestExternalLink',
-    'GearStamp',
-  ]) {
-    await assertLease();
-    await collectionFor(model).deleteMany(personalFilter(userId, personalOrganizationIds));
-  }
-
-  for (const model of [
-    'AuthSession',
-    'TrustedDevice',
-    'PasskeyCredential',
-    'OAuthGrant',
-    'OAuthRefreshToken',
-    'OAuthAuthorizationCode',
-    'UserApiKey',
-    'ApiKey',
-    'PushToken',
-    'DeviceAuthorization',
-    'CcBridgeDevice',
-    'CcBridgePairingToken',
-    'WsConnectTicket',
-    'PasskeyChallenge',
-    'UserActivityCounter',
-    'UserUsagePatternSignals',
-    'AdminUserNote',
-    'AdminUserNoteRevision',
-    'FeedbackNote',
-  ]) {
-    await assertLease();
-    await collectionFor(model).deleteMany(ownerFilter(userId));
-  }
-  // Connection rows are ended by the caller's realtime invalidation, which needs them to find
-  // subscriptions and leaves them for the sweep to close the sockets before deleting the rows.
-  for (const model of ['ActiveCodeAgent', 'CodeAgentEvent', 'SessionAgentConfig', 'SessionToolApproval']) {
-    await assertLease();
-    await collectionFor(model).deleteMany(ownerFilter(userId));
-  }
-  await collectionFor('GitHubLakeAuthGrant').deleteMany(ownerFilter(userId));
-  await collectionFor('Inbox').deleteMany({ receiverId: userId });
-  await collectionFor('Friendship').deleteMany({ $or: [{ requester: userId }, { recipient: userId }] });
-  await collectionFor('McpConnection').deleteMany({ ownerType: 'user', ownerKey: userId });
-  await collectionFor('McpServer').deleteMany(ownerFilter(userId));
+  // Rows owned by a personal workspace do not name the person, so the registry erasure cannot find them.
   await collectionFor('GenerationJob').deleteMany({
-    $or: [
-      { ownerType: CreditHolderType.User, ownerId: userId },
-      { ownerType: CreditHolderType.Organization, ownerId: { $in: personalOrganizationIds } },
-    ],
+    ownerType: CreditHolderType.Organization,
+    ownerId: { $in: personalOrganizationIds },
   });
-  await collectionFor('Activity').deleteMany({
-    $or: [
-      { ownerType: 'User', ownerId: userId },
-      { ownerType: 'Organization', ownerId: { $in: personalOrganizationIds } },
-    ],
-  });
-  await collectionFor('TaskSchedule').deleteMany({ 'payload.userId': userId });
-  // A share received from another owner is an access row, never that owner's content.
-  for (const model of [Session.modelName, 'Project', FabFile.modelName, 'Agent', 'ToolModel']) {
-    await assertLease();
-    await collectionFor(model).updateMany({ 'users.userId': userId }, { $pull: { users: { userId } } });
-  }
-  await assertLease();
-  await collectionFor('Organization').updateMany(
-    { $or: [{ 'users.userId': userId }, { adminUserIds: userId }, { 'userDetails.id': userId }] },
-    { $pull: { users: { userId }, adminUserIds: userId, userDetails: { id: userId } } }
-  );
-  await collectionFor('DataLakeAccessGrant').deleteMany({ principalType: 'user', principalId: userId });
+  await collectionFor('Activity').deleteMany({ ownerType: 'Organization', ownerId: { $in: personalOrganizationIds } });
   await embedConversationRepository.deleteAllForUser(userId);
   await integrationRequestRepository.deleteAllForUser(userId);
   await hideDeletedAuthorAnnotations(userId);

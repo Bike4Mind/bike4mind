@@ -13,7 +13,16 @@ export const socialHolders = {
   },
   Connection: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        // Deleting the row would hide the socket from the sweep that closes it (realtimeConnectionRepository).
+        action: 'retain',
+        reason: 'Realtime connection row kept only until the connection sweep closes its socket and deletes it',
+        retention: { expiresBy: 'condition', until: 'the connection sweep closes the ended socket' },
+      },
+    ],
     secretPaths: ['sid'],
   },
   Feedback: {

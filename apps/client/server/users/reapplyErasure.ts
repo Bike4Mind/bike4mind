@@ -1,5 +1,6 @@
 import {
   Organization,
+  User,
   erasureRecordRepository,
   realtimeConnectionRepository,
   userRepository,
@@ -14,6 +15,7 @@ import type { Logger } from '@bike4mind/observability';
 import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDeletedUserData';
 import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
+import { erasureRegistry } from '../dataSubject/erasureRegistry';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 
@@ -42,6 +44,8 @@ export async function reapplyErasure(
 ): Promise<{ ownedOrganizationIds: string[] }> {
   const owned = await Organization.find({ userId, deletedAt: null, personal: { $ne: true } }, { _id: 1 }).lean();
   const writeRecord = () => erasureRecordRepository.record(record);
+  const restored = await User.findById(userId, { email: 1 }).lean<{ email?: string | null }>();
+  const subject = { userId, email: restored?.email ?? null };
   // Fail before deleting the retry anchor if realtime invalidation cannot complete. Unlike the
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
@@ -51,6 +55,7 @@ export async function reapplyErasure(
     const assertLease = async () => {};
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
+    await erasureRegistry.erase(subject, assertLease);
     await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
       await deleteFeedbackAiForUser(userId, { session });

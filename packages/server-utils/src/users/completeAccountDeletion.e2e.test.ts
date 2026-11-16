@@ -80,6 +80,7 @@ async function seedUser() {
 }
 const erasureRegistry: ErasureRegistry = {
   scope: async () => [],
+  erase: async () => {},
   audit: async () => ({ remaining: [], unclassified: [] }),
 };
 const complete = (userId: string) => completeAccountDeletion(userId, { logger: logger as never, now, erasureRegistry });

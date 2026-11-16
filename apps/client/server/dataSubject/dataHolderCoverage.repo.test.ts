@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BEFORE_ERASURE_HOOKS } from './erasureRegistry';
 import { DATA_HOLDER_REGISTRY } from './registry';
 
 // Split from dataHolderCoverage.test.ts: this case greps every tracked .ts file, so it runs in the
@@ -19,5 +20,12 @@ describe('data holder registry: beforeErasure hooks', () => {
       encoding: 'utf8',
     });
     expect(matches.trim()).not.toBe('');
+  });
+
+  it('every beforeErasure name resolves to a function the erasure runs', () => {
+    const names = Object.values(DATA_HOLDER_REGISTRY).flatMap(holder =>
+      holder.kind === 'holder' ? (holder.beforeErasure ?? []) : []
+    );
+    expect(names.filter(name => !(name in BEFORE_ERASURE_HOOKS))).toEqual([]);
   });
 });

@@ -25,6 +25,8 @@ export type ErasureSubject = { userId: string; email: string | null };
 export type ErasureRegistry = {
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
+  /** Deletes, anonymizes or detaches every row the registry finds naming the subject. Idempotent. */
+  erase(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<void>;
   /** After the purge: what still names the subject outside the stated retentions, and the models not checked. */
   audit(subject: ErasureSubject): Promise<{ remaining: AdminErasureCollection[]; unclassified: string[] }>;
 };
@@ -137,6 +139,8 @@ export async function completeAccountDeletion(
       { userId },
       { db: { realtimeConnections: realtimeConnectionRepository } }
     );
+    // After the realtime invalidation, which finds the live sockets through the Connection rows this erases.
+    await erasureRegistry.erase(subject, assertLease);
     await hardDeleteUser(
       userId,
       {
