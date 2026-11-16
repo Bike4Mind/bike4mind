@@ -34,7 +34,7 @@ import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
  * Which lakes the in-chat surface is scoped to: a trigger in the tree card's header opening the
  * full lake list (#1943). Replaces the standalone page's persistent rail - the chat already
  * spends its width on the conversation, so a third column is not available, but the list itself
- * (all-lakes row, per-lake scope + file count, foreign-owner marker, filter past a threshold)
+ * (per-lake scope + file count, foreign-owner marker, filter past a threshold)
  * survives intact one click away, grouped by owner so other users' lakes do not mix into the
  * caller's own.
  *
@@ -70,7 +70,7 @@ export interface DataLakeLakePickerProps {
   /** Distinct live files per lake, keyed by `datalakeTag` (see DataLakeTagCountsResponse). */
   lakeFileCounts: Record<string, number> | undefined;
   /**
-   * Combined distinct-file count across every reachable lake, for the all-lakes row.
+   * Combined distinct-file count across every reachable lake, for the all-lakes trigger.
    * `undefined` means not yet known - a known zero is `0` and renders as such. Pass the raw
    * value rather than coalescing to 0, or a loading payload reads as an empty account.
    */
@@ -83,7 +83,7 @@ export interface DataLakeLakePickerProps {
   onOpen?: () => void;
 }
 
-/** Below this many lakes a filter box is noise rather than help, unless it has Create to sit beside. */
+/** Below this many lakes a filter box is noise rather than help, unless it has Create or Discover to sit beside. */
 const SEARCH_THRESHOLD = 8;
 
 /**
@@ -311,8 +311,8 @@ export default function DataLakeLakePicker({
   return (
     <Box sx={{ px: '12px', pt: '12px' }}>
       {/* The filter is scratch state for one browse, not a setting: a query left over from a
-          previous open would greet the next one with a narrowed list and a "1 of 10 lakes"
-          chip, which reads as a broken picker rather than a remembered choice. */}
+          previous open would greet the next one with a narrowed list, which reads as a broken picker
+          rather than a remembered choice. */}
       <Dropdown
         open={open}
         onOpenChange={(_, isOpen) => {
@@ -461,7 +461,7 @@ export default function DataLakeLakePicker({
               {filtered.length === 0 ? (
                 <ListItem>
                   <Typography level="body-xs" sx={{ px: 1, py: 1, color: 'text.tertiary' }}>
-                    {/* rootLabel, not allLakesLabel: the latter is the "All data lakes" ROW label,
+                    {/* rootLabel, not allLakesLabel: the latter names the all-lakes scope,
                         which reads as "No all data lakes yet" in a sentence. */}
                     {deferredQuery ? 'No matches' : `No ${copy.rootLabel.toLowerCase()} yet`}
                   </Typography>
