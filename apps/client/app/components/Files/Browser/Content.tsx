@@ -403,11 +403,11 @@ const FileBrowserContent = () => {
     } else if (ownedCount === 0) {
       title = `Remove ${sharedCount} shared file(s)`;
       description =
-        "You will be removed from the share list for these files. They will no longer appear in your browser. The owners' copies are not affected.";
+        "Direct shares will be removed from your library. Files available through shared or read-only access will remain visible. The owners' copies are not affected.";
       type = 'warning';
     } else {
       title = `Delete ${ownedCount} file(s) and remove ${sharedCount} shared file(s)`;
-      description = `This will delete ${ownedCount} file(s) you own and remove ${sharedCount} shared file(s) from your view. The shared files' owners are not affected.`;
+      description = `This will delete ${ownedCount} file(s) you own and remove direct shares from your library. Files available through shared or read-only access will remain visible. The shared files' owners are not affected.`;
     }
 
     confirm({
