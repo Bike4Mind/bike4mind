@@ -392,17 +392,26 @@ test.describe('Teams', () => {
     const saved = page.waitForResponse(
       r => r.request().method() === 'PUT' && r.url().includes(`/api/organizations/${mainTeamId}/admins`)
     );
-    await page.getByTestId('org-admins-save-btn').click();
+    await page.getByTestId('admin-save-confirm-btn').click();
     expect((await saved).ok()).toBe(true);
 
     const asManager = await openTeamsPageAs(browser, baseURL, manager);
     try {
       await asManager.teamsPage.gotoTeam(mainTeamId);
       const tabs = await asManager.teamsPage.visibleTabs();
-      expect(tabs).toEqual(expect.arrayContaining(['Overview', 'Members', 'Analysis']));
-      for (const ownerOnly of ['Billing', 'Usage', 'Integrations']) {
+      expect(tabs).toEqual(
+        expect.arrayContaining(['Overview', 'Members', 'Library', 'Usage', 'Analysis', 'Integrations'])
+      );
+      for (const ownerOnly of ['Billing']) {
         expect(tabs).not.toContain(ownerOnly);
       }
+      // Integrations stands for a manager on its Connectors section alone; the owner-only
+      // GitHub, Slack and Webhooks sections stay hidden.
+      await asManager.teamsPage.openTab('Integrations');
+      await expect(asManager.page.getByTestId('organization-integration-section-connectors')).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
+      await expect(asManager.page.getByTestId('organization-integration-sections')).toHaveCount(0);
 
       await asManager.teamsPage.openTab('Members');
       await expect(asManager.page.getByTestId('organization-members-add-btn')).toBeVisible({
@@ -423,7 +432,7 @@ test.describe('Teams', () => {
     const saved = page.waitForResponse(
       r => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/organizations/${mainTeamId}`
     );
-    await page.getByTestId('organization-settings-system-prompt-save-btn').click();
+    await page.getByTestId('admin-save-confirm-btn').click();
     expect((await saved).ok()).toBe(true);
 
     await teamsPage.gotoTeam(mainTeamId, 'settings');

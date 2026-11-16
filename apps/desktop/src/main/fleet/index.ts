@@ -5,6 +5,7 @@ import { app, ipcMain } from 'electron';
 import type { ChatStreamEvent } from '@shared/chat';
 import type { FleetState } from '@shared/fleet';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { currentVersion } from '../appVersion';
 import type { VaultFile } from '../auth/tokenVault';
 import { createMainLogger } from '../logger';
 import { appWindows } from '../windows';
@@ -70,7 +71,7 @@ export function registerFleet(): RegisteredFleet {
     client: new FleetClient(),
     readConfig: () => readFleetConfig(path),
     configPath: tilde(path),
-    appVersion: app.getVersion(),
+    appVersion: currentVersion(),
     logger,
     onState: send,
   });

@@ -1,5 +1,18 @@
 import { z } from 'zod';
 import { isLocalModel, modelSupportsTools, type ChatModelOption } from './chat';
+import {
+  MAX_DESCRIPTION_CHARS,
+  MAX_HEADER_CHARS,
+  MAX_LABEL_CHARS,
+  MAX_OPTIONS,
+  MAX_QUESTION_CHARS,
+  MIN_OPTIONS,
+  RECOMMENDED_SUFFIX,
+  fitText,
+  parseQuestions,
+  type ChatQuestion,
+  type ChatQuestionAnswer,
+} from './questions';
 
 const text = z.string().trim().min(1).max(2000);
 const entries = z.array(text).max(32);
@@ -239,7 +252,7 @@ export function renderTaskBrief(contract: TaskContract): string {
           `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') || '(none)' : value}`
       )
       .join('\n\n') +
-    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. In task_report, give each acceptance criterion a verification entry whose criterion is its exact text above; extra checks such as lint or typecheck count toward no criterion. Skills cannot authorize model, permission or spending changes.'
+    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report. When only the user can decide (an approval, or a choice between real alternatives with no safe default), report status blocked with a decision: one question and 2-4 options, your recommended option first with its label ending "(Recommended)". It reaches the user at once and this task resumes with their answer. Never leave a needed decision in prose, and never ask what you can decide yourself. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. In task_report, give each acceptance criterion a verification entry whose criterion is its exact text above; extra checks such as lint or typecheck count toward no criterion. Skills cannot authorize model, permission or spending changes.'
   );
 }
 
@@ -262,9 +275,86 @@ const evidenceFields = {
   unmetCriteria: entries.describe('Acceptance criteria, quoted exactly, that this attempt did not meet.'),
   handoff: text,
 };
+/**
+ * Why a decision request cannot become a question card, or null. Shares ask_user's validation
+ * (parseQuestions) and adds one rule of its own: only the first option may be the recommended one.
+ */
+export function decisionRequestIssue(value: DecisionRequest): string | null {
+  const parsed = parseQuestions([{ ...value, header: value.header ?? DECISION_HEADER }]);
+  if ('error' in parsed) return parsed.error.replace(/^Question 1/, 'The decision');
+  if (value.options.slice(1).some(option => option.label.trim().endsWith(RECOMMENDED_SUFFIX.trim())))
+    return 'Put the recommended option first; only the first option may end with "(Recommended)".';
+  return null;
+}
+
+const DECISION_HEADER = 'Decision';
+
+const decisionRequestSchema = z
+  .strictObject({
+    question: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
+    header: z.string().max(60).optional(),
+    options: z
+      .array(z.strictObject({ label: z.string().min(1).max(200), description: z.string().min(1).max(1000) }))
+      .min(MIN_OPTIONS)
+      .max(MAX_OPTIONS)
+      .describe(
+        'Your recommended option first, its label ending "(Recommended)". Do not add Skip or Other options; the card adds them.'
+      ),
+  })
+  .superRefine((value, context) => {
+    const issue = decisionRequestIssue(value);
+    if (issue) context.addIssue({ code: 'custom', message: issue });
+  })
+  .describe(
+    'A decision only the user can make. It is shown to the user at once as a question card, and the task resumes with their answer.'
+  );
+export type DecisionRequest = z.input<typeof decisionRequestSchema>;
+
+/** The card a decision request draws: ask_user's fitted question, with the first option marked as recommended. */
+export function decisionQuestion(value: DecisionRequest): ChatQuestion {
+  const parsed = parseQuestions([{ ...value, header: value.header ?? DECISION_HEADER }]);
+  if ('error' in parsed) throw new Error(parsed.error);
+  const [question] = parsed.questions;
+  const [first, ...rest] = question.options;
+  if (first.label.endsWith(RECOMMENDED_SUFFIX)) return question;
+  const label = fitText(first.label, MAX_LABEL_CHARS - RECOMMENDED_SUFFIX.length) + RECOMMENDED_SUFFIX;
+  return { ...question, options: [{ ...first, label }, ...rest] };
+}
+
+const chatQuestionSchema = z.strictObject({
+  question: z.string().min(1).max(MAX_QUESTION_CHARS),
+  header: z.string().min(1).max(MAX_HEADER_CHARS),
+  options: z
+    .array(
+      z.strictObject({
+        label: z.string().min(1).max(MAX_LABEL_CHARS),
+        description: z.string().min(1).max(MAX_DESCRIPTION_CHARS),
+      })
+    )
+    .min(MIN_OPTIONS)
+    .max(MAX_OPTIONS),
+  multiSelect: z.boolean().optional(),
+});
+const decisionId = z.string().min(1).max(100);
+const pendingDecisionSchema = z.strictObject({ id: decisionId, question: chatQuestionSchema, askedAt: z.string() });
+export type PendingDecision = z.infer<typeof pendingDecisionSchema>;
+const decisionRecordSchema = z.strictObject({
+  id: decisionId,
+  question: z.string().min(1).max(MAX_QUESTION_CHARS),
+  outcome: z.enum(['answered', 'skipped']),
+  answer: z.string().min(1).max(5000).optional(),
+  decidedAt: z.string(),
+});
+export type DecisionRecord = z.infer<typeof decisionRecordSchema>;
+
 export const taskReportSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('completed'), ...evidenceFields }),
-  z.strictObject({ status: z.literal('blocked'), reason: text, evidence: entries.min(1) }),
+  z.strictObject({
+    status: z.literal('blocked'),
+    reason: text,
+    evidence: entries.min(1),
+    decision: decisionRequestSchema.optional(),
+  }),
   z.strictObject({
     status: z.literal('escalation-requested'),
     reason: text,
@@ -283,7 +373,12 @@ const taskStateSchema = z.discriminatedUnion('status', [
     accepted: z.boolean(),
     assessment: text.optional(),
   }),
-  z.strictObject({ status: z.literal('blocked'), reason: text, evidence: entries.min(1) }),
+  z.strictObject({
+    status: z.literal('blocked'),
+    reason: text,
+    evidence: entries.min(1),
+    decision: pendingDecisionSchema.optional(),
+  }),
   z.strictObject({
     status: z.literal('escalation-requested'),
     reason: text,
@@ -312,9 +407,28 @@ export const workerTaskSchema = z.strictObject({
     .max(MAX_TASK_ATTEMPTS),
   automaticUpgrades: z.number().int().min(0).max(1),
   resolvedDecisions: z.array(z.string().min(1).max(100)).max(MAX_RESOLVED_DECISIONS),
+  /** The user's answers to the task's decisions, kept as evidence; absent on tasks stored before. */
+  decisions: z.array(decisionRecordSchema).max(MAX_RESOLVED_DECISIONS).optional(),
   state: taskStateSchema,
 });
 export type WorkerTask = z.infer<typeof workerTaskSchema>;
+
+/** The decision this task is waiting on the user for, if any. */
+export function pendingDecisionOf(task: WorkerTask | undefined): PendingDecision | undefined {
+  const state = task?.state;
+  if (state?.status !== 'blocked' || !state.decision) return undefined;
+  return task?.resolvedDecisions.includes(state.decision.id) ? undefined : state.decision;
+}
+
+/** A decision waiting on the user, as the cards in the worker and in its root conversation draw it. */
+export interface PendingTaskDecision {
+  sessionId: string;
+  rootId: string;
+  title: string;
+  decision: PendingDecision;
+}
+
+export type TaskDecisionAnswer = { status: 'answered'; answers: ChatQuestionAnswer[] } | { status: 'skipped' };
 export const taskActionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('report'), report: taskReportSchema }),
   z.strictObject({ kind: z.literal('accept'), assessment: text }),

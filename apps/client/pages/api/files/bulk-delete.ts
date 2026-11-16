@@ -22,6 +22,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
     if (results.deleted.length > 0) parts.push(`Deleted ${results.deleted.length} file(s)`);
     if (results.unshared.length > 0) parts.push(`Removed ${results.unshared.length} shared file(s) from your library`);
     if (results.notFound.length > 0) parts.push(`${results.notFound.length} file(s) not found`);
+    if (results.denied.length > 0) parts.push(`${results.denied.length} file(s) could not be removed`);
     if (results.failed.length > 0) parts.push(`Failed to process ${results.failed.length} file(s)`);
     // Every id lands in exactly one bucket above and the schema requires at least one id, so
     // `parts` is never empty.

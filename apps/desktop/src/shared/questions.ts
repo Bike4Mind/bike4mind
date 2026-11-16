@@ -35,7 +35,7 @@ export type ChatQuestionOutcome =
   { status: 'answered'; answers: ChatQuestionAnswer[] } | { status: 'skipped' } | { status: 'cancelled' };
 
 const FALLBACK_HEADER = 'Question';
-const RECOMMENDED_SUFFIX = ' (Recommended)';
+export const RECOMMENDED_SUFFIX = ' (Recommended)';
 const ELLIPSIS = '\u2026';
 const CUT_BOUNDARY = /[\s\-+/]/;
 
