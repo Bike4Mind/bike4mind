@@ -117,7 +117,7 @@ describe('AdminPermissionsDialog', () => {
     expect(role(SUPPORT_AGENT.id)).not.toBeDisabled();
     expect(role(BILLING.id)).toBeDisabled();
     expect(screen.getByTestId(`${DIALOG}-role-${BILLING.id}-blocked`)).toHaveTextContent(
-      'You do not hold credits:adjust'
+      'You do not hold Adjust credits'
     );
   });
 

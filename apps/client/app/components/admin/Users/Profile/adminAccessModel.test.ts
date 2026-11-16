@@ -56,6 +56,6 @@ describe('roleGrantBlockedReason', () => {
   it('blocks a delegate from a role carrying a permission they lack, counting their own roles', () => {
     const delegate = { adminPermissions: ['support:read'], roleAdminPermissions: ['users:moderate'] };
     expect(roleGrantBlockedReason(delegate, ROLES[0])).toBeNull();
-    expect(roleGrantBlockedReason(delegate, ROLES[1])).toBe('You do not hold credits:adjust');
+    expect(roleGrantBlockedReason(delegate, ROLES[1])).toBe('You do not hold Adjust credits');
   });
 });

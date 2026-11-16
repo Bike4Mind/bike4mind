@@ -6,6 +6,7 @@ import {
   type AdminPermissionId,
 } from '@bike4mind/common';
 import type { AdminRoleListItem } from '../useAdminRoleList';
+import { ADMIN_PERMISSION_LABELS } from './userProfileModel';
 
 type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
 type RoleRef = Pick<AdminRoleListItem, 'id' | 'name' | 'permissions'>;
@@ -42,5 +43,7 @@ export const describeProvenance = ({ direct, roleNames }: Pick<PermissionProvena
 export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef, 'permissions'>): string | null => {
   if (isFullAdmin(actor)) return null;
   const unheld = role.permissions.filter(permission => !hasAdminPermission(actor, permission));
-  return unheld.length > 0 ? `You do not hold ${unheld.join(', ')}` : null;
+  return unheld.length > 0
+    ? `You do not hold ${unheld.map(permission => ADMIN_PERMISSION_LABELS[permission].label).join(', ')}`
+    : null;
 };

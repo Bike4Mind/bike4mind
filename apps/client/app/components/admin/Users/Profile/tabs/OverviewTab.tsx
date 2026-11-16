@@ -177,9 +177,12 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
           <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
             {roles.isLoading
               ? '...'
-              : heldRoles.length === 0
-                ? 'None'
-                : heldRoles.map(role => <StatusChip key={role.id} tone="neutral" label={role.name} />)}
+              : !roles.data
+                ? // No role list to name them from (a read error); the count is still known.
+                  `${roleIds.length} ${roleIds.length === 1 ? 'role' : 'roles'}`
+                : heldRoles.length === 0
+                  ? 'None'
+                  : heldRoles.map(role => <StatusChip key={role.id} tone="neutral" label={role.name} />)}
           </Stack>
         </Fact>
       )}
