@@ -12,6 +12,7 @@ const PROJECT_RESPONSE_FIELDS = {
   name: true,
   description: true,
   userId: true,
+  organizationId: true,
   sessionIds: true,
   fileIds: true,
   systemPrompts: true,

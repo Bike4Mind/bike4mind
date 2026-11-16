@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import type { ChatModelOption } from './chat';
 import {
   acceptTask,
   assertReportCoversCriteria,
   automaticUpgradeAllowed,
+  decisionQuestion,
   inheritancePolicy,
+  pendingDecisionOf,
+  modelRequestHint,
   renderTaskBrief,
+  resolveModelAlias,
   resolveWorkerModel,
   spawnOptionsSchema,
   taskContractSchema,
+  taskReportSchema,
   validateWorkerModel,
   workerTaskSchema,
   type TaskContract,
@@ -54,7 +60,7 @@ describe('orchestration contracts and role routing', () => {
     expect(resolveWorkerModel('planner', policy, { role: 'review' })).toMatchObject({ effectiveModel: 'planner' });
     expect(() =>
       resolveWorkerModel('planner', policy, { role: 'implementation', requestedModelId: 'planner' })
-    ).toThrow(/explicit user/);
+    ).toThrow(/^Model request refused: /);
     expect(resolveWorkerModel('planner', policy, { role: 'review', requestedModelId: 'planner' })).toMatchObject({
       effectiveModel: 'planner',
     });
@@ -71,7 +77,96 @@ describe('orchestration contracts and role routing', () => {
     expect(resolveWorkerModel('planner', policy, { requestedModelId: 'planner' })).toMatchObject({
       effectiveModel: 'planner',
     });
-    expect(() => resolveWorkerModel('planner', policy, { requestedModelId: 'unauthorized' })).toThrow(/explicit user/);
+    expect(() => resolveWorkerModel('planner', policy, { requestedModelId: 'unauthorized' })).toThrow(
+      /^Model request refused: /
+    );
+  });
+  describe('model requests', () => {
+    const catalog: ChatModelOption[] = [
+      { id: 'claude-opus-5', name: 'Claude Opus 5', releaseDate: '2026-08-01', supportsTools: true },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', releaseDate: '2026-02-01', supportsTools: true },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', releaseDate: '2026-09-01', supportsTools: true },
+      { id: 'claude-sonnet-5-1', name: 'Claude Sonnet 5.1', releaseDate: '2026-10-01', unavailable: 'Server down' },
+      { id: 'claude-haiku-5', name: 'Claude Haiku 5', releaseDate: '2026-09-15', supportsTools: true },
+      { id: 'gpt-6.1', name: 'GPT-6.1', releaseDate: '2026-07-01', supportsTools: true },
+      { id: 'gpt-6.1-mini', name: 'GPT-6.1 mini', releaseDate: '2026-07-01', supportsTools: true },
+    ];
+    const open = {
+      ...inheritancePolicy(),
+      roles: { implementation: 'claude-sonnet-4-6', exploration: 'inherit', review: 'inherit' },
+      allowedOverrides: ['claude-sonnet-5', 'claude-sonnet-5-1', 'claude-haiku-5', 'gpt-6.1', 'gpt-6.1-mini'],
+    };
+
+    it('resolves a family alias to the newest usable allowed model, never an unallowed or exact-id variant', () => {
+      const ids = catalog.map(model => model.id);
+      expect(resolveModelAlias('sonnet', ids, catalog)).toBe('claude-sonnet-5');
+      expect(resolveModelAlias('Opus', ids, catalog)).toBe('claude-opus-5');
+      expect(resolveModelAlias('gpt-6.1', ['gpt-6.1-mini'], catalog)).toBeNull();
+      expect(resolveModelAlias('GPT 6.1', ['gpt-6.1-mini', 'gpt-6.10'], catalog)).toBe('gpt-6.1-mini');
+      expect(resolveModelAlias('sonnet', ['claude-opus-5'], catalog)).toBeNull();
+      expect(resolveModelAlias('claude-sonnet-5', ['claude-sonnet-5-1'], catalog)).toBeNull();
+      expect(resolveModelAlias('son', ids, catalog)).toBeNull();
+    });
+
+    it('routes an alias through the allowlist and refuses with an actionable message', () => {
+      expect(
+        resolveWorkerModel('claude-opus-5', open, { role: 'implementation', requestedModelId: 'sonnet' }, catalog)
+      ).toMatchObject({ effectiveModel: 'claude-sonnet-5', requestedModelId: 'sonnet', source: 'override' });
+      expect(
+        resolveWorkerModel('claude-opus-5', open, { role: 'review', requestedModelId: 'opus' }, catalog)
+      ).toMatchObject({ effectiveModel: 'claude-opus-5' });
+      expect(
+        resolveWorkerModel(
+          'claude-opus-5',
+          open,
+          { role: 'implementation', requestedModelId: 'claude-haiku-5' },
+          catalog
+        )
+      ).toMatchObject({ effectiveModel: 'claude-haiku-5', source: 'override' });
+      const closed = { ...open, allowedOverrides: [] };
+      expect(() =>
+        resolveWorkerModel('claude-opus-5', closed, { role: 'implementation', requestedModelId: 'opus' }, catalog)
+      ).toThrow(
+        "Model request refused: 'opus' is not an allowed override (allowed: none). Nothing was started. Omit requested_model_id to use the role default (claude-sonnet-4-6), or ask the user to allow it in orchestration settings."
+      );
+      expect(() =>
+        resolveWorkerModel('claude-opus-5', open, { role: 'implementation', requestedModelId: 'opus' }, catalog)
+      ).toThrow(/allowed: claude-sonnet-5, claude-sonnet-5-1, claude-haiku-5, gpt-6.1, gpt-6.1-mini\)/);
+      expect(resolveWorkerModel('claude-opus-5', closed, { role: 'implementation' }, catalog)).toMatchObject({
+        effectiveModel: 'claude-sonnet-4-6',
+        source: 'role-policy',
+      });
+    });
+
+    it('leaves requested_model_id out with no allowed override and lists the choices otherwise', () => {
+      expect(modelRequestHint('claude-opus-5', inheritancePolicy())).toBeNull();
+      expect(modelRequestHint('claude-opus-5', { ...open, allowedOverrides: ['claude-haiku-5'] })).toBe(
+        'Optional; omit for the role default (implementation=claude-sonnet-4-6, exploration=claude-opus-5, review=claude-opus-5). Allowed: claude-haiku-5. A family name like sonnet picks the newest allowed match.'
+      );
+    });
+
+    it('still refuses a hosted alias match for device-local work', () => {
+      const local = [...catalog, { id: 'local:qwen3:8b', name: 'Qwen3 8B', supportsTools: true }];
+      const selection = resolveWorkerModel(
+        'local:qwen3:8b',
+        { ...open, roles: { ...open.roles, implementation: 'inherit' } },
+        { role: 'implementation', requestedModelId: 'sonnet' },
+        local
+      );
+      expect(() => validateWorkerModel(selection.effectiveModel, local, { localOnly: 'local-work' })).toThrow(
+        /never moved to a hosted model automatically/
+      );
+    });
+  });
+  it('points a refused hosted spawn at the parent picker before any worker exists', () => {
+    const models = [
+      { id: 'worker', name: 'Hosted worker', supportsTools: true },
+      { id: 'local:qwen', name: 'Local worker', supportsTools: true },
+    ];
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-parent' })).toThrow(
+      'Worker model worker is blocked: a conversation using a local model cannot start a hosted worker automatically. To start one, explicitly select a hosted model for the parent conversation first.'
+    );
+    expect(() => validateWorkerModel('local:qwen', models, { localOnly: 'local-parent' })).not.toThrow();
   });
   it('validates a self-contained bounded contract and explicit empty sections', () => {
     expect(taskContractSchema.parse(contract)).toEqual(contract);
@@ -94,7 +189,17 @@ describe('orchestration contracts and role routing', () => {
       expect(() => validateWorkerModel('worker', models, { localOnly: false })).toThrow(/blocked/);
     }
     const models = [{ id: 'worker', name: 'Worker', supportsTools: true, supportsVision: false, contextWindow: 1000 }];
-    expect(() => validateWorkerModel('worker', models, { localOnly: true })).toThrow(/device-local/);
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'device' })).toThrow(
+      /only local models can run here\. Choose a local model, or sign in/
+    );
+    expect(() => validateWorkerModel('worker', models, { localOnly: 'local-work' })).toThrow(
+      /never moved to a hosted model automatically\. To move it, pick a hosted model/
+    );
+    expect(() =>
+      validateWorkerModel('local:ollama:qwen', [{ id: 'local:ollama:qwen', name: 'Qwen', supportsTools: true }], {
+        localOnly: 'device',
+      })
+    ).not.toThrow();
     expect(() => validateWorkerModel('worker', models, { localOnly: false, vision: true })).toThrow(/images/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false, contextTokens: 2000 })).toThrow(/context/);
     expect(() => validateWorkerModel('worker', models, { localOnly: false })).not.toThrow();
@@ -254,5 +359,86 @@ describe('orchestration contracts and role routing', () => {
         true
       )
     ).toBe(false);
+  });
+});
+
+describe('decision requests in a blocked report', () => {
+  const blocked = (decision: unknown) => ({
+    status: 'blocked',
+    reason: 'Needs a call on the prerequisite branch',
+    evidence: ['The prerequisite is not merged'],
+    decision,
+  });
+  const decision = {
+    question: 'Stack this task on the prerequisite branch, or wait until it merges?',
+    options: [
+      { label: 'Stack on it (Recommended)', description: 'Start now on top of the open branch.' },
+      { label: 'Wait for the merge', description: 'Pause until it lands on main.' },
+    ],
+  };
+
+  it('accepts the ask_user shape and keeps a blocked report without one valid', () => {
+    expect(taskReportSchema.parse(blocked(decision))).toMatchObject({ decision });
+    const { decision: _none, ...plain } = blocked(decision);
+    expect(taskReportSchema.parse(plain)).not.toHaveProperty('decision');
+  });
+
+  it.each([
+    [{ ...decision, options: decision.options.slice(0, 1) }, /2 to 4 options|>=2|too small/i],
+    [
+      {
+        ...decision,
+        options: [
+          ...decision.options,
+          ...decision.options.map(option => ({ ...option, label: `${option.label} 2` })),
+        ].concat({ label: 'Fifth', description: 'One too many.' }),
+      },
+      /4|too big/i,
+    ],
+    [{ ...decision, options: [...decision.options, { label: 'Other', description: 'Free text.' }] }, /Other/],
+    [
+      {
+        ...decision,
+        options: [
+          { label: 'Wait for the merge', description: 'Pause.' },
+          { label: 'Stack on it (Recommended)', description: 'Start now.' },
+        ],
+      },
+      /recommended option first/,
+    ],
+    [{ ...decision, question: '  ' }, /question|too small/i],
+  ])('refuses a decision the card could not draw (%#)', (value, message) => {
+    const parsed = taskReportSchema.safeParse(blocked(value));
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toMatch(message);
+  });
+
+  it('draws the fitted question with the first option marked as recommended', () => {
+    const question = decisionQuestion({
+      ...decision,
+      options: [
+        { label: 'Stack on it', description: 'Start now.' },
+        { label: 'Wait for the merge', description: 'Pause.' },
+      ],
+    });
+    expect(question.header).toBe('Decision');
+    expect(question.options.map(option => option.label)).toEqual(['Stack on it (Recommended)', 'Wait for the merge']);
+    expect(decisionQuestion(decision).options[0].label).toBe('Stack on it (Recommended)');
+  });
+
+  it('stores a pending decision on the task and reads stored tasks without one', () => {
+    const pending = { id: 'd1', question: decisionQuestion(decision), askedAt: '2026-11-13' };
+    const stored = workerTaskSchema.parse({
+      ...task(),
+      state: { status: 'blocked', reason: 'r', evidence: ['e'], decision: pending },
+    });
+    expect(pendingDecisionOf(stored)).toEqual(pending);
+    expect(pendingDecisionOf({ ...stored, resolvedDecisions: ['d1'] })).toBeUndefined();
+    expect(
+      pendingDecisionOf(
+        workerTaskSchema.parse({ ...task(), state: { status: 'blocked', reason: 'r', evidence: ['e'] } })
+      )
+    ).toBeUndefined();
+    expect(workerTaskSchema.safeParse(task()).success).toBe(true);
   });
 });

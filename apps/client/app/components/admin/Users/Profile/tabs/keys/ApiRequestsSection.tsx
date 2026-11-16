@@ -103,6 +103,7 @@ export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IU
           {
             id: 'completion',
             label: 'Completion outcome',
+            wrap: true,
             render: entry => {
               const observation = entry.request.completionObservation;
               if (!observation) return 'Not captured';

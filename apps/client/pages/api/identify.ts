@@ -1,7 +1,7 @@
 import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
 import { ExtractJwt } from 'passport-jwt';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
@@ -24,7 +24,7 @@ const extractBearerToken = ExtractJwt.fromAuthHeaderAsBearerToken();
  * either into a full browser session. Sessions come only from the login, second-factor and
  * refresh routes.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true })
   .use(rateLimit(IDENTIFY_RATE_LIMIT))
   .use(requireUser)
   .get(async (req, res) => {

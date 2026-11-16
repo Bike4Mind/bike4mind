@@ -1,7 +1,7 @@
 name: iOS
 
-# openapi.json is not a trigger: the job regenerates from the committed package snapshot, so it cannot
-# detect drift from the server spec. Spec sync is a tracked follow-up of the iOS epic.
+# openapi.json is not a trigger: this job regenerates from the committed snapshot, so it cannot detect drift
+# from the server spec. native-openapi-drift.yml does that, as an advisory PR comment.
 on:
   pull_request:
     paths:

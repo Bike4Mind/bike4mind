@@ -93,7 +93,7 @@ export const VisibilityChip: FC<{ visibility: SkillListingVisibility }> = ({ vis
 const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' | 'danger'; hint: string }> = {
   clean: { label: 'Low risk', color: 'success', hint: 'No findings that need a human' },
   review: {
-    label: 'Needs a look',
+    label: 'Scan: needs a look',
     color: 'warning',
     hint: 'Medium findings, low classifier confidence, or a description mismatch',
   },

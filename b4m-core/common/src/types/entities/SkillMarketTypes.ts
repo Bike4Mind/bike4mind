@@ -203,7 +203,7 @@ export interface ISkillImportedFrom {
 
 /** Server-computed on GET /api/skills and /api/skills/[id] for imported copies. */
 export interface ISkillMarketStatus {
-  state: 'current' | 'stale' | 'delisted' | 'removed';
+  state: 'current' | 'stale' | 'delisted' | 'removed' | 'hidden';
   importedVersion: number;
   latestVersion?: number;
   locallyModified: boolean;

@@ -512,6 +512,7 @@ describe('buildCreatePayload', () => {
     name: 'App',
     redirectUris: 'https://a.example.test/cb',
     firstParty: true,
+    unpaidAccountsAllowed: true,
     federated: {
       enabled: true,
       subjectSource: 'sub' as const,
@@ -548,6 +549,13 @@ describe('buildCreatePayload', () => {
       jwksUri: undefined,
       providerName: undefined,
     });
+  });
+
+  it('sends unpaidAccountsAllowed false only for a federated client that opts out', () => {
+    expect(buildCreatePayload({ ...form, unpaidAccountsAllowed: false }).unpaidAccountsAllowed).toBe(false);
+    expect(buildCreatePayload(form)).not.toHaveProperty('unpaidAccountsAllowed');
+    const off = { ...form, unpaidAccountsAllowed: false, federated: { ...form.federated, enabled: false } };
+    expect(buildCreatePayload(off)).not.toHaveProperty('unpaidAccountsAllowed');
   });
 
   it('splits redirect URIs on newlines only, so a comma in a query string stays in one entry', () => {
@@ -595,6 +603,33 @@ describe('edit modal scopes and federated trust', () => {
     expect(scopeBox('openid').disabled).toBe(true);
     expect((screen.getByTestId('oauth-client-edit-federated-switch') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByTestId('oauth-client-edit-federated-issuer-input')).toHaveValue(idp.issuer);
+  });
+
+  it('shows the unpaid-accounts toggle on for a federated client and saves an opt-out', async () => {
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    api.updateOAuthClient.mockResolvedValue(federatedClient);
+    await openEdit();
+    const toggle = screen.getByTestId('oauth-client-edit-unpaid-accounts-switch') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        unpaidAccountsAllowed: false,
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
+  it('shows the toggle off for a stored opt-out', async () => {
+    api.fetchOAuthClients.mockResolvedValue([{ ...federatedClient, unpaidAccountsAllowed: false }]);
+    await openEdit();
+    expect((screen.getByTestId('oauth-client-edit-unpaid-accounts-switch') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('does not offer the unpaid-accounts toggle when the client is not federated', async () => {
+    await openEdit();
+    expect(screen.queryByTestId('oauth-client-edit-unpaid-accounts-switch')).toBeNull();
   });
 
   it('disables the opt-in scope unless the client is federated and relying-party', async () => {

@@ -11,6 +11,7 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
   isRegisteredSettingKey,
   resolveSettingDefinition,
@@ -25,6 +26,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -45,21 +47,6 @@ import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
 let warnedSelfHostPlaintext = false;
-
-// These settings constrain delegated admins themselves, so settings:manage alone must not loosen them.
-export const FULL_ADMIN_SETTING_KEYS = new Set([
-  'AdminApprovalsEnabled',
-  'AdminApprovalBulkUserThreshold',
-  'AdminApprovalCreditThreshold',
-  'AdminApprovalExpiryHours',
-  'AdminAuditCriticalGrantCredits',
-  'AdminAuditDailyGrantCredits',
-  'SlackSecurityAlertsWebhookUrl',
-  'enforceMFA',
-  'allowTrustedDevices',
-  // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
-  'signupGrantUnprotectedMaxCredits',
-]);
 
 // The stored settings checkSignupGrantSave reads. This route is the admin write path the check guards;
 // migrations also write some of these keys, without the check.
@@ -257,6 +244,12 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
 
     const updatedSetting = await withTransaction(async () => {
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
+      // Every signup receives these tags (register.ts). Compared against the row read in this
+      // transaction, so a concurrent edit conflicts rather than slipping a managed tag past the check.
+      if (key === 'defaultTags') {
+        const splitTags = (raw: unknown) => (typeof raw === 'string' ? raw.split(',') : []);
+        assertCanChangeManagedTags(req.user, splitTags(existing?.settingValue), splitTags(value));
+      }
       const written = await AdminSettings.findOneAndUpdate(
         { settingName: key },
         { $set: { settingValue: settingValueToStore } },

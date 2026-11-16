@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -12,7 +12,7 @@ import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { adminBypassLakeIds } from '@server/dataLakes';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 

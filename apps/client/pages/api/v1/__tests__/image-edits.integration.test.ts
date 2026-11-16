@@ -119,7 +119,7 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
   assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
 }));
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
@@ -127,7 +127,7 @@ vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
 }));
 
-vi.mock('@server/imageGenerations/imageEdit', () => ({
+vi.mock('@bike4mind/server-utils/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 

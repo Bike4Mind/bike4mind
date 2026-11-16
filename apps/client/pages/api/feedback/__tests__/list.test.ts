@@ -17,6 +17,9 @@ const mockRefs = vi.hoisted(() => ({
 
 const { mockRecordFeedbackRead } = vi.hoisted(() => ({ mockRecordFeedbackRead: vi.fn() }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
@@ -374,6 +377,65 @@ describe('GET /api/feedback', () => {
 
   it('rejects an unknown received window with a 422 before any query runs', async () => {
     const { req, res } = buildRequest({ received: '90d' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('ANDs a custom created range in with both ends inclusive', async () => {
+    const { req, res } = buildRequest(
+      { createdFrom: '2026-11-01T07:00:00.000Z', createdTo: '2026-11-08T06:59:59.999Z' },
+      adminAbility()
+    );
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({
+      createdAt: { $gte: new Date('2026-11-01T07:00:00.000Z'), $lte: new Date('2026-11-08T06:59:59.999Z') },
+    });
+  });
+
+  it('accepts an open-ended created range', async () => {
+    const { req, res } = buildRequest({ createdFrom: '2026-11-01T07:00:00.000Z' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ createdAt: { $gte: new Date('2026-11-01T07:00:00.000Z') } });
+  });
+
+  it('rejects a created range whose start is after its end with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest(
+      { createdFrom: '2026-11-08T00:00:00.000Z', createdTo: '2026-11-01T00:00:00.000Z' },
+      adminAbility()
+    );
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('rejects a created bound that is not an ISO instant with a 422', async () => {
+    const { req, res } = buildRequest({ createdFrom: '2026-11-01' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['true', true],
+    ['false', false],
+  ])('maps hasComment=%s to an equality on contentStored', async (hasComment, contentStored) => {
+    const { req, res } = buildRequest({ hasComment }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ contentStored });
+  });
+
+  it('rejects a hasComment value other than true or false with a 422', async () => {
+    const { req, res } = buildRequest({ hasComment: 'yes' }, adminAbility());
     await runHandler(req, res);
 
     expect(res._getStatusCode()).toBe(422);

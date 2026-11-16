@@ -195,7 +195,7 @@ export function buildOwnershipConditions(
      * Every `ResolvedLakeAccess` now carries a scope, registry lakes included, so presence is no
      * longer a proxy for "creator-anchored" and the `kind` discriminant is the only thing that
      * decides. The two multi-lake fan-outs allow-list it: `lakeMembershipsFrom`
-     * (getDynamicDataLakeTags.ts) and `dynamicMembershipScopesFor` (server/dataLakes/index.ts).
+     * (getDynamicDataLakeTags.ts) and `dynamicMembershipScopesFor` (packages/server-utils/src/dataLakes/index.ts).
      * Any NEW multi-lake call site must go through one of them rather than mapping
      * `lakes.map(l => l.membership)` itself.
      */

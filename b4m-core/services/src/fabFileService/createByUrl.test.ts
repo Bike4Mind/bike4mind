@@ -14,7 +14,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   fetchAndParseURL,
 }));
 
-import { createFabFileByUrl, urlFileName } from './createByUrl';
+import { createFabFileByUrl, FinalUrlRejectedError, urlFileName } from './createByUrl';
 
 const URL_UNDER_TEST = 'https://example.com/article';
 
@@ -400,5 +400,50 @@ describe('createFabFileByUrl nameFile', () => {
     await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), nameFile: urlFileName });
 
     expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('An Article.txt');
+  });
+});
+
+describe('createFabFileByUrl assertFinalUrl', () => {
+  const provenance = {
+    sourceType: FabFileSourceType.PROPOSAL_APPROVAL,
+    sourceMetadata: { proposalId: 'p-1' },
+  };
+
+  beforeEach(() => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'An Article',
+      textContent: 'body text',
+      mimeType: 'text/plain',
+      ext: 'txt',
+      finalUrl: 'https://docs.example.com/moved',
+    });
+  });
+
+  it('passes the post-redirect URL to the predicate and stamps what it returns', async () => {
+    const assertFinalUrl = vi.fn().mockReturnValue({ trustedDomain: 'example.com' });
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance, assertFinalUrl });
+
+    expect(assertFinalUrl).toHaveBeenCalledWith('https://docs.example.com/moved');
+    expect(fabFilesCreate.mock.calls[0][0].sourceMetadata).toEqual({ proposalId: 'p-1', trustedDomain: 'example.com' });
+  });
+
+  it('writes and uploads nothing when the predicate rejects', async () => {
+    const assertFinalUrl = vi.fn().mockImplementation(() => {
+      throw new FinalUrlRejectedError();
+    });
+
+    await expect(
+      createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance, assertFinalUrl })
+    ).rejects.toBeInstanceOf(FinalUrlRejectedError);
+
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+    expect(storageUpload).not.toHaveBeenCalled();
+  });
+
+  it('leaves provenance untouched when no predicate is given', async () => {
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), provenance });
+
+    expect(fabFilesCreate.mock.calls[0][0].sourceMetadata).toEqual({ proposalId: 'p-1' });
   });
 });

@@ -18,6 +18,14 @@ export const billingHolders = {
     // DAG node ids of other executions, not users.
     unrelatedPaths: ['blockedBy'],
   },
+  // Attribution only (who minted a run id); the run's charges live on the ledger and usage events.
+  CompletionRun: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'ownerId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+    ],
+  },
   CreditGrantIdentityClaim: {
     kind: 'holder',
     // `ownerId` is immutable and uniquely indexed, so it cannot be cleared in place. The claim is what blocks a
@@ -158,7 +166,13 @@ export const billingHolders = {
   ReferralSubscriptionReward: {
     kind: 'holder',
     references: [
-      { path: 'payerId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
+      {
+        path: 'payerId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...FINANCIAL_RECORD,
+        identifies: ['invoiceId', 'paymentIntentId'],
+      },
       { path: 'inviterId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
     ],
   },
@@ -251,7 +265,7 @@ export const billingHolders = {
       { path: 'grantedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
-  // Mirrors `purgePersonalUsage` (server/users/purgeAccountContent.ts): the person's own usage goes,
+  // Mirrors `purgePersonalUsage` (packages/server-utils/src/users/purgeAccountContent.ts): the person's own usage goes,
   // and an organization's rows keep their quantities and prices with the person's links severed. The
   // charges themselves stay on the credit ledger (CreditTransaction). The purge also deletes the
   // organization-owned rows of the person's personal workspaces, which no equality filter here can say.

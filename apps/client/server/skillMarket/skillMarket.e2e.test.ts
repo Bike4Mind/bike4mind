@@ -110,7 +110,6 @@ import rescanHandler from '@pages/api/skills/market/versions/[vid]/rescan';
 import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
-import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
 import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -197,6 +196,11 @@ async function publish(
 }
 
 const browse = (orgIds: string[] = []) => searchListings(orgIds, { page: 1, limit: 50, sort: 'top' });
+
+/** Opens an unlisted listing the way every client does: the share token in the `x-share-token` header. */
+function openByShareToken(userId: string, token: string) {
+  return call(byTokenHeaderHandler, 'GET', userId, {}, {}, false, new Date(0), { 'x-share-token': token });
+}
 
 async function call(
   handler: (req: unknown, res: unknown) => unknown,
@@ -321,7 +325,7 @@ describe('Skill Market (real mongod)', () => {
       // Neither the org feed nor the share link serves a version that is still pending.
       if (visibility === 'organization') expect((await browse([ORG])).data).toEqual([]);
       else
-        await expect(call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken })).rejects.toMatchObject({
+        await expect(openByShareToken(OTHER, listing.shareToken!)).rejects.toMatchObject({
           statusCode: 404,
         });
 
@@ -339,7 +343,7 @@ describe('Skill Market (real mongod)', () => {
 
       expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBe(version.id);
       if (visibility === 'organization') expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
-      else expect((await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken }))._getStatusCode()).toBe(200);
+      else expect((await openByShareToken(OTHER, listing.shareToken!))._getStatusCode()).toBe(200);
     }
   );
 
@@ -365,7 +369,7 @@ describe('Skill Market (real mongod)', () => {
       const detail =
         visibility === 'organization'
           ? await call(detailHandler, 'GET', OTHER, { id: listing.id })
-          : await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken! });
+          : await openByShareToken(OTHER, listing.shareToken!);
       expect(detail._getJSONData().version).toMatchObject({
         id: approved.id,
         snapshot: { body: source.body },
@@ -781,6 +785,32 @@ describe('Skill Market (real mongod)', () => {
     await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  it('reports: the queue splits counting reports from the total, and an importer sees the hidden state', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    // A newer version exists, so the copy is stale; the report hold must still win.
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+    for (const u of ['new-1', 'new-2']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' }, false, new Date());
+    }
+    for (const u of ['old-1', 'old-2', 'old-3']) {
+      await call(reportHandler, 'POST', u, { id: listing.id }, { reason: 'spam' });
+    }
+
+    const queue = (await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'reports' }, {}, true))._getJSONData();
+    expect(queue.data).toHaveLength(1);
+    expect(queue.data[0]).toMatchObject({ count: 5, countingCount: 3 });
+
+    let [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('hidden');
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('stale');
+  });
+
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing, version: v1 } = await publish(source, 'public');
@@ -1167,16 +1197,6 @@ describe('Skill Market (real mongod)', () => {
     }
 
     expect((await recommendListings('viewer-1', [ORG])).map(r => r.id)).toEqual([pub.id]);
-  });
-
-  it('by-token (deprecated path route): opens an unlisted listing and 404s a malformed token', async () => {
-    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
-    const res = await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken });
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().listing).toMatchObject({ id: listing.id, visibility: 'unlisted' });
-    await expect(call(byTokenHandler, 'GET', OTHER, { token: 'x'.repeat(31) })).rejects.toMatchObject({
-      statusCode: 404,
-    });
   });
 
   it('by-token: opens an unlisted listing from the x-share-token header and 404s without one', async () => {

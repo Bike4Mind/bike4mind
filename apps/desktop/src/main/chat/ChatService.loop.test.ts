@@ -84,6 +84,26 @@ describe('ChatService /loop', () => {
     ).toEqual(['check the job', 'check the job']);
   });
 
+  it('starts no run after its --until end time and ends with a notice', async () => {
+    const until = new Date(Date.now() + 45_000).toISOString();
+    expect(await service.loopCommand(id, `30s --until ${until} check the job`)).toMatchObject({
+      ok: true,
+      state: { prompt: 'check the job', until: Date.parse(until) },
+    });
+    await waitForPosts(1);
+    await finish();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForPosts(2);
+    await finish();
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(service.getLoop(id)).toMatchObject({ phase: 'ended', notice: expect.stringContaining('end time') });
+    expect(await service.loopCommand(id, `--until ${new Date(Date.now() - 1000).toISOString()} check`)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('already passed'),
+    });
+  });
+
   it('uses ordinary skill expansion without sending slash text to a shell', async () => {
     await service.loopCommand(id, '30s /check the build');
     await waitForPosts(1);

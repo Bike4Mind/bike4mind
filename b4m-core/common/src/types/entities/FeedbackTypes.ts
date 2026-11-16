@@ -2,12 +2,36 @@ import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { PromptMeta } from './PromptMetaTypes';
 import { IOrganizationDocument } from './OrganizationTypes';
+import { AdminActionReasonSchema } from './adminActionReason';
+import { AdminNoteBodySchema } from '../../adminUserNotes';
 
 export enum FeedbackStatus {
   New = 'New',
   Closed = 'Closed',
   InProgress = 'InProgress',
 }
+
+export const FEEDBACK_RESOLUTIONS = ['fixed', 'wont_fix', 'duplicate', 'no_action_needed'] as const;
+export type FeedbackResolution = (typeof FEEDBACK_RESOLUTIONS)[number];
+export const FEEDBACK_RESOLUTION_LABELS: Record<FeedbackResolution, string> = {
+  fixed: 'Fixed',
+  wont_fix: "Won't fix",
+  duplicate: 'Duplicate',
+  no_action_needed: 'No action needed',
+};
+
+export const AddFeedbackNoteRequestSchema = z.object({ note: AdminNoteBodySchema }).strict();
+
+export type FeedbackHistoryItem = {
+  id: string;
+  occurredAt: string;
+  author: string;
+  summary: string;
+  note?: string;
+  reason?: string;
+  changes?: { field: string; before: unknown; after: unknown }[];
+};
+export type FeedbackHistoryPage = { items: FeedbackHistoryItem[]; nextCursor: string | null };
 
 export enum FeedbackType {
   BUG = 'Bug',
@@ -205,6 +229,8 @@ export interface IFeedback {
    * creation - optional here because an expired or same-request-write-failure report has none. */
   content?: string;
   status: FeedbackStatus;
+  resolution?: FeedbackResolution;
+  resolutionDuplicateId?: string;
   tags?: Array<string>;
   username: string;
   userEmail: string;
@@ -251,8 +277,28 @@ export const UpdateFeedbackStatusRequestSchema = z
     status: z.nativeEnum(FeedbackStatus),
     expectedStatus: z.nativeEnum(FeedbackStatus).optional(),
     undoOf: z.string().min(1).max(64).optional(),
+    resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
+    resolutionDuplicateId: z
+      .string()
+      .regex(/^[a-f\d]{24}$/i, 'Enter a valid report id')
+      .optional(),
+    reason: AdminActionReasonSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.status === FeedbackStatus.Closed && !body.resolution && !body.undoOf) {
+      ctx.addIssue({ code: 'custom', path: ['resolution'], message: 'Choose a resolution before closing' });
+    }
+    if (body.resolution === 'duplicate' && !body.resolutionDuplicateId) {
+      ctx.addIssue({ code: 'custom', path: ['resolutionDuplicateId'], message: 'Enter the original report id' });
+    }
+    if (body.status !== FeedbackStatus.Closed && (body.resolution || body.resolutionDuplicateId)) {
+      ctx.addIssue({ code: 'custom', message: 'Only closed reports have a resolution' });
+    }
+    if (body.resolutionDuplicateId && body.resolution !== 'duplicate') {
+      ctx.addIssue({ code: 'custom', message: 'Only duplicate resolutions take a report id' });
+    }
+  });
 export type UpdateFeedbackStatusRequest = z.infer<typeof UpdateFeedbackStatusRequestSchema>;
 
 export type UpdateFeedbackStatusResponse = {
@@ -274,6 +320,7 @@ export type UpdateFeedbackStatusResponse = {
  * is structurally impossible rather than merely disallowed.
  */
 export interface IFeedbackText {
+  revision?: number;
   content: string;
   contentTruncated: boolean;
   expiresAt: Date;

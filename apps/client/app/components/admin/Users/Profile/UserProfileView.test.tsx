@@ -447,7 +447,7 @@ describe('UserProfileView', () => {
     it.each([
       ['self', 'Self-serve'],
       ['support', 'Support'],
-      ['admin', 'Admin'],
+      ['admin', 'Admin erasure'],
     ])('shows the purge date, the %s source and the request date', (source, label) => {
       setup(buildProfile({ deletion: deletion({ source }) }));
 

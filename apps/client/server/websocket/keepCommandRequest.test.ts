@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: vi.fn().mockRejectedValue(new Error('no api key')),
   verifyJwtToken: vi.fn().mockResolvedValue({ id: 'u1' }),
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
@@ -14,7 +14,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@bike4mind/server-utils/cli/auth';
 import { sendToClient, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 const mockRecordUserActivity = vi.hoisted(() => vi.fn());
 vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));

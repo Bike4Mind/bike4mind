@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
 }));
@@ -75,8 +75,8 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
-vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>()),
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
   createCompletionMeter: vi.fn(),
 }));
 
@@ -191,7 +191,7 @@ describe('processQuest', () => {
 
   it("hands the queued turn's key to the QuestMaster completion meter", async () => {
     const { processQuest } = await import('./questProcessor');
-    const { createCompletionMeter } = await import('@server/billing/meterPlatformCompletion');
+    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
     const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, apiKeyId: 'k1' };
 

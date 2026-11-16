@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+const audit = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrganizationAuditEvent: audit }));
 
 /**
  * GET/PUT /api/organizations/[id] are access-gated to org members already; this test
  * pins the response SCOPING: stripeCustomerId is dropped for everyone and
- * billingContact only survives for the owner/admin. In-org fields (systemPrompt,
- * userDetails) are preserved so member UIs keep working. The PUT (update) response
+ * billingContact only survives for the owner/admin. A plain member gets the member view
+ * (no systemPrompt or other settings); owners, managers and admins keep them. The PUT (update) response
  * is routed through the same serializer so a manager updating org settings never
  * gets billing identifiers echoed back.
  *
@@ -55,6 +57,8 @@ const update = vi.hoisted(() =>
     systemPrompt: 'ctx',
     billingContact: 'billing@acme.com',
     stripeCustomerId: 'cus_SECRET',
+    adminUserIds: ['manager2'],
+    users: [{ userId: 'manager2', permissions: ['read'] }],
   }))
 );
 const credits = vi.hoisted(() => ({
@@ -111,13 +115,14 @@ function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
 describe('GET /api/organizations/[id] - safe serialization', () => {
   beforeEach(() => get.mockClear());
 
-  it('drops billing identifiers for a non-owner, non-admin member but keeps in-org fields', async () => {
+  it('gives a non-owner, non-admin member the member view without billing identifiers or settings', async () => {
     const { req, res } = mocks({ id: 'member2', isAdmin: false });
     await mockRefs.getHandler!(req, res);
     const body = res._getJSONData();
     expect('stripeCustomerId' in body).toBe(false);
     expect('billingContact' in body).toBe(false);
-    expect(body.systemPrompt).toBe('ctx');
+    expect('systemPrompt' in body).toBe(false);
+    expect(body.name).toBe('Acme');
     expect(Array.isArray(body.userDetails)).toBe(true);
     expect(JSON.stringify(body)).not.toContain('cus_SECRET');
   });
@@ -133,6 +138,25 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
 
 describe('PUT /api/organizations/[id] - URL id wins', () => {
   beforeEach(() => update.mockClear());
+
+  it('awaits policy audit persistence inside the transaction', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'owner1', action: 'policy.updated' });
+    expect(credits.withTransaction).toHaveBeenCalled();
+    audit.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('audit unavailable');
+  });
+
+  it('attributes policy audit to the real impersonating administrator', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req.user, { impersonatedBy: 'real-admin' });
+    req.body = { sharingPolicy: { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] } };
+    await mockRefs.putHandler!(req, res);
+    expect(audit).toHaveBeenCalledWith({ organizationId: 'org1', actorUserId: 'real-admin', action: 'policy.updated' });
+    expect(update.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'owner1' });
+  });
 
   it('takes the org id from the URL, not from any id field in the body', async () => {
     const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
@@ -257,5 +281,53 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(credits.addCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(credits.subtractCreditsWithLedgerRow).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/organizations/[id] - settings audit', () => {
+  beforeEach(() => {
+    update.mockClear();
+    credits.recordAdminAction.mockClear();
+    credits.findById.mockResolvedValueOnce({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      currentCredits: 100,
+      systemPrompt: 'old',
+    } as never);
+  });
+
+  it('records the changed fields, with the system prompt as a length only', async () => {
+    update.mockResolvedValueOnce({
+      id: 'org1',
+      userId: 'owner1',
+      name: 'Acme Labs',
+      systemPrompt: 'new prompt',
+    } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { name: 'Acme Labs', systemPrompt: 'new prompt' } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.settings.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'org1', displayName: 'Acme Labs' },
+        changes: [
+          { field: 'name', before: 'Acme', after: 'Acme Labs' },
+          { field: 'systemPrompt', before: { characters: 3 }, after: { characters: 10 } },
+        ],
+      })
+    );
+  });
+
+  it('writes no entry when nothing changed', async () => {
+    update.mockResolvedValueOnce({ id: 'org1', userId: 'owner1', name: 'Acme', systemPrompt: 'old' } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { name: 'Acme' } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).not.toHaveBeenCalled();
   });
 });

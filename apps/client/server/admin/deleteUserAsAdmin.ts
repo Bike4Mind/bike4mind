@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { adminSettingsRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
@@ -13,7 +14,7 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { subscriptionCancellationAudit } from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
 import { approvalDetails } from '@server/admin/creditGrants/approval';
@@ -88,6 +89,7 @@ export async function deleteUserAsAdmin(
             adminSettings: adminSettingsRepository,
             realtimeConnections: realtimeConnectionRepository,
           },
+          resolveAdminRoles: resolveRoleAdminPermissions,
           notify: {
             // postMessageToSlack reports whether it delivered; the adapter contract returns void.
             send: async (message: string) => {

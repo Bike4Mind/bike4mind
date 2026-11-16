@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -11,6 +11,7 @@ import {
   memoryLedgerRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
@@ -45,7 +46,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const health = await dataLakeService.computeLakeHealth(lake, {
@@ -58,6 +64,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       logger: req.logger,
     });
 
+    const fileIds = [
+      ...health.affectedMembers.map(m => m.fabFileId),
+      ...health.duplicateMembers.groups.flatMap(g => g.members.map(m => m.fabFileId)),
+      ...health.membership.duplicateGroups.flatMap(g => g.members.map(m => m.fabFileId)),
+    ];
+    // Healthy responses still disclose lake-derived metadata without anomaly file identifiers.
+    await recordLakeRead(req, {
+      lakeIds: [lake.id],
+      ...(fileIds.length > 0 ? { fileIds } : {}),
+      surface: 'data-lake-health',
+    });
     return res.json(health);
   });
 

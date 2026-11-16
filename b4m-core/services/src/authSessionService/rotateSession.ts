@@ -13,6 +13,7 @@ import {
   DEFAULT_REFRESH_TTL_MS,
   MAX_REFRESH_REPLAY_USES,
   MAX_SESSION_RECOVERIES,
+  PERSONA_SESSION_IDLE_TTL_MS,
   REFRESH_REPLAY_WINDOW_MS,
 } from './constants';
 import { endRealtimeConnections } from './endRealtimeConnections';
@@ -135,7 +136,8 @@ const describeReuse = (session: IAuthSessionDocument, reason: ReuseRevokeReason,
  */
 const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
   if (session.impersonatedBy) return session.expiresAt;
-  const slid = now.getTime() + DEFAULT_REFRESH_TTL_MS;
+  const idleTtl = session.createdVia === 'persona-mint' ? PERSONA_SESSION_IDLE_TTL_MS : DEFAULT_REFRESH_TTL_MS;
+  const slid = now.getTime() + idleTtl;
   const cap = new Date(session.createdAt).getTime() + ABSOLUTE_SESSION_MAX_MS;
   return new Date(Math.max(new Date(session.expiresAt).getTime(), Math.min(slid, cap)));
 };

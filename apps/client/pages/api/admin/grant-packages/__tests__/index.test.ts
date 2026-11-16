@@ -58,6 +58,7 @@ function makeReqRes(method: string, over: { user?: unknown; body?: unknown; quer
   return { req, res };
 }
 
+const DELEGATE = { isAdmin: false, id: 'delegate-1', adminPermissions: ['settings:manage'] };
 const small = { name: 'Launch', credits: 100, totalCap: 1, dailyCap: null };
 
 describe('/api/admin/grant-packages (POST)', () => {
@@ -119,6 +120,33 @@ describe('/api/admin/grant-packages (POST)', () => {
     const { req, res } = makeReqRes('POST', { body: { ...small, totalCap: cap } });
     await expect(handlers.post(req, res)).rejects.toThrow(/totalCap/);
     expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/grant-packages (POST) managed tags', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo.create.mockImplementation(async input => ({ id: 'p1', redeemedTotal: 0, capHits: 0, active: true, ...input }));
+  });
+
+  it('refuses a managed tag from a delegated admin and never writes', async () => {
+    const { req, res } = makeReqRes('POST', { user: DELEGATE, body: { ...small, tags: ['Developer'] } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/full administrators/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegated admin create a package with ordinary tags', async () => {
+    const { req, res } = makeReqRes('POST', { user: DELEGATE, body: { ...small, tags: ['beta-cohort'] } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ tags: ['beta-cohort'] }));
+  });
+
+  it('lets a full admin create a package with a managed tag', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...small, tags: ['Developer'] } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ tags: ['Developer'] }));
   });
 });
 
@@ -247,5 +275,72 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
       body: { active: false },
     });
     await expect(handlers.patch(req, res)).rejects.toThrow(/missing permission/i);
+  });
+
+  describe('managed tags', () => {
+    it('refuses a delegated admin adding a managed tag', async () => {
+      repo.findById.mockResolvedValue({ ...stored, tags: ['beta-cohort'] });
+      const { req, res } = makeReqRes('PATCH', {
+        user: DELEGATE,
+        query: { id: 'p1' },
+        body: { tags: ['beta-cohort', 'Developer'] },
+      });
+      await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['re-casing a stored managed tag', ['DEVELOPER'], ['Developer']],
+      ['adding an exact spelling beside a stored variant', ['DEVELOPER'], ['DEVELOPER', 'Developer']],
+    ])('refuses a delegated admin %s', async (_label, before, after) => {
+      repo.findById.mockResolvedValue({ ...stored, tags: before });
+      const { req, res } = makeReqRes('PATCH', { user: DELEGATE, query: { id: 'p1' }, body: { tags: after } });
+      await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it('refuses a delegated admin removing a stored managed tag', async () => {
+      repo.findById.mockResolvedValue({ ...stored, tags: ['Developer', 'beta-cohort'] });
+      const { req, res } = makeReqRes('PATCH', {
+        user: DELEGATE,
+        query: { id: 'p1' },
+        body: { tags: ['beta-cohort'] },
+      });
+      await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it('lets a delegated admin change ordinary tags while keeping a stored managed tag', async () => {
+      repo.findById.mockResolvedValue({ ...stored, tags: ['Developer', 'beta-cohort'] });
+      const { req, res } = makeReqRes('PATCH', {
+        user: DELEGATE,
+        query: { id: 'p1' },
+        body: { tags: ['Developer', 'alpha-cohort'] },
+      });
+      await handlers.patch(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(repo.updatePackage).toHaveBeenCalledWith('p1', { tags: ['Developer', 'alpha-cohort'] });
+    });
+
+    it('judges a delegate against the package as read inside the transaction', async () => {
+      repo.findById
+        .mockResolvedValueOnce({ ...stored, tags: ['beta-cohort'] })
+        .mockResolvedValueOnce({ ...stored, tags: ['beta-cohort', 'Developer'] });
+      const { req, res } = makeReqRes('PATCH', {
+        user: DELEGATE,
+        query: { id: 'p1' },
+        body: { tags: ['alpha-cohort'] },
+      });
+      await expect(handlers.patch(req, res)).rejects.toThrow(/full administrators/i);
+      expect(repo.updatePackage).not.toHaveBeenCalled();
+    });
+
+    it('lets a full admin add a managed tag', async () => {
+      repo.findById.mockResolvedValue({ ...stored, tags: [] });
+      const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { tags: ['Developer'] } });
+      await handlers.patch(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(repo.updatePackage).toHaveBeenCalledWith('p1', { tags: ['Developer'] });
+    });
   });
 });

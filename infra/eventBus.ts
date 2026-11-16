@@ -96,6 +96,11 @@ const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
 });
 const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
 
+// Recipient domains the worker drops instead of handing to the transport. The E2E suites sign up
+// and invite synthetic test.com users on every non-production stage, and SES would otherwise
+// bounce those and count them against the stage's configuration set metrics.
+const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';
+
 export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
@@ -107,6 +112,7 @@ export const emailSendSubscription = eventBus.subscribe(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
       ...mailTransportEnvironment,
+      MAIL_SINK_DOMAINS: mailSinkDomains,
     },
     permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
     transform: emailEventsDeadLetter.functionTarget,
@@ -159,7 +165,29 @@ export const notificationPushSubscription = eventBus.subscribe(
   }
 );
 
-pushEventsDeadLetter.allowRules([notificationPushSubscription]);
+// Relays a finished Studio group to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts).
+// A user-facing notification like push, so it shares the push DLQ; a native notifier adds its own rule on the
+// same detail-type.
+export const studioJobCompletedSubscription = eventBus.subscribe(
+  'studio-job-completed',
+  {
+    handler: 'apps/workers/src/events/studioJobCompleted.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi],
+    // VPC for the database egress path (websocket connections are read from Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['studio.job.completed'] },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+pushEventsDeadLetter.allowRules([notificationPushSubscription, studioJobCompletedSubscription]);
 
 // Session events
 //

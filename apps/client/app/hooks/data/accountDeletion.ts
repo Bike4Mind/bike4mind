@@ -13,6 +13,8 @@ export type OwnedOrganization = { id: string; name: string };
 export type AccountDeletionStatus = {
   deletion: IUserDeletion | null;
   ownedOrganizations: OwnedOrganization[];
+  /** Owned organizations with no other member; the purge deletes them with the account. */
+  soleOwnedOrganizations: OwnedOrganization[];
 };
 
 /** The pending deletion, if any, and the organizations that block a new request (GET /api/account/deletion). */

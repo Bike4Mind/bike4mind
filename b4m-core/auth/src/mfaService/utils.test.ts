@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
-import { clearFailedAttempts, generateTOTPSetup, matchTOTPStep, userHasMFAConfigured } from './utils';
+import {
+  clearFailedAttempts,
+  generateTOTPSetup,
+  isMfaEnforcementExempt,
+  matchTOTPStep,
+  userHasMFAConfigured,
+  userHasTotpConfigured,
+  userRequiresMFA,
+} from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
 const user = (mfa: unknown) => ({ mfa }) as unknown as IUserDocument;
@@ -19,6 +27,34 @@ describe('userHasMFAConfigured', () => {
     expect(userHasMFAConfigured(user({ totpEnabled: false }))).toBe(false);
     expect(userHasMFAConfigured(user(null))).toBe(false);
     expect(userHasMFAConfigured(user(undefined))).toBe(false);
+  });
+
+  it.each([
+    ['an authenticator app only', { totpEnabled: true }, true],
+    ['a passkey only', { totpEnabled: false, passkeyEnabled: true }, true],
+    ['a passkey with no totp flag at all', { passkeyEnabled: true }, true],
+    ['both factors', { totpEnabled: true, passkeyEnabled: true }, true],
+    ['neither factor', { totpEnabled: false, passkeyEnabled: false }, false],
+    ['a pending app setup', { totpEnabled: false }, false],
+    ['an empty mfa object', {}, false],
+  ])('for %s returns %s', (_label, mfa, expected) => {
+    expect(userHasMFAConfigured(user(mfa))).toBe(expected);
+  });
+});
+
+describe('userHasTotpConfigured', () => {
+  it.each([
+    ['an authenticator app only', { totpEnabled: true }, true],
+    ['both factors', { totpEnabled: true, passkeyEnabled: true }, true],
+    ['a passkey only', { totpEnabled: false, passkeyEnabled: true }, false],
+    ['a pending app setup', { totpEnabled: false }, false],
+  ])('for %s returns %s', (_label, mfa, expected) => {
+    expect(userHasTotpConfigured(user(mfa))).toBe(expected);
+  });
+
+  it('is false when the user has no mfa', () => {
+    expect(userHasTotpConfigured(user(null))).toBe(false);
+    expect(userHasTotpConfigured(user(undefined))).toBe(false);
   });
 });
 
@@ -91,5 +127,28 @@ describe('generateTOTPSetup', () => {
     expect(setup.manualEntryKey).toBe(fresh.base32);
     expect(toDataURL).toHaveBeenCalledWith(fresh.otpauth_url);
     toDataURL.mockRestore();
+  });
+});
+
+describe('userRequiresMFA', () => {
+  const ordinary = { mfa: {} } as unknown as IUserDocument;
+  const persona = { mfa: {}, isPersona: true } as unknown as IUserDocument;
+
+  it('requires every ordinary user while enforcement is on, and nobody while it is off', () => {
+    expect(userRequiresMFA(ordinary, true)).toBe(true);
+    expect(userRequiresMFA({ ...ordinary, isPersona: false } as IUserDocument, true)).toBe(true);
+    expect(userRequiresMFA(ordinary, false)).toBe(false);
+  });
+
+  it('never requires a test persona', () => {
+    expect(isMfaEnforcementExempt(persona)).toBe(true);
+    expect(userRequiresMFA(persona, true)).toBe(false);
+  });
+
+  it('requires a persona that holds any admin access', () => {
+    const fullAdmin = { ...persona, isAdmin: true } as IUserDocument;
+    const delegate = { ...persona, adminPermissions: ['settings:manage'] } as unknown as IUserDocument;
+    expect(userRequiresMFA(fullAdmin, true)).toBe(true);
+    expect(userRequiresMFA(delegate, true)).toBe(true);
   });
 });

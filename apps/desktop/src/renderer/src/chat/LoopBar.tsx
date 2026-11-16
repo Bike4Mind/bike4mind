@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
-import { formatLoopInterval, type LoopState } from '@shared/loop';
+import { formatLoopInterval, formatLoopUntil, type LoopState } from '@shared/loop';
 
 export function useLoop(sessionId: string | null) {
   const [state, setState] = useState<LoopState | null>(null);
@@ -33,7 +33,14 @@ export function useLoop(sessionId: string | null) {
 export function LoopBar({ state }: { state: LoopState }) {
   const cadence =
     state.intervalMs === null ? 'Model-paced' : `${formatLoopInterval(state.intervalMs)} after completion`;
-  const next = state.nextRunAt === null ? state.phase : `Next: ${new Date(state.nextRunAt).toLocaleTimeString()}`;
+  const until = state.until === undefined ? '' : `, until ${formatLoopUntil(state.until)}`;
+  const ended = state.phase === 'ended';
+  const next =
+    state.nextRunAt !== null
+      ? ` Next: ${new Date(state.nextRunAt).toLocaleTimeString()}.`
+      : ended
+        ? ''
+        : ` ${state.phase}.`;
   return (
     <Alert
       role="status"
@@ -50,12 +57,13 @@ export function LoopBar({ state }: { state: LoopState }) {
           data-testid="loop-stop-btn"
           onClick={() => void window.b4m.chat.loopCommand(state.sessionId, 'stop')}
         >
-          Stop loop
+          {ended ? 'Dismiss' : 'Stop loop'}
         </Button>
       }
     >
       <Typography level="body-xs">
-        Loop: {state.prompt} - {cadence}. {next}. {state.error ?? 'This app run only. Stop loop cancels future runs.'}
+        Loop: {state.prompt} - {cadence}
+        {until}.{next} {state.error ?? state.notice ?? 'This app run only. Stop loop cancels future runs.'}
       </Typography>
     </Alert>
   );

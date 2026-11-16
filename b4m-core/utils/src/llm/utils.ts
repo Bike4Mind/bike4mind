@@ -36,6 +36,8 @@ import {
   formatChoicesBlock,
   MIN_REPLY_CHOICES,
   visibleReplyText,
+  isPasswordProtectedPdfError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
 } from '@bike4mind/common';
 import { BaseStorage, detectURLs, fetchAndParseURL, hasURLs } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
@@ -2165,6 +2167,20 @@ export async function processFabFilesServer(
                 fileName: file.fileName,
                 band: 'read_failed',
                 message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: it appears to be corrupted or deleted. Try uploading it again.`,
+                delivered: false,
+              });
+            } else if (isPasswordProtectedPdfError(e)) {
+              // An expected user outcome: warn without the stack, and tell the user why.
+              logger.warn(`[processFabFilesServer] Skipping password-protected file ${file.fileName}`, {
+                fileId: file.id,
+              });
+              await sendStatusUpdate(`Skipping password-protected file ${file.fileName}`);
+              await db.fabfiles.update({ id: file.id, error: PASSWORD_PROTECTED_PDF_MESSAGE });
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'read_failed',
+                message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: ${PASSWORD_PROTECTED_PDF_MESSAGE}`,
                 delivered: false,
               });
             } else if (e instanceof CorruptedFileError) {

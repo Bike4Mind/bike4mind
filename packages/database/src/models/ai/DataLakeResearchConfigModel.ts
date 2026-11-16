@@ -3,13 +3,16 @@ import type {
   CreateDataLakeResearchConfigInput,
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
+  ResearchFeedCursor,
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
   UpdateDataLakeResearchConfigInput,
 } from '@bike4mind/common';
 import {
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_TRIGGERS,
+  RESEARCH_SOURCES,
   RESEARCH_SCHEDULE_CADENCES,
   RESEARCH_SCHEDULE_SKIP_REASONS,
   RESEARCH_UNLISTED_SOURCES,
@@ -36,6 +39,26 @@ const ResearchScheduleOutcomeSchema = new Schema(
   { _id: false }
 );
 
+// Run output written back after a feed run; never snapshotted on a run and never edited through the API.
+const ResearchFeedCursorSchema = new Schema(
+  {
+    fingerprint: { type: String, required: true },
+    feedUrlKey: { type: String },
+    newestPublishedAt: { type: Date, default: null },
+    seenKeys: { type: [String], default: [] },
+    retries: {
+      type: [
+        new Schema(
+          { key: { type: String, required: true }, attempts: { type: Number, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+  },
+  { _id: false }
+);
+
 /**
  * One saved, reusable research-run configuration for one lake (#1682). See
  * DataLakeResearchTypes.ts for what each lever means and why the bounds are where they are.
@@ -49,6 +72,9 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
   {
     dataLakeId: { type: String, required: true },
     name: { type: String, required: true },
+    // Absent on a stored config reads as search; see `upgradeLegacyResearchLevers`.
+    source: { type: String, enum: RESEARCH_SOURCES, default: 'search' },
+    feedUrl: { type: String, default: null },
     query: { type: String, required: true },
     // No default: absent means "the service's current default model", which is deliberately
     // resolved at run time so a retired model does not strand a saved config.
@@ -60,6 +86,8 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     reviewDomains: { type: [String], default: [] },
     // No default: its absence is how a document written before the tiers is recognized and upgraded.
     unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
+    autoAdmitTrusted: { type: Boolean, default: false },
+    maxAutoAdmits: { type: Number, default: RESEARCH_MAX_AUTO_ADMITS_DEFAULT },
     // Derived from the three fields above on every write; kept for readers that predate them.
     allowedDomains: { type: [String], default: [] },
     blockedDomains: { type: [String], default: [] },
@@ -76,6 +104,7 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     createdByUserId: { type: String, required: true },
     lastUpdatedByUserId: { type: String, default: null },
     lastRunAt: { type: Date, default: null },
+    feedCursor: { type: ResearchFeedCursorSchema, default: null },
   },
   {
     timestamps: true,
@@ -144,6 +173,11 @@ class DataLakeResearchConfigRepository
 
   async recordRunStarted(id: string, at: Date): Promise<void> {
     await this.configModel.updateOne({ _id: id }, { $set: { lastRunAt: at } }).catch(() => undefined);
+  }
+
+  async recordFeedCursor(id: string, feedUrl: string, cursor: ResearchFeedCursor): Promise<boolean> {
+    const res = await this.configModel.updateOne({ _id: id, feedUrl }, { $set: { feedCursor: cursor } });
+    return res.matchedCount > 0;
   }
 
   async claimDueConfigs(now: Date, leaseUntil: Date, limit: number): Promise<IDataLakeResearchConfigDocument[]> {

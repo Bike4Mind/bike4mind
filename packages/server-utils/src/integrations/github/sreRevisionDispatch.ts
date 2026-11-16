@@ -30,6 +30,13 @@ const SRE_REVISION_DEDUP_WINDOW_MS = 60 * 60 * 1000;
 const SRE_BRANCH_NAME_REGEX = /^sre-fix\/[a-zA-Z0-9._-]+$/;
 
 /**
+ * GitHub author associations whose changes_requested review may drive a revision.
+ * A constant, not a setting, so no config value can widen it. Anything else,
+ * including a missing or empty association, is denied.
+ */
+const SRE_TRUSTED_REVIEWER_ASSOCIATIONS: ReadonlySet<string> = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+/**
  * Zod schema for validating the GitHub pull_request_review payload fields we depend on.
  * Used at the trust boundary (webhook endpoint / queue handler) to catch shape mismatches.
  *
@@ -42,6 +49,7 @@ export const SrePullRequestReviewPayloadSchema = z.object({
     state: z.literal('changes_requested'),
     body: z.string().max(4000).nullish(),
     user: z.object({ login: z.string() }),
+    author_association: z.string().optional(),
   }),
   pull_request: z.object({
     number: z.number().int().positive(),
@@ -93,6 +101,18 @@ export async function dispatchReviewToSreRevision(
   if (!SRE_BRANCH_NAME_REGEX.test(branchName)) {
     logger?.warn('[SRE-REVISION] Branch name contains invalid characters', { branchName, prNumber });
     return { dispatched: false, reason: 'invalid-branch-name' };
+  }
+
+  // 3b. Only trusted reviewers may drive a revision. This runs before the dedup counter
+  //     below so a denied review cannot use up the window and block a trusted one.
+  if (!SRE_TRUSTED_REVIEWER_ASSOCIATIONS.has(review.review.author_association ?? '')) {
+    logger?.info('[SRE-REVISION] Ignoring review from untrusted reviewer', {
+      branchName,
+      prNumber,
+      reviewer: review.review.user.login,
+      authorAssociation: review.review.author_association ?? null,
+    });
+    return { dispatched: false, reason: 'untrusted-reviewer' };
   }
 
   logger?.info('[SRE-REVISION] Detected changes_requested on SRE fix branch', {

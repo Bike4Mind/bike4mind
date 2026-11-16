@@ -11,6 +11,7 @@ import {
   AI_ACCESS_REVOKED_MESSAGE,
   entersBlockedState,
   entersSuspension,
+  isPersonaExpired,
   suspensionReasons,
   isAiAccessRevoked,
   isAiAccessRefusal,
@@ -207,5 +208,28 @@ describe('isAiAccessRefusal', () => {
     expect(isAiAccessRefusal(Object.assign(new Error(ACCOUNT_BANNED_MESSAGE), { statusCode: 500 }))).toBe(false);
     expect(isAiAccessRefusal(new Error(ACCOUNT_BANNED_MESSAGE))).toBe(false);
     expect(isAiAccessRefusal(ACCOUNT_BANNED_MESSAGE)).toBe(false);
+  });
+});
+
+describe('isPersonaExpired', () => {
+  const now = new Date('2026-11-10T12:00:00.000Z');
+
+  it('is false for an account that is not a persona', () => {
+    expect(isPersonaExpired({ personaExpiresAt: new Date(now.getTime() - 1000) }, now)).toBe(false);
+    expect(isPersonaExpired({ isPersona: false }, now)).toBe(false);
+  });
+
+  it('is false for a persona whose expiry is in the future', () => {
+    expect(isPersonaExpired({ isPersona: true, personaExpiresAt: new Date(now.getTime() + 1000) }, now)).toBe(false);
+  });
+
+  it.each([
+    ['past', new Date('2026-11-10T11:59:59.000Z')],
+    ['equal to now', new Date('2026-11-10T12:00:00.000Z')],
+    ['missing', undefined],
+    ['null', null],
+    ['an invalid date string', 'not-a-date'],
+  ])('is true for a persona whose expiry is %s', (_label, personaExpiresAt) => {
+    expect(isPersonaExpired({ isPersona: true, personaExpiresAt }, now)).toBe(true);
   });
 });

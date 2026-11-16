@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
@@ -48,6 +48,22 @@ const openDialog = (props: HarnessProps = {}) => {
 };
 
 describe('ActionDialog', () => {
+  it('allows a reason-free command when the caller policy does not require one', async () => {
+    const onConfirm = vi.fn();
+    const confirm = openDialog({ onConfirm, reasonRequired: false });
+    expect(confirm).toBeEnabled();
+    expect(screen.queryByTestId('adjust-dialog-reason-input')).not.toBeInTheDocument();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(''));
+  });
+
+  it('still gates a reason-free command on typed confirmation', () => {
+    const confirm = openDialog({ reasonRequired: false, typedConfirm: { expected: 'queue', noun: 'queue name' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId('adjust-dialog-typed-input'), { target: { value: 'queue' } });
+    expect(confirm).toBeEnabled();
+  });
+
   it('seeds a complete, editable reason from initialReason', async () => {
     const onConfirm = vi.fn();
     expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);
@@ -303,5 +319,49 @@ describe('ActionDialog', () => {
 
     expect(screen.getByTestId('adjust-dialog-confirm-btn')).toBeDisabled();
     expect(screen.getByTestId('adjust-dialog-reason-input-preset-0')).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('ActionDialog pending ownership', () => {
+  it('holds edits, every dismissal path and duplicate submits until a rejected request settles', async () => {
+    let rejectRequest: ((error: Error) => void) | undefined;
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRequest = reject;
+        })
+    );
+    const onClose = vi.fn();
+    const changed = vi.fn();
+    const confirm = openDialog({
+      onConfirm,
+      onClose,
+      children: <input aria-label="Draft value" defaultValue="original" onChange={changed} />,
+    });
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledOnce());
+    const input = screen.getByRole('textbox', { name: 'Draft value' });
+    expect(input).toBeDisabled();
+    await userEvent.type(input, 'late');
+    fireEvent.change(input, { target: { value: 'late' } });
+    expect(changed).not.toHaveBeenCalled();
+    expect(screen.getByTestId('adjust-dialog-reason-input')).toBeDisabled();
+    expect(screen.getByTestId('adjust-dialog-close-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('adjust-dialog-close-btn'));
+    await userEvent.keyboard('{Escape}');
+    const backdrop = document.querySelector('.MuiModal-backdrop');
+    if (!backdrop) throw new Error('Modal backdrop missing');
+    fireEvent.click(backdrop);
+    fireEvent.submit(confirm.closest('form')!);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onConfirm).toHaveBeenCalledOnce();
+    await act(async () => {
+      rejectRequest?.(new Error('Request failed'));
+    });
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(screen.getByTestId('adjust-dialog-reason-input-preset-0')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('adjust-dialog-close-btn'));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

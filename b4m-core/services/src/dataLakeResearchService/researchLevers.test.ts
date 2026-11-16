@@ -4,6 +4,7 @@ import {
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_DOMAIN_LIST_MAX,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -16,12 +17,16 @@ import { normalizeResearchLevers } from './researchLevers';
 describe('normalizeResearchLevers', () => {
   it('fills every lever from the shared defaults when only a query is given', () => {
     expect(normalizeResearchLevers({ query: 'coastal erosion' })).toEqual({
+      source: 'search',
+      feedUrl: null,
       query: 'coastal erosion',
       maxResults: RESEARCH_MAX_RESULTS_DEFAULT,
       maxProposals: RESEARCH_MAX_PROPOSALS_DEFAULT,
       trustedDomains: [],
       reviewDomains: [],
       unlistedSources: 'review',
+      autoAdmitTrusted: false,
+      maxAutoAdmits: RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
       allowedDomains: [],
       blockedDomains: [],
       minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
@@ -212,11 +217,66 @@ describe('normalizeResearchLevers', () => {
     });
   });
 
+  describe('auto-admit levers', () => {
+    it('defaults to off with the default cap', () => {
+      expect(normalizeResearchLevers({ query: 'q' })).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
+    });
+
+    it('turns on only for a strict true', () => {
+      const coerce = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', autoAdmitTrusted: value as boolean }).autoAdmitTrusted;
+      expect(coerce(true)).toBe(true);
+      expect(coerce('true')).toBe(false);
+      expect(coerce(1)).toBe(false);
+      expect(coerce(undefined)).toBe(false);
+    });
+
+    it('clamps the cap to 1..25 and falls back on a non-number', () => {
+      const cap = (value: unknown) =>
+        normalizeResearchLevers({ query: 'q', maxAutoAdmits: value as number }).maxAutoAdmits;
+      expect(cap(0)).toBe(1);
+      expect(cap(999)).toBe(25);
+      expect(cap(7.9)).toBe(7);
+      expect(cap('x')).toBe(3);
+    });
+
+    it('does not clamp the cap against maxProposals', () => {
+      expect(normalizeResearchLevers({ query: 'q', maxProposals: 2, maxAutoAdmits: 10 }).maxAutoAdmits).toBe(10);
+    });
+  });
+
   it('trims and dedupes proposed tags without touching the reserved namespace', () => {
     // Reserved-namespace stripping belongs to the queue door; duplicating it here is how the two
     // copies drift.
     expect(
       normalizeResearchLevers({ query: 'q', proposedTags: [' research ', 'research', 'datalake:x'] }).proposedTags
     ).toEqual(['research', 'datalake:x']);
+  });
+});
+
+describe('normalizeResearchLevers - feed source', () => {
+  it('keeps a trimmed feed url only for a feed config', () => {
+    const feed = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '  https://example.com/f.xml ' });
+    expect(feed.source).toBe('feed');
+    expect(feed.feedUrl).toBe('https://example.com/f.xml');
+  });
+
+  it('nulls the url on a search config and keeps the query', () => {
+    const search = normalizeResearchLevers({ query: 'q', source: 'search', feedUrl: 'https://example.com/f.xml' });
+    expect(search.source).toBe('search');
+    expect(search.feedUrl).toBeNull();
+    expect(search.query).toBe('q');
+  });
+
+  it('treats anything but the exact feed value as search', () => {
+    expect(normalizeResearchLevers({ query: 'q', source: 'Feed' as never }).source).toBe('search');
+    expect(normalizeResearchLevers({ query: 'q' }).source).toBe('search');
+  });
+
+  it('caps an oversized url and does not throw on an empty or malformed one', () => {
+    const long = normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: `https://e.com/${'a'.repeat(5000)}` });
+    expect(long.feedUrl?.length).toBe(2048);
+    expect(normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: '   ' }).feedUrl).toBeNull();
+    expect(() => normalizeResearchLevers({ query: 'q', source: 'feed', feedUrl: 'not a url' })).not.toThrow();
   });
 });

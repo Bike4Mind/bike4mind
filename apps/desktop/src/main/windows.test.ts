@@ -9,7 +9,8 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { focusedAppWindow, markAgentBrowserWindow, markDeveloperWindow } = await import('./windows');
+const { appWindows, focusedAppWindow, markAgentBrowserWindow, markCompanionWindow, markDeveloperWindow } =
+  await import('./windows');
 
 type Window = Parameters<typeof markAgentBrowserWindow>[0];
 
@@ -18,11 +19,17 @@ describe('focusedAppWindow', () => {
   const second = {} as Window;
   const devLog = {} as Window;
   const agentBrowser = {} as Window;
+  const miniTavern = {} as Window;
 
   beforeEach(() => {
     markDeveloperWindow(devLog);
     markAgentBrowserWindow(agentBrowser);
-    electron.all = [chat, second, devLog, agentBrowser];
+    markCompanionWindow(miniTavern);
+    electron.all = [chat, second, devLog, agentBrowser, miniTavern];
+  });
+
+  it('leaves the mini Tavern out of the app windows', () => {
+    expect(appWindows()).toEqual([chat, second]);
   });
 
   it('picks the focused app window', () => {
@@ -33,6 +40,7 @@ describe('focusedAppWindow', () => {
   it.each([
     ['the developer log', devLog],
     ['an agent browser', agentBrowser],
+    ['the mini Tavern', miniTavern],
     ['nothing', null],
   ])('falls back to the first app window when %s has focus', (_label, focused) => {
     electron.focused = focused;

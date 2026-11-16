@@ -16,8 +16,8 @@ const formatDate = (value: string | null): string =>
   value ? new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Never';
 
 /**
- * Passkeys as an alternative second factor to the authenticator code. Shown only once MFA is
- * on: the server refuses enrollment otherwise, and disabling MFA removes them.
+ * Passkeys as a second factor, alone or beside the authenticator app. Shown only once MFA is on
+ * (the first passkey of a new enrollment is added from the MFA setup step); disabling MFA removes them.
  */
 const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
   const { data: passkeys, isLoading } = usePasskeys(enabled);
@@ -52,7 +52,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
         onSuccess: () => toast.success(`Removed passkey "${label}"`),
         onError: error => {
           if (isStepUpCancelled(error)) return;
-          toast.error(`Could not remove passkey "${label}"`);
+          toast.error(describePasskeyError(error, `Could not remove passkey "${label}"`));
         },
       }
     );

@@ -9,7 +9,7 @@ import {
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -41,8 +41,8 @@ const QuerySchema = z.object({
  *
  * Access: platform admins see any owner. A delegate holding support:read (API keys
  * need ApiKeyScope.ADMIN) gets the same read-only view minus key names/prefixes.
- * Otherwise an Organization owner is gated by verifyOrgOwner (org managers are
- * refused); a User owner may read only their own id.
+ * Otherwise an Organization reader is gated by verifyOrgAccess (owner or current
+ * manager); a User owner may read only their own id.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {
@@ -58,8 +58,8 @@ const handler = baseApi().get(async (req, res) => {
   let viaDelegate = false;
   if (ownerType === CreditHolderType.Organization) {
     // A support:read delegate is checked as platform admin: read-only access to any org, minus key names.
-    const org = await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport }, ownerId);
-    viaDelegate = !req.user.isAdmin && org.userId !== req.user.id;
+    const org = await verifyOrgAccess({ id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport }, ownerId);
+    viaDelegate = !req.user.isAdmin && canReadSupport && org.userId !== req.user.id;
   } else if (req.user.id !== ownerId && !req.user.isAdmin) {
     if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
     viaDelegate = true;

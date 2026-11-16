@@ -252,5 +252,15 @@ describe('AdminCommandPalette', () => {
     fireEvent.change(input, { target: { value: 'shortcuts' } });
     fireEvent.click(screen.getByRole('option', { name: 'Show keyboard shortcuts' }));
     expect(await screen.findByTestId('admin-shortcuts-close-btn')).toBeInTheDocument();
+    for (const label of [
+      'Toggle selection of the focused table row',
+      'Focus the next / previous Feedback row; move between reports in the drawer',
+      'Open the focused Feedback report',
+      'Mark the focused Feedback report In progress',
+      'Close the focused Feedback report with a resolution',
+      'Email the focused Feedback reporter',
+    ]) {
+      expect(screen.getByTestId(`admin-shortcut-${label}`)).toBeInTheDocument();
+    }
   });
 });

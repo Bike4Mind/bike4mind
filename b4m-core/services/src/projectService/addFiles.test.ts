@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
 import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  IUserDocument,
+  NotFoundError,
+  Permission,
+  attachOrgApiKeyReach,
+  orgApiKeyReachOf,
+} from '@bike4mind/common';
 
 describe('projectService - addFiles', () => {
   const contributorId = 'contributor-123';
@@ -128,5 +136,27 @@ describe('projectService - addFiles', () => {
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+
+  it('checks file readability without the caller org key reach', async () => {
+    const keyUser = attachOrgApiKeyReach({ id: contributorId, groups: ['group-1'] } as IUserDocument, {
+      organizationId: 'org-1',
+      readGroupIds: ['group-2'],
+      dataLakeOrgIds: [],
+    });
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce({
+      id: 'p1',
+      userId: 'owner',
+      fileIds: [],
+      users: [],
+      groups: [],
+    });
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce([]);
+
+    await addFiles(keyUser, { projectId: 'p1', fileIds: ['file-1'] }, adapters).catch(() => undefined);
+
+    const [accessor] = (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mock.calls[0]!;
+    expect(orgApiKeyReachOf(accessor)).toBeUndefined();
+    expect(accessor).toMatchObject({ id: contributorId, groups: ['group-1'] });
   });
 });

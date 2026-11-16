@@ -56,6 +56,10 @@ const MFA_PENDING_ALLOWED_PATHS = new Set([
   '/api/auth/mfa/status', // MFAEnforcementWrapper reads the user's MFA status
   '/api/auth/mfa/passkey/authenticate-options',
   '/api/auth/mfa/passkey/authenticate',
+  // Enrolling a passkey as the first factor; both routes refuse a pending token whose user
+  // already has a factor, so these cannot add a passkey ahead of the challenge.
+  '/api/auth/mfa/passkey/register-options',
+  '/api/auth/mfa/passkey/register',
   '/api/logout', // lets an mfaPending user abandon and revoke
   '/api/identify', // read-only whoami
   '/api/settings/fetch', // MFAEnforcementWrapper reads enforceMFA

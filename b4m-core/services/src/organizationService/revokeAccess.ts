@@ -109,5 +109,5 @@ export const revokeAccess = async (
     await adapters.db.users.update({ id: userId, organizationId: null });
   }
 
-  return organization;
+  return { organization, revokedOrgBilledApiKeyIds: purged.revokedOrgBilledApiKeyIds };
 };

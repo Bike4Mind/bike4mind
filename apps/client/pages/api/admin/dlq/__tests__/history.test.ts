@@ -39,6 +39,41 @@ beforeEach(async () => {
 });
 
 describe('GET /api/admin/dlq/history', () => {
+  it('returns a cursor from the last visible row and forwards it on the next request', async () => {
+    const rows = Array.from({ length: 3 }, (_, index) => ({
+      id: `${index + 1}`.padStart(24, '0'),
+      createdAt: new Date('2026-11-01'),
+      replayedBy: 'admin-1',
+    }));
+    h.findRecent.mockResolvedValue(rows);
+    const first = createMocks({ method: 'GET', query: { limit: '2' } });
+    Object.assign(first.req, { user: { id: 'admin-1' } });
+    await h.get!(first.req, first.res);
+    const page = JSON.parse(first.res._getData());
+    expect(page.history).toHaveLength(2);
+    expect(page.nextCursor).toEqual(expect.any(String));
+    const second = createMocks({ method: 'GET', query: { limit: '2', cursor: page.nextCursor } });
+    Object.assign(second.req, { user: { id: 'admin-1' } });
+    h.findRecent.mockResolvedValue([]);
+    await h.get!(second.req, second.res);
+    expect(h.findRecent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 3, before: { createdAt: rows[1].createdAt, id: rows[1].id } })
+    );
+    expect(JSON.parse(second.res._getData()).nextCursor).toBeNull();
+  });
+
+  it.each([
+    { cursor: 'bad' },
+    { cursor: Buffer.from(JSON.stringify({ createdAt: 'bad', id: 'bad' })).toString('base64url') },
+    { limit: 'NaN' },
+    { limit: '201' },
+    { limit: '2.5' },
+  ])('rejects invalid pagination %j', async query => {
+    const { req, res } = createMocks({ method: 'GET', query });
+    Object.assign(req, { user: { id: 'admin-1' } });
+    await expect(h.get!(req, res)).rejects.toThrow();
+    expect(h.findRecent).not.toHaveBeenCalled();
+  });
   it('passes includeBody: false so messageBody is excluded from the response', async () => {
     h.findRecent.mockResolvedValue([
       {

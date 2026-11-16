@@ -1,8 +1,8 @@
 import type { IMFAConfig, IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 
-// What toSafeOrganization leaves on an org: no stripeCustomerId for anyone; billingContact is
-// present only for the org owner or a site admin; per-member credit fields in userDetails are
-// present only for owners, current managers and site admins (a member keeps their own row's).
+// What toSafeOrganization leaves on an org for its full view (owner, manager or site admin, the
+// only viewers of this admin list): no stripeCustomerId for anyone; billingContact only for the
+// org owner or a site admin. Plain members get ORGANIZATION_MEMBER_VISIBLE_FIELDS instead.
 export type SafeOrganization = Omit<IOrganizationDocument, 'stripeCustomerId' | 'billingContact'> &
   Partial<Pick<IOrganizationDocument, 'billingContact'>>;
 
@@ -22,6 +22,7 @@ export const ADMIN_USER_LIST_FIELDS = [
   'email',
   'isAdmin',
   'adminPermissions',
+  'adminRoleIds',
   'level',
   'tags',
   'isBanned',
@@ -65,6 +66,7 @@ export const ADMIN_USER_PROJECTION: Record<string, 1> = {
   _id: 1,
   ...Object.fromEntries(ADMIN_USER_LIST_FIELDS.map(field => [field, 1])),
   'mfa.totpEnabled': 1,
+  'mfa.passkeyEnabled': 1,
   'mfa.setupAt': 1,
   'mfa.lastUsedAt': 1,
 };
@@ -78,7 +80,7 @@ export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST
   // The endpoint populates organizationId and serializes it, so it arrives as the safe org shape
   // (null when unset). A non-admin viewer gets only id and name, since the list spans tenants.
   organizationId: SafeOrganization | Pick<SafeOrganization, 'id' | 'name'> | null;
-  mfa?: Pick<IMFAConfig, 'totpEnabled' | 'setupAt' | 'lastUsedAt'> | null;
+  mfa?: Pick<IMFAConfig, 'totpEnabled' | 'passkeyEnabled' | 'setupAt' | 'lastUsedAt'> | null;
 };
 
 // publicView for an admin caller. Non-admin pickers get PICKER_USER_PROJECTION instead.

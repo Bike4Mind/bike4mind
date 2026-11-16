@@ -127,3 +127,43 @@ describe('upgradeLegacyResearchLevers - mismatch rule', () => {
     expect(upgradeLegacyResearchLevers(once)).toEqual(once);
   });
 });
+
+describe('upgradeLegacyResearchLevers auto-admit defaults', () => {
+  it('reads absent levers as off with the default cap', () => {
+    expect(upgradeLegacyResearchLevers(base)).toMatchObject({ autoAdmitTrusted: false, maxAutoAdmits: 3 });
+    expect(upgradeLegacyResearchLevers({ ...base, allowedDomains: ['a.com'] })).toMatchObject({
+      autoAdmitTrusted: false,
+      maxAutoAdmits: 3,
+    });
+    expect(upgradeLegacyResearchLevers({ ...base, unlistedSources: 'review' })).toMatchObject({
+      autoAdmitTrusted: false,
+      maxAutoAdmits: 3,
+    });
+  });
+
+  it('keeps stored values', () => {
+    expect(upgradeLegacyResearchLevers({ ...base, autoAdmitTrusted: true, maxAutoAdmits: 9 })).toMatchObject({
+      autoAdmitTrusted: true,
+      maxAutoAdmits: 9,
+    });
+  });
+});
+
+describe('upgradeLegacyResearchLevers - feed source', () => {
+  it('reads an absent source as search and an absent feedUrl as null', () => {
+    const upgraded = upgradeLegacyResearchLevers(base);
+    expect(upgraded.source).toBe('search');
+    expect(upgraded.feedUrl).toBeNull();
+  });
+
+  it('keeps a feed source and its url', () => {
+    const upgraded = upgradeLegacyResearchLevers({ ...base, source: 'feed', feedUrl: 'https://example.com/f.xml' });
+    expect(upgraded.source).toBe('feed');
+    expect(upgraded.feedUrl).toBe('https://example.com/f.xml');
+  });
+
+  it('reads an unknown source as search', () => {
+    const upgraded = upgradeLegacyResearchLevers({ ...base, source: 'rss' as never });
+    expect(upgraded.source).toBe('search');
+  });
+});

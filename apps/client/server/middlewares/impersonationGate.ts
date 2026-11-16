@@ -10,7 +10,7 @@ const READS = [
   /^\/api\/(models|entitlements|chat-completion-status)$/,
   /^\/api\/users\/[^/]+\/(userInvites|friend-requests|activities)$/,
   /^\/api\/(gears\/status|models\/stats|help\/recently-viewed)$/,
-  /^\/api\/v1\/(video-models|music-models)$/,
+  /^\/api\/v1\/(image-models|video-models|music-models)$/,
   /^\/api\/security\/(user-recent|support-access)$/,
   /^\/api\/auth\/impersonation$/,
   /^\/api\/users\/me\/(sessions|storage-breakdown)$/,
@@ -49,7 +49,7 @@ export function impersonationDecision(
   }
   if (/^\/api\/auth\/impersonation$/.test(path)) return 'allow';
   if (
-    /^\/api\/(auth|oauth|otc|admin|email|stripe|subscriptions|api-keys|user-api-keys|credits|websocket|google-drive|mcp|mcp-connections|mcp-servers|integrations|secret-rotations|cc-bridge|ai|chat|tools|agent-executions|deep-agent)(\/|$)/i.test(
+    /^\/api\/(auth|oauth|otc|admin|email|stripe|subscriptions|api-keys|user-api-keys|credits|websocket|google-drive|mcp|mcp-connections|mcp-servers|integrations|cc-bridge|ai|chat|tools|agent-executions|deep-agent)(\/|$)/i.test(
       path
     ) ||
     /^\/api\/users\/[^/]+\/(update|delete|loginAs|revoke-sessions|email-settings)$/i.test(path) ||
@@ -89,6 +89,7 @@ export function impersonationAnonymousGate(req: Request, _res: Response, next: N
     ['GET', 'HEAD'].includes(req.method) &&
     [
       '/api/settings/serverConfigPublic',
+      '/api/v1/client-config/public',
       '/api/settings/serverStatus',
       '/api/settings/logo',
       '/api/ping',

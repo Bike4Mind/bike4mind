@@ -13,6 +13,72 @@ const queryKey = ['items'];
 const options = { keysAllowedToCreate: [] };
 
 describe('updateSingleQueryDataFast', () => {
+  it('keeps sibling fields of a { data } cache entry when deleting an item', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, {
+      data: [{ id: 'item-1' }, { id: 'item-2' }],
+      totalPages: 3,
+      totalItems: 42,
+    });
+
+    updateSingleQueryDataFast(queryClient, queryKey, 'delete', { id: 'item-1' }, options);
+
+    expect(queryClient.getQueryData(queryKey)).toEqual({
+      data: [{ id: 'item-2' }],
+      totalPages: 3,
+      totalItems: 42,
+    });
+  });
+
+  it('keeps sibling fields of a { data } cache entry when updating an existing item', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, {
+      data: [
+        { id: 'item-1', value: 'old' },
+        { id: 'item-2', value: 'other' },
+      ],
+      totalPages: 3,
+      totalItems: 42,
+    });
+
+    updateSingleQueryDataFast(queryClient, queryKey, 'write', { id: 'item-1', value: 'new' }, options);
+
+    const cached = queryClient.getQueryData<{ data: CacheItem[]; totalPages: number; totalItems: number }>(queryKey);
+    expect(cached?.totalPages).toBe(3);
+    expect(cached?.totalItems).toBe(42);
+    expect(cached?.data.map(item => [item.id, item.value])).toEqual([
+      ['item-1', 'new'],
+      ['item-2', 'other'],
+    ]);
+  });
+
+  it('keeps sibling fields of a { data } cache entry when creating a new item', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, {
+      data: [{ id: 'item-1', value: 'old' }],
+      totalPages: 3,
+      totalItems: 42,
+    });
+
+    updateSingleQueryDataFast(
+      queryClient,
+      queryKey,
+      'write',
+      { id: 'item-2', value: 'created' },
+      {
+        keysAllowedToCreate: [['items']],
+      }
+    );
+
+    const cached = queryClient.getQueryData<{ data: CacheItem[]; totalPages: number; totalItems: number }>(queryKey);
+    expect(cached?.totalPages).toBe(3);
+    expect(cached?.totalItems).toBe(42);
+    expect(cached?.data.map(item => [item.id, item.value])).toEqual([
+      ['item-2', 'created'],
+      ['item-1', 'old'],
+    ]);
+  });
+
   it('replaces an optimistic infinite-query item with an older authoritative document', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(queryKey, {
@@ -42,6 +108,20 @@ describe('updateSingleQueryDataFast', () => {
     const result = queryClient.getQueryData<{ pages: Array<{ data: CacheItem[] }> }>(queryKey);
     expect(result?.pages[0].data[0]).toMatchObject({ value: 'server value' });
     expect(result?.pages[0].data[0]).not.toHaveProperty('_optimistic');
+  });
+
+  it('leaves a paged entry whose pages carry no data array untouched instead of throwing', () => {
+    const queryClient = new QueryClient();
+    const pages = [{ items: [{ id: 'item-1' }], cursor: 'next' }];
+    queryClient.setQueryData(queryKey, { pages, pageParams: [undefined] });
+
+    expect(() =>
+      updateSingleQueryDataFast(queryClient, queryKey, 'write', { id: 'item-1', value: 'server value' }, options)
+    ).not.toThrow();
+    expect(() => updateSingleQueryDataFast(queryClient, queryKey, 'delete', { id: 'item-1' }, options)).not.toThrow();
+
+    const result = queryClient.getQueryData<{ pages: typeof pages }>(queryKey);
+    expect(result?.pages[0]).toEqual(pages[0]);
   });
 
   it('keeps the newer document when both cache entries are authoritative', () => {

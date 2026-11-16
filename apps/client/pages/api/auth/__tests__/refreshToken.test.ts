@@ -45,7 +45,10 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  User: { findById: (...a: unknown[]) => mockFindById(...a) },
+  User: {
+    findById: (...a: unknown[]) =>
+      Object.assign(Promise.resolve(mockFindById(...a)), { select: () => ({ lean: async () => null }) }),
+  },
   userRepository: {},
   authSessionRepository: {},
   realtimeConnectionRepository: {},

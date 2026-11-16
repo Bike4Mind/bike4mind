@@ -1,9 +1,9 @@
 import { Logger } from '@bike4mind/observability';
 import type { ServerToolExecutors } from '@bike4mind/services';
-import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
+import { buildDecideExecutor } from '@bike4mind/server-utils/decisions/cliDecideExecutor';
 import { executeToolContract } from '@bike4mind/common';
-import { checkRateLimit } from '@server/cli/auth';
-import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { checkRateLimit } from '@bike4mind/server-utils/cli/auth';
+import { buildWebToolExecutors } from '@bike4mind/server-utils/cli/webToolExecutors';
 import { executeToolWithLogging, toolResultStatus } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
 

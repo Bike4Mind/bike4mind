@@ -445,6 +445,11 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
+  .command('mirror <dir>', 'Mirror your notebooks into a local v2 bundle and keep it current', y =>
+    y
+      .positional('dir', { type: 'string', describe: 'Directory that holds the mirror state and bundle' })
+      .option('watch', { type: 'number', describe: 'Keep syncing, pausing this many seconds between passes' })
+  )
   .command('acp', 'Run as an Agent Client Protocol (ACP) stdio server for editors like Zed')
   .help()
   .alias('help', 'h')
@@ -506,7 +511,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'acp', 'host']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'skills', 'models', 'update', 'doctor', 'mirror', 'acp', 'host']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -781,6 +786,27 @@ if (argv._[0] === 'doctor') {
     }
 
     await handleDoctorCommand();
+    process.exit(0);
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle mirror command (external command)
+if (argv._[0] === 'mirror') {
+  try {
+    let handleMirrorCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      handleMirrorCommand = (await import('../src/commands/mirrorCommand.ts')).handleMirrorCommand;
+    } else {
+      handleMirrorCommand = (await import('../dist/commands/mirrorCommand.mjs')).handleMirrorCommand;
+    }
+
+    await handleMirrorCommand(argv.dir, { watchSeconds: argv.watch });
     process.exit(0);
   } catch (error) {
     console.error('Error:', error.message);

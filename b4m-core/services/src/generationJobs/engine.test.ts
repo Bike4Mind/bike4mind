@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
+import { CreditHolderType, type IGenerationJob, type IGenerationJobDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
 import { MAX_STEP_ATTEMPTS } from './backoff';
@@ -23,9 +23,11 @@ const LEASE_MS = 330_000;
 const setup = ({
   submitMode = 'async',
   aiAccessDenial,
+  onTerminalHandled,
 }: {
   submitMode?: GenerationJobHandler['submitMode'];
   aiAccessDenial?: (userId: string) => Promise<string | null>;
+  onTerminalHandled?: (job: IGenerationJobDocument) => Promise<void>;
 } = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const now = () => clock;
@@ -58,6 +60,7 @@ const setup = ({
     logger,
     leaseMs: LEASE_MS,
     aiAccessDenial,
+    onTerminalHandled,
   });
   const create = (overrides: Partial<IGenerationJob> = {}) =>
     repository.createJob({
@@ -509,6 +512,51 @@ describe('GenerationJobEngine', () => {
     });
   });
 
+  describe('a submit mode chosen per job', () => {
+    const modeByProvider: GenerationJobHandler['submitMode'] = job =>
+      job.payload.providerId === 'sync-provider' ? 'sync' : 'async';
+    const withProvider = (providerId: string) => ({ ...payload, providerId }) as IGenerationJob['payload'];
+
+    it.each([
+      ['sync-provider', 'orphaned_submit'],
+      ['async-provider', undefined],
+    ])('a running job with a recorded submit attempt (%s) settles as %s', async (providerId, errorCode) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({
+        state: 'running',
+        payload: withProvider(providerId),
+        submitAttemptedAt: new Date('2026-10-05T23:59:00Z'),
+      });
+      t.results.poll.push({ next: 'poll_again', progress: 0.5 });
+      await t.engine.step(job.id);
+      expect(t.repository.jobs.get(job.id)!.error?.code).toBe(errorCode);
+      expect(t.handler.poll).toHaveBeenCalledTimes(errorCode ? 0 : 1);
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('submit for %s marks the job running: %s', async (providerId, markRunning) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const markSubmitAttempted = vi.spyOn(t.repository, 'markSubmitAttempted');
+      t.results.submit.push({ next: 'succeeded', payload: withProvider(providerId) });
+      await t.engine.step(job.id);
+      expect(markSubmitAttempted).toHaveBeenCalledWith(job.id, expect.any(Date), { markRunning });
+    });
+
+    it.each([
+      ['sync-provider', true],
+      ['async-provider', false],
+    ])('a cancel for %s restricts the cancel to before the submit: %s', async (providerId, beforeSubmitOnly) => {
+      const t = setup({ submitMode: modeByProvider });
+      const job = await t.create({ payload: withProvider(providerId) });
+      const requestCancel = vi.spyOn(t.repository, 'requestCancel');
+      await t.engine.requestCancel(job);
+      expect(requestCancel).toHaveBeenCalledWith(job.id, { beforeSubmitOnly });
+    });
+  });
+
   // The cancel lands after the step's own cancelRequested check but before the provider call.
   it.each(['sync', 'async'] as const)(
     'a %s submit that loses the race to a cancel ends cancelled without calling the provider',
@@ -652,6 +700,33 @@ describe('GenerationJobEngine', () => {
       expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('skipped');
       expect(t.repository.jobs.get(job.id)!.error).toBeUndefined();
       expect(t.handler.onTerminal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onTerminalHandled', () => {
+    const enqueueFailed = { code: 'enqueue_failed' as const, message: 'The job could not be queued' };
+
+    it('runs once, after terminal handling is recorded', async () => {
+      const storedHandledAt: Array<Date | null | undefined> = [];
+      let readStored: (id: string) => Date | null | undefined = () => undefined;
+      const onTerminalHandled = vi.fn(async (job: IGenerationJobDocument) => {
+        storedHandledAt.push(readStored(job.id));
+      });
+      const t = setup({ onTerminalHandled });
+      readStored = id => t.repository.jobs.get(id)?.terminalHandledAt;
+      const job = await t.create();
+      await t.engine.failBeforeStart(job.id, enqueueFailed);
+      await t.engine.step(job.id);
+      expect(onTerminalHandled).toHaveBeenCalledTimes(1);
+      expect(onTerminalHandled).toHaveBeenCalledWith(expect.objectContaining({ id: job.id, state: 'failed' }));
+      expect(storedHandledAt).toEqual([expect.any(Date)]);
+    });
+
+    it('a throw never fails the terminal step', async () => {
+      const t = setup({ onTerminalHandled: async () => Promise.reject(new Error('bus down')) });
+      const job = await t.create();
+      expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('failed');
+      expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
     });
   });
 

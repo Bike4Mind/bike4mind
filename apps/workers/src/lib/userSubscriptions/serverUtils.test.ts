@@ -32,6 +32,10 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: {},
 }));
 
+// Covered in applyPlanStorageLimit.test.ts; here only when the invoice path calls it.
+const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
+vi.mock('./applyPlanStorageLimit', () => ({ applyPlanStorageLimit: mockApplyPlanStorageLimit }));
+
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
   return {
@@ -896,6 +900,25 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         acquisition: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'email' } },
       })
     );
+  });
+
+  it('applies the plan storage limit to the user on the first payment', async () => {
+    const sub = buildUserSubscription('price_test_professional');
+
+    await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(sub, 'u1', logger);
+  });
+
+  it('leaves the plan storage limit to the update event on a renewal', async () => {
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 });
 

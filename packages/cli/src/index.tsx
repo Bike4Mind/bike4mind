@@ -138,7 +138,6 @@ function renderBanner(startupLog: string[] = []): void {
 
 import { useCliStore } from './store';
 import { ServerLlmBackend } from './llm/ServerLlmBackend';
-import { WebSocketLlmBackend } from './llm/WebSocketLlmBackend';
 import { NotifyingLlmBackend } from './llm/NotifyingLlmBackend.js';
 import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
 import { FallbackLlmBackend } from './llm/FallbackLlmBackend.js';
@@ -3953,7 +3952,7 @@ function CliApp() {
 
     // Keep the LLM backend (stored in the agent's context) in sync
     if (state.agent) {
-      const backend = (state.agent as any).context.llm as ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
+      const backend = (state.agent as any).context.llm as ServerLlmBackend | MultiLlmBackend;
       if (backend) {
         backend.currentModel = modelId;
       }

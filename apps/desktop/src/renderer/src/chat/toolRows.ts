@@ -1,6 +1,7 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
 import { own } from '@shared/ownKeys';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
+import { MODEL_REQUEST_REFUSED } from '@shared/orchestration';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { WEB_FETCH_TOOL_NAME, hostOf } from '@shared/webSearch';
 
@@ -453,6 +454,11 @@ export function toolRowLabel(call: ChatToolCall): string {
   const phrases = phrasesFor(call.name);
   const argument = shortenArgument(summarizeInput(call));
 
+  if (isModelRequestRefusal(call)) {
+    const requested = call.input.requested_model_id;
+    return `Not started: model ${typeof requested === 'string' ? shortenArgument(requested) : 'request'} is not allowed`;
+  }
+
   if (call.status === 'error' || call.status === 'denied') {
     const attempt = phrases.to && argument ? `${phrases.to} ${argument}` : phrases.toAlone;
     return call.status === 'denied' ? `Did not ${attempt}` : `Failed to ${attempt}`;
@@ -492,6 +498,19 @@ export function toolRowLabel(call: ChatToolCall): string {
   if (call.label) return shortenArgument(call.label);
 
   return phrases.did && argument ? `${phrases.did} ${argument}` : phrases.didAlone;
+}
+
+/**
+ * A spawn refused only because the agent asked for a model the user has not allowed. Nothing
+ * started and the agent is told to retry without it, so the row is muted rather than a failure.
+ */
+export function isModelRequestRefusal(call: ChatToolCall): boolean {
+  return call.name === 'session_spawn' && call.status === 'error' && !!call.error?.startsWith(MODEL_REQUEST_REFUSED);
+}
+
+/** The status a row is drawn with; see isModelRequestRefusal. */
+export function displayStatus(call: ChatToolCall): ChatToolStatus {
+  return isModelRequestRefusal(call) ? 'done' : call.status;
 }
 
 /** Lines added and removed by the writes in a group, once there has been at least one. */
@@ -534,7 +553,7 @@ const STATUS_RANK: Record<ChatToolStatus, number> = {
 
 function groupStatus(calls: readonly ChatToolCall[]): ChatToolStatus {
   return calls.reduce<ChatToolStatus>(
-    (worst, call) => (STATUS_RANK[call.status] > STATUS_RANK[worst] ? call.status : worst),
+    (worst, call) => (STATUS_RANK[displayStatus(call)] > STATUS_RANK[worst] ? displayStatus(call) : worst),
     'done'
   );
 }
@@ -563,11 +582,13 @@ function toSegments(calls: readonly ChatToolCall[]): ToolSegment[] {
 
   for (const call of calls) {
     const open = segments[segments.length - 1];
+    const previous = open?.calls[open.calls.length - 1];
     const mergeable =
       open !== undefined &&
+      previous !== undefined &&
       open.name === call.name &&
-      sharesAClause(call) &&
-      sharesAClause(open.calls[open.calls.length - 1]);
+      ((sharesAClause(call) && sharesAClause(previous)) ||
+        (isModelRequestRefusal(call) && isModelRequestRefusal(previous)));
 
     if (mergeable) open.calls.push(call);
     else segments.push({ name: call.name, calls: [call] });
@@ -578,6 +599,12 @@ function toSegments(calls: readonly ChatToolCall[]): ToolSegment[] {
 
 function segmentLabel(segment: ToolSegment): string {
   if (segment.calls.length === 1) return toolRowLabel(segment.calls[0]);
+  if (isModelRequestRefusal(segment.calls[0])) {
+    const asked = new Set(segment.calls.map(call => call.input.requested_model_id));
+    return asked.size === 1
+      ? `${toolRowLabel(segment.calls[0])} (${segment.calls.length} requests)`
+      : `Not started: ${segment.calls.length} model requests were not allowed`;
+  }
   return phrasesFor(segment.name).many(segment.calls.length);
 }
 

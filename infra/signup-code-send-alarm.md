@@ -63,6 +63,12 @@ account. It carries `reason` and the address's `domain`, never the full address.
 It is counted as `SignupCodeSuppressed` in the same namespace, with no alarm, so
 a run of wrongly refused domains shows up on the metric.
 
+`signup-limit-failed-open` is logged when the signup network cap check (per IP,
+per ASN) cannot read its settings or count recent signups and lets the signup
+proceed. The error text is in the log's metadata, not the message. It is counted
+as `SignupLimitFailOpen` in the same namespace, with no alarm, and shown on the
+`<app>-<stage>-llm-spend` dashboard.
+
 ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
 The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
 report the Slack relay itself failing. Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
@@ -165,10 +171,9 @@ credit enforcement is disabled; aborts carrying settled partial usage count too.
 
 Metric filters on every log group that logs the line write the same metrics to the
 `<app>/<stage>/LLMSpend` namespace, so every alarm and widget below sums them all.
-The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container and the
-`cli_completion_request` WebSocket Lambda (both run `executeCompletion`), the Slack
-quest processor Lambda, and the Next.js server Lambda (`/api/chat?wait=true` and the
-voice v2 LLM proxy run `ChatCompletionProcess` inline):
+The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container (it runs
+`executeCompletion`), the Slack quest processor Lambda, and the Next.js server Lambda
+(`/api/chat?wait=true` and the voice v2 LLM proxy run `ChatCompletionProcess` inline):
 
 | Metric                      | Value            | Dimensions        |
 | --------------------------- | ---------------- | ----------------- |
@@ -182,7 +187,8 @@ One alarm per provider fires when `EstimatedUsd` sums to at least
 the Slack DLQ topic. The
 `<app>-<stage>-llm-spend` dashboard shows spend per 5 minutes and across the selected dashboard range,
 output tokens, spend by model, the young-account share of spend, and the signup
-and WAF edge-signal counts from the alarms above.
+and WAF edge-signal counts from the alarms above, plus the count of signup
+network cap checks that failed open.
 
 An hourly alarm on `EstimatedUsdYoungAccounts` fires when accounts under 7 days
 old sum to at least `YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR` (whole USD) and

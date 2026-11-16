@@ -2,10 +2,9 @@ import { z } from 'zod';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { imageModerationIncidentRepository, withTransaction } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
@@ -99,11 +98,10 @@ const recordVerdict = async (
   });
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+}).post(async (req: Request, res) => {
   const incidentId = String(req.query.id);
 
   const parsed = bodySchema.safeParse(req.body ?? {});

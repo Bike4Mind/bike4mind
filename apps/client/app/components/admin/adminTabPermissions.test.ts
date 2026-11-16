@@ -19,7 +19,22 @@ describe('canOpenAdminTab', () => {
   it('keeps unmapped tabs full-admin only, whatever the delegate holds', () => {
     const everything = delegate('support:read', 'settings:manage', 'users:moderate', 'credits:adjust');
     expect(canOpenAdminTab(everything, AdminTab.Users)).toBe(false);
-    expect(canOpenAdminTab(everything, AdminTab.WhatsNewModals)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.ModelMetrics)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.Tutorials)).toBe(false);
+  });
+
+  it('opens the platform settings tabs to a settings manager and not to a support reader', () => {
+    const settingsTabs = [
+      AdminTab.AdminSettings,
+      AdminTab.SystemPrompts,
+      AdminTab.SystemSecrets,
+      AdminTab.ReleaseNotes,
+      AdminTab.WhatsNewModals,
+    ];
+    for (const tab of settingsTabs) {
+      expect(canOpenAdminTab(delegate('settings:manage'), tab)).toBe(true);
+      expect(canOpenAdminTab(delegate('support:read'), tab)).toBe(false);
+    }
   });
 
   it('refuses a mapped tab to a delegate without its permission', () => {
@@ -32,6 +47,15 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab(delegate('support:read'), AdminTab.ToolDefinitions)).toBe(true);
     expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.ToolDefinitions)).toBe(true);
     expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
+  });
+
+  it('opens Models to a delegate holding support:read and to no other delegate', () => {
+    expect(canOpenAdminTab(delegate('support:read'), AdminTab.Models)).toBe(true);
+    expect(canOpenAdminTab(delegate('support:read', 'settings:manage'), AdminTab.Models)).toBe(true);
+    // GET /api/admin/models declares support:read alone, so settings:manage would only reach a 403.
+    expect(canOpenAdminTab(delegate('settings:manage'), AdminTab.Models)).toBe(false);
+    expect(canOpenAdminTab(delegate('users:moderate', 'credits:adjust'), AdminTab.Models)).toBe(false);
+    expect(DELEGATED_ADMIN_TAB_PERMISSIONS[AdminTab.Models]).toBe('support:read');
   });
 
   it('refuses everything to a user with no admin role', () => {

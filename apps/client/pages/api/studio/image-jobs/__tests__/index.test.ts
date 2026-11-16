@@ -60,7 +60,9 @@ vi.mock('@bike4mind/server-utils/middlewares/studioFeatureFlag', () => ({
     mocks.flag.open ? next() : res.status(403).json({ error: 'FEATURE_DISABLED' }),
 }));
 vi.mock('@bike4mind/services/imageJobs', () => ({ createImageJobs: mocks.createImageJobs }));
-vi.mock('@server/generationJobs/wiring', () => ({ getCreateImageJobsDeps: mocks.getCreateImageJobsDeps }));
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
+  getCreateImageJobsDeps: mocks.getCreateImageJobsDeps,
+}));
 vi.mock('@server/generations/listOwnGenerationJobs', () => ({ listOwnGenerationJobs: mocks.listOwnGenerationJobs }));
 vi.mock('@server/billing/resolveMediaBillingOrgId', () => ({
   resolveMediaBillingOrgId: mocks.resolveMediaBillingOrgId,

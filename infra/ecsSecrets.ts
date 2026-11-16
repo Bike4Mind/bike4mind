@@ -34,11 +34,11 @@ export function ecsResourceSecrets(
 }
 
 // Plain env var for a consumer that reads process.env directly, so the value is stored raw.
-export function ecsEnvSecret(service: string, envName: string, secret: sst.Secret): EcsSecrets {
+export function ecsEnvSecret(service: string, envName: string, value: $util.Input<string>): EcsSecrets {
   const parameter = new aws.ssm.Parameter(`${service}${envName}EcsSecret`, {
     name: `/sst/${$app.name}/${$app.stage}/ecs-secrets/${service}/${envName}`,
     type: 'SecureString',
-    value: secret.value,
+    value,
   });
   return { ssm: { [envName]: parameter.arn }, versions: [parameter.version] };
 }

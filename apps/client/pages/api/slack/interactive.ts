@@ -1,5 +1,5 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
 import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
-import { createSession } from '@server/managers/sessionManager';
+import { createSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -629,6 +629,18 @@ async function handleInteractiveAction(
       const slackTeamId = payload.team?.id;
       return await handleChannelConfigRemove(user.id, channelId, slackTeamId, botToken, appName);
     }
+  }
+
+  if (actions?.[0]?.action_id === 'liveops_approve_issue' || actions?.[0]?.action_id === 'liveops_reject_issue') {
+    const { handleLiveopsApprovalAction } =
+      await import('@bike4mind/server-utils/integrations/slack/liveopsTriageApproval');
+    const { response, deferred } = await handleLiveopsApprovalAction(actions[0].action_id, actions[0].value, user.id, {
+      workspaceId,
+      channelId: payload.channel?.id,
+      botToken,
+    });
+    (payload as Record<string, unknown>).__sreDeferred = deferred;
+    return response;
   }
 
   // Handle SRE approval actions (no linked account required - admin-only Slack action)

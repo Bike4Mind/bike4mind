@@ -64,7 +64,7 @@ const OrganizationAnalysisSection: FC<{ organization: IOrganizationDocument }> =
 
       {applied === null ? (
         <Typography level="body-md" data-testid="org-analysis-idle">
-          Choose a window and run the report to see what this organization has been reporting.
+          Choose a window and run the report to see what this team has been reporting.
         </Typography>
       ) : (
         <Stack spacing={3}>

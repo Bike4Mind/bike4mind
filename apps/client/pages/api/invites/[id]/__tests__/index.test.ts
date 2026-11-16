@@ -34,6 +34,8 @@ vi.mock('@bike4mind/services', () => ({
   sharingService: { cancelInviteById, authorizeByInviteType, resolveRedeemableInvite },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   Invite: { findById: vi.fn() },
   inviteRepository: {},
   fabFileRepository: {},

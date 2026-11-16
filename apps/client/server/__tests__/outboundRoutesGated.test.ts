@@ -23,6 +23,9 @@ const MIDDLEWARE_GATED: Array<[route: string, method: 'post']> = [
   ['tools/weather.ts', 'post'],
   ['tools/web-fetch.ts', 'post'],
   ['tools/web-search.ts', 'post'],
+  ['v1/tools/weather.ts', 'post'],
+  ['v1/tools/web-fetch.ts', 'post'],
+  ['v1/tools/web-search.ts', 'post'],
   ['publish/artifact/upload-url.ts', 'post'],
   ['publish/artifact/finalize.ts', 'post'],
   ['publish/[publicId]/share-token.ts', 'post'],
@@ -43,6 +46,7 @@ const INLINE_GATED = [
   'v1/agents/[id]/generate-avatar.ts',
   'v1/agents/[id]/generate-system-prompt.ts',
   'v1/agents/[id]/enhance-field.ts',
+  'v1/agents/from-context.ts',
   'v1/projects/[id]/invites.ts',
 ];
 

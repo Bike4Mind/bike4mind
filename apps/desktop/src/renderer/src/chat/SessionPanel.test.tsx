@@ -401,6 +401,7 @@ describe('the Background tasks section', () => {
 
     expect(get('session-panel-task-running').textContent).toContain('pnpm run dev');
     expect(get('session-panel-task-running').textContent).toMatch(/1m [56]s/);
+    expect(getComputedStyle(get('session-panel-spawned-open-btn')).fontSize).toBe('var(--joy-fontSize-xs)');
     const stops = host.querySelectorAll<HTMLElement>('[data-testid="session-panel-task-stop-btn"]');
     expect(stops).toHaveLength(2);
     await act(async () => stops[0].click());

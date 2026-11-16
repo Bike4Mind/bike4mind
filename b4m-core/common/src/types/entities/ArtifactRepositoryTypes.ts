@@ -40,6 +40,9 @@ export interface IArtifactVersionDocument {
 export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> {
   shareable: IShareableStaticMethods<IArtifactDocument>;
 
+  /** `options` carries a field projection plus skip/limit/sort, as BaseRepository.find reads it. */
+  find(filter: Record<string, unknown>, options?: Record<string, unknown>): Promise<IArtifactDocument[]>;
+
   /**
    * Partial update keyed on the custom `id` that re-checks write access (owner or
    * permissions.canWrite) and not-deleted in the write filter; null when either fails.
@@ -48,6 +51,12 @@ export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> 
     userId: string,
     data: Partial<IArtifactDocument> & { id: string }
   ): Promise<IArtifactDocument | null>;
+
+  /** Transfers scoped ownership and removes the departing owner's explicit grants atomically. */
+  reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }>;
 
   // Artifact-specific methods
   findByType(type: string, filter?: Record<string, unknown>): Promise<IArtifactDocument[]>;

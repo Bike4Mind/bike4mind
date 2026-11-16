@@ -7,11 +7,13 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { AgentStageIcon, ConversationIcon } from '../icons';
 import { isMac } from '../platform';
 import type { SessionSurface } from './orchestratorPrefs';
-import { AGENT_STATE_LABEL, AGENT_STATE_PRIORITY, type AgentState } from './roster';
+import { describeAgentStates, type AgentState } from './roster';
 
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
+  /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
+  parentNeedsYou?: boolean;
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
 }
@@ -27,20 +29,6 @@ const SHORTCUT_HINT = isMac ? '\u2318\u21E7O' : 'Ctrl+Shift+O';
 export function isSurfaceToggleKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'code'>) {
   const mod = isMac ? event.metaKey : event.ctrlKey;
   return mod && event.shiftKey && !event.altKey && event.code === 'KeyO';
-}
-
-/** "4 agents: 1 needs you, 2 working, 1 done", most urgent first; idle and stopped count as done. */
-export function describeAgentStates(states: readonly AgentState[]): string {
-  if (states.length === 0) return 'No agents yet';
-  const counts = new Map<AgentState, number>();
-  for (const state of states) {
-    const bucket = state === 'idle' || state === 'stopped' ? 'done' : state;
-    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
-  }
-  const parts = AGENT_STATE_PRIORITY.filter(state => counts.has(state)).map(
-    state => `${counts.get(state)} ${AGENT_STATE_LABEL[state].toLowerCase()}`
-  );
-  return `${states.length} ${states.length === 1 ? 'agent' : 'agents'}: ${parts.join(', ')}`;
 }
 
 function Segment({
@@ -96,7 +84,7 @@ function Segment({
  * nothing to navigate to. The conversation segment stays icon-only, since "Chat" already names the
  * sidebar's Chat/Code mode and would misread in a Code session.
  */
-export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
+export function OrchestrateToggle({ states, parentNeedsYou = false, surface, onSurfaceChange }: OrchestrateToggleProps) {
   const dark = useTheme().palette.mode === 'dark';
   const available = states.length > 0;
 
@@ -118,12 +106,12 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange }: Orchestr
 
   if (!available) return null;
 
-  const needsYou = states.includes('needs-you');
+  const needsYou = parentNeedsYou || states.includes('needs-you');
   const failed = !needsYou && states.includes('failed');
   const working = !needsYou && !failed && states.includes('working');
   const raisedBg = dark ? 'background.level2' : 'background.surface';
   const badgeColor = needsYou ? 'warning' : failed ? 'danger' : 'neutral';
-  const description = describeAgentStates(states);
+  const description = describeAgentStates(states, parentNeedsYou ? 1 : 0);
 
   return (
     <Box

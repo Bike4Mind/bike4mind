@@ -10,7 +10,8 @@ struct SessionDetailView: View {
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
-      agentRuns: services.agentRuns)
+      agentRuns: services.agentRuns, pendingActions: services.pendingActions,
+      firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
   }
 }
 
@@ -27,14 +28,14 @@ private struct ChatScreen: View {
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
-    agentRuns: any AgentRunStarting
+    agentRuns: any AgentRunStarting, pendingActions: any PendingActionAPI, firstTurn: QuestTurn?
   ) {
     self.session = session
     _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
-        agentRuns: agentRuns))
+        agentRuns: agentRuns, pendingActions: pendingActions, firstTurn: firstTurn))
   }
 
   var body: some View {
@@ -45,6 +46,7 @@ private struct ChatScreen: View {
       .safeAreaInset(edge: .bottom) { composer }
       .inAppSafari(url: $linkedPage)
       .environment(\.openWebPage, { linkedPage = $0 })
+      .environment(\.approvalActions, approvalActions)
       .sheet(isPresented: $isRecordingVoice) {
         VoiceRecorderPanel(
           onTranscript: { text in
@@ -68,6 +70,15 @@ private struct ChatScreen: View {
       .sensoryFeedback(trigger: model.hapticTrigger) { _, trigger in
         trigger.map(Self.feedback(for:))
       }
+  }
+
+  private var approvalActions: ApprovalActions? {
+    guard model.canAnswerApprovals else { return nil }
+    return ApprovalActions(
+      state: { [model] action, questID in model.approvalState(for: action, questID: questID) },
+      respond: { [model] action, questID, decision in
+        Task { await model.respond(to: action, questID: questID, decision: decision) }
+      })
   }
 
   /// Live turns that reached a terminal state; each one spent credits, so the Credits widget re-reads the balance.
@@ -132,7 +143,7 @@ private struct ChatScreen: View {
   private var transcriptList: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(spacing: Tokens.Spacing.m) {
+        LazyVStack(spacing: Tokens.Spacing.l) {
           if case .failed(let error) = model.transcript.state {
             InlineErrorBanner(message: error.message) { Task { await model.refresh() } }
           }
@@ -146,8 +157,10 @@ private struct ChatScreen: View {
           }
           footer
         }
+        .frame(maxWidth: Tokens.Layout.transcriptMaxWidth)
         .padding(.horizontal, Tokens.Spacing.m)
         .padding(.vertical, Tokens.Spacing.s)
+        .frame(maxWidth: .infinity)
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
@@ -161,8 +174,10 @@ private struct ChatScreen: View {
         }
       )
       .onChange(of: model.messages.last) { _, last in
-        guard let last else { return }
-        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+        // From iOS 18 the bottom anchor also holds through size changes. An animated scrollTo racing a
+        // reply's height change can leave the lazy stack blank until the next scroll, so it is not animated.
+        guard #unavailable(iOS 18.0), let last else { return }
+        proxy.scrollTo(last.id, anchor: .bottom)
       }
       .accessibilityIdentifier("transcript-scroll")
     }
@@ -185,7 +200,8 @@ private struct ChatScreen: View {
     ChatComposer(
       draft: $model.draft, isFocused: $composerFocused, canSend: model.canSend,
       agentRun: model.canRunAgent ? $model.sendsAsAgentRun : nil,
-      onDictate: { isRecordingVoice = true }, onSend: send)
+      onDictate: { isRecordingVoice = true },
+      onVoiceConversation: { services.navigator.startVoiceConversation(.session(session.id)) }, onSend: send)
   }
 
   private func send() {

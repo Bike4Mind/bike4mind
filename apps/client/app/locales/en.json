@@ -110,7 +110,7 @@
   "deleteVoiceConfirm": "Are you sure you want to delete this Voice?",
   "organization": {
     "organizations": "Teams",
-    "defaultName": "My Organization",
+    "defaultName": "My Team",
     "shared": "Shared with Me",
     "create": "Create Team",
     "search": "Search teams...",
@@ -121,9 +121,94 @@
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "x_members": "{{count}} members",
-    "x_credits": "{{count}} credits",
-    "owner": "Owner"
+    "team_plan": "Team Plan",
+    "no_active_plan": "No Active Plan",
+    "x_members_one": "{{count}} member",
+    "x_members_other": "{{count}} members",
+    "x_credits_one": "{{amount}} credit",
+    "x_credits_other": "{{amount}} credits",
+    "personal_team": "Personal team",
+    "shared_team": "Shared team",
+    "learn_about": "Learn about Teams",
+    "document_title_suffix": " | Team",
+    "roles": {
+      "owner": "Owner",
+      "manager": "Manager",
+      "member": "Member"
+    },
+    "access": {
+      "can_edit_settings": "Can edit settings"
+    },
+    "admin_preview": {
+      "title": "Explore Team administration before subscribing",
+      "description": "See sample members, monthly credit limits and usage, plus which controls each role can access.",
+      "button": "Preview Team administration"
+    },
+    "tabs": {
+      "domains": "Domains",
+      "overview": "Overview",
+      "members": "Members",
+      "library": "Library",
+      "groups": "Groups",
+      "usage": "Usage",
+      "analysis": "Analysis",
+      "billing": "Billing",
+      "api-keys": "API keys",
+      "audit": "Audit",
+      "integrations": "Integrations",
+      "settings": "Settings"
+    },
+    "tab_groups": {
+      "team": "Team",
+      "insights": "Insights",
+      "integrations": "Integrations",
+      "admin": "Admin"
+    },
+    "descriptions": {
+      "domains": "Manage the email domains associated with your team.",
+      "overview": "Plan, credits and seat usage for this team.",
+      "members": "{{current}} of {{max}} seats used. Invite people and manage their roles.",
+      "library": "Shared definitions the team owns. They stay available when their author leaves.",
+      "groups": "Appoint managers and organize members into groups.",
+      "usage": "Credit spend across the team.",
+      "analysis": "Feedback members left on AI responses, summarized.",
+      "integrations": "Connect GitHub, Slack, webhooks and custom connectors for the whole team.",
+      "billing": "Subscription, seats and payment details.",
+      "api-keys": "Keys the team owns, and members' own keys billed to this team.",
+      "audit": "Team activity recorded from the time audit logging was enabled. Dates use UTC.",
+      "settings": "Team-wide AI context, ownership and deletion."
+    },
+    "integration_sections": {
+      "github": "GitHub",
+      "slack": "Slack",
+      "webhooks": "Webhooks",
+      "connectors": "Connectors"
+    },
+    "integration_descriptions": {
+      "github": "API access for PR summaries, code context and repository features.",
+      "slack": "Link the team's Slack workspace.",
+      "webhooks": "Receive GitHub repository events and share them with members.",
+      "connectors": "Which custom MCP servers members may connect, and on what terms."
+    },
+    "overview": {
+      "total_members": "Total Members",
+      "available_credits": "Available Credits",
+      "subscription_status": "Subscription Status",
+      "plan": "Plan",
+      "status": "Status",
+      "canceling": "Canceling",
+      "active": "Active",
+      "next_billing": "Next Billing",
+      "not_available": "N/A",
+      "seats_utilization": "Seats Utilization",
+      "seats_utilization_label": "Seats utilization: {{current}} of {{max}} seats used",
+      "x_active": "{{count}} Active",
+      "x_pending": "{{count}} Pending",
+      "x_available": "{{count}} Available"
+    },
+    "api_keys": {
+      "member_keys": "Member API keys"
+    }
   },
   "session": {
     "typeYourMessage": "Type your message here",
@@ -137,6 +222,7 @@
     "errors": {
       "notebookDeleted": "This notebook was deleted. Please create a new one.",
       "noPermission": "You do not have permission to access this notebook.",
+      "modelUnavailable": "This model is no longer available to you. Pick another model and send again.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
       "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",
@@ -383,6 +469,7 @@
     "pay_now_success": "Payment received. Your plan will be restored in a moment.",
     "pay_now_received": "Payment received",
     "upgrade": "Upgrade",
+    "seat_plan_via": "Included with your seat in {{organization}}",
     "credit_analytics": "Credit Analytics",
     "pricing": "Credits Pricing",
     "show_purchases": "Show Purchases",
@@ -413,6 +500,7 @@
     "free_plan": "Free",
     "free_plan_detail": "Pay as you go with credit packs",
     "low_org": "An organization admin can add credits to this account.",
+    "low_seat_plan": "A pack tops you up now. Your team's credits are on the {{organization}} account.",
     "low_with_plan": "Top up to keep working until your allowance renews.",
     "low_without_plan": "A plan adds credits every month; a pack tops you up now.",
     "payment_failed": "Payment failed",
@@ -428,6 +516,8 @@
     "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
     "retry": "Retry",
     "see_plans": "See plans",
+    "seat_plan_detail": "Included with your seat in {{organization}}",
+    "seat_plan_notice": "Your team covers your plan, so there is nothing to upgrade here. Credit packs still top up your personal balance.",
     "team_no_plan": "No team plan",
     "team_no_plan_detail": "Credits are added by a team admin",
     "team_plan": "Team",

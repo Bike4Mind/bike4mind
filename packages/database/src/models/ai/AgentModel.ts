@@ -200,30 +200,6 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
     return limit ? entries.slice(-limit) : entries;
   }
 
-  /** Wholesale replace the memoryJournal - used by consolidation/grooming.
-   *  appendMemory uses $push and won't shrink the array, so a separate
-   *  replace path is required. */
-  async replaceMemoryJournal(agentId: string, entries: IMemoryEntry[]): Promise<void> {
-    await this.agentModel.findByIdAndUpdate(agentId, {
-      $set: {
-        memoryJournal: entries,
-        'memoryConfig.lastConsolidatedAt': new Date(),
-      },
-    });
-  }
-
-  // World memory: capped-array pattern mirroring memoryJournal, retains last 100 entries.
-  async appendWorldMemory(agentId: string, entry: IWorldMemoryEntry): Promise<void> {
-    await this.agentModel.findByIdAndUpdate(agentId, {
-      $push: {
-        worldMemory: {
-          $each: [entry],
-          $slice: -100,
-        },
-      },
-    });
-  }
-
   async getWorldMemory(agentId: string, limit?: number): Promise<IWorldMemoryEntry[]> {
     const agent = await this.agentModel.findById(agentId).select('worldMemory').lean();
     if (!agent?.worldMemory) return [];
@@ -249,12 +225,6 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
       ],
     });
     return result.map(doc => doc.toJSON());
-  }
-
-  async pushPendingMessage(agentId: string, message: IPendingAgentMessage): Promise<void> {
-    await this.agentModel.findByIdAndUpdate(agentId, {
-      $push: { pendingMessages: message },
-    });
   }
 
   async consumePendingMessages(agentId: string): Promise<IPendingAgentMessage[]> {

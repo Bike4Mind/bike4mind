@@ -28,6 +28,11 @@ export const PushNotificationEventSchema = z.object({
   collapseId: z.string().optional(),
   questId: z.string().optional(),
   sessionId: z.string().optional(),
+  /**
+   * `approval_needed` only: the `ts` of the pending action on `questId`. With it, the push carries the
+   * approve/deny action identifiers so a client can answer from the notification itself.
+   */
+  pendingActionTs: z.number().int().positive().optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;

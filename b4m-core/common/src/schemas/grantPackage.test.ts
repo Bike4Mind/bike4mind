@@ -3,7 +3,10 @@ import {
   createGrantPackageSchema,
   grantPackageCapsConflict,
   grantPackageExposure,
+  grantPackageRefusalMessage,
+  isGrantPackageExpired,
   requiresGrantReason,
+  signupDomainGrantRefusalNotice,
   updateGrantPackageSchema,
   updateRequiresGrantReason,
 } from './grantPackage';
@@ -54,6 +57,39 @@ describe('updateRequiresGrantReason', () => {
   it('requires a reason to reactivate a large package', () => {
     expect(updateRequiresGrantReason({ ...large, active: false }, large, policy)).toBe(true);
   });
+
+  it('treats extending an expired large package as reactivation, and expiring one as shrinking', () => {
+    const now = new Date('2026-06-01T00:00:00Z');
+    const past = new Date('2026-05-01T00:00:00Z');
+    const future = new Date('2026-07-01T00:00:00Z');
+    expect(updateRequiresGrantReason({ ...large, expiresAt: past }, { ...large, expiresAt: future }, policy, now)).toBe(
+      true
+    );
+    expect(updateRequiresGrantReason({ ...large, expiresAt: past }, { ...large, expiresAt: null }, policy, now)).toBe(
+      true
+    );
+    expect(updateRequiresGrantReason(large, { ...large, expiresAt: past }, policy, now)).toBe(false);
+  });
+});
+
+describe('isGrantPackageExpired', () => {
+  const now = new Date('2026-06-01T12:00:00Z');
+
+  it('never expires a package without an expiry', () => {
+    expect(isGrantPackageExpired({}, now)).toBe(false);
+    expect(isGrantPackageExpired({ expiresAt: null }, now)).toBe(false);
+  });
+
+  it('expires at the exact instant, and reads ISO strings from the API', () => {
+    expect(isGrantPackageExpired({ expiresAt: new Date('2026-06-01T12:00:00.001Z') }, now)).toBe(false);
+    expect(isGrantPackageExpired({ expiresAt: new Date('2026-06-01T12:00:00Z') }, now)).toBe(true);
+    expect(isGrantPackageExpired({ expiresAt: '2026-05-31T23:59:59.999Z' }, now)).toBe(true);
+  });
+
+  it('has refusal copy for both the invite-code and domain paths', () => {
+    expect(grantPackageRefusalMessage('expired')).toBe('This invite code has expired');
+    expect(signupDomainGrantRefusalNotice('expired')).toMatch(/expired/);
+  });
 });
 
 describe('admin package schemas', () => {
@@ -86,5 +122,15 @@ describe('admin package schemas', () => {
 
   it('accepts a partial edit', () => {
     expect(updateGrantPackageSchema.parse({ totalCap: null })).toEqual({ totalCap: null });
+  });
+});
+
+describe('package expiry in the admin schemas', () => {
+  it('coerces an ISO expiry, keeps null as never, and rejects an empty string', () => {
+    expect(createGrantPackageSchema.parse({ ...base, expiresAt: '2026-06-01T23:59:59.999Z' }).expiresAt).toEqual(
+      new Date('2026-06-01T23:59:59.999Z')
+    );
+    expect(updateGrantPackageSchema.parse({ expiresAt: null }).expiresAt).toBeNull();
+    expect(updateGrantPackageSchema.safeParse({ expiresAt: '' }).success).toBe(false);
   });
 });

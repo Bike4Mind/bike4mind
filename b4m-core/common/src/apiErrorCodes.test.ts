@@ -14,6 +14,7 @@ import {
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   UPGRADE_REQUIRED_ERROR_CODE,
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  RUN_NOT_FOUND_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -28,6 +29,7 @@ import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from '
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
+import { PENDING_ACTION_ERROR_CODES } from './schemas/pendingActions';
 import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
@@ -67,6 +69,7 @@ describe('API_ERROR_CODES', () => {
       SKILL_MARKET_IMPORT_ERROR_CODES,
       SLACK_MESSAGE_ERROR_CODES,
       COMPLETION_SSE_ERROR_CODES,
+      PENDING_ACTION_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
@@ -81,6 +84,7 @@ describe('API_ERROR_CODES', () => {
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by packages/server-utils/src/billing/freeTierDailyCapGate.test.ts.
     // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
     // ACCOUNT_SUSPENDED_ERROR_CODE likewise; proven by packages/server-utils/src/auth/assertAccountStateUsable.test.ts.
+    // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -97,6 +101,7 @@ describe('API_ERROR_CODES', () => {
       DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
       UPGRADE_REQUIRED_ERROR_CODE,
       ACCOUNT_SUSPENDED_ERROR_CODE,
+      RUN_NOT_FOUND_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

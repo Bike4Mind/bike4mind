@@ -74,7 +74,7 @@ vi.mock('@bike4mind/database', () => ({
     personalSpendSince: async () => [],
   },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   isCreditsEnforced: async () => false,
   createRequestCompletionMeter: vi.fn(),
   reserveCompletionCredits: async () => ({ refund: vi.fn() }),

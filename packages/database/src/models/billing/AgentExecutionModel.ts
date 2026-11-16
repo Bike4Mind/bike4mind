@@ -400,7 +400,7 @@ export interface IAgentExecution {
   /**
    * How the request that started the run was authenticated, forwarded to ToolContext.authOrigin and
    * inherited by child and DAG-node runs. Optional only for runs started before the field existed;
-   * read it through `executionTurnAuth` (apps/client/server/auth/turnAuth.ts), which fails those closed.
+   * read it through `executionTurnAuth` (packages/server-utils/src/auth/turnAuth.ts), which fails those closed.
    */
   authOrigin?: AuthOrigin;
   /**

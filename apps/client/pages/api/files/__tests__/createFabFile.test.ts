@@ -621,6 +621,25 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
     expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
+
+  it('signs a session upload as create-only', async () => {
+    const { res } = makeRes();
+    await run(body(), res);
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ IfNoneMatch: '*' });
+  });
+
+  it('leaves an API-key upload unconditional', async () => {
+    const { res } = makeRes();
+    await run(body(), res, { apiKeyInfo: { keyId: 'k1', scopes: ['files:write'] } });
+    expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    expect(h.signUrl.mock.calls[0][2]).not.toHaveProperty('IfNoneMatch');
+  });
+
+  it('never adds the create-only condition to a GET', async () => {
+    const { res } = makeRes();
+    await run(body({ content: 'owned text' }), res);
+    expect(h.signUrl.mock.calls.every(call => !call[2]?.IfNoneMatch)).toBe(true);
+  });
 });
 
 describe('POST /api/files/createFabFile - admin modal video', () => {

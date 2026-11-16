@@ -7,7 +7,6 @@ import { CreateMusicGenerationBodySchema } from './musicGenerations';
 import { CreateAgentRequestSchema, GenerateAgentAvatarRequestSchema, UpdateAgentRequestSchema } from './agentPublic';
 import { SimplifiedChatRequestSchema } from './chat';
 import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './openai';
-import { CliCompletionRequestAction } from './actions';
 
 const ids = (length: number) => 'm'.repeat(length);
 
@@ -71,18 +70,6 @@ const cases: Case[] = [
     'OpenAIImageGenerationInput local-image',
     OpenAIImageGenerationInput,
     model => ({ prompt: 'p', model: `local-image/${model.slice('local-image/'.length)}` }),
-    'model',
-  ],
-  [
-    'CliCompletionRequestAction',
-    CliCompletionRequestAction,
-    model => ({
-      action: 'cli_completion_request',
-      accessToken: 'token',
-      requestId: '6f1c1d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f',
-      model,
-      messages: [{ role: 'user', content: 'hi' }],
-    }),
     'model',
   ],
 ];

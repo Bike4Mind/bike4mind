@@ -16,6 +16,7 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { recordMfaEnrollmentEvent } from '@server/auth/mfaEnrollmentFunnel';
+import { requiresOrganizationMfaEnrollment } from './organizationMfa';
 
 // Re-exported so existing importers (mfa/status, mfa/disable) keep one import site.
 export { readEnforceMfa };
@@ -46,8 +47,7 @@ export type SecondFactorOutcome =
 
 /**
  * Decides the second factor for a sign-in whose first factor the caller has already verified.
- * Sign-ins through an org's enterprise IdP (SAML, or Okta bound to an IdP record) do not call
- * this: the IdP owns MFA for them.
+ * Enterprise IdPs retain their own MFA behavior unless an org requires local enrollment.
  *
  * `honourTrustedDevice: false` makes a remembered device irrelevant (emergency login).
  * A trusted device only ever skips the challenge; it never stands in for enrollment.
@@ -55,9 +55,14 @@ export type SecondFactorOutcome =
 export async function resolveSecondFactor(
   req: Pick<Request, 'headers'>,
   user: IUserDocument,
-  { origin, honourTrustedDevice = true }: { origin: SignInOrigin; honourTrustedDevice?: boolean }
+  {
+    origin,
+    honourTrustedDevice = true,
+    enterpriseIdp = false,
+  }: { origin: SignInOrigin; honourTrustedDevice?: boolean; enterpriseIdp?: boolean }
 ): Promise<SecondFactorOutcome> {
   if (mfaService.userHasMFAConfigured(user)) {
+    if (enterpriseIdp) return { kind: 'satisfied', trustedDevice: null };
     const trustedDevice =
       honourTrustedDevice && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, user.id) : null;
     if (trustedDevice) return { kind: 'satisfied', trustedDevice };
@@ -65,7 +70,7 @@ export async function resolveSecondFactor(
     return { kind: 'challenge', mfaToken: signMfaPendingToken(user, origin), passkeyAvailable };
   }
 
-  if (await readEnforceMfa()) {
+  if ((!enterpriseIdp && (await readEnforceMfa())) || (await requiresOrganizationMfaEnrollment(user))) {
     await recordMfaEnrollmentEvent(user.id, MfaEnrollmentEvents.REQUIRED, {
       surface: 'signin',
       source: origin.createdVia,

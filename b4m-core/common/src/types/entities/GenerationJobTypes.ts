@@ -1,4 +1,4 @@
-import type { ProviderOutput } from '../../generation';
+import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
@@ -120,14 +120,23 @@ export type MusicJobPayload = {
 export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
 
 /**
- * One image per job. Like music, the provider returns the finished image from one blocking call, so the output
- * is moderated and stored in the submit step and provider bytes never reach this payload.
+ * One image per job. Most providers return the finished image from one blocking call, so the output is moderated
+ * and stored in the submit step. An async provider (BFL) queues a task instead: the handle is kept while the job
+ * polls, and the provider's delivery URL (never its bytes) until the store step downloads it.
  */
 export type ImageJobPayload = {
   request: StoredImageRequest;
   providerId: ImageProviderId;
+  providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
+  providerOutput?: ProviderOutput;
   /** Shared by the jobs one "make N" request created, so a surface can show them as one batch. */
   groupId?: string;
+  /**
+   * How many jobs the request asked for. The batch is persisted one job at a time, so an early finisher can see a
+   * partial group; completion waits until this many are stored and terminal. A batch that aborts mid-persist never
+   * reaches it and is not announced. Absent on jobs made before it existed.
+   */
+  groupSize?: number;
   output?: ImageJobOutput;
   /** As VideoJobPayload.billedBlock. */
   billedBlock?: boolean;
@@ -173,6 +182,8 @@ type GenerationJobFields = {
   rawProviderError?: unknown;
   terminalHandlingClaimedAt?: Date | null;
   terminalHandledAt?: Date | null;
+  /** Set once on a group's anchor job (its lowest id) when the group's completion event is claimed. */
+  groupCompletionNotifiedAt?: Date | null;
   questId?: string;
   delivery?: GenerationJobDelivery;
   createdAt?: Date;
@@ -280,6 +291,10 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;
   markTerminalHandled(id: string, at: Date): Promise<void>;
+  /** The image jobs one "make N" request created, for that requester; at most IMAGE_JOB_BATCH_MAX. */
+  findByGroup(requestedBy: string, groupId: string): Promise<IGenerationJobDocument[]>;
+  /** True for exactly one caller per job: the claim that a group's completion event is emitted once. */
+  claimGroupCompletionNotice(id: string, at: Date): Promise<boolean>;
   /** Separate limits so an in-flight backlog can never starve terminal handling (credit release). */
   findStalled(overdueBefore: Date, limits: StalledJobLimits): Promise<IGenerationJobDocument[]>;
   /** Newest first, by id. Visibility is the requester, not the credit owner: org members never see each other's jobs. */

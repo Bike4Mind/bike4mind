@@ -239,6 +239,13 @@ describe('x ticks', () => {
     expect(d.ticks).toEqual([local(10), local(13), local(16), local(19)]);
   });
 
+  it('widens daily ticks on a long range so the axis keeps about 10', () => {
+    const points = Array.from({ length: 90 }, (_, i) => point({ runId: `r${i}`, startedAt: iso(local(1 + i, 9)) }));
+    const d = passRateData(points, '30d');
+    expect(d.ticks).toHaveLength(10);
+    expect(d.ticks.slice(0, 2)).toEqual([local(1), local(10)]);
+  });
+
   it('has no ticks without rows', () => {
     expect(passRateData([]).ticks).toEqual([]);
   });

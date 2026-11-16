@@ -12,7 +12,6 @@ import {
   ipcMain,
   nativeImage,
   net,
-  safeStorage,
   shell,
   type WebContents,
 } from 'electron';
@@ -59,8 +58,10 @@ import {
   type BrowserTabRequest,
 } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
+import { NO_SKILLS } from '@shared/skills';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
+import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
@@ -95,6 +96,7 @@ import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
 import { privateFile } from '../privateFile';
+import { appSecretCipher } from '../secrets';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -143,6 +145,7 @@ import {
   retireSessionApprovals,
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
+import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
@@ -165,6 +168,7 @@ import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
+import { rendererNotes } from './rendererNotes';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -325,6 +329,8 @@ export interface RegisteredChat {
   modelSettings: ModelSettingsStore;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
+  /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
+  respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
 }
 
 /**
@@ -529,10 +535,18 @@ export function registerChat(
     logger.warn(message)
   );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
-  // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
+  // Encrypted like the MCP secrets: a server's token or header value never goes to plain JSON.
+  const modelServerStore = new ModelServerStore(
+    appSecretCipher(),
+    privateFile(join(userData, 'model-servers.json')),
+    logger
+  );
+  void modelServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MODEL SERVERS: could not re-save stored credentials: ${String(error)}`));
   const modelServers = new ModelServerRegistry({
     loadSettings,
-    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
+    store: modelServerStore,
     logger,
     changed: servers => {
       models.expireLocal();
@@ -547,7 +561,7 @@ export function registerChat(
       gpuVendor: async () => (await localHardware.probed())?.gpuVendor ?? null,
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
-    ownedCipher: safeStorage,
+    ownedCipher: appSecretCipher(),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -614,6 +628,7 @@ export function registerChat(
   // service only through `chat`, which is first called long after both exist.
   const pullRequests = registerPullRequests({
     path: join(userData, 'pull-requests.json'),
+    autoFixAttemptsPath: join(userData, 'auto-fix-attempts.json'),
     chat: () => service,
     store,
     logger,
@@ -678,12 +693,14 @@ export function registerChat(
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
-  // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
+  // Encrypted for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
-  const mcp = new McpManager(
-    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
-    logger,
-    (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
+  const mcpServerStore = new McpServerStore(appSecretCipher(), privateFile(join(userData, 'mcp-servers.json')), logger);
+  void mcpServerStore
+    .reencrypt()
+    .catch(error => logger.warn(`MCP: could not re-save stored secrets: ${String(error)}`));
+  const mcp = new McpManager(mcpServerStore, logger, (state: McpServersState) =>
+    send(IPC_CHANNELS.mcpServersChanged, state)
   );
 
   const foreground = new ForegroundCommandRegistry();
@@ -737,6 +754,9 @@ export function registerChat(
     models,
     modelSettings,
     logger,
+    mintCompletionRun: createCompletionRunMinter(message =>
+      logger.warn(`CHAT: could not mint a completion run: ${message}`)
+    ),
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
@@ -799,6 +819,7 @@ export function registerChat(
       }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    taskDecisionsChanged: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
@@ -806,6 +827,9 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
     service.listModels(force === 'local' ? 'local' : force === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, async () =>
+    store.defaultsForNewSession(await service.modelForNewSession())
   );
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
@@ -825,11 +849,21 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
-  ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, sessionId: string) => service.listSkills(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
+    const scope = parseSkillsScope(raw);
+    return scope ? service.listSkills(scope) : NO_SKILLS;
+  });
   // Coerced rather than trusted, like the approval mode above: this is the only door to project
   // trust, so anything that is not an explicit `true` has to land as "not trusted".
-  ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
-    service.setProjectSkillsTrusted(sessionId, trusted === true)
+  ipcMain.handle(
+    IPC_CHANNELS.chatSetProjectSkillsTrusted,
+    (_event, raw: unknown, trusted: boolean, expectedProjectDirectory: unknown) => {
+      const scope = parseSkillsScope(raw);
+      const target = skillsTrustTargetSchema.safeParse(expectedProjectDirectory);
+      return scope && target.success
+        ? service.setProjectSkillsTrusted(scope, trusted === true, target.data)
+        : NO_SKILLS;
+    }
   );
   ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
     skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
@@ -898,6 +932,8 @@ export function registerChat(
   );
   registerSessionOrchestrateIpc(ipcMain, service);
   registerOrchestrationIpc(ipcMain, service);
+  // Decisions asked before a restart badge the dock and notify even before a window asks for them.
+  void service.listTaskDecisions();
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.
@@ -1145,7 +1181,7 @@ export function registerChat(
     )
   );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
-    service.send(request.sessionId, request.text, request.attachments)
+    service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
@@ -1180,8 +1216,11 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
+  // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
+  // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
+  const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => approvals.resolve(approvalId, answer);
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
-    approvals.resolve(approvalId, answer)
+    respondToApproval(approvalId, answer)
   );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one
@@ -1221,6 +1260,13 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDiscardAttachment, (_event, sessionId: string, attachmentId: string) =>
     attachments.discard(sessionId, attachmentId)
   );
+  ipcMain.handle(IPC_CHANNELS.chatCopyDraftAttachments, (_event, draftId: string, sessionId: string, ids: string[]) =>
+    attachments.copyDraft(draftId, sessionId, ids)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDiscardDraftAttachments, (_event, draftId: string) => {
+    if (!draftId.startsWith('draft-')) throw new Error('Invalid draft id.');
+    return attachments.disposeDraft(draftId);
+  });
 
   registerImageMenuIpc(ipcMain, {
     media,
@@ -1531,6 +1577,7 @@ export function registerChat(
     localContext,
     modelSettings,
     capabilityLedger,
+    respondToApproval,
   };
 }
 

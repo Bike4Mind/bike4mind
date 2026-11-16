@@ -4,6 +4,7 @@ import { BRIEFCASE_CATALOG_QUERIES } from '@bike4mind/common';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useBriefcaseCatalog } from '@client/app/hooks/data/briefcase';
 import { BriefcaseLauncher } from './BriefcaseLauncher';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 // Keyed by BRIEFCASE_CATALOG_QUERIES keys: adding a category there without a
 // label here is a type error rather than a group that renders its raw key.
@@ -61,14 +62,18 @@ export function BriefcasePanel({ onLaunched }: { onLaunched?: () => void } = {})
 
   if (groups.length === 0) {
     return (
-      <Typography level="body-sm" sx={{ p: 1, opacity: 0.7 }} data-testid="briefcase-panel-empty">
-        No prompts yet.
-      </Typography>
+      <Box>
+        <OrganizationLibraryPicker kind="prompt" />
+        <Typography level="body-sm" sx={{ p: 1, opacity: 0.7 }} data-testid="briefcase-panel-empty">
+          No prompts yet.
+        </Typography>
+      </Box>
     );
   }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="briefcase-panel">
+      <OrganizationLibraryPicker kind="prompt" />
       {groups.map(group => (
         <Box key={group.key} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Typography level="body-xs" sx={{ textTransform: 'uppercase', opacity: 0.6 }}>

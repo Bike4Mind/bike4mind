@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { ModelIdSchema } from './modelId';
-
 import {
   actorKindSchema,
   hearthEventKindSchema,
@@ -10,6 +8,7 @@ import {
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { TurnTimingSchema } from './turnTiming';
+import { StudioJobCompletionSchema } from './studioJobCompleted';
 import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
@@ -21,12 +20,6 @@ import {
   QUEST_GENERATION_JOB_KINDS,
 } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import {
-  CompletionProviderBlockEventSchema,
-  CompletionSessionIdSchema,
-  CompletionToolSchema,
-  ResponseFormatSchema,
-} from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -92,37 +85,6 @@ export const VoiceSessionSendTranscriptAction = z.object({
   timestamp: z.coerce.date().optional(),
 });
 export type IVoiceSessionSendTranscriptAction = z.infer<typeof VoiceSessionSendTranscriptAction>;
-
-/**
- * CLI Completion request over WebSocket (bypasses CloudFront 20s timeout)
- */
-export const CliCompletionRequestAction = z.object({
-  action: z.literal('cli_completion_request'),
-  accessToken: z.string(),
-  requestId: z.uuid(),
-  model: ModelIdSchema,
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system']),
-        content: z.union([z.string(), z.array(z.unknown())]),
-        // per-message cache flag (Anthropic only - silently ignored elsewhere)
-        cache: z.boolean().optional(),
-      })
-    )
-    .min(1),
-  sessionId: CompletionSessionIdSchema.optional(),
-  options: z
-    .object({
-      temperature: z.number().optional(),
-      maxTokens: z.number().optional(),
-      stream: z.boolean().optional(),
-      tools: z.array(CompletionToolSchema).optional(),
-      response_format: ResponseFormatSchema.optional(),
-    })
-    .optional(),
-});
-export type ICliCompletionRequestAction = z.infer<typeof CliCompletionRequestAction>;
 
 /**
  * CLI Tool execution request over WebSocket
@@ -386,6 +348,13 @@ export const GenerationJobUpdatedAction = z.object({
 });
 export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
 
+/** Relays a studio.job.completed event to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts). */
+export const StudioJobCompletedAction = z.object({
+  action: z.literal('studio_job_completed'),
+  completion: StudioJobCompletionSchema,
+});
+export type IStudioJobCompletedAction = z.infer<typeof StudioJobCompletedAction>;
+
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
   clientId: z.string().optional(),
@@ -616,57 +585,6 @@ export const VoiceCreditsExhaustedAction = z.object({
   clientId: z.string().optional(),
 });
 export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedAction>;
-
-/**
- * CLI Completion chunk sent from server over WebSocket
- * Mirrors SSEContentEvent shape for minimal server-side changes
- */
-export const CliCompletionChunkAction = z.object({
-  action: z.literal('cli_completion_chunk'),
-  requestId: z.string(),
-  chunk: z.union([
-    z.object({
-      type: z.enum(['content', 'tool_use']),
-      text: z.string(),
-      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-      tools: z.array(z.unknown()).optional(),
-      usage: z
-        .object({
-          inputTokens: z.number().optional(),
-          outputTokens: z.number().optional(),
-        })
-        .optional(),
-      thinking: z.array(z.unknown()).optional(),
-    }),
-    CompletionProviderBlockEventSchema,
-  ]),
-});
-export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
-
-/**
- * CLI Completion stream finished successfully
- */
-export const CliCompletionDoneAction = z.object({
-  action: z.literal('cli_completion_done'),
-  requestId: z.string(),
-});
-export type ICliCompletionDoneAction = z.infer<typeof CliCompletionDoneAction>;
-
-/**
- * CLI Completion stream error
- */
-export const CliCompletionErrorAction = z.object({
-  action: z.literal('cli_completion_error'),
-  requestId: z.string(),
-  error: z.string(),
-  /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
-  retryAfter: z.number().optional(),
-  /** Machine-readable reason, e.g. `tool_search_unsupported` or `provider_not_configured`. */
-  errorCode: z.string().optional(),
-  /** HTTP status the SSE route would have answered with. */
-  status: z.number().int().optional(),
-});
-export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 
 /**
  * CLI Tool execution response over WebSocket
@@ -1644,7 +1562,6 @@ export const MessageDataToServer = z.discriminatedUnion('action', [
   ReauthConnectionAction,
   VoiceSessionSendTranscriptAction,
   VoiceSessionEndedAction,
-  CliCompletionRequestAction,
   CliToolRequestAction,
   KeepCommandRequestAction,
   KeepCommandResponseAction,
@@ -1666,6 +1583,7 @@ export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedActio
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
   GenerationJobUpdatedAction,
+  StudioJobCompletedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
   ResubscribeRequiredAction,
@@ -1694,9 +1612,6 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   PiHistoryErrorAction,
   SessionCreatedAction,
   VoiceCreditsExhaustedAction,
-  CliCompletionChunkAction,
-  CliCompletionDoneAction,
-  CliCompletionErrorAction,
   CliToolResponseAction,
   KeepCommandAction,
   KeepCommandResultAction,

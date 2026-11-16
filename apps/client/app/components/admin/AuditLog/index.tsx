@@ -11,6 +11,7 @@ import { AuditNeedsReviewPanel } from './AuditNeedsReviewPanel';
 import { AuditSavedViewChips } from './AuditSavedViewChips';
 import { AuditSummaryStrip } from './AuditSummaryStrip';
 import { useAuditLogSearchParams } from './useAuditLogSearchParams';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 
 const RELATED_EVENTS_LIMIT = 20;
 const LIST_ERROR_MESSAGE = 'Could not load audit events. Refresh to try again.';
@@ -62,7 +63,7 @@ const AuditLogPage: React.FC = () => {
   );
 
   return (
-    <Stack spacing={2} sx={{ p: { xs: 1, sm: 2 } }} data-testid="audit-log-page">
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="audit-log-page">
       <AdminPageHeader title="Audit log" description="Review recorded changes, their actors and reasons." />
       {alertStatus && !alertStatus.alertsEnabled && (
         <Alert color="warning" variant="soft" data-testid="audit-alerts-off-banner">

@@ -33,7 +33,7 @@ import {
   shiftDay,
   unionSize,
   WAU_WINDOW_DAYS,
-} from './analyticsRollup';
+} from '@bike4mind/server-utils/analytics/analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
 // Per query: the live slice runs several stages in sequence, all inside the 60s API Lambda (infra/web.ts).

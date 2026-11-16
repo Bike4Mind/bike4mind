@@ -4,19 +4,22 @@ import { NATIVE_OAUTH_CLIENT_ID } from '@bike4mind/common';
 import { OAuthClientModel } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
+const PROD_ORIGIN = 'https://app.bike4mind.com';
 const NATIVE_OAUTH_REDIRECT_PATH = '/ios/auth-callback';
-export const NATIVE_OAUTH_REDIRECT_URI = `https://app.bike4mind.com${NATIVE_OAUTH_REDIRECT_PATH}`;
+export const NATIVE_OAUTH_REDIRECT_URI = `${PROD_ORIGIN}${NATIVE_OAUTH_REDIRECT_PATH}`;
 
 /**
- * The prod URI plus, on non-prod deploys, the one on this deploy's own origin (APP_URL). Without the
- * latter a preview/dev/staging DB would carry a redirect URI that can never match, and $setOnInsert
- * could not repair it later.
+ * The prod URI for `path` plus, on non-prod deploys, the one on this deploy's own origin (APP_URL).
+ * Without the latter a preview/dev/staging DB would carry a redirect URI that can never match, and
+ * $setOnInsert could not repair it later. Also used by the Android client (20260921236952).
  */
-export function resolveNativeOAuthRedirectUris(appUrl = process.env.APP_URL): string[] {
+export function resolveNativeOAuthRedirectUris(
+  appUrl = process.env.APP_URL,
+  path = NATIVE_OAUTH_REDIRECT_PATH
+): string[] {
   const origin = appUrl?.trim().replace(/\/+$/, '');
-  const uris = origin
-    ? [`${origin}${NATIVE_OAUTH_REDIRECT_PATH}`, NATIVE_OAUTH_REDIRECT_URI]
-    : [NATIVE_OAUTH_REDIRECT_URI];
+  const prodUri = `${PROD_ORIGIN}${path}`;
+  const uris = origin ? [`${origin}${path}`, prodUri] : [prodUri];
   return [...new Set(uris)];
 }
 

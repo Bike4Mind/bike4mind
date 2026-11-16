@@ -150,6 +150,38 @@ export interface IApiKeyScopePreflight {
   coverage: IApiKeyScopePreflightCoverage;
 }
 
+/** One key on the admin legacy-key list (GET /api/admin/api-keys/legacy). */
+export interface IAdminLegacyApiKeyRow {
+  keyId: string;
+  name: string;
+  keyPrefix: string;
+  userId: string;
+  /** Absent when the owner account no longer exists. */
+  ownerEmail?: string;
+  ownerName?: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
+/**
+ * Recently used legacy API keys and their owners: who still has to move to a scoped key
+ * before legacy access ends. Paged server-side, most recently used first.
+ */
+export interface IAdminLegacyApiKeys {
+  rows: IAdminLegacyApiKeyRow[];
+  page: number;
+  limit: number;
+  /** Matching keys across every page. */
+  total: number;
+  /** Distinct owners of the matching keys across every page. */
+  ownerCount: number;
+  /** Only keys used within this many days are listed. */
+  usedWithinDays: number;
+  /** The legacy window's dates (ISO); `null` until set. */
+  cutoff: string | null;
+  endsAt: string | null;
+}
+
 /**
  * The client signal a request carries: User-Agent, then x-b4m-client. Header names are matched
  * case-insensitively. Source attribution and per-client rate limiting both read this, so the two

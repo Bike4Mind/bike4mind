@@ -161,6 +161,12 @@ function serverMessage(error: unknown): string {
   return err?.response?.data?.error ?? err?.response?.data?.message ?? err?.message ?? String(error);
 }
 
+/** Names the scope a 403 from an API-key gate asks for, so the user knows what to re-mint the key with. */
+function scopeHint(error: unknown): string {
+  const required = (error as { response?: { data?: { required_scopes?: string[] } } }).response?.data?.required_scopes;
+  return required?.length ? ` (the API key needs ${required.join(' or ')})` : '';
+}
+
 /** The stamp is plain comment text, so only a same-origin URL is presented as provenance. */
 function isSameOrigin(url: string, apiOrigin: string | undefined): boolean {
   try {
@@ -241,7 +247,7 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<PushRe
     await api.put(`/api/skills/${existing.id}`, { ...payload, argumentHint: payload.argumentHint ?? '' });
     return { outcome: 'updated', skillId: existing.id };
   } catch (error) {
-    throw new Error(serverMessage(error));
+    throw new Error(`${serverMessage(error)}${scopeHint(error)}`);
   }
 }
 
@@ -292,10 +298,7 @@ export async function publishToMarket(
     });
     log(`Published listing "${listing.name}" (${listing.visibility}): ${describeVersion(version)}`);
   } catch (error) {
-    const required = (error as { response?: { data?: { required_scopes?: string[] } } }).response?.data
-      ?.required_scopes;
-    const hint = required?.length ? ` (the API key needs ${required.join(' or ')})` : '';
-    throw new Error(`Publishing to the Skill Market failed: ${serverMessage(error)}${hint}`);
+    throw new Error(`Publishing to the Skill Market failed: ${serverMessage(error)}${scopeHint(error)}`);
   }
 }
 

@@ -4,6 +4,7 @@ import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
+import { providerAdminKeyCronAccess, providerAdminKeyStore } from './providerAdminKeys';
 import { eventBus } from './bus';
 import {
   researchEngineQueue,
@@ -39,6 +40,7 @@ import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
+import './organizationRetention';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -475,6 +477,22 @@ const signupIpRetentionCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/signupIpRetention.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      },
+    })
+  : undefined;
+
+// Persona expiry sweep - bans every test persona past personaExpiresAt and revokes its sessions and keys.
+// With PersonaMintEnabled off it bans every live persona, which makes that setting the stage kill switch.
+const personaExpirySweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('personaExpirySweep', {
+      schedule: 'cron(5 * * * ? *)', // Hourly at :05
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/personaExpirySweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
         link: [...allSecrets],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
@@ -1182,6 +1200,10 @@ const agentExecutionAbandonedSweepCron = runsScheduledJobs
     })
   : undefined;
 
+// Provider admin keys come from the secret store in infra/providerAdminKeys.ts where it exists; the
+// linked Config secrets remain the source for stages and self-host deploys without it.
+const providerAdminKeyAccess = providerAdminKeyCronAccess(providerAdminKeyStore);
+
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
 const spendReconciliationCron = runsScheduledJobs
@@ -1195,7 +1217,9 @@ const spendReconciliationCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
         },
+        permissions: [...providerAdminKeyAccess.permissions],
       },
     })
   : undefined;
@@ -1216,12 +1240,14 @@ const providerUsagePollCron = runsScheduledJobs
         link: [...allSecrets],
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
+          ...providerAdminKeyAccess.environment,
         },
         permissions: [
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
           },
+          ...providerAdminKeyAccess.permissions,
         ],
       },
     })
@@ -1621,6 +1647,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
+  personaExpirySweepCron,
   signupRiskSweepCron,
   accountCampaignSweepCron,
   completionSequenceSweepCron,

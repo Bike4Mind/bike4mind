@@ -13,14 +13,14 @@ import {
 import { AdminAiAttemptModel, AdminAiSuggestionModel, Cache, adminAiSuggestionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
-import { DecisionRequestError } from '@server/decisions/decisionErrors';
-import type { ExecuteDecisionParams, ExecutedDecision } from '@server/decisions/executeDecision';
+import { DecisionRequestError } from '@bike4mind/server-utils/decisions/decisionErrors';
+import type { ExecuteDecisionParams, ExecutedDecision } from '@bike4mind/server-utils/decisions/executeDecision';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { completionCeilingUsd, completionUsd } from '@server/billing/meterPlatformCompletion';
-import { toMicroUsd } from '@server/decisions/platformDecision';
+import { completionCeilingUsd, completionUsd } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { toMicroUsd } from '@bike4mind/server-utils/decisions/platformDecision';
 import { readAdminAiSpend } from './budget';
 import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 

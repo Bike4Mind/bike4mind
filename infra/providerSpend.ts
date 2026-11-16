@@ -1,11 +1,25 @@
 /**
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
- * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus an alarm
- * on the poller failing and a small dashboard. The ledger-derived twin is infra/llmSpend.ts.
+ * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
+ * on the poller failing or skipping a provider, and a small dashboard. The ledger-derived twin is
+ * infra/llmSpend.ts.
+ *
+ * Also holds the access policy and the access alarms for the provider admin key store
+ * (infra/providerAdminKeys.ts) the two spend crons read.
  */
 
-import { providerUsagePollCron } from './cron';
+import { providerUsagePollCron, spendReconciliationCron } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import {
+  PROVIDER_ADMIN_KEY_PROVIDERS,
+  providerAdminKeyChangeEventPattern,
+  providerAdminKeyKmsEventPattern,
+  providerAdminKeyLogsPolicy,
+  providerAdminKeyReadEventPattern,
+  providerAdminKeySecretPolicy,
+  providerAdminKeyStore,
+  type ProviderAdminKeyStore,
+} from './providerAdminKeys';
 import { parseAlarmThreshold } from './signupAlarmThreshold';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
@@ -31,6 +45,40 @@ const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number],
 };
 
 let providerSpendDashboard: aws.cloudwatch.Dashboard | undefined;
+
+// Names the access policy and the access rules need, resolved to plain strings.
+function resolveAdminKeyStoreRefs(store: ProviderAdminKeyStore) {
+  if (!providerUsagePollCron || !spendReconciliationCron) {
+    throw new Error('the provider admin key store requires both spend crons');
+  }
+  return $resolve({
+    readerRoleArns: [
+      providerUsagePollCron.nodes.function.nodes.role.arn,
+      spendReconciliationCron.nodes.function.nodes.role.arn,
+    ],
+    secrets: PROVIDER_ADMIN_KEY_PROVIDERS.map(provider => ({
+      name: store.secrets[provider].name,
+      arn: store.secrets[provider].arn,
+    })),
+    keyId: store.key.keyId,
+    keyArn: store.key.arn,
+  });
+}
+
+const adminKeyStore = providerAdminKeyStore && {
+  store: providerAdminKeyStore,
+  refs: resolveAdminKeyStoreRefs(providerAdminKeyStore),
+};
+
+if (adminKeyStore) {
+  for (const provider of PROVIDER_ADMIN_KEY_PROVIDERS) {
+    new aws.secretsmanager.SecretPolicy(`ProviderAdminKeySecretPolicy-${provider}`, {
+      secretArn: adminKeyStore.store.secrets[provider].arn,
+      policy: adminKeyStore.refs.apply(refs => JSON.stringify(providerAdminKeySecretPolicy(refs.readerRoleArns))),
+      blockPublicPolicy: true,
+    });
+  }
+}
 
 if (isMonitoredStage) {
   if (!dlqAlarmTopic || !oobAlarmTopic) {
@@ -64,6 +112,26 @@ if (isMonitoredStage) {
 
   // The cron only exists where scheduled jobs run, so a preview that opts in to monitoring has none.
   if (providerUsagePollCron) {
+    // Fires on the ProviderUsagePollSkipped datum the poller publishes, in place of spend, for a
+    // provider with no admin key.
+    for (const provider of PROVIDER_SPEND_PROVIDERS) {
+      new aws.cloudwatch.MetricAlarm(`providerUsagePollSkipped-${provider}`, {
+        name: `${prefix}-provider-usage-poll-skipped-${provider}`,
+        alarmDescription: `Usage poller skipped ${provider}: admin key not configured`,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'ProviderUsagePollSkipped',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Sum',
+        threshold: 1,
+        treatMissingData: 'notBreaching',
+        alarmActions: [dlqAlarmTopic.arn],
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
+      });
+    }
+
     new aws.cloudwatch.MetricAlarm('providerUsagePollErrors', {
       name: `${prefix}-provider-usage-poll-errors`,
       alarmDescription: 'The hourly provider usage poller failed, so the provider-reported spend alarms are blind',
@@ -79,6 +147,100 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });
+  }
+
+  if (adminKeyStore) {
+    // Matched events land here so the CloudTrail record of each access is kept.
+    const accessLogGroup = new aws.cloudwatch.LogGroup('ProviderAdminKeyAccessLogs', {
+      name: `/aws/events/${prefix}-provider-admin-key-access`,
+      retentionInDays: 365,
+    });
+
+    new aws.cloudwatch.LogResourcePolicy('ProviderAdminKeyAccessLogsPolicy', {
+      policyName: `${prefix}-provider-admin-key-access`,
+      policyDocument: accessLogGroup.arn.apply(arn => JSON.stringify(providerAdminKeyLogsPolicy(arn))),
+    });
+
+    const readRuleName = `${prefix}-provider-admin-key-read`;
+    const changeRuleName = `${prefix}-provider-admin-key-change`;
+    const kmsChangeRuleName = `${prefix}-provider-admin-key-kms-change`;
+
+    const readRule = new aws.cloudwatch.EventRule('ProviderAdminKeyReadRule', {
+      name: readRuleName,
+      description: 'A principal other than the spend crons read a provider admin key secret',
+      // Read-only management events reach a rule only in this state.
+      state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(
+          providerAdminKeyReadEventPattern({ secrets: refs.secrets, allowedRoleArns: refs.readerRoleArns })
+        )
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyReadTarget', {
+      rule: readRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const changeRule = new aws.cloudwatch.EventRule('ProviderAdminKeyChangeRule', {
+      name: changeRuleName,
+      description: 'A provider admin key secret or its policy was changed',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(providerAdminKeyChangeEventPattern({ secrets: refs.secrets }))
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyChangeTarget', {
+      rule: changeRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const kmsChangeRule = new aws.cloudwatch.EventRule('ProviderAdminKeyKmsChangeRule', {
+      name: kmsChangeRuleName,
+      description: 'The provider admin key store KMS key policy, grants or lifecycle changed',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(providerAdminKeyKmsEventPattern({ keyId: refs.keyId, keyArn: refs.keyArn }))
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyKmsChangeTarget', {
+      rule: kmsChangeRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const accessAlarms = [
+      {
+        id: 'Read',
+        ruleName: readRuleName,
+        alarmDescription: 'A principal other than the spend crons read a provider admin key secret',
+      },
+      {
+        id: 'Change',
+        ruleName: changeRuleName,
+        alarmDescription: 'A provider admin key secret or its resource policy was changed',
+      },
+      {
+        id: 'KmsChange',
+        ruleName: kmsChangeRuleName,
+        alarmDescription:
+          'The KMS key that encrypts the provider admin key secrets had its policy, grants or lifecycle changed',
+      },
+    ];
+
+    for (const { id, ruleName, alarmDescription } of accessAlarms) {
+      new aws.cloudwatch.MetricAlarm(`ProviderAdminKey${id}Alarm`, {
+        name: ruleName,
+        alarmDescription,
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 1,
+        metricName: 'MatchedEvents',
+        namespace: 'AWS/Events',
+        dimensions: { RuleName: ruleName },
+        period: 300,
+        statistic: 'Sum',
+        threshold: 1,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Critical' },
+      });
+    }
   }
 
   const dashboardBody = aws.getRegionOutput().name.apply(region => {

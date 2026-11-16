@@ -9,7 +9,7 @@ import {
   raceAbort,
   toDataUrl,
 } from '../shared';
-import type { ImageInputs, ImageProvider } from '../types';
+import type { ImageInputs, SyncImageProvider } from '../types';
 
 export type OpenAIImageProviderOptions = {
   /** The ImageProcessor Lambda, which a masked edit needs (the mask is converted to PNG there). Read per call. */
@@ -24,7 +24,7 @@ type SdkSize = OpenAIImageGenerationOptions['size'];
  * prompt (references go through the edit endpoint, as the chat path does); `edit` mode edits the edit_source image,
  * optionally masked.
  */
-export class OpenAIImageProvider implements ImageProvider {
+export class OpenAIImageProvider implements SyncImageProvider {
   readonly mode = 'sync' as const;
   readonly id = 'openai' as const;
   readonly models = OPENAI_IMAGE_MODELS;

@@ -12,7 +12,6 @@ const mockDlqUrls = vi.hoisted(() => ({
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
-  'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
   'slack-export': 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueueDLQ',
@@ -20,6 +19,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'webhook-delivery': 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueueDLQ',
   'quest-export': 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueueDLQ',
   'account-data-export': 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueueDLQ',
+  'account-erasure': 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueueDLQ',
   'liveops-triage': 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueueDLQ',
   'email-ingestion': 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueueDLQ',
   'email-analysis': 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueueDLQ',
@@ -56,6 +56,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'revenue-snapshot',
       'subscription-reconciliation',
       'account-deletion-sweep',
+      'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
       'session-enrichment',
@@ -80,7 +81,6 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   generationJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
-  whatsNewHighlightsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueue',
   notebookCurationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueue',
   agentProactiveMessageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueue',
   slackExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueue',
@@ -88,6 +88,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   webhookDeliveryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueue',
   questExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueue',
   accountDataExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueue',
+  accountErasureQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueue',
   liveOpsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueue',
   emailIngestionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueue',
   emailAnalysisQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueue',
@@ -132,13 +133,17 @@ import {
   getSourceQueueUrl,
   getDlqUrl,
   missingQueueHelp,
+  entityAt,
+  firstEntity,
+  noEntity,
+  describeDlqMessage,
 } from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(61);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {
@@ -282,5 +287,50 @@ describe('dlqUrls Linkable', () => {
         .map(entry => entry.label)
         .sort()
     );
+  });
+});
+
+describe('dead-letter message describe', () => {
+  it('every core entry describes its messages', () => {
+    const undescribed = coreDlqDescriptors()
+      .filter(entry => typeof entry.describe !== 'function')
+      .map(entry => entry.label);
+    expect(undescribed).toEqual([]);
+  });
+
+  it('entityAt reads the first dotted path that holds a string or number', () => {
+    const describe = entityAt('Quest', 'payload.questId', 'questId');
+    expect(describe({ payload: { questId: 'q1' } })).toEqual({ type: 'Quest', id: 'q1' });
+    expect(describe({ questId: 42 })).toEqual({ type: 'Quest', id: '42' });
+    expect(entityAt('Notebook', 'sessionIds.0')({ sessionIds: ['s1', 's2'] })).toEqual({ type: 'Notebook', id: 's1' });
+    expect(describe({ payload: {} })).toBeNull();
+    expect(describe('not an object')).toBeNull();
+  });
+
+  it('firstEntity falls through to the next describer', () => {
+    const describe = firstEntity(entityAt('Invoice', 'invoiceId'), entityAt('Subscription', 'subscriptionId'));
+    expect(describe({ subscriptionId: 'sub_1' })).toEqual({ type: 'Subscription', id: 'sub_1' });
+    expect(describe({})).toBeNull();
+    expect(noEntity({ anything: 'x' })).toBeNull();
+  });
+
+  it('describeDlqMessage parses the body and tolerates non-JSON or a missing describe', () => {
+    const entry = getDlqByLabel('fab-file-vectorize')!;
+    expect(describeDlqMessage(entry, '{"fabFileId":"f1"}')).toEqual({ type: 'File', id: 'f1' });
+    expect(describeDlqMessage(entry, 'not json')).toBeNull();
+    expect(describeDlqMessage(entry, undefined)).toBeNull();
+    expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
+  });
+
+  it("release-notes tells the two kinds on the merged What's New DLQ apart", () => {
+    const entry = getDlqByLabel('release-notes')!;
+    expect(describeDlqMessage(entry, '{"kind":"release-notes","releaseTag":"v1.2.3.4"}')).toEqual({
+      type: 'Release',
+      id: 'v1.2.3.4',
+    });
+    expect(describeDlqMessage(entry, '{"kind":"highlights","correlationId":"c1","environment":"dev"}')).toEqual({
+      type: 'Highlights run',
+      id: 'c1',
+    });
   });
 });

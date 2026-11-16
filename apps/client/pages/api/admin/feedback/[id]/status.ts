@@ -5,7 +5,9 @@ import {
   ConflictError,
   NotFoundError,
   UpdateFeedbackStatusRequestSchema,
-  type FeedbackStatus,
+  FeedbackStatus,
+  FEEDBACK_RESOLUTIONS,
+  type AuditChange,
   type UpdateFeedbackStatusResponse,
 } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -19,12 +21,13 @@ import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server
  */
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:moderate' } }).patch(
   async (req: Request, res) => {
-    const id = String(req.query.id ?? '');
-    if (!isValidObjectId(id)) throw new NotFoundError('Feedback not found');
+    const requestedId = String(req.query.id ?? '');
+    if (!isValidObjectId(requestedId)) throw new NotFoundError('Feedback not found');
+    const id = requestedId.toLowerCase();
 
     const parsed = UpdateFeedbackStatusRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid status');
-    const { status, expectedStatus, undoOf } = parsed.data;
+    const { status, expectedStatus, undoOf, reason } = parsed.data;
 
     const undone = undoOf ? await adminAuditLogRepository.findById(undoOf) : null;
     if (undoOf) {
@@ -38,13 +41,14 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
 
     const result = await withTransaction(async () => {
       const current = await FeedbackModel.findById(id)
-        .select('userId status handledBy handledAt handledAuditEntryId')
+        .select('userId status resolution resolutionDuplicateId handledBy handledAt handledAuditEntryId')
         .lean();
       if (!current) throw new NotFoundError('Feedback not found');
       const previousStatus = current.status as FeedbackStatus;
       if (expectedStatus && previousStatus !== expectedStatus) {
         throw new ConflictError(`This report is already ${previousStatus}. Refresh and try again.`);
       }
+      // Resolution corrections use reopen/reclose so Undo keeps its status-transition contract.
       if (previousStatus === status) {
         return { previousStatus, handledBy: current.handledBy, handledAt: current.handledAt, auditEntryId: null };
       }
@@ -57,6 +61,36 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
         throw new ConflictError('This status change is no longer the latest one. Refresh and try again.');
       }
 
+      const restoredResolution = undone?.changes?.find(change => change.field === 'resolution')?.before;
+      const restoredDuplicateId = undone?.changes?.find(change => change.field === 'resolutionDuplicateId')?.before;
+      const resolution =
+        status === FeedbackStatus.Closed ? (undoOf ? restoredResolution : parsed.data.resolution) : undefined;
+      const duplicateId =
+        resolution === 'duplicate' ? (undoOf ? restoredDuplicateId : parsed.data.resolutionDuplicateId) : undefined;
+      if (status === FeedbackStatus.Closed && !FEEDBACK_RESOLUTIONS.some(value => value === resolution)) {
+        throw new BadRequestError('Choose a resolution before closing');
+      }
+      if (resolution === 'duplicate') {
+        if (
+          typeof duplicateId !== 'string' ||
+          !isValidObjectId(duplicateId) ||
+          duplicateId.toLowerCase() === id.toLowerCase()
+        ) {
+          throw new BadRequestError('Choose another report as the original');
+        }
+        if (!(await FeedbackModel.exists({ _id: duplicateId }))) throw new BadRequestError('Original report not found');
+      }
+
+      const changes: AuditChange[] = [{ field: 'status', before: previousStatus, after: status }];
+      if (current.resolution !== resolution)
+        changes.push({ field: 'resolution', before: current.resolution ?? null, after: resolution ?? null });
+      if (current.resolutionDuplicateId !== duplicateId)
+        changes.push({
+          field: 'resolutionDuplicateId',
+          before: current.resolutionDuplicateId ?? null,
+          after: duplicateId ?? null,
+        });
+
       const handledAt = new Date();
       const entry = await recordAdminActionFromRequest(req, {
         action: 'feedback.status_changed',
@@ -64,13 +98,26 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
         summary: undoOf
           ? `undid a feedback status change: ${previousStatus} back to ${status}`
           : `changed feedback status from ${previousStatus} to ${status}`,
-        changes: [{ field: 'status', before: previousStatus, after: status }],
+        changes,
+        reason,
         details: { feedbackId: id, ...(undoOf ? { undoOf } : {}) },
       });
       if (!entry) throw new Error('Feedback status change requires an audit entry');
       const { matchedCount } = await FeedbackModel.updateOne(
         { _id: id, status: previousStatus },
-        { $set: { status, handledBy: adminId, handledAt, handledAuditEntryId: entry.id } }
+        {
+          $set: {
+            status,
+            handledBy: adminId,
+            handledAt,
+            handledAuditEntryId: entry.id,
+            ...(resolution ? { resolution, ...(duplicateId ? { resolutionDuplicateId: duplicateId } : {}) } : {}),
+          },
+          $unset: {
+            ...(!resolution ? { resolution: '' } : {}),
+            ...(!duplicateId ? { resolutionDuplicateId: '' } : {}),
+          },
+        }
       );
       if (matchedCount === 0) throw new ConflictError('This report changed while saving. Refresh and try again.');
 

@@ -22,12 +22,20 @@ public struct GenerationHandle: Hashable, Codable, Sendable, Identifiable {
   public let id: String
   public let prompt: String
   public let startedAt: Date
+  /// What it was made with, for "Use these settings". Optional so handles persisted before these existed decode.
+  public let modelID: String?
+  public let params: GenerationParams?
 
-  public init(kind: GenerationKind, id: String, prompt: String, startedAt: Date) {
+  public init(
+    kind: GenerationKind, id: String, prompt: String, startedAt: Date, modelID: String? = nil,
+    params: GenerationParams? = nil
+  ) {
     self.kind = kind
     self.id = id
     self.prompt = prompt
     self.startedAt = startedAt
+    self.modelID = modelID
+    self.params = params
   }
 
   /// Video and music jobs can be cancelled; an image quest runs to the end.

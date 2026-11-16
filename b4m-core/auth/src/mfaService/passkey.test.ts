@@ -8,6 +8,7 @@ import type {
   IUserDocument,
   PasskeyChallengePurpose,
 } from '@bike4mind/common';
+import { generateBackupCodes, hashBackupCode } from './utils';
 import {
   MAX_PASSKEYS_PER_USER,
   finishPasskeyAuthentication,
@@ -171,19 +172,28 @@ const makeUser = (id = 'user-1', mfa: Record<string, unknown> | null = {}): IUse
   }) as unknown as IUserDocument;
 
 let deps: PasskeyDeps & { credentials: MemoryCredentials; challenges: MemoryChallenges };
-const users = { update: vi.fn(async (u: unknown) => u as IUserDocument) };
+const users = {
+  update: vi.fn(async (u: unknown, _options?: unknown) => u as IUserDocument),
+  atomicEnablePasskeyMfa: vi.fn(async (_userId: string, _hashedCodes: string[]) => ({}) as IUserDocument | null),
+};
+const registrationDeps = () => ({ ...deps, users });
 
 beforeEach(() => {
   deps = { credentials: new MemoryCredentials(), challenges: new MemoryChallenges() };
   users.update.mockClear();
+  users.atomicEnablePasskeyMfa.mockReset();
+  users.atomicEnablePasskeyMfa.mockResolvedValue({} as IUserDocument);
 });
 
 async function enroll(user: IUserDocument, authenticator = new SoftAuthenticator()) {
   const options = await startPasskeyRegistration({ user, rp: RP }, deps);
   await finishPasskeyRegistration(
     { user, rp: RP, response: authenticator.register(options.challenge), name: 'Laptop' },
-    deps
+    registrationDeps()
   );
+  // Enrollment side effects are not what the calling test asserts on.
+  users.update.mockClear();
+  users.atomicEnablePasskeyMfa.mockClear();
   return authenticator;
 }
 
@@ -212,10 +222,10 @@ describe('passkey registration ceremony', () => {
 
     const created = await finishPasskeyRegistration(
       { user, rp: RP, response: authenticator.register(options.challenge), name: '  Laptop  ' },
-      deps
+      registrationDeps()
     );
 
-    expect(created).toMatchObject({
+    expect(created.credential).toMatchObject({
       userId: 'user-1',
       credentialId: authenticator.id,
       counter: 0,
@@ -232,9 +242,10 @@ describe('passkey registration ceremony', () => {
     expect(options.excludeCredentials?.map(c => c.id)).toEqual([authenticator.id]);
   });
 
-  it('requires authenticator-app MFA to be on before enrolling', async () => {
-    await expect(startPasskeyRegistration({ user: makeUser('u', null), rp: RP }, deps)).rejects.toMatchObject({
-      code: 'mfa_not_enabled',
+  it('does not require another factor before enrolling', async () => {
+    const user = makeUser('u', null);
+    await expect(startPasskeyRegistration({ user, rp: RP }, deps)).resolves.toMatchObject({
+      rp: { id: RP.rpID },
     });
   });
 
@@ -244,7 +255,7 @@ describe('passkey registration ceremony', () => {
     await expect(
       finishPasskeyRegistration(
         { user, rp: RP, response: new SoftAuthenticator().register(options.challenge, PHISHING_ORIGIN) },
-        deps
+        registrationDeps()
       )
     ).rejects.toMatchObject({ code: 'verification_failed' });
     expect(deps.credentials.rows).toHaveLength(0);
@@ -254,8 +265,8 @@ describe('passkey registration ceremony', () => {
     const user = makeUser();
     const options = await startPasskeyRegistration({ user, rp: RP }, deps);
     const response = new SoftAuthenticator().register(options.challenge);
-    await finishPasskeyRegistration({ user, rp: RP, response }, deps);
-    await expect(finishPasskeyRegistration({ user, rp: RP, response }, deps)).rejects.toMatchObject({
+    await finishPasskeyRegistration({ user, rp: RP, response }, registrationDeps());
+    await expect(finishPasskeyRegistration({ user, rp: RP, response }, registrationDeps())).rejects.toMatchObject({
       code: 'challenge_expired',
     });
   });
@@ -265,7 +276,10 @@ describe('passkey registration ceremony', () => {
     const stale = await startPasskeyRegistration({ user, rp: RP }, deps);
     await startPasskeyRegistration({ user, rp: RP }, deps);
     await expect(
-      finishPasskeyRegistration({ user, rp: RP, response: new SoftAuthenticator().register(stale.challenge) }, deps)
+      finishPasskeyRegistration(
+        { user, rp: RP, response: new SoftAuthenticator().register(stale.challenge) },
+        registrationDeps()
+      )
     ).rejects.toMatchObject({ code: 'verification_failed' });
   });
 
@@ -273,6 +287,88 @@ describe('passkey registration ceremony', () => {
     const user = makeUser();
     for (let i = 0; i < MAX_PASSKEYS_PER_USER; i++) await enroll(user);
     await expect(startPasskeyRegistration({ user, rp: RP }, deps)).rejects.toMatchObject({ code: 'limit_reached' });
+  });
+});
+
+describe('passkey registration and the MFA factor', () => {
+  const register = async (user: IUserDocument, pendingSignIn = false) => {
+    const options = await startPasskeyRegistration({ user, rp: RP }, deps);
+    return finishPasskeyRegistration(
+      { user, rp: RP, response: new SoftAuthenticator().register(options.challenge), pendingSignIn },
+      registrationDeps()
+    );
+  };
+
+  it('turns MFA on for a user with no factor, issuing 10 hashed backup codes shown once', async () => {
+    const result = await register(makeUser('user-1', null));
+
+    expect(result.firstFactor).toBe(true);
+    expect(result.backupCodes).toHaveLength(10);
+    expect(users.atomicEnablePasskeyMfa).toHaveBeenCalledTimes(1);
+    const [userId, hashed] = users.atomicEnablePasskeyMfa.mock.calls[0];
+    expect(userId).toBe('user-1');
+    expect(hashed).toHaveLength(10);
+    expect(hashed).toEqual(result.backupCodes!.map(hashBackupCode));
+    expect(hashed).not.toContain(result.backupCodes![0]);
+    expect(users.update).not.toHaveBeenCalled();
+  });
+
+  it('treats a user with a pending (unconfirmed) authenticator app as having no factor', async () => {
+    const result = await register(makeUser('user-1', { totpEnabled: false, passkeyEnabled: false }));
+    expect(result.firstFactor).toBe(true);
+    expect(users.atomicEnablePasskeyMfa).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the passkey and refuses when a pending sign-in loses the first-factor race', async () => {
+    users.atomicEnablePasskeyMfa.mockResolvedValue(null);
+    const error = await register(makeUser('user-1', null), true).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ name: 'PasskeyError', code: 'mfa_already_enabled' });
+    expect(await deps.credentials.countByUser('user-1')).toBe(0);
+    expect(users.update).not.toHaveBeenCalled();
+  });
+
+  it('flags the passkey without issuing codes when a concurrent enrollment won the first-factor race', async () => {
+    users.atomicEnablePasskeyMfa.mockResolvedValue(null);
+    const result = await register(makeUser('user-1', null));
+
+    expect(result).toMatchObject({ firstFactor: false, backupCodes: null });
+    expect(users.update).toHaveBeenCalledTimes(1);
+    expect(users.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1', 'mfa.passkeyEnabled': true }));
+  });
+
+  it('adds a passkey to an authenticator-app user without touching the first-factor path', async () => {
+    const result = await register(makeUser());
+
+    expect(result).toMatchObject({ firstFactor: false, backupCodes: null });
+    expect(users.atomicEnablePasskeyMfa).not.toHaveBeenCalled();
+    expect(users.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1', 'mfa.passkeyEnabled': true }));
+    expect(users.update.mock.calls[0][0]).not.toHaveProperty('mfa');
+  });
+
+  it('writes nothing more when the passkey flag is already set', async () => {
+    const result = await register(makeUser('user-1', { passkeyEnabled: true }));
+
+    expect(result).toMatchObject({ firstFactor: false, backupCodes: null });
+    expect(users.atomicEnablePasskeyMfa).not.toHaveBeenCalled();
+    expect(users.update).not.toHaveBeenCalled();
+  });
+
+  it('does not enable MFA when the attestation fails', async () => {
+    const user = makeUser('user-1', null);
+    const options = await startPasskeyRegistration({ user, rp: RP }, deps);
+    await expect(
+      finishPasskeyRegistration(
+        { user, rp: RP, response: new SoftAuthenticator().register(options.challenge, PHISHING_ORIGIN) },
+        registrationDeps()
+      )
+    ).rejects.toMatchObject({ code: 'verification_failed' });
+    expect(users.atomicEnablePasskeyMfa).not.toHaveBeenCalled();
+  });
+
+  it('generates codes that round-trip through the hash helper', () => {
+    const [code] = generateBackupCodes();
+    expect(hashBackupCode(code)).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
@@ -291,9 +387,33 @@ describe('passkey authentication ceremony', () => {
 
     expect(result.credentialId).toBe(deps.credentials.rows[0].id);
     expect(deps.credentials.rows[0].counter).toBe(1);
-    const written = users.update.mock.calls[0][0] as { mfa: Record<string, unknown> };
-    expect(written.mfa).toMatchObject({ failedAttempts: 0, lockedUntil: undefined, totpSecret: 'SECRET' });
-    expect(written.mfa.lastUsedAt).toBeInstanceOf(Date);
+    const written = users.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(written).toMatchObject({ id: 'user-1', 'mfa.failedAttempts': 0 });
+    expect(written['mfa.lastUsedAt']).toBeInstanceOf(Date);
+    expect(written).not.toHaveProperty('mfa');
+    expect(users.update.mock.calls[0][1]).toEqual({ unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] });
+  });
+
+  it('succeeds for a passkey-only user (no authenticator app, no totpSecret) with a field-level write', async () => {
+    const user = makeUser('user-1', {
+      totpEnabled: false,
+      totpSecret: undefined,
+      passkeyEnabled: true,
+      backupCodes: [],
+    });
+    const authenticator = await enroll(user);
+    const options = await startPasskeyAuthentication({ userId: user.id, rp: RP }, deps);
+
+    const result = await finishPasskeyAuthentication(
+      { user, rp: RP, response: authenticator.authenticate(options.challenge) },
+      { ...deps, users }
+    );
+
+    expect(result.credentialId).toBe(deps.credentials.rows[0].id);
+    const [written, options2] = users.update.mock.calls[0] as [Record<string, unknown>, unknown];
+    expect(written).not.toHaveProperty('mfa');
+    expect(written['mfa.failedAttempts']).toBe(0);
+    expect(options2).toEqual({ unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] });
   });
 
   it('refuses to start when the user has no passkeys', async () => {
@@ -378,6 +498,22 @@ describe('passkey authentication ceremony', () => {
     await expect(finishPasskeyAuthentication({ user, rp: RP, response }, { ...deps, users })).rejects.toMatchObject({
       code: 'verification_failed',
     });
+  });
+
+  it('refuses a user with only a pending authenticator app and no passkey flag', async () => {
+    const user = makeUser();
+    const authenticator = await enroll(user);
+    const options = await startPasskeyAuthentication({ userId: user.id, rp: RP }, deps);
+    await expect(
+      finishPasskeyAuthentication(
+        {
+          user: makeUser('user-1', { totpEnabled: false }),
+          rp: RP,
+          response: authenticator.authenticate(options.challenge),
+        },
+        { ...deps, users }
+      )
+    ).rejects.toMatchObject({ code: 'mfa_not_enabled' });
   });
 
   it('refuses when MFA has been turned off', async () => {

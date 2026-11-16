@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { DEFAULT_OPERATIONS_IMAGE_MODEL } from '@bike4mind/server-utils/utils/modelResolvers';
 import { z } from 'zod';
-import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ, SpeechToTextModels } from '@bike4mind/common';
 
 const UpdateOperationsModelSchema = z.object({
   modelId: z.string(),
@@ -19,7 +19,7 @@ const UpdateOperationsModelSchema = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req: Request, res: Response) => {

@@ -57,7 +57,14 @@ describe('holderExportScope', () => {
   });
 
   it('exports the whole document on a scalar retain match', () => {
-    expect(holderExportScope([match('AdminAuditLog', 'actor.userId')])).toEqual(WHOLE);
+    expect(holderExportScope([match('AdminAuditLog', 'target.id')])).toEqual(WHOLE);
+  });
+
+  it("exports only the actor's reference and identifying fields from a record about someone else", () => {
+    expect(holderExportScope([match('AdminAuditLog', 'actor.userId')])).toEqual({
+      scope: 'matchedPaths',
+      paths: ['actor.userId', 'actor.email', 'actor.name', 'actor.apiKeyId', 'context.ip', 'context.userAgent'],
+    });
   });
 
   it('exports only the matching elements on an array match, whatever the action', () => {
