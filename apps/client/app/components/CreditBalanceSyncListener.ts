@@ -1,8 +1,7 @@
 import { useEffect } from 'react';
 import { isCancelledError, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { useUser } from '@client/app/contexts/UserContext';
-import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from '@client/app/hooks/data/credits';
+import { CREDITS_BALANCE_KEY, fetchCreditsBalance, writeBilledBalance } from '@client/app/hooks/data/credits';
 import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
@@ -12,21 +11,6 @@ import { useStreamingState } from '@client/app/hooks/useStreamingState';
  * `POST_STREAM_HOLD_MAX_MS` in useEffectiveCredits must stay above the last entry.
  */
 export const BALANCE_SYNC_DELAYS_MS = [1500, 5000] as const;
-
-/**
- * Copy a billed-balance response into `currentUser.currentCredits`, where the composer chip and the Studio header
- * read the personal balance. A missing or non-numeric balance is ignored.
- */
-export function writeBilledBalance(balance: { currentCredits?: unknown } | null | undefined): void {
-  const { currentUser, setCurrentUser } = useUser.getState();
-  if (
-    currentUser &&
-    typeof balance?.currentCredits === 'number' &&
-    balance.currentCredits !== currentUser.currentCredits
-  ) {
-    setCurrentUser({ ...currentUser, currentCredits: balance.currentCredits });
-  }
-}
 
 /**
  * Pull the billed balance from the server and write it where the composer chip reads it:

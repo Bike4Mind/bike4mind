@@ -1,6 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { writeBilledBalance } from '@client/app/components/CreditBalanceSyncListener';
-import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from './credits';
+import { CREDITS_BALANCE_KEY, fetchCreditsBalance, writeBilledBalance } from './credits';
 
 /**
  * Refresh every balance a generation's charge or refund moves; every Studio medium calls this at submit and at
