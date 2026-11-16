@@ -6820,7 +6820,7 @@ export const settingsMap = {
     name: 'Enable Studio Create v2',
     defaultValue: false,
     description:
-      'Admin-only preview of the restructured Studio Create area. Non-admins never see it, whatever this is set to.',
+      'The restructured Studio Create area, for every user. Off, everyone gets the legacy Studio tabs; this is the kill switch.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 300,
@@ -6829,7 +6829,8 @@ export const settingsMap = {
     key: 'EnableStudioImage',
     name: 'Enable Image in Studio',
     defaultValue: false,
-    description: 'Admin-only preview of the Image tab in Studio. Non-admins never see it, whatever this is set to.',
+    description:
+      'The Image medium in Studio Create, for every user. Needs Enable Studio Create v2; off, the Image medium is hidden.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 301,

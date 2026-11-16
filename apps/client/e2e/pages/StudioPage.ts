@@ -28,7 +28,7 @@ export const parseAudioEstimate = (text: string | null): number => {
 };
 
 /**
- * Page object for Studio (`/studio/$modality`): the tab strip, each modality's form, and the
+ * Page object for Studio (`/studio/$modality`): the tab strip or Create v2 medium rail, each modality's form, and the
  * gallery of the user's generations with its media player.
  *
  * Test ids come from STUDIO_MODALITY_DEFINITIONS (`<testId>-page`), CapabilityForm (`video-form-*`,
@@ -41,8 +41,25 @@ export class StudioPage extends BasePage {
     return this.page.getByTestId(`${modality}-studio-page`);
   }
 
+  /** The Create v2 medium rail; absent on the legacy page. */
+  mediumRail(): Locator {
+    return this.page.getByTestId('studio-medium-rail');
+  }
+
+  /**
+   * A modality's entry in whichever layout is showing: the legacy tab strip (`studio-tab-*`) or the Create v2
+   * medium rail (`studio-rail-*`). EnableStudioCreateV2 picks the layout for every user, so a stage can serve
+   * either and the spec accepts both.
+   */
   tab(modality: StudioModality): Locator {
-    return this.page.getByTestId(`studio-tab-${modality}`);
+    return this.page.getByTestId(`studio-tab-${modality}`).or(this.page.getByTestId(`studio-rail-${modality}`));
+  }
+
+  /** Which Studio layout this stage serves, once one of them has rendered. */
+  async layout(): Promise<'legacy' | 'createV2'> {
+    const tabs = this.page.getByTestId('studio-tabs');
+    await expect(tabs.or(this.mediumRail())).toBeVisible({ timeout: TIMEOUTS.ACTION });
+    return (await this.mediumRail().isVisible()) ? 'createV2' : 'legacy';
   }
 
   async goto(modality: StudioModality) {
@@ -57,7 +74,11 @@ export class StudioPage extends BasePage {
   async waitForModality(modality: StudioModality) {
     await expect(this.page).toHaveURL(new RegExp(`/studio/${modality}(?:[?#]|$)`), { timeout: TIMEOUTS.NAVIGATION });
     await expect(this.pageRoot(modality)).toBeVisible({ timeout: TIMEOUTS.ACTION });
-    await expect(this.tab(modality)).toHaveAttribute('aria-selected', 'true');
+    if ((await this.layout()) === 'createV2') {
+      await expect(this.tab(modality)).toHaveAttribute('aria-current', 'page');
+    } else {
+      await expect(this.tab(modality)).toHaveAttribute('aria-selected', 'true');
+    }
     await expect(this.form(modality)).toBeVisible({ timeout: TIMEOUTS.ACTION });
   }
 

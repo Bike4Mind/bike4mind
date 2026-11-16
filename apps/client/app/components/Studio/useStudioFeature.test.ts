@@ -44,9 +44,21 @@ describe('useStudioFeature', () => {
     expect(renderHook(() => useStudioFeature('image')).result.current).toBe(false);
   });
 
-  it('stays closed to a non-admin when the flag is on', () => {
+  it('opens Create v2 and Image to a non-admin when their settings are on', () => {
+    h.enabledSettings = new Set(['EnableStudioCreateV2', 'EnableStudioImage']);
+    expect(renderHook(() => useStudioFeature('createV2')).result.current).toBe(true);
+    expect(renderHook(() => useStudioFeature('image')).result.current).toBe(true);
+  });
+
+  it('keeps Create v2 closed to a non-admin when its setting is off', () => {
     h.enabledSettings = new Set(['EnableStudioImage']);
+    expect(renderHook(() => useStudioFeature('createV2')).result.current).toBe(false);
     expect(renderHook(() => useStudioFeature('image')).result.current).toBe(false);
+  });
+
+  it('keeps admin-only Productions closed to a non-admin with every setting on', () => {
+    h.enabledSettings = new Set(['EnableStudioCreateV2', 'EnableStudioProductions']);
+    expect(renderHook(() => useStudioFeature('productions')).result.current).toBe(false);
   });
 
   it('opens for an admin with that feature flag and Create v2 on, and only that feature', () => {
