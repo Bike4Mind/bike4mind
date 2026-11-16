@@ -27,6 +27,7 @@ import type {
   WorkItemPriority,
   WorkItemStatus,
 } from '@bike4mind/common';
+import type { LoopMirrorSnapshot } from '@bike4mind/common/loops';
 import { api } from '@client/app/contexts/ApiContext';
 import type { AgentExecutionTrace } from '@client/app/hooks/data/agentExecutions';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -278,6 +279,21 @@ export const useLoopRunInfo = (executionId?: string) =>
     },
     enabled: !!executionId,
     staleTime: query => (query.state.data?.loopReflection ? Infinity : 0),
+  });
+
+/** One Desktop-owned loop as GET /api/loops/mirror serves it (apps/client/pages/api/loops/mirror/index.ts). */
+export interface IDesktopLoopMirror {
+  localLoopId: string;
+  snapshot: LoopMirrorSnapshot;
+  lastSeenAt: string;
+}
+
+/** The caller's Desktop loops, read-only, as their Desktops last posted them. */
+export const useDesktopLoopMirror = () =>
+  useQuery({
+    queryKey: [...loopKeys.all, 'mirror'],
+    queryFn: async () => (await api.get<{ loops: IDesktopLoopMirror[] }>('/api/loops/mirror')).data.loops,
+    refetchInterval: 60_000,
   });
 
 export const useLoopsBudget = () =>

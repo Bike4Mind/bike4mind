@@ -24,6 +24,7 @@ import AgentPageHeader from '@client/app/components/Agent/AgentPageHeader';
 import LoopActions from '@client/app/components/Loops/LoopActions';
 import LoopFormModal from '@client/app/components/Loops/LoopFormModal';
 import LoopsBudgetBar from '@client/app/components/Loops/LoopsBudgetBar';
+import DesktopLoopsMirror from '@client/app/components/Loops/DesktopLoopsMirror';
 import {
   holdLabel,
   formatCredits,
@@ -163,6 +164,7 @@ export default function LoopsPage() {
             </tbody>
           </Table>
         )}
+        <DesktopLoopsMirror />
       </Box>
       <Modal open={picking} onClose={() => setPicking(false)}>
         <ModalDialog sx={{ width: 480, maxWidth: '95vw', overflowY: 'auto' }} data-testid="loop-template-picker">

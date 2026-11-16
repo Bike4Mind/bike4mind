@@ -8,3 +8,4 @@ export * from './validation';
 export * from './pacing';
 export * from './pick';
 export * from './reflection';
+export * from './mirror';

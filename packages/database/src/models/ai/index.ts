@@ -63,3 +63,4 @@ export * from './LoopModel';
 export * from './LoopEventModel';
 export * from './LoopRunnerPresenceModel';
 export * from './LoopDirectiveModel';
+export * from './LoopMirrorModel';
