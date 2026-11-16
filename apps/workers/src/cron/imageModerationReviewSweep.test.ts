@@ -8,9 +8,14 @@ const mocks = vi.hoisted(() => ({
   findPendingReview: vi.fn(),
   markAlerted: vi.fn(async () => undefined),
   markReminded: vi.fn(async () => undefined),
+  findDueForEscalation: vi.fn(),
+  escalate: vi.fn(),
+  findEscalationUnalerted: vi.fn(),
+  markEscalationAlerted: vi.fn(async () => undefined),
   createReviewerAlertDelivery: vi.fn(),
   sendEmail: vi.fn(),
   getRecipients: vi.fn(),
+  getEscalationRecipients: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -21,6 +26,10 @@ vi.mock('@bike4mind/database', () => ({
     findPendingReview: mocks.findPendingReview,
     markAlerted: mocks.markAlerted,
     markReminded: mocks.markReminded,
+    findDueForEscalation: mocks.findDueForEscalation,
+    escalate: mocks.escalate,
+    findEscalationUnalerted: mocks.findEscalationUnalerted,
+    markEscalationAlerted: mocks.markEscalationAlerted,
   },
 }));
 vi.mock('@bike4mind/observability', () => ({
@@ -55,10 +64,15 @@ describe('imageModerationReviewSweep handler', () => {
     mocks.findUnalerted.mockResolvedValue([]);
     mocks.findDueForReminder.mockResolvedValue([]);
     mocks.findPendingReview.mockResolvedValue([]);
+    mocks.findDueForEscalation.mockResolvedValue([]);
+    mocks.escalate.mockResolvedValue(null);
+    mocks.findEscalationUnalerted.mockResolvedValue([]);
     mocks.getRecipients.mockResolvedValue(['reviewer-one@example.com']);
+    mocks.getEscalationRecipients.mockResolvedValue(['second-one@example.com']);
     mocks.sendEmail.mockResolvedValue({ messageId: 'm-1' });
     mocks.createReviewerAlertDelivery.mockReturnValue({
       getRecipients: mocks.getRecipients,
+      getEscalationRecipients: mocks.getEscalationRecipients,
       sendEmail: mocks.sendEmail,
       appUrl: () => 'https://app.example',
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -89,6 +103,24 @@ describe('imageModerationReviewSweep handler', () => {
       OldestPendingAgeMinutes: 40,
       PendingWithoutReviewers: 0,
     });
+  });
+
+  it('escalates an overdue incident on timeout, with no admin, and emails the escalation list', async () => {
+    const overdue = row('inc-3', 25 * 60);
+    const escalatedAt = new Date();
+    mocks.findDueForEscalation.mockResolvedValue([overdue]);
+    mocks.escalate.mockResolvedValue({ ...overdue, escalatedAt, escalationTrigger: 'timeout' });
+    mocks.findEscalationUnalerted.mockResolvedValue([{ ...overdue, escalatedAt }]);
+
+    const result = await handler();
+
+    expect(mocks.escalate).toHaveBeenCalledExactlyOnceWith('inc-3', { trigger: 'timeout' }, expect.any(Date));
+    expect(mocks.sendEmail).toHaveBeenCalledExactlyOnceWith(
+      'second-one@example.com',
+      expect.objectContaining({ subject: 'Moderation review escalated' })
+    );
+    expect(mocks.markEscalationAlerted).toHaveBeenCalledWith('inc-3', expect.any(Date));
+    expect(result).toMatchObject({ escalated: 1, escalationAlerted: 1 });
   });
 
   it('publishes every series dimensioned by Stage only', async () => {

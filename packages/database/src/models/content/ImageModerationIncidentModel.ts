@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
 import {
+  INCIDENT_ESCALATION_TRIGGERS,
   INCIDENT_OVERRIDABLE_REVIEW_STATUSES,
   INCIDENT_REPORT_CHANNELS,
   INCIDENT_REVIEW_STATUSES,
@@ -59,6 +60,10 @@ const ImageModerationIncidentSchema = new Schema(
     noActionAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
     lastReminderAt: { type: Date, required: false },
+    escalatedAt: { type: Date, required: false },
+    escalatedBy: { type: String, required: false },
+    escalationTrigger: { type: String, enum: INCIDENT_ESCALATION_TRIGGERS, required: false },
+    escalationAlertedAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -167,6 +172,60 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Unreviewed incidents created at or before `createdBefore` that are not escalated yet, oldest first. */
+  async findDueForEscalation(createdBefore: Date, limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalatedAt: null,
+        createdAt: { $lte: createdBefore },
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /** Escalated incidents still awaiting a verdict with no delivered escalation email, oldest first. */
+  async findEscalationUnalerted(limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({
+        reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES },
+        escalatedAt: { $ne: null },
+        escalationAlertedAt: null,
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Moves an unreviewed incident to the second review step without touching reviewStatus. Atomic on
+   * its filter: only an unreviewed, not yet escalated incident matches, so of two concurrent
+   * escalations one wins and the other gets null, as does an incident with a verdict or none at all.
+   */
+  async escalate(
+    id: string,
+    escalation: { trigger: 'manual'; by: string } | { trigger: 'timeout' },
+    at = new Date()
+  ): Promise<IImageModerationIncidentDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES }, escalatedAt: null },
+      {
+        $set: {
+          escalatedAt: at,
+          escalationTrigger: escalation.trigger,
+          ...(escalation.trigger === 'manual' ? { escalatedBy: escalation.by } : {}),
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /** Stamps the time the escalation email for this incident was delivered. */
+  async markEscalationAlerted(id: string, escalationAlertedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { escalationAlertedAt } });
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */

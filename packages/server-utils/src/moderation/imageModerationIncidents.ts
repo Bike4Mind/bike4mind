@@ -1,7 +1,13 @@
 import { adminSettingsRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
-import { withReviewerAlerts, type IncidentReviewDelivery } from './incidentReviewAlerts';
+import {
+  alertEscalationReviewers,
+  withReviewerAlerts,
+  type IncidentAlertOutcome,
+  type IncidentEscalationDelivery,
+  type RecordedIncident,
+} from './incidentReviewAlerts';
 
 /**
  * Origin for the admin link. APP_URL is set only on the web Lambda, so the queue, chat, agent and
@@ -21,29 +27,32 @@ export function resolveAdminAppUrl(env: Record<string, string | undefined> = pro
 let mailerModule: Promise<typeof import('../utils/mailer/index')> | undefined;
 
 /**
- * Recipients, mail transport, admin link and logger shared by the request-path alert and the
- * scheduled review sweep (apps/workers/src/cron/imageModerationReviewSweep.ts), so both read the
- * same ImageModerationReviewerEmails setting and render the same alert.
+ * Recipients, mail transport, admin link and logger shared by the request-path alert, the escalate
+ * route and the scheduled review sweep (apps/workers/src/cron/imageModerationReviewSweep.ts), so all
+ * of them read the same ImageModerationReviewerEmails and ImageModerationEscalationEmails settings
+ * and render the same emails.
  *
  * Mail goes straight through the SMTP mailer rather than the email.send event: the upload scan
  * Lambda records incidents too and is not linked to the event bus.
  */
-export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentReviewDelivery {
+export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentEscalationDelivery {
+  const readEmailList = async (name: 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails') => {
+    const stores = { adminSettings: adminSettingsRepository };
+    const settings = await (options.skipSettingsCache
+      ? getSettingsMap(stores, { skipCache: true })
+      : getSettingsMap(stores));
+    const raw = settings[name];
+    if (typeof raw !== 'string') return raw;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  };
   // Every dependency resolves at call time, so importing this module costs an image path nothing.
   return {
-    getRecipients: async () => {
-      const stores = { adminSettings: adminSettingsRepository };
-      const settings = await (options.skipSettingsCache
-        ? getSettingsMap(stores, { skipCache: true })
-        : getSettingsMap(stores));
-      const raw = settings.ImageModerationReviewerEmails;
-      if (typeof raw !== 'string') return raw;
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return [];
-      }
-    },
+    getRecipients: () => readEmailList('ImageModerationReviewerEmails'),
+    getEscalationRecipients: () => readEmailList('ImageModerationEscalationEmails'),
     sendEmail: async (to, email) => {
       const { default: mailer } = await (mailerModule ??= import('../utils/mailer/index'));
       return mailer.sendEmail(to, email, { mirror: false, logRecipient: false });
@@ -68,3 +77,18 @@ export const imageModerationIncidents = withReviewerAlerts({
     markAlerted: id => imageModerationIncidentRepository.markAlerted(id),
   },
 });
+
+/**
+ * Emails the escalation list about an incident a reviewer just escalated and stamps
+ * escalationAlertedAt on delivery. Never throws; the review sweep retries a send that was not
+ * delivered.
+ */
+export function sendIncidentEscalationAlert(
+  incident: RecordedIncident
+): Promise<{ outcome: IncidentAlertOutcome; alertedAt: Date | null }> {
+  return alertEscalationReviewers(incident, {
+    // An admin who has just saved the escalation list should not escalate into a stale cached copy.
+    ...createReviewerAlertDelivery({ skipSettingsCache: true }),
+    incidents: { markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at) },
+  });
+}

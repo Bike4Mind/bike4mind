@@ -1,4 +1,5 @@
 import type {
+  IncidentEscalationTrigger,
   IncidentOverridableReviewStatus,
   IncidentReviewStatus,
   IncidentSurface,
@@ -21,6 +22,7 @@ type QueueIncidentJson = {
   labels?: ModerationLabelHit[];
   surface?: IncidentSurface;
   reviewStatus?: IncidentReviewStatus;
+  escalatedAt?: string;
 };
 
 export type ModerationIncidentRow = {
@@ -34,6 +36,8 @@ export type ModerationIncidentRow = {
   reviewStatus: IncidentReviewStatus;
   /** A claim left in confirmed_csam after an unknown submission outcome; not resolvable from this page. */
   stuck: boolean;
+  /** Moved to the second review step, by a reviewer or after waiting too long. */
+  escalated: boolean;
 };
 
 /** `open` is the work queue; `closed` lists past verdicts, newest first. */
@@ -54,6 +58,7 @@ const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentR
   surface: incident.surface,
   reviewStatus: incident.reviewStatus ?? 'pending_review',
   stuck,
+  escalated: Boolean(incident.escalatedAt),
 });
 
 const createdAtMs = (row: ModerationIncidentRow) => new Date(row.createdAt).getTime();
@@ -111,6 +116,11 @@ export type ModerationIncidentView = {
   /** Null when no reviewer alert was delivered. */
   alertedAt: string | null;
   lastReminderAt: string | null;
+  /** Null until the incident moves to the second review step. */
+  escalatedAt: string | null;
+  escalationTrigger: IncidentEscalationTrigger | null;
+  /** Null when no escalation email was delivered. */
+  escalationAlertedAt: string | null;
   reportedAt: string | null;
   falsePositiveAt: string | null;
   image:
@@ -148,11 +158,38 @@ const verdictBody = (verdict: ModerationVerdict) => {
   }
 };
 
+// Both writes need a recently verified session: the api client's step-up interceptor prompts for it
+// and replays the request, as it does for the view.
 export function useModerationIncidentVerdict() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, verdict }: { id: string; verdict: ModerationVerdict }) =>
-      (await api.post<{ ok: true }>(`${ENDPOINT}/${encodeURIComponent(id)}/verdict`, verdictBody(verdict))).data,
+    mutationFn: async ({ id, verdict, reason }: { id: string; verdict: ModerationVerdict; reason: string }) =>
+      (
+        await api.post<{ ok: true }>(`${ENDPOINT}/${encodeURIComponent(id)}/verdict`, {
+          ...verdictBody(verdict),
+          reason,
+        })
+      ).data,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
+  });
+}
+
+/** Whether the escalation email went out: `no_recipients` means no escalation reviewer is configured. */
+export type ModerationEscalationAlert = 'delivered' | 'no_recipients' | 'failed';
+
+export type ModerationEscalationResult = {
+  incident: Pick<
+    ModerationIncidentView,
+    'id' | 'reviewStatus' | 'escalatedAt' | 'escalationTrigger' | 'escalationAlertedAt'
+  >;
+  alert: ModerationEscalationAlert;
+};
+
+export function useModerationIncidentEscalation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) =>
+      (await api.post<ModerationEscalationResult>(`${ENDPOINT}/${encodeURIComponent(id)}/escalate`, { reason })).data,
     onSettled: () => queryClient.invalidateQueries({ queryKey: MODERATION_INCIDENT_QUEUE_QUERY_KEY }),
   });
 }

@@ -117,6 +117,119 @@ describe('ImageModerationIncidentRepository', () => {
 
       expect(found.map(incident => String(incident._id))).toEqual([remindedLongAgo, neverReminded]);
     });
+
+    it('findDueForEscalation returns unreviewed, unescalated incidents created at or before the cutoff, oldest first', async () => {
+      const atCutoff = await seed({ createdAt: hoursAgo(24) });
+      const older = await seed({ createdAt: hoursAgo(30), reviewStatus: 'pending_review' });
+      await seed({ createdAt: hoursAgo(24 - 1 / 60) });
+      await seed({ createdAt: hoursAgo(40), escalatedAt: hoursAgo(10), escalationTrigger: 'manual' });
+      await seed({ createdAt: hoursAgo(50), reviewStatus: 'no_action' });
+      await seed({ createdAt: hoursAgo(50), reviewStatus: 'confirmed_csam' });
+
+      const found = await imageModerationIncidentRepository.findDueForEscalation(hoursAgo(24), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([older, atCutoff]);
+      expect(await imageModerationIncidentRepository.findDueForEscalation(hoursAgo(24), 1)).toHaveLength(1);
+    });
+
+    it('findEscalationUnalerted returns escalated, unreviewed incidents with no delivered escalation email', async () => {
+      const manual = await seed({ createdAt: hoursAgo(3), escalatedAt: hoursAgo(2), escalationTrigger: 'manual' });
+      const timeout = await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1), escalationTrigger: 'timeout' });
+      await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1), escalationAlertedAt: hoursAgo(1) });
+      await seed({ createdAt: hoursAgo(30), escalatedAt: hoursAgo(1), reviewStatus: 'false_positive' });
+      await seed({ createdAt: hoursAgo(30) });
+
+      const found = await imageModerationIncidentRepository.findEscalationUnalerted(10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([timeout, manual]);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(1)).toHaveLength(1);
+    });
+  });
+
+  describe('escalate', () => {
+    const AT = new Date('2026-10-20T12:00:00.000Z');
+
+    it('stamps a manual escalation with the admin and leaves the incident pending', async () => {
+      const inc = await imageModerationIncidentRepository.record({ ...baseIncident(), reviewStatus: 'pending_review' });
+
+      const out = await imageModerationIncidentRepository.escalate(
+        String(inc._id),
+        { trigger: 'manual', by: 'admin-esc' },
+        AT
+      );
+
+      expect(out).toMatchObject({
+        reviewStatus: 'pending_review',
+        escalatedAt: AT,
+        escalatedBy: 'admin-esc',
+        escalationTrigger: 'manual',
+      });
+      expect(out?.escalationAlertedAt).toBeUndefined();
+      expect(await imageModerationIncidentRepository.countPendingReview()).toBe(1);
+    });
+
+    it('stamps a timeout escalation with no admin', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+
+      const out = await imageModerationIncidentRepository.escalate(String(inc._id), { trigger: 'timeout' }, AT);
+
+      expect(out?.escalationTrigger).toBe('timeout');
+      expect(out?.escalatedAt).toEqual(AT);
+      expect(out?.escalatedBy).toBeUndefined();
+      expect(out?.reviewStatus).toBeUndefined();
+    });
+
+    it('lets exactly one of two concurrent escalations win and keeps the first stamp', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+
+      const results = await Promise.all([
+        imageModerationIncidentRepository.escalate(id, { trigger: 'manual', by: 'admin-a' }, AT),
+        imageModerationIncidentRepository.escalate(id, { trigger: 'timeout' }, AT),
+      ]);
+
+      expect(results.filter(result => result !== null)).toHaveLength(1);
+      const winner = results.find(result => result !== null);
+      const stored = await ImageModerationIncident.findById(id).lean();
+      expect(stored?.escalationTrigger).toBe(winner?.escalationTrigger);
+      expect(await imageModerationIncidentRepository.escalate(id, { trigger: 'manual', by: 'admin-b' })).toBeNull();
+      expect((await ImageModerationIncident.findById(id).lean())?.escalatedAt).toEqual(AT);
+    });
+
+    it.each(['false_positive', 'no_action', 'reported', 'confirmed_csam'] as const)(
+      'refuses an incident in %s and leaves it unescalated',
+      async reviewStatus => {
+        const inc = await imageModerationIncidentRepository.record({ ...baseIncident(), reviewStatus });
+        expect(
+          await imageModerationIncidentRepository.escalate(String(inc._id), { trigger: 'manual', by: 'admin-esc' })
+        ).toBeNull();
+        expect((await ImageModerationIncident.findById(inc._id).lean())?.escalatedAt).toBeUndefined();
+      }
+    );
+
+    it('returns null for an unknown id', async () => {
+      expect(
+        await imageModerationIncidentRepository.escalate(new mongoose.Types.ObjectId().toString(), {
+          trigger: 'timeout',
+        })
+      ).toBeNull();
+    });
+
+    it('markEscalationAlerted stamps escalationAlertedAt', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.escalate(String(inc._id), { trigger: 'timeout' }, AT);
+
+      await imageModerationIncidentRepository.markEscalationAlerted(inc.id, AT);
+
+      expect((await ImageModerationIncident.findById(inc._id).lean())?.escalationAlertedAt).toEqual(AT);
+      expect(await imageModerationIncidentRepository.findEscalationUnalerted(10)).toEqual([]);
+    });
+
+    it('rejects an escalation trigger outside the enum', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      inc.set('escalationTrigger', 'other');
+      await expect(inc.save()).rejects.toThrow(/escalationTrigger/);
+    });
   });
 
   describe('findPendingReview', () => {

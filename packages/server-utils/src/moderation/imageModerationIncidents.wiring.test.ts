@@ -13,6 +13,7 @@ const ALLOWED = new Set([
   'packages/database/src/models/content/ImageModerationIncidentModel.ts',
   'packages/server-utils/src/moderation/imageModerationIncidents.ts',
   'apps/client/pages/api/admin/moderation-incidents/index.ts',
+  'apps/client/pages/api/admin/moderation-incidents/[id]/escalate.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',

@@ -107,6 +107,23 @@ export const ModerationIncidentsTab: React.FC = () => {
       sortValue: row => row.surface ?? '',
       width: '14rem',
     },
+    ...(closed
+      ? []
+      : [
+          {
+            id: 'heldBy',
+            label: 'Held by',
+            render: (row: ModerationIncidentRow) => (
+              <StatusChip
+                tone={row.escalated ? 'info' : 'neutral'}
+                label={row.escalated ? 'Second reviewer' : 'First reviewer'}
+                data-testid={`moderation-incident-held-by-${row.id}`}
+              />
+            ),
+            sortValue: (row: ModerationIncidentRow) => (row.escalated ? 1 : 0),
+            width: '10rem',
+          },
+        ]),
     {
       id: 'age',
       label: 'Age',
@@ -188,7 +205,7 @@ export const ModerationIncidentsTab: React.FC = () => {
         error={queue.error ? "Couldn't load the review queue." : undefined}
         onRetry={() => void queue.refetch()}
         onRowActivate={row => void open(row.id)}
-        minWidth="64rem"
+        minWidth={closed ? '64rem' : '74rem'}
         empty={
           <EmptyState
             title={closed ? 'No incidents have a verdict yet' : 'No incidents are waiting for review'}

@@ -39,6 +39,7 @@ const row = (over: Partial<ModerationIncidentRow>): ModerationIncidentRow => ({
   surface: 'upload',
   reviewStatus: 'pending_review',
   stuck: false,
+  escalated: false,
   ...over,
 });
 const rows: ModerationIncidentRow[] = [
@@ -79,6 +80,26 @@ describe('ModerationIncidentsTab', () => {
     expect(second.textContent).toContain('Report stuck');
     expect(screen.getByTestId('admin-page-header').textContent).toContain('(2)');
     expect(m.queue).toHaveBeenCalledWith('open', undefined);
+  });
+
+  it('shows which review step holds each waiting incident, by role', () => {
+    m.queue.mockReturnValue(ready([row({ id: 'inc-first' }), row({ id: 'inc-second', escalated: true })]));
+    renderTab();
+    const first = screen.getByTestId('moderation-incident-held-by-inc-first');
+    const second = screen.getByTestId('moderation-incident-held-by-inc-second');
+    expect(first.textContent).toBe('First reviewer');
+    expect(first.getAttribute('data-tone')).toBe('neutral');
+    expect(second.textContent).toBe('Second reviewer');
+    expect(second.getAttribute('data-tone')).toBe('info');
+    expect(screen.getByTestId('moderation-incidents-table').textContent).toContain('Held by');
+  });
+
+  it('leaves Held by off the closed list', () => {
+    renderTab();
+    m.queue.mockReturnValue(ready([row({ id: 'inc-closed-esc', reviewStatus: 'no_action', escalated: true })]));
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(screen.queryByTestId('moderation-incident-held-by-inc-closed-esc')).toBeNull();
+    expect(screen.getByTestId('moderation-incidents-table').textContent).not.toContain('Held by');
   });
 
   it('names the flagged user and the top label, falling back to the user id', () => {

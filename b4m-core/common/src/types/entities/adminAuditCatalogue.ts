@@ -409,6 +409,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
   'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.escalated': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 

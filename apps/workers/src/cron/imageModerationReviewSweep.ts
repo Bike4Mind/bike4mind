@@ -1,8 +1,10 @@
 /**
  * Re-sends the reviewer alert for image moderation incidents nobody was told about (none configured
  * when it was recorded, or the send failed) and sends a daily reminder digest (counts only, one
- * email per reviewer) for incidents still awaiting a verdict. Both are metadata only and go through
- * the same delivery as the request path (packages/server-utils/src/moderation/incidentReviewSweep.ts).
+ * email per reviewer) for incidents still awaiting a verdict. Escalates incidents that waited too
+ * long to the second review step and sends any escalation email still owed. All of it is metadata
+ * only and goes through the same delivery as the request path
+ * (packages/server-utils/src/moderation/incidentReviewSweep.ts).
  *
  * Publishes the oldest unalerted and oldest pending incident ages and a reviewer-list-empty flag
  * on every run; the alarms in infra/imageModerationReviewAlarms.ts watch them.
@@ -32,6 +34,7 @@ const toRecorded = (doc: StoredIncident) => ({
   createdAt: doc.createdAt,
   surface: doc.surface,
   reviewStatus: doc.reviewStatus,
+  escalatedAt: doc.escalatedAt,
 });
 
 const incidents: IncidentReviewSweepDeps['incidents'] = {
@@ -46,6 +49,15 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
   markAlerted: (id, at) => imageModerationIncidentRepository.markAlerted(id, at),
   countPending: () => imageModerationIncidentRepository.countPendingReview(),
   markReminded: (ids, at) => imageModerationIncidentRepository.markReminded(ids, at),
+  findDueForEscalation: async (createdBefore, limit) =>
+    (await imageModerationIncidentRepository.findDueForEscalation(createdBefore, limit)).map(toRecorded),
+  escalateOnTimeout: async (id, at) => {
+    const escalated = await imageModerationIncidentRepository.escalate(id, { trigger: 'timeout' }, at);
+    return escalated && toRecorded(escalated);
+  },
+  findEscalationUnalerted: async limit =>
+    (await imageModerationIncidentRepository.findEscalationUnalerted(limit)).map(toRecorded),
+  markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at),
 };
 
 export async function handler() {

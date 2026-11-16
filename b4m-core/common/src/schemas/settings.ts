@@ -372,6 +372,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'ImageModerationReviewerEmails',
+  'ImageModerationEscalationEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -3941,6 +3942,16 @@ export const settingsMap = {
     // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
     // silence every reviewer. The update route refuses invalid entries; readers filter with
     // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
+  ImageModerationEscalationEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationEscalationEmails',
+    name: 'Image Moderation Escalation Emails',
+    defaultValue: [],
+    description:
+      'Email addresses for the second review step, one per line: alerted when an image moderation incident is escalated, by a reviewer or automatically when it waits too long for a verdict. The email carries incident metadata and an admin link only, never the image or user content. Empty sends no escalation email.',
+    category: 'AI Moderation',
+    // Same shape and read rules as ImageModerationReviewerEmails.
     schema: z.array(z.string()),
   }),
   SkillMarketHighRiskTools: makeStringSetting({

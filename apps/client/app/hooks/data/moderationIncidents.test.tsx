@@ -2,10 +2,15 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useModerationIncidentQueue } from './moderationIncidents';
+import { act } from 'react';
+import {
+  useModerationIncidentEscalation,
+  useModerationIncidentQueue,
+  useModerationIncidentVerdict,
+} from './moderationIncidents';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -60,6 +65,18 @@ describe('useModerationIncidentQueue', () => {
     expect(data?.truncated).toBe(true);
   });
 
+  it('marks the escalated rows', async () => {
+    const [plain, escalated] = incidents(2, 3);
+    const data = await loadQueue({
+      incidents: [plain, { ...escalated, escalatedAt: '2026-10-04T00:00:00.000Z' }],
+      staleConfirmedCsam: [],
+    });
+    expect(data?.rows.map(row => [row.id, row.escalated])).toEqual([
+      ['id-3-0', false],
+      ['id-3-1', true],
+    ]);
+  });
+
   it('ignores a closed cursor on the open queue', async () => {
     await loadQueue({ incidents: [], staleConfirmedCsam: [] }, 'open', {
       before: '2026-10-03T00:00:00.000Z',
@@ -100,5 +117,49 @@ describe('useModerationIncidentQueue (closed)', () => {
   it('is not truncated for an exactly full closed page when hasMore is false', async () => {
     const data = await loadQueue({ incidents: incidents(100, 2), staleConfirmedCsam: [], hasMore: false }, 'closed');
     expect(data?.truncated).toBe(false);
+  });
+});
+
+describe('moderation incident writes', () => {
+  // Both go through the shared api client, whose step-up interceptor prompts and replays them.
+  it('sends the reviewer reason with a verdict', async () => {
+    mocks.post.mockResolvedValue({ data: { ok: true } });
+    const { result } = renderHook(() => useModerationIncidentVerdict(), { wrapper });
+
+    await act(() =>
+      result.current.mutateAsync({ id: 'inc/1', verdict: { kind: 'confirmed', reportId: 'R-1' }, reason: 'Filed it' })
+    );
+
+    expect(mocks.post).toHaveBeenCalledWith('/api/admin/moderation-incidents/inc%2F1/verdict', {
+      verdict: 'record_manual_report',
+      ncmecReportId: 'R-1',
+      reason: 'Filed it',
+    });
+  });
+
+  it('posts an escalation with its reason and returns the outcome', async () => {
+    const response = {
+      ok: true,
+      incident: {
+        id: 'inc-1',
+        reviewStatus: 'pending_review',
+        escalatedAt: '2026-10-30T12:00:00.000Z',
+        escalationTrigger: 'manual',
+        escalationAlertedAt: null,
+      },
+      alert: 'no_recipients',
+    };
+    mocks.post.mockResolvedValue({ data: response });
+    const { result } = renderHook(() => useModerationIncidentEscalation(), { wrapper });
+
+    let returned: unknown;
+    await act(async () => {
+      returned = await result.current.mutateAsync({ id: 'inc-1', reason: 'Needs a second opinion' });
+    });
+
+    expect(mocks.post).toHaveBeenCalledWith('/api/admin/moderation-incidents/inc-1/escalate', {
+      reason: 'Needs a second opinion',
+    });
+    expect(returned).toEqual(response);
   });
 });

@@ -3,8 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  DialogActions,
-  DialogContent,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -16,14 +14,27 @@ import {
 import { Link } from '@tanstack/react-router';
 import { INCIDENT_OVERRIDABLE_REVIEW_STATUSES } from '@bike4mind/common';
 import { toast } from 'sonner';
-import { AdminDialog, AdminPageHeader, Fact, SectionCard, StatusChip, formatUtc, relativeTime } from './shared';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminPageHeader,
+  Fact,
+  SectionCard,
+  StatusChip,
+  formatUtc,
+  relativeTime,
+} from './shared';
 import { REVIEW_STATUS_LABELS, formatConfidence, surfaceLabel } from './moderationIncidentLabels';
 import {
+  type ModerationEscalationAlert,
+  type ModerationEscalationResult,
   type ModerationVerdict,
+  useModerationIncidentEscalation,
   useModerationIncidentVerdict,
   useModerationIncidentView,
 } from '@client/app/hooks/data/moderationIncidents';
 import { getErrorMessage } from '@client/app/utils/error';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
 // The id the external reporting form returns; mirrors what the verdict route accepts.
 const REPORT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
@@ -35,6 +46,13 @@ const VERDICT_SUCCESS: Record<VerdictChoice, string> = {
   no_action: 'Closed as correctly blocked.',
   false_positive: 'Marked as a false positive.',
   confirmed: 'Report id recorded.',
+};
+
+const ESCALATION_ALERT_COPY: Record<ModerationEscalationAlert, string> = {
+  delivered: 'Escalated. The second reviewers were emailed.',
+  no_recipients:
+    'Escalated, but no second reviewer is configured, so no email went out. Add addresses to Image Moderation Escalation Emails in admin settings.',
+  failed: 'Escalated, but the email to the second reviewers did not send. The next review sweep sends it again.',
 };
 
 const UNAVAILABLE_COPY: Record<'no_stored_image' | 'not_displayable', string> = {
@@ -50,6 +68,21 @@ const Mono: React.FC<{ children: React.ReactNode; testId?: string }> = ({ childr
     {children}
   </Typography>
 );
+
+// Reasons land in the audit log, which is not a review surface for the image itself.
+const ReasonNote: React.FC = () => (
+  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="moderation-incident-reason-note">
+    The reason must not describe the image.
+  </Typography>
+);
+
+/** A failed write, unless the reviewer dismissed the verification prompt themselves. */
+const WriteError: React.FC<{ error: unknown; testId: string }> = ({ error, testId }) =>
+  error && !isStepUpCancelled(error) ? (
+    <Alert color="danger" data-testid={testId}>
+      {getErrorMessage(error)}
+    </Alert>
+  ) : null;
 
 /** One verdict button with a plain line saying what it means. */
 const VerdictOption: React.FC<{ button: React.ReactNode; help: string; testId: string }> = ({
@@ -74,7 +107,10 @@ const VerdictOption: React.FC<{ button: React.ReactNode; help: string; testId: s
 export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }) => {
   const view = useModerationIncidentView(incidentId);
   const verdict = useModerationIncidentVerdict();
-  const [dialog, setDialog] = useState<VerdictChoice | null>(null);
+  const escalation = useModerationIncidentEscalation();
+  const [dialog, setDialog] = useState<VerdictChoice | 'escalate' | null>(null);
+  // The view is an audited fetch, so a successful escalation updates the page from its own response.
+  const [escalated, setEscalated] = useState<ModerationEscalationResult | null>(null);
   const [reportId, setReportId] = useState('');
   // Keyed to the link that failed, so the fresh link a reload brings back clears it by itself.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -91,30 +127,35 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
   // Mirrors the verdict route: a report can also be recorded over an earlier closing verdict.
   const canConfirm =
     isPending || INCIDENT_OVERRIDABLE_REVIEW_STATUSES.some(overridable => overridable === data?.reviewStatus);
+  const escalationState = escalated?.incident ?? data;
+  const canEscalate = isPending && !escalationState?.escalatedAt;
 
   const closeDialog = () => {
-    if (verdict.isPending) return;
+    if (verdict.isPending || escalation.isPending) return;
     setDialog(null);
     setReportId('');
     verdict.reset();
+    escalation.reset();
   };
 
-  const submit = (choice: VerdictChoice) =>
-    verdict.mutate(
-      {
-        id: incidentId,
-        verdict: choice === 'confirmed' ? { kind: 'confirmed', reportId: reportIdValue } : { kind: choice },
-      },
-      {
-        onSuccess: () => {
-          toast.success(VERDICT_SUCCESS[choice], {
-            closeButton: true,
-            position: 'bottom-left',
-          });
-          onBack();
-        },
-      }
-    );
+  // A rejection leaves the dialog open with the error shown in it.
+  const submitVerdict = async (choice: VerdictChoice, reason: string) => {
+    await verdict.mutateAsync({
+      id: incidentId,
+      verdict: choice === 'confirmed' ? { kind: 'confirmed', reportId: reportIdValue } : { kind: choice },
+      reason,
+    });
+    toast.success(VERDICT_SUCCESS[choice], {
+      closeButton: true,
+      position: 'bottom-left',
+    });
+    onBack();
+  };
+
+  const submitEscalation = async (reason: string) => {
+    setEscalated(await escalation.mutateAsync({ id: incidentId, reason }));
+    setDialog(null);
+  };
 
   return (
     <Stack
@@ -192,6 +233,23 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                 <Fact label="Last reminder" data-testid="moderation-incident-reminded">
                   {formatUtc(new Date(data.lastReminderAt))}
                 </Fact>
+              )}
+              {escalationState?.escalatedAt && (
+                <>
+                  <Fact label="Escalated" data-testid="moderation-incident-escalated-at">
+                    {formatUtc(new Date(escalationState.escalatedAt))}
+                  </Fact>
+                  <Fact label="Escalation" data-testid="moderation-incident-escalation-trigger">
+                    {escalationState.escalationTrigger === 'timeout'
+                      ? 'Automatic, no verdict in time'
+                      : 'Manual, by a reviewer'}
+                  </Fact>
+                  <Fact label="Escalation email" data-testid="moderation-incident-escalation-alerted">
+                    {escalationState.escalationAlertedAt
+                      ? formatUtc(new Date(escalationState.escalationAlertedAt))
+                      : 'No escalation email delivered yet'}
+                  </Fact>
+                </>
               )}
               {data.falsePositiveAt && (
                 <Fact label="False positive at" data-testid="moderation-incident-false-positive-at">
@@ -324,6 +382,15 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                     : 'A verdict has already been recorded for this incident.'}
             </Alert>
           )}
+          {escalated && (
+            <Alert
+              color={escalated.alert === 'delivered' ? 'neutral' : 'warning'}
+              data-testid="moderation-incident-escalation-outcome"
+              data-alert={escalated.alert}
+            >
+              {ESCALATION_ALERT_COPY[escalated.alert]}
+            </Alert>
+          )}
           <Stack gap={1.5} data-testid="moderation-incident-verdicts">
             <VerdictOption
               testId="moderation-incident-no-action-help"
@@ -368,135 +435,109 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                 </Button>
               }
             />
+            {canEscalate && (
+              <VerdictOption
+                testId="moderation-incident-escalate-help"
+                help="Hands the incident to the second reviewer list and emails them. It stays open until someone records a verdict."
+                button={
+                  <Button
+                    variant="outlined"
+                    color="neutral"
+                    onClick={() => setDialog('escalate')}
+                    data-testid="moderation-incident-escalate-btn"
+                  >
+                    Escalate to second reviewer
+                  </Button>
+                }
+              />
+            )}
           </Stack>
         </>
       )}
 
-      <AdminDialog
+      <ActionDialog
         open={dialog === 'no_action'}
         onClose={closeDialog}
         title="Close as correctly blocked"
+        description="This records that the image was explicit and nothing suggests a minor, so no report is filed. The incident leaves the queue and its reminders stop. If a report is filed after all, you can still record it with Record report."
+        reasonPresets={ADMIN_REASON_PRESETS.moderationNoAction}
+        confirmLabel="Close as correctly blocked"
+        onConfirm={reason => submitVerdict('no_action', reason)}
+        pending={verdict.isPending}
         data-testid="moderation-incident-no-action-dialog"
+        testIds={{ confirm: 'moderation-incident-no-action-confirm-btn' }}
       >
-        <DialogContent>
-          <Typography level="body-sm">
-            This records that the image was explicit and nothing suggests a minor, so no report is filed. The incident
-            leaves the queue and its reminders stop. If a report is filed after all, you can still record it with Record
-            report.
-          </Typography>
-          {verdict.error && dialog === 'no_action' && (
-            <Alert color="danger" data-testid="moderation-incident-verdict-error">
-              {getErrorMessage(verdict.error)}
-            </Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            loading={verdict.isPending}
-            onClick={() => submit('no_action')}
-            data-testid="moderation-incident-no-action-confirm-btn"
-          >
-            Close as correctly blocked
-          </Button>
-          <Button
-            variant="plain"
-            onClick={closeDialog}
-            disabled={verdict.isPending}
-            data-testid="moderation-incident-dialog-cancel-btn"
-          >
-            Cancel
-          </Button>
-        </DialogActions>
-      </AdminDialog>
+        <ReasonNote />
+        <WriteError error={verdict.error} testId="moderation-incident-verdict-error" />
+      </ActionDialog>
 
-      <AdminDialog
+      <ActionDialog
         open={dialog === 'false_positive'}
         onClose={closeDialog}
         title="Mark as false positive"
+        description="This records that the classifier was wrong: the image was not explicit. It closes the incident without a report and takes it out of the queue. It stays on file: if a report is filed after all, use Record report."
+        reasonPresets={ADMIN_REASON_PRESETS.moderationFalsePositive}
+        confirmLabel="Mark false positive"
+        onConfirm={reason => submitVerdict('false_positive', reason)}
+        pending={verdict.isPending}
         data-testid="moderation-incident-false-positive-dialog"
+        testIds={{ confirm: 'moderation-incident-false-positive-confirm-btn' }}
       >
-        <DialogContent>
-          <Typography level="body-sm">
-            This records that the classifier was wrong: the image was not explicit. It closes the incident without a
-            report and takes it out of the queue. It stays on file: if a report is filed after all, use Record report.
-          </Typography>
-          {verdict.error && dialog === 'false_positive' && (
-            <Alert color="danger" data-testid="moderation-incident-verdict-error">
-              {getErrorMessage(verdict.error)}
-            </Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            loading={verdict.isPending}
-            onClick={() => submit('false_positive')}
-            data-testid="moderation-incident-false-positive-confirm-btn"
-          >
-            Mark false positive
-          </Button>
-          <Button
-            variant="plain"
-            onClick={closeDialog}
-            disabled={verdict.isPending}
-            data-testid="moderation-incident-dialog-cancel-btn"
-          >
-            Cancel
-          </Button>
-        </DialogActions>
-      </AdminDialog>
+        <ReasonNote />
+        <WriteError error={verdict.error} testId="moderation-incident-verdict-error" />
+      </ActionDialog>
 
-      <AdminDialog
+      <ActionDialog
         open={dialog === 'confirmed'}
         onClose={closeDialog}
         title="Record a filed report"
+        description="File the report on the external reporting web form first, then enter the report id it gives you. This records that the report was filed and cannot be undone here."
+        reasonPresets={ADMIN_REASON_PRESETS.moderationManualReport}
+        confirmLabel="Record report"
+        tone="danger"
+        blockedReason={
+          canSubmitConfirmed
+            ? null
+            : reportIdInvalid
+              ? 'Use only letters, digits and hyphens in the report id.'
+              : 'Enter the report id the web form gave you.'
+        }
+        onConfirm={reason => submitVerdict('confirmed', reason)}
+        pending={verdict.isPending}
         data-testid="moderation-incident-confirmed-dialog"
+        testIds={{ confirm: 'moderation-incident-confirmed-confirm-btn' }}
       >
-        <DialogContent>
-          <Stack gap={2}>
-            <Typography level="body-sm">
-              File the report on the external reporting web form first, then enter the report id it gives you. This
-              records that the report was filed and cannot be undone here.
-            </Typography>
-            <FormControl required error={reportIdInvalid}>
-              <FormLabel>Report id</FormLabel>
-              <Input
-                value={reportId}
-                onChange={event => setReportId(event.target.value)}
-                slotProps={{
-                  input: { maxLength: REPORT_ID_MAX_LENGTH, 'data-testid': 'moderation-incident-report-id-input' },
-                }}
-              />
-              <FormHelperText data-testid="moderation-incident-report-id-hint">
-                {reportIdInvalid ? 'Letters, digits and hyphens only.' : 'Enter the report id the web form gave you.'}
-              </FormHelperText>
-            </FormControl>
-            {verdict.error && dialog === 'confirmed' && (
-              <Alert color="danger" data-testid="moderation-incident-verdict-error">
-                {getErrorMessage(verdict.error)}
-              </Alert>
-            )}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="danger"
-            loading={verdict.isPending}
-            disabled={!canSubmitConfirmed}
-            onClick={() => submit('confirmed')}
-            data-testid="moderation-incident-confirmed-confirm-btn"
-          >
-            Record report
-          </Button>
-          <Button
-            variant="plain"
-            onClick={closeDialog}
-            disabled={verdict.isPending}
-            data-testid="moderation-incident-dialog-cancel-btn"
-          >
-            Cancel
-          </Button>
-        </DialogActions>
-      </AdminDialog>
+        <FormControl required error={reportIdInvalid}>
+          <FormLabel>Report id</FormLabel>
+          <Input
+            value={reportId}
+            onChange={event => setReportId(event.target.value)}
+            slotProps={{
+              input: { maxLength: REPORT_ID_MAX_LENGTH, 'data-testid': 'moderation-incident-report-id-input' },
+            }}
+          />
+          <FormHelperText data-testid="moderation-incident-report-id-hint">
+            {reportIdInvalid ? 'Letters, digits and hyphens only.' : 'Enter the report id the web form gave you.'}
+          </FormHelperText>
+        </FormControl>
+        <ReasonNote />
+        <WriteError error={verdict.error} testId="moderation-incident-verdict-error" />
+      </ActionDialog>
+
+      <ActionDialog
+        open={dialog === 'escalate'}
+        onClose={closeDialog}
+        title="Escalate to second reviewer"
+        description="This moves the incident to the second review step and emails the second reviewer list. It stays open until someone records a verdict."
+        reasonPresets={ADMIN_REASON_PRESETS.moderationEscalation}
+        confirmLabel="Escalate to second reviewer"
+        onConfirm={submitEscalation}
+        pending={escalation.isPending}
+        data-testid="moderation-incident-escalate-dialog"
+      >
+        <ReasonNote />
+        <WriteError error={escalation.error} testId="moderation-incident-escalate-error" />
+      </ActionDialog>
     </Stack>
   );
 };

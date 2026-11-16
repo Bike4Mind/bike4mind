@@ -18,5 +18,7 @@ export const REVIEW_SWEEP_INTERVAL_MINUTES = 15;
 // An incident younger than this is left to the alert sent on the request that recorded it.
 export const REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES = 15;
 export const REVIEW_REMINDER_INTERVAL_HOURS = 24;
+// An incident still awaiting a verdict this long after it was recorded moves to the second review step.
+export const REVIEW_ESCALATION_TIMEOUT_HOURS = 24;
 export const UNALERTED_INCIDENT_ALARM_MINUTES = 30;
 export const PENDING_INCIDENT_ALARM_MINUTES = 24 * 60;

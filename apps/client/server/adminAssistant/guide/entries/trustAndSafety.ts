@@ -125,12 +125,14 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     summary:
       'Image moderation incidents waiting for a verdict, oldest first, plus a Closed list of past verdicts. Opening an incident records a view in the audit log.',
     views: ['admin.moderation_incidents'],
-    settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails'],
+    settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails', 'ImageModerationEscalationEmails'],
     howTo: [
       'Switch between Needs review and Closed. Click an incident to open it; reviewers are alerted by email when one needs a verdict.',
       'Close as correctly blocked records that the block was right and nothing needs reporting. It leaves the queue and its reminders stop.',
       'Mark false positive records that the classifier was wrong. It closes the incident without a report and keeps it on file.',
       'Record report stores the id of a report you filed on the external reporting form first; it cannot be undone. Full admin access is required.',
+      'Escalate to second reviewer hands a pending incident to the second review step and emails the escalation reviewers; it stays open for a verdict. Incidents still waiting a day after they were flagged are escalated automatically. Held by in the queue shows which step has each incident.',
+      'Every verdict and escalation asks for a reason, recorded in the audit log. Do not describe the image in it.',
     ],
     keywords: [
       'image moderation',
@@ -139,6 +141,8 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
       'false positive',
       'moderation queue',
       'verdict',
+      'escalation',
+      'second reviewer',
     ],
   },
   {
