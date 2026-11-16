@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assignPersonas } from '@shared/agentPersona';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
@@ -27,6 +27,11 @@ const notes = () => [
     'button[data-testid^="orchestrator-tavern-quest-"]:not([data-testid="orchestrator-tavern-quest-more"])'
   ),
 ];
+
+// A needs-you agent's speech bubble loads its session to find what it waits on.
+beforeEach(() => {
+  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
+});
 
 afterEach(() => {
   themed.unmount();
