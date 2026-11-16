@@ -41,7 +41,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.count.mockReturnValue({ maxTimeMS: mocks.maxTimeMS });
   mocks.aggregate.mockReturnValue({ option: mocks.option });
-  mocks.maxTimeMS.mockResolvedValueOnce(3).mockResolvedValueOnce(5);
+  // clearAllMocks keeps queued once-values, so reset or unconsumed pairs leak into later tests.
+  mocks.maxTimeMS.mockReset().mockResolvedValueOnce(3).mockResolvedValueOnce(5);
   mocks.option.mockResolvedValue([{ count: 2 }]);
   mocks.send.mockResolvedValue(undefined);
 });

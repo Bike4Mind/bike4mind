@@ -21,9 +21,10 @@ this is not an immutable audit stream.
 
 Metrics use `<app>/<stage>/AccountCreation`, carry no account dimensions, and are
 timestamped at the start of the counted hour, except `NegativeBalances`, which is
-timestamped at the end of it (the hour boundary the snapshot was taken after). Alarms use `Maximum`, not `Sum`, so
-redelivery of the same scheduled window does not add counts. An empty hour publishes
-zeros. Query or publication failures throw for retry and eventually dead-letter.
+timestamped at the end of it (the hour boundary the snapshot was taken after).
+Alarms use `Maximum`, not `Sum`, so redelivery of the same scheduled window does not
+add counts. An empty hour publishes zeros. Query or publication failures throw for
+retry and eventually dead-letter.
 A separate missing-census alarm distinguishes silence from a clean scan. Rate alarms
 treat missing data as not breaching. Notifications reuse the existing DLQ SNS-to-Slack
 subscriber; wiring does not prove delivery. Persistent ALARM state does not send
