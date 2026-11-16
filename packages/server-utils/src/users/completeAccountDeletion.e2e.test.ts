@@ -261,6 +261,23 @@ describe('account deletion purge claims with Mongo', () => {
     expect(await User.exists({ _id: userId })).not.toBeNull();
     expect(h.purgeFiles).not.toHaveBeenCalled();
   });
+  it('refuses before erasure an organization acquired after the start check, so erasure cannot orphan it', async () => {
+    const userId = await seedUser();
+    let orgId = '';
+    // Purge content stands in for the window after the start check in which an ownership transfer lands.
+    h.purgeContent.mockImplementation(async () => {
+      orgId = (await Organization.create({ name: 'Transferred', userId, personal: false })).id;
+    });
+    const erase = vi.fn(async () => {
+      await Organization.collection.updateMany({ userId }, { $set: { userId: '0'.repeat(24) } });
+    });
+    await expect(
+      completeAccountDeletion(userId, { logger: logger as never, now, erasureRegistry: { ...erasureRegistry, erase } })
+    ).rejects.toThrow(`user ${userId} still owns an organization`);
+    expect(erase).not.toHaveBeenCalled();
+    expect(await Organization.exists({ _id: orgId, userId })).not.toBeNull();
+    expect(await User.exists({ _id: userId })).not.toBeNull();
+  });
   it('admits one worker and skips a competing live claim', async () => {
     const userId = await seedUser();
     let unblock: (() => void) | undefined;
