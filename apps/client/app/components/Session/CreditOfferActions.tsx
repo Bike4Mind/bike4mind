@@ -3,7 +3,7 @@ import { Box, Button } from '@mui/joy';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
-import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSeatPlan, useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
 import { trackUpsell, type UpsellSurface } from '@client/app/utils/funnelEvents';
@@ -128,8 +128,10 @@ export function CreditOfferActions({ moment, surface }: CreditOfferActionsProps 
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
   const subscriptions = useGetSubscriptions({ enabled: !isOrgAccount });
-  // Same "has a plan" test CreditsModal uses; a subscriber is offered a top-up, never the plan they hold.
-  const hasPlan = (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status));
+  const seatPlan = useGetSeatPlan({ enabled: !isOrgAccount });
+  // A subscriber is offered a top-up, never the plan they hold; a Team seat counts as holding one.
+  const hasPlan =
+    (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status)) || !!seatPlan.data;
 
   const account: CreditOfferKind = isOrgAccount
     ? { kind: 'org', organizationId: selectedAccount.id }
@@ -137,7 +139,7 @@ export function CreditOfferActions({ moment, surface }: CreditOfferActionsProps 
       ? { kind: 'subscriber' }
       : { kind: 'unsubscribed' };
   // Wait for the subscription lookup, or a subscriber would first be counted as seeing the Pro offer.
-  const accountResolved = isOrgAccount || !subscriptions.isPending;
+  const accountResolved = isOrgAccount || (!subscriptions.isPending && !seatPlan.isLoading);
 
   useEffect(() => {
     // Ask your admin sells nothing, so an org member's prompt is not an upsell impression.
