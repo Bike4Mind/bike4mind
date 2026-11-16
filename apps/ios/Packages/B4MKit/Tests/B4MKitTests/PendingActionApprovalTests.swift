@@ -59,6 +59,20 @@ final class PendingActionClientTests: XCTestCase {
     await assertFailure(client(transport), .notFound)
   }
 
+  func testADeterministicRefusalCarriesTheServersReasonAndIsFinal() async {
+    let reason = #"Repository "owner/repo" is not enabled. Available: other/repo"#
+    let body = json(#"{"error":"Repository \"owner/repo\" is not enabled. Available: other/repo"}"#)
+    await assertFailure(client(FakeTransport { _ in (400, body) }), .refused(reason))
+    await assertFailure(client(FakeTransport { _ in (400, json("{}")) }), .refused(PendingActionFailure.unavailable.message))
+    XCTAssertFalse(PendingActionFailure.refused(reason).isRetryable)
+    XCTAssertEqual(PendingActionFailure.refused(reason).message, reason)
+  }
+
+  func testStatusesWithAPrecisePolicyStayOnTheAPIPath() async {
+    await assertFailure(client(FakeTransport { _ in (429, json(#"{"error":"slow down"}"#)) }), .api(.rateLimited))
+    await assertFailure(client(FakeTransport { _ in (403, json(#"{"error":"no"}"#)) }), .api(.forbidden))
+  }
+
   func testOfflineAndServerErrorsAreRetryable() async {
     await assertFailure(client(FakeTransport { _ in throw URLError(.notConnectedToInternet) }), .api(.offline))
     await assertFailure(client(FakeTransport { _ in (503, Data()) }), .api(.server(status: 503)))

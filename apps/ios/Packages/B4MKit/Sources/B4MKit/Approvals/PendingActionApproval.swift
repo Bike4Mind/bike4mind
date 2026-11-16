@@ -51,6 +51,9 @@ public enum PendingActionFailure: Error, Equatable, Sendable {
   case notFound
   /// The notification carried no usable pending action to answer.
   case unavailable
+  /// The server refused this action for a reason that will not change on retry (a tool that cannot be
+  /// confirmed, a repository that is not enabled). Carries the server's own explanation.
+  case refused(String)
   case api(APIError)
 
   /// Whether a retry could succeed (a dropped connection or a busy server), as opposed to a settled answer.
@@ -67,6 +70,7 @@ public enum PendingActionFailure: Error, Equatable, Sendable {
     case .alreadyResolved: "This request was already answered."
     case .notFound: "This request is no longer available."
     case .unavailable: "This request can't be answered from here. Open Bike4Mind to review it."
+    case .refused(let reason): reason
     case .api(let error):
       switch error {
       case .offline: "You appear to be offline. Check your connection and try again."
@@ -87,7 +91,7 @@ public protocol PendingActionAPI: Sendable {
 
 /// Hand-written client for `POST /api/v1/pending-actions/{questId}/approve|deny` (JWT only). The body is
 /// `{pendingActionTs}`; 200 is `{success, message, url?}`; 409 carries `errorCode` `action_replaced`,
-/// `action_expired` or `action_already_resolved`; a missing, malformed or foreign quest is 404. Nothing in a
+/// `action_expired` or `action_already_resolved`; other 4xx refusals carry an `{error}` text; a missing, malformed or foreign quest is 404. Nothing in a
 /// push authorizes the call: the server checks the session owner against the access token every time.
 public struct PendingActionClient: PendingActionAPI {
   private let requester: AuthorizedRequester
@@ -124,7 +128,12 @@ enum PendingActionWire {
 
   private struct ErrorEnvelope: Decodable {
     let errorCode: String?
+    let error: String?
   }
+
+  /// Statuses `APIError` already gives a precise, actionable reading; every other 4xx is a settled refusal.
+  private static let apiMappedClientStatuses: Set<Int> = [401, 403, 426, 429]
+  private static let fallbackRefusal = "This request can't be answered from here. Open Bike4Mind to review it."
 
   static func result(status: Int, body: Data, decision: PendingActionDecision) throws -> PendingActionResult {
     switch status {
@@ -142,6 +151,10 @@ enum PendingActionWire {
       // Also the safe reading of a bare 409 (a connector tool that is no longer offered): never retry it.
       default: throw PendingActionFailure.alreadyResolved
       }
+    case 400..<500 where !apiMappedClientStatuses.contains(status):
+      let reason = (try? JSONDecoder().decode(ErrorEnvelope.self, from: body))?.error?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      throw PendingActionFailure.refused(reason.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackRefusal)
     default:
       throw PendingActionFailure.api(APIError(status: status))
     }
