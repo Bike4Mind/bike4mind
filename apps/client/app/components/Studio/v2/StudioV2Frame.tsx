@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { styled } from '@mui/system';
-import StudioSegmentedControl, { type StudioSegmentOption } from '../design/StudioSegmentedControl';
+import StudioSegmentedControl, { type StudioNavOption } from '../design/StudioSegmentedControl';
 import StudioThemeScope from '../design/StudioThemeScope';
 import { studioColor, studioRadius } from '../design/studioTokens';
 import type { StudioMedium } from '../studioModality';
@@ -93,7 +93,7 @@ const StudioV2Frame = ({ area, testId, medium, rail, children }: StudioV2FramePr
   const isImageOpen = useStudioFeature('image');
   const isProductionsOpen = useStudioFeature('productions');
 
-  const areas: StudioSegmentOption<StudioArea>[] = [
+  const areas: StudioNavOption<StudioArea>[] = [
     {
       value: 'create',
       label: 'Create',

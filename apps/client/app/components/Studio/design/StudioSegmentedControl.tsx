@@ -54,18 +54,22 @@ export type StudioSegmentOption<Value extends string> = {
   link?: LinkComponentProps<typeof SegmentLink>;
 };
 
+export type StudioNavOption<Value extends string> = StudioSegmentOption<Value> &
+  Required<Pick<StudioSegmentOption<Value>, 'link'>>;
+
+/**
+ * `radio` picks a value (role=radio, aria-checked). `tabs` switches in-page panels (role=tab, aria-selected).
+ * `nav` switches routes: a nav of links, the current one marked aria-current="page".
+ */
 type StudioSegmentedControlProps<Value extends string> = {
-  options: readonly StudioSegmentOption<Value>[];
   value: Value;
   onChange?: (value: Value) => void;
   'aria-label': string;
-  /**
-   * `radio` picks a value (role=radio, aria-checked). `tabs` switches in-page panels (role=tab, aria-selected).
-   * `nav` switches routes: a nav of links (options carrying `link`), the current one marked aria-current="page".
-   */
-  semantics?: 'tabs' | 'radio' | 'nav';
   testId?: string;
-};
+} & (
+  | { semantics?: 'tabs' | 'radio'; options: readonly StudioSegmentOption<Value>[] }
+  | { semantics: 'nav'; options: readonly StudioNavOption<Value>[] }
+);
 
 const NEXT_KEYS: Record<string, 1 | -1> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
