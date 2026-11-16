@@ -3224,11 +3224,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 3
-    }
-  },
   "apps/workers/src/queueHandlers/agentExecutor.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
