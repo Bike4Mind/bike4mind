@@ -176,7 +176,7 @@ beforeAll(async () => {
   const app = express();
   registerEmbedRoutes(app, () => {});
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       resolve();
     });
