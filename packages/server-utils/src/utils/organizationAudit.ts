@@ -40,4 +40,11 @@ export const organizationLifecycleAuditActions: Readonly<Record<string, Organiza
   'org.member_budget.updated': 'policy.updated',
   'org.custom_mcp_policy.updated': 'policy.updated',
   'org.slack_channel_api_posting.updated': 'policy.updated',
+  'org.settings.updated': 'settings.updated',
+  'org.logo.updated': 'settings.updated',
+  'org.webhook.created': 'connector.connected',
+  'org.webhook.updated': 'connector.updated',
+  'org.webhook.deleted': 'connector.disconnected',
+  'org.webhook.secret_rotated': 'connector.updated',
+  'org.webhook.deliveries_replayed': 'connector.updated',
 };

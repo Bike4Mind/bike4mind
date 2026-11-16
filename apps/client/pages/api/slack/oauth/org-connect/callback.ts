@@ -240,6 +240,16 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     auditLogger.setWorkspaceId(slackTeamId);
     await recordOrganizationAuditEventSafe({ organizationId, actorUserId: userId, action: 'connector.connected' });
+    await recordAdminActionForActor(
+      req,
+      { kind: 'user', scope: 'organization', userId, name: userId, wasAdmin: false },
+      {
+        action: 'org.slack.connected',
+        target: { kind: 'organization', id: organizationId, displayName: org.name },
+        summary: `connected Slack workspace ${slackTeamName ?? slackTeamId}`,
+        details: { slackTeamId },
+      }
+    );
     auditLogger.success({ slackTeamId, slackTeamName, organizationId });
 
     return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_connected=true`);
