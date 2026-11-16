@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { BadRequestError, startOfUtcDay } from '@bike4mind/common';
 import { UNSURE_PREFIX } from '@bike4mind/common/loops';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { loopNeedsYouCount } from '@shared/needsYou';
 import {
   answerLocalEventSchema,
   createLocalLoopSchema,
@@ -39,6 +40,7 @@ import { checkedFields } from './fields';
 import { LocalLoopScheduler } from './LocalLoopScheduler';
 import { applyTicketPatch, LocalLoopStore } from './LocalLoopStore';
 import { createTicket, updateTicket } from './ticketTools';
+import { WATCHDOG_MS } from './watchdog';
 
 const ALL_LOOPS_CAP = 'allLoopsCap';
 const CLOUD_SPENT = 'cloudLoopsSpent';
@@ -65,6 +67,7 @@ export function registerLocalLoops(
   };
   let pushTimer: ReturnType<typeof setTimeout> | undefined;
   const changed = new Set<string>();
+  const listeners: (() => void)[] = [];
   const push = (loopId?: string) => {
     if (loopId) changed.add(loopId);
     pushTimer ??= setTimeout(() => {
@@ -72,6 +75,7 @@ export function registerLocalLoops(
       const loopIds = [...changed];
       changed.clear();
       for (const window of appWindows()) window.webContents.send(IPC_CHANNELS.localLoopsChanged, { loopIds });
+      for (const listener of listeners) listener();
     }, 50);
   };
 
@@ -108,6 +112,8 @@ export function registerLocalLoops(
     github: new PrGithub(runGh),
     powerSaveBlocker,
     alert: (loop, event) => {
+      // A lifted cap is good news: the board and Activity show it, no notice.
+      if (event.kind === 'auto_resumed') return;
       if (!Notification.isSupported() || appWindows().some(window => window.isFocused())) return;
       new Notification({ title: `${loop.name}: ${event.kind}`, body: event.reason, silent: true }).show();
     },
@@ -327,8 +333,18 @@ export function registerLocalLoops(
     return { dailyCredits: body.effectiveCap ?? null };
   });
 
+  powerMonitor.on('suspend', () => scheduler.suspend(new Date()));
+  powerMonitor.on('resume', () => scheduler.resume());
+  setInterval(() => void scheduler.watchdog(), WATCHDOG_MS.interval);
+
   follow();
-  return { scheduler, store };
+  return {
+    scheduler,
+    store,
+    /** For main's dock badge while no window is open. */
+    needsYouCount: () => loopNeedsYouCount(summaries()),
+    onChanged: (listener: () => void) => void listeners.push(listener),
+  };
 }
 
 const LOCAL_LOOP_HANDLERS = [

@@ -203,6 +203,7 @@ describe('LocalLoopScheduler', () => {
     await settle();
     expect(store.loop('loop-1')?.cappedUntil).toBeUndefined();
     expect(chat.turns).toHaveLength(1);
+    expect(alerts).toContain('auto_resumed: Resumed after the daily reset');
   });
 
   it('caps every loop on the all-loops budget', async () => {
@@ -529,6 +530,203 @@ describe('LocalLoopScheduler', () => {
     await vi.advanceTimersByTimeAsync(SCHEDULER_MS.recheck);
     await settle();
     expect(chat.turns).toHaveLength(1);
+  });
+
+  describe('watchdog, sleep and power', () => {
+    const MIN = 60_000;
+    const project = (id: string) => ({
+      id,
+      project: { directory: '/repo', workingDirectory: `/wt/${id}`, workspace: true, workspaceBranch: `b-${id}` },
+    });
+
+    it('restarts a hung tick, and the superseded pass starts nothing when it wakes', async () => {
+      let release!: () => void;
+      const machine = vi
+        .fn()
+        .mockImplementationOnce(
+          () => new Promise(resolve => (release = () => resolve({ sample, settings: { runOnBattery: false } })))
+        )
+        .mockResolvedValue({ sample, settings: { runOnBattery: false } });
+      const hung = new LocalLoopScheduler({ ...schedulerDeps(), machine });
+      make();
+      ticket('a');
+      hung.start();
+      await settle();
+      expect(chat.turns).toEqual([]);
+      vi.setSystemTime(Date.now() + 5 * MIN + 1);
+      await hung.watchdog();
+      await settle();
+      expect(chat.turns).toHaveLength(1);
+      expect(store.events('loop-1').map(event => event.reason)).toContain('Scheduler restarted (1/5 this hour)');
+      release();
+      await settle();
+      expect(chat.turns).toHaveLength(1);
+      hung.stop();
+    });
+
+    it('puts live loops in error once the restart budget is spent, and tells the owner', async () => {
+      const hung = new LocalLoopScheduler({
+        ...schedulerDeps(),
+        machine: () => new Promise(() => undefined),
+        alert: (_loop, event) => alerts.push(`${event.kind}: ${event.reason}`),
+      });
+      make();
+      ticket('a');
+      hung.start();
+      await settle();
+      for (let i = 0; i < 6; i++) {
+        vi.setSystemTime(Date.now() + 9 * MIN);
+        await hung.watchdog();
+        await settle();
+      }
+      expect(store.loop('loop-1')).toMatchObject({ status: 'error', error: 'The loop scheduler kept stalling' });
+      expect(alerts.filter(alert => alert.startsWith('watchdog:'))).toHaveLength(5);
+      expect(alerts.at(-1)).toBe('error: The loop scheduler kept stalling');
+      hung.stop();
+    });
+
+    it('alarms on a silent run at 15 min and aborts it at 45, counted', async () => {
+      make();
+      const t = ticket('a');
+      chat.isSessionBusy = () => true;
+      scheduler.start();
+      await settle();
+      const first = store.openRuns()[0];
+      vi.setSystemTime(Date.now() + 16 * MIN);
+      await scheduler.watchdog();
+      expect(alerts).toContain('alarm: The run on a has made no progress for 15 min');
+      vi.setSystemTime(Date.now() + 30 * MIN);
+      await scheduler.watchdog();
+      await settle();
+      expect(store.run(first.id)).toMatchObject({ stopReason: 'watchdog', reason: 'No progress for 45 min' });
+      // Taken again at once; the aborted run still counts.
+      expect(chat.turns).toHaveLength(2);
+      expect(store.ticket(t.id)).toMatchObject({ status: 'in_progress', runCount: 2 });
+    });
+
+    it('frees a lane whose session died, uncounted', async () => {
+      make();
+      const t = ticket('a');
+      scheduler.start();
+      await settle();
+      const first = store.openRuns()[0];
+      vi.setSystemTime(Date.now() + 2 * MIN + 1);
+      await scheduler.watchdog();
+      await settle();
+      expect(store.run(first.id)).toMatchObject({ stopReason: 'requeued' });
+      expect(alerts.some(alert => alert.startsWith('watchdog: Freed the lane of a'))).toBe(true);
+      expect(store.ticket(t.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
+    });
+
+    it('alarms once on a live loop with ready work and no run for 30 min, never on a capped one', async () => {
+      // Every tick fails before it can start a run, with no reason the loop would show.
+      const stuck = new LocalLoopScheduler({
+        ...schedulerDeps(),
+        machine: async () => {
+          throw new Error('no sample');
+        },
+        alert: (_loop, event) => alerts.push(`${event.kind}: ${event.reason}`),
+      });
+      make();
+      make({ id: 'loop-2', cappedUntil: '2026-01-03T00:00:00.000Z' });
+      ticket('a');
+      ticket('b', 'p2', 'loop-2');
+      stuck.start();
+      await settle();
+      await stuck.watchdog();
+      vi.setSystemTime(Date.now() + 31 * MIN);
+      await stuck.tick();
+      await stuck.watchdog();
+      await stuck.watchdog();
+      expect(alerts.filter(alert => alert === 'alarm: Ready work but no run for 30 min')).toHaveLength(1);
+      expect(store.events('loop-2').some(event => event.kind === 'alarm')).toBe(false);
+      stuck.stop();
+    });
+
+    it('keeps the Mac awake while a live loop has ready work, and lets it sleep once paused', async () => {
+      make();
+      ticket('a');
+      otherLanes = 4;
+      scheduler.start();
+      await settle();
+      expect(chat.turns).toEqual([]);
+      expect(blocker.start).toHaveBeenCalledTimes(1);
+      store.putLoop({ ...store.loop('loop-1')!, status: 'paused' });
+      await scheduler.tick();
+      expect(blocker.stop).toHaveBeenCalledWith(7);
+    });
+
+    it('starts nothing while asleep, says so, and dispatches at once on wake', async () => {
+      make();
+      scheduler.start();
+      await settle();
+      scheduler.suspend(new Date());
+      ticket('a');
+      scheduler.poke();
+      await settle();
+      expect(chat.turns).toEqual([]);
+      const summary = scheduler.summary(store.loop('loop-1')!);
+      expect(summary.idleReason).toMatch(/^paused: machine asleep since \d{2}:\d{2}$/);
+      expect(summary.asleepSince).toBe(new Date().toISOString());
+      scheduler.resume();
+      await settle();
+      expect(chat.turns).toHaveLength(1);
+    });
+
+    it('re-queues a run that errors just after a wake, without feeding the error streak', async () => {
+      make();
+      const t = ticket('a');
+      scheduler.start();
+      await settle();
+      const first = store.openRuns()[0];
+      scheduler.suspend(new Date());
+      scheduler.resume();
+      scheduler.observe({
+        type: 'error',
+        sessionId: chat.turns[0].sessionId,
+        messageId: 'm',
+        message: 'socket hang up',
+      });
+      await settle();
+      expect(store.run(first.id)).toMatchObject({ stopReason: 'requeued' });
+      expect(store.loop('loop-1')?.errorStreak).toBe(0);
+      expect(store.ticket(t.id)?.runCount).toBe(1);
+    });
+
+    it('removes the worktree of a run the app was killed in, on relaunch', async () => {
+      make();
+      const t = ticket('a');
+      store.putTicket({ ...t, status: 'in_progress', runCount: 1 });
+      store.putRun({
+        id: 'cut-off',
+        loopId: 'loop-1',
+        ticketId: t.id,
+        kind: 'ticket',
+        sessionId: 'old',
+        model: 'stage-model',
+        fallback: false,
+        startedAt: new Date().toISOString(),
+        credits: 0,
+      });
+      chat.getSession = (async (id: string) => (id === 'old' ? project(id) : null)) as never;
+      scheduler.start();
+      await settle();
+      expect(chat.removeWorktrees).toHaveBeenCalledWith('/repo', ['/wt/old']);
+    });
+
+    it('removes the worktree of a session that opened after its run was released', async () => {
+      make();
+      ticket('a');
+      let open!: (value: { ok: true; session: { id: string } }) => void;
+      chat.createCodeSession.mockImplementationOnce(() => new Promise(resolve => (open = resolve)));
+      chat.getSession = (async (id: string) => (id === 'late' ? project(id) : null)) as never;
+      scheduler.start();
+      await settle();
+      await scheduler.releaseAll();
+      open({ ok: true, session: { id: 'late' } });
+      await settle();
+      expect(chat.removeWorktrees).toHaveBeenCalledWith('/repo', ['/wt/late']);
+    });
   });
 
   function schedulerDeps() {

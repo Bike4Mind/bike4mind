@@ -117,7 +117,9 @@ export interface LocalRun {
   prUrl?: string;
 }
 
-export type LocalLoopEventKind = 'asked' | 'capped' | 'blocked' | 'error' | 'requeued';
+/** `alarm`, `watchdog`: raised by the watchdog (main/loops/local/watchdog.ts); `auto_resumed`: a cap lifted at the reset. */
+export type LocalLoopEventKind =
+  'asked' | 'capped' | 'blocked' | 'error' | 'requeued' | 'alarm' | 'watchdog' | 'auto_resumed';
 
 export interface LocalLoopEvent {
   id: string;
@@ -138,6 +140,8 @@ export interface LocalLoopSummary {
   needsYou: number;
   /** Why it is idle, when it is. */
   idleReason?: string;
+  /** The machine went to sleep then (machine-wide); no run starts until it wakes. */
+  asleepSince?: string;
 }
 
 export interface LocalLoopDetail extends LocalLoopSummary {

@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   deps: null as LocalSchedulerDeps | null,
   stopTicketRun: vi.fn(async (_id: string) => undefined),
   pickDirectory: vi.fn(async (): Promise<string | null> => null),
+  power: new Map<string, () => void>(),
+  suspend: vi.fn(),
+  resume: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -22,7 +25,7 @@ vi.mock('electron', () => ({
   },
   app: { getPath: () => mocks.userData },
   Notification: { isSupported: () => false },
-  powerMonitor: {},
+  powerMonitor: { on: (event: string, listener: () => void) => mocks.power.set(event, listener) },
   powerSaveBlocker: {},
 }));
 vi.mock('../../chat', () => ({ pickDirectory: mocks.pickDirectory }));
@@ -42,6 +45,8 @@ vi.mock('./LocalLoopScheduler', () => ({
     poke() {}
     releaseAll = async () => undefined;
     stopTicketRun = mocks.stopTicketRun;
+    suspend = mocks.suspend;
+    resume = mocks.resume;
     summary = (loop: unknown) => ({ loop, lanesBusy: 0, spentToday: 0, needsYou: 0 });
   },
 }));
@@ -115,6 +120,14 @@ describe('registerLocalLoops handlers', () => {
     register();
     mocks.pickDirectory.mockResolvedValue(mkdtempSync(join(tmpdir(), 'b4m-plain-')));
     expect(await call(IPC_CHANNELS.localLoopsPickFolder)).toEqual({ ok: false, error: 'Pick a local git checkout.' });
+  });
+
+  it('holds the scheduler while the machine sleeps and wakes it on resume', () => {
+    register();
+    mocks.power.get('suspend')!();
+    expect(mocks.suspend).toHaveBeenCalledWith(expect.any(Date));
+    mocks.power.get('resume')!();
+    expect(mocks.resume).toHaveBeenCalled();
   });
 
   it('counts the cached web-loop spend for the same UTC day only', async () => {
