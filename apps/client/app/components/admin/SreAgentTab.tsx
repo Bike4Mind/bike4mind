@@ -181,20 +181,9 @@ function setRepoField<K extends keyof SreRepoConfig>(
 }
 
 /** Gate editor for per-repo gate config */
-function RepoGateEditor({
-  label,
-  gate,
-  onChange,
-}: {
-  label: string;
-  gate: { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number };
-  onChange: (g: {
-    enabled: boolean;
-    autoThreshold: number;
-    askThreshold: number;
-    approvalTimeoutHours: number;
-  }) => void;
-}) {
+function RepoGateEditor<
+  G extends { enabled: boolean; autoThreshold: number; askThreshold: number; approvalTimeoutHours: number },
+>({ label, gate, onChange }: { label: string; gate: G; onChange: (g: G) => void }) {
   return (
     <Box sx={{ py: 1.5, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
