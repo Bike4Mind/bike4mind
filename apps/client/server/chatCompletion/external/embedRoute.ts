@@ -20,6 +20,7 @@ import {
   type IMessage,
   type ModelInfo,
   readOrgModelPolicy,
+  type ReadOrgModelPolicy,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
@@ -245,6 +246,8 @@ async function buildEmbedServerTools(args: {
    * per-member credit side-table and can lag membership (a member may have no row yet).
    */
   ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
+  /** The embed key's org policy; governs the models a tool may call (createToolModelAdmission). */
+  orgToolPolicy: ReadOrgModelPolicy;
   /**
    * Resolved once on the request path for the reasoning-channel model gate, which runs
    * before this. Passed in rather than re-derived: both are per-request work, and the gate
@@ -263,6 +266,7 @@ async function buildEmbedServerTools(args: {
     actorUser,
     hydrated,
     ownerOrg,
+    orgToolPolicy,
     apiKeys: toolApiKeys,
     models,
     modelId,
@@ -352,6 +356,7 @@ async function buildEmbedServerTools(args: {
     enabledTools,
     getAbortSignal,
     toolAvailability,
+    orgToolPolicy,
     // Leave imageUrlSigningSecret unset: the embed widget has no card renderer
     // (server/embed/embedWidgetPage.ts appends reply text verbatim into a text bubble) and no
     // JWT for an anonymous visitor to hit the (jwtOnly) image proxy with, so a signed secret here
@@ -618,6 +623,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
+      // The embed key's organization owns the agent, so its policy governs the turn's tools and model
+      // even when an identified end user pays personally (see governingOrgModelPolicy below).
+      const orgToolPolicy = readOrgModelPolicy(org?.modelPolicy);
       const builtServerTools = await buildEmbedServerTools({
         apiKeys: embedApiKeys,
         models: embedModels,
@@ -628,14 +636,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
         ownerOrg: ownedByOrg ? org : null,
+        orgToolPolicy,
         logger,
         getAbortSignal: () => abortController.signal,
       });
-      // The embed key's organization owns the agent, so its policy governs the turn's tools and model
-      // even when an identified end user pays personally (see governingOrgModelPolicy below).
-      const orgFiltered = builtServerTools
-        ? applyOrgToolPolicy(builtServerTools, readOrgModelPolicy(org?.modelPolicy))
-        : undefined;
+      const orgFiltered = builtServerTools ? applyOrgToolPolicy(builtServerTools, orgToolPolicy) : undefined;
       if (orgFiltered && orgFiltered.stripped.length > 0) {
         logger.info('[OrgToolPolicy] stripped tools the organization does not allow', { tools: orgFiltered.stripped });
       }
