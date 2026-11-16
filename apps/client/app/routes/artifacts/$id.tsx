@@ -35,7 +35,7 @@ const ArtifactPage: React.FC = () => {
     if (isPending) return <CenteredSpinner />;
     if (error || !artifact) {
       return (
-        <Alert color="neutral" data-testid="artifact-page-not-found">
+        <Alert color="neutral" sx={{ alignSelf: 'flex-start' }} data-testid="artifact-page-not-found">
           This artifact does not exist, or you do not have access to it.
         </Alert>
       );
@@ -43,14 +43,14 @@ const ArtifactPage: React.FC = () => {
     if (isViewingOlderVersion && olderVersionPending) return <CenteredSpinner />;
     if (isViewingOlderVersion && olderVersionError) {
       return (
-        <Alert color="danger" data-testid="artifact-page-version-error">
+        <Alert color="danger" sx={{ alignSelf: 'flex-start' }} data-testid="artifact-page-version-error">
           Could not load this version.
         </Alert>
       );
     }
     if (content === undefined) {
       return (
-        <Alert color="warning" data-testid="artifact-page-no-content">
+        <Alert color="warning" sx={{ alignSelf: 'flex-start' }} data-testid="artifact-page-no-content">
           This version has no content.
         </Alert>
       );
