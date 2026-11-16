@@ -65,7 +65,7 @@ AI providers receive a 64-character lowercase hex identifier for each end user i
 2. Paste the full 64-character value into the search box. Upper or lower case both work.
 3. The matching account appears in the list. Open it to review the profile and activity.
 
-The same lookup is available as `GET /api/admin/users/by-provider-id?id=<64 hex>`. It returns the account's ID, name, username, and email. Both routes need the `support:read` permission (see [Delegated permissions](./delegated-permissions.md)). The API responds with 400 if the value is not 64 hex characters.
+The same lookup is available as `GET /api/admin/users/by-provider-id?id=<64 hex>`. It returns the account's ID, name, username, and email. The Users tab needs full admin access; the API also accepts a delegate holding `support:read` (see [Delegated permissions](./delegated-permissions.md)). It responds with 400 if the value is not 64 hex characters and 404 if no account matches.
 
 If nothing matches, the account may have been deleted, or the identifier may come from a different deployment. Check that you pasted the whole value without extra characters.
 
