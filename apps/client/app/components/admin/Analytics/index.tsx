@@ -29,6 +29,7 @@ import { adminTabToSlug } from '../adminTabSlugs';
 import { AdminTab } from '../adminSidebarConfig';
 import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { AcquisitionSection } from './AcquisitionSection';
 import { ActivationFunnelSection } from './ActivationFunnelSection';
 import { CohortsSection } from './CohortsSection';
 import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
@@ -36,8 +37,16 @@ import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageS
 import { TopAccountsSection } from './TopAccountsSection';
 import { downloadAnalyticsExport } from './analyticsExport';
 import { useAnalyticsTopAccounts } from './useAnalyticsTopAccounts';
-import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
+import {
+  ANALYTICS_SEARCH_KEYS,
+  readAcquisitionControls,
+  readAnalyticsFilters,
+  writeAcquisitionControls,
+  writeAnalyticsFilters,
+  type AcquisitionControls,
+} from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
+import { useAcquisitionConversion } from './useAcquisitionConversion';
 import { useActivationFunnel } from './useActivationFunnel';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -179,6 +188,7 @@ const AnalyticsTab = () => {
   const navigate = useNavigate();
   const [urlState, updateUrl] = useAdminListUrlState(ANALYTICS_SEARCH_KEYS);
   const query = readAnalyticsFilters(urlState.filters);
+  const acquisitionControls = readAcquisitionControls(urlState.filters);
   const [showMissing, setShowMissing] = useState(false);
 
   const customIncomplete = query.range === 'custom' && (!query.from || !query.to);
@@ -194,8 +204,21 @@ const AnalyticsTab = () => {
       ? getErrorMessage(funnelQuery.error)
       : undefined;
 
+  const acquisitionQuery = useAcquisitionConversion(query, acquisitionControls, queryReady);
+  const acquisitionStatus = isAxiosError(acquisitionQuery.error) ? acquisitionQuery.error.response?.status : undefined;
+  const acquisitionRefused = acquisitionStatus === 422 ? getErrorMessage(acquisitionQuery.error) : undefined;
+
   const setQuery = (patch: Partial<AnalyticsOverviewQuery>) =>
-    updateUrl({ filters: writeAnalyticsFilters({ ...query, ...patch }) });
+    updateUrl({
+      filters: { ...writeAnalyticsFilters({ ...query, ...patch }), ...writeAcquisitionControls(acquisitionControls) },
+    });
+  const setAcquisitionControls = (patch: Partial<AcquisitionControls>) =>
+    updateUrl({
+      filters: {
+        ...writeAnalyticsFilters(query),
+        ...writeAcquisitionControls({ ...acquisitionControls, ...patch }),
+      },
+    });
   const setRange = (range: AnalyticsRange) => {
     if (range !== 'custom') return setQuery({ range, from: undefined, to: undefined });
     // Seed the date inputs with the range on screen, so Custom starts from what the admin is looking at.
@@ -465,6 +488,20 @@ const AnalyticsTab = () => {
           />
         ))}
       </Box>
+
+      <AcquisitionSection
+        data={acquisitionQuery.data}
+        loading={acquisitionQuery.isPending && !acquisitionQuery.isError}
+        error={acquisitionQuery.isError && !acquisitionRefused && acquisitionStatus !== 504}
+        refused={acquisitionRefused}
+        timedOut={acquisitionStatus === 504}
+        updating={acquisitionQuery.isPlaceholderData}
+        fetching={acquisitionQuery.isFetching}
+        controls={acquisitionControls}
+        onControlsChange={setAcquisitionControls}
+        onRetry={() => void acquisitionQuery.refetch()}
+        onShowDefaultRange={showDefaultRange}
+      />
 
       <CohortsSection signups={query.signups} />
 

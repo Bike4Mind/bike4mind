@@ -13,18 +13,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverview, AnalyticsTopAccounts } from '@client/app/utils/analyticsOverview';
-import { parseAdminSearch } from '../adminTabParams';
+import { adminSearchForTab, parseAdminSearch } from '../adminTabParams';
 
 const mocks = vi.hoisted(() => {
   const overview = vi.fn();
   const topAccounts = vi.fn();
   const funnel = vi.fn();
+  const acquisition = vi.fn((_url: string, _config?: unknown) =>
+    Promise.resolve({ data: { status: 'rangeTooLong', maxDays: 93 } })
+  );
   const get = vi.fn((url: string, config?: unknown) => {
+    if (url.endsWith('/acquisition')) return acquisition(url, config);
     if (url.endsWith('/top-accounts')) return topAccounts(url, config);
     if (url.endsWith('/activation')) return funnel(url, config);
     return overview(url, config);
   });
-  return { get, overview, topAccounts, funnel, download: vi.fn(), toastError: vi.fn() };
+  return { get, overview, topAccounts, funnel, acquisition, download: vi.fn(), toastError: vi.fn() };
 });
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -46,7 +50,12 @@ vi.mock('recharts', async importOriginal => {
 
 import AnalyticsTab from './index';
 import { ActiveUsersTooltip } from './ActiveUsersSection';
-import { readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
+import {
+  readAcquisitionControls,
+  readAnalyticsFilters,
+  writeAcquisitionControls,
+  writeAnalyticsFilters,
+} from './analyticsTabSearch';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -866,5 +875,46 @@ describe('ActiveUsersTooltip', () => {
     daysById.set('2026-06-01', { ...overview().activeUsers.days[0], day: '2026-06-01', internal: null });
     renderTooltip('2026-06-01');
     expect(screen.getByTestId('analytics-tooltip-internal')).toHaveTextContent('Internal: not recorded');
+  });
+});
+
+describe('acquisition controls', () => {
+  it('reads defaults, drops unknown values and leaves defaults out of the URL', () => {
+    expect(readAcquisitionControls({ touch: 'middle', window: '14', followUp: '365' })).toEqual({
+      touch: 'first',
+      window: '30',
+      followUp: '90',
+    });
+    expect(writeAcquisitionControls({ touch: 'first', window: '30', followUp: '90' })).toEqual({
+      touch: '',
+      window: '',
+      followUp: '',
+    });
+    const controls = { touch: 'last', window: '7', followUp: '60' } as const;
+    expect(readAcquisitionControls(writeAcquisitionControls(controls))).toEqual(controls);
+  });
+
+  it('writes the touch toggle to the URL and keeps it when the range changes', async () => {
+    const router = await renderPage('/admin?tab=analytics&range=90d');
+    fireEvent.click(await screen.findByTestId('acquisition-touch-toggle-last'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' }));
+    await waitFor(() =>
+      expect(mocks.acquisition.mock.calls.at(-1)?.[1]).toEqual({
+        params: { range: '90d', signups: 'legit', touch: 'last', window: '30', followUp: '90' },
+      })
+    );
+    fireEvent.click(screen.getByTestId('analytics-range-28d'));
+    await waitFor(() => expect(router.state.location.search.range).toBeUndefined());
+    expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' });
+  });
+
+  it('drops the acquisition controls on a switch to another tab', () => {
+    const switched = adminSearchForTab(
+      { tab: 'analytics', acquisitionTouch: 'last', conversionWindow: '7', followUp: '60' },
+      'users'
+    );
+    expect(switched.acquisitionTouch).toBeUndefined();
+    expect(switched.conversionWindow).toBeUndefined();
+    expect(switched.followUp).toBeUndefined();
   });
 });
