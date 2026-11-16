@@ -10,7 +10,9 @@ import {
   ERROR_MAX_CHARS,
   applyLatencyGate,
   latencyGateTest,
+  latencyGateTests,
   latencyMetric,
+  latencyMetrics,
   mergeParsed,
   parseResults,
   suiteDisplayName,
@@ -249,5 +251,73 @@ describe('latency gate', () => {
     expect(breached.tests.map(t => t.status)).toEqual(['failed']);
     expect(breached.tests.map(t => t.testKey)).toEqual([over.testKey]);
     expect(breached.counts).toMatchObject({ failed: 1, ran: 1 });
+  });
+});
+
+describe('per-prompt latency results', () => {
+  const file = '/x/ai-latency-doc-prompts-results.json';
+  const prompt = (over = {}) => ({
+    aiModel: 'model-x',
+    promptName: 'Prompt A',
+    thresholdSec: 120,
+    actualResponseLatency: '51.67 secs.',
+    totalEndToEnd: '51.67 secs.',
+    exceedsThreshold: false,
+    ...over,
+  });
+
+  it('maps each prompt to its own latency metric', () => {
+    expect(
+      latencyMetrics(file, [prompt(), prompt({ promptName: 'Prompt B', actualResponseLatency: '8 secs.' })])
+    ).toEqual([
+      {
+        kind: 'latency',
+        model: 'model-x',
+        label: 'ai-latency-doc-prompts: Prompt A',
+        value: 51.67,
+        unit: 's',
+        threshold: 120,
+      },
+      {
+        kind: 'latency',
+        model: 'model-x',
+        label: 'ai-latency-doc-prompts: Prompt B',
+        value: 8,
+        unit: 's',
+        threshold: 120,
+      },
+    ]);
+  });
+
+  it('skips prompts with no latency and list entries of any other shape', () => {
+    expect(latencyMetrics(file, [prompt({ actualResponseLatency: '0.00 secs.' }), { model: 'model-x' }, null])).toEqual(
+      []
+    );
+    expect(latencyGateTests(file, [{ model: 'model-x', averageResponseTimeSec: 9 }])).toEqual([]);
+  });
+
+  it('passes a prompt within budget and fails one over it or with no measurement', () => {
+    const tests = latencyGateTests(file, [
+      prompt(),
+      prompt({ promptName: 'Prompt B', actualResponseLatency: '130.5 secs.', exceedsThreshold: true }),
+      prompt({ promptName: 'Prompt C', actualResponseLatency: '0.00 secs.', totalEndToEnd: '0.00 secs.' }),
+    ]);
+    expect(tests.map(t => [t.testKey, t.status, t.error])).toEqual([
+      ['latency-gate::ai-latency-doc-prompts: Prompt A [model-x]', 'passed', undefined],
+      ['latency-gate::ai-latency-doc-prompts: Prompt B [model-x]', 'failed', '130.50s, threshold 120s'],
+      [
+        'latency-gate::ai-latency-doc-prompts: Prompt C [model-x]',
+        'failed',
+        'no measurement; the prompt crashed or timed out',
+      ],
+    ]);
+  });
+
+  it('leaves a single-cell summary file exactly as latencyMetric and latencyGateTest read it', () => {
+    const json = { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 6.5 };
+    expect(latencyMetrics(file, json)).toEqual([latencyMetric(file, json)]);
+    expect(latencyGateTests(file, json)).toEqual([latencyGateTest(file, json)]);
+    expect(latencyMetrics(file, { ...json, medianResponseTimeSec: 0 })).toEqual([]);
+    expect(latencyGateTests(file, { ...json, medianResponseTimeSec: 0 })).toEqual([]);
   });
 });

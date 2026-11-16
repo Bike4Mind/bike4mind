@@ -244,6 +244,70 @@ function gateTest(testKey, title, status, error) {
   return test;
 }
 
+/**
+ * Some results files are a list with one entry per prompt (`aiModel`, `promptName`, latencies as
+ * "51.67 secs." strings) instead of one summary per cell. Each prompt is then its own cell. The
+ * gate mirrors the producing workflow's per-prompt rule: `exceedsThreshold`, or no end-to-end time
+ * (the prompt crashed or timed out), fails. Any other list shape is ignored.
+ */
+function promptEntries(json) {
+  return Array.isArray(json)
+    ? json.filter(e => typeof e?.aiModel === 'string' && typeof e.promptName === 'string')
+    : [];
+}
+
+function promptSeconds(value) {
+  const sec = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  return Number.isFinite(sec) ? sec : 0;
+}
+
+const promptLabel = (fileName, entry) => `${path.basename(fileName, '-results.json')}: ${entry.promptName}`;
+
+/** Every latency metric in one results file: one per cell summary, or one per prompt. */
+export function latencyMetrics(fileName, json) {
+  if (!Array.isArray(json)) {
+    const metric = latencyMetric(fileName, json);
+    return metric ? [metric] : [];
+  }
+  return promptEntries(json).flatMap(entry => {
+    const latencySec = promptSeconds(entry.actualResponseLatency);
+    if (latencySec <= 0) return [];
+    const metric = {
+      kind: 'latency',
+      model: entry.aiModel,
+      label: promptLabel(fileName, entry),
+      value: latencySec,
+      unit: 's',
+    };
+    if (typeof entry.thresholdSec === 'number') metric.threshold = entry.thresholdSec;
+    return [metric];
+  });
+}
+
+/** Every latency gate test in one results file: one per cell summary, or one per prompt. */
+export function latencyGateTests(fileName, json) {
+  if (!Array.isArray(json)) {
+    const test = latencyGateTest(fileName, json);
+    return test ? [test] : [];
+  }
+  return promptEntries(json).map(entry => {
+    const label = `${promptLabel(fileName, entry)} [${entry.aiModel}]`;
+    const testKey = `latency-gate::${label}`;
+    const title = `Latency gate: ${label}`;
+    if (promptSeconds(entry.totalEndToEnd) <= 0)
+      return gateTest(testKey, title, 'failed', 'no measurement; the prompt crashed or timed out');
+    if (entry.exceedsThreshold !== true) return gateTest(testKey, title, 'passed');
+    const threshold =
+      typeof entry.thresholdSec === 'number' ? `threshold ${entry.thresholdSec}s` : 'no threshold declared';
+    return gateTest(
+      testKey,
+      title,
+      'failed',
+      `${promptSeconds(entry.actualResponseLatency).toFixed(2)}s, ${threshold}`
+    );
+  });
+}
+
 /** Fallback when the workflow reports a breach but no cell file explains it. */
 export const LATENCY_GATE_FALLBACK = gateTest(
   'latency-gate',
@@ -273,10 +337,7 @@ async function loadLatencyGateTests(latencyDir, log) {
   if (!latencyDir) return [];
   const files = await findFiles(latencyDir, n => n.endsWith('-results.json') && !n.endsWith('-pw-results.json'));
   const tests = [];
-  for (const file of files) {
-    const test = latencyGateTest(file, await readJson(file, log));
-    if (test) tests.push(test);
-  }
+  for (const file of files) tests.push(...latencyGateTests(file, await readJson(file, log)));
   return tests;
 }
 
@@ -406,10 +467,7 @@ async function loadMetrics(args, log) {
   if (args.credits) metrics.push(...creditsMetrics(await readJson(args.credits, log)));
   if (args.latencyDir) {
     const files = await findFiles(args.latencyDir, n => n.endsWith('-results.json') && !n.endsWith('-pw-results.json'));
-    for (const file of files) {
-      const metric = latencyMetric(file, await readJson(file, log));
-      if (metric) metrics.push(metric);
-    }
+    for (const file of files) metrics.push(...latencyMetrics(file, await readJson(file, log)));
   }
   return metrics.slice(0, 500);
 }

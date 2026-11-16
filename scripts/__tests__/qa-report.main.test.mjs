@@ -295,6 +295,59 @@ describe('main', () => {
     ]);
   });
 
+  it('reads a per-prompt latency list beside single-cell summaries', async () => {
+    const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
+    report.stats.unexpected = 0;
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a', 'playwright-report'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'playwright-report/spec-pw-results.json'),
+      JSON.stringify(report)
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 3 })
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-doc-prompts-results.json'),
+      JSON.stringify([
+        {
+          aiModel: 'model-a',
+          promptName: 'Prompt A',
+          thresholdSec: 120,
+          actualResponseLatency: '51.67 secs.',
+          totalEndToEnd: '51.67 secs.',
+          exceedsThreshold: false,
+        },
+        {
+          aiModel: 'model-a',
+          promptName: 'Prompt B',
+          thresholdSec: 120,
+          actualResponseLatency: '130.50 secs.',
+          totalEndToEnd: '130.50 secs.',
+          exceedsThreshold: true,
+        },
+      ])
+    );
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')],
+      { ...ENV, QA_LATENCY_BREACH: 'true' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    const body = runBody(calls);
+    expect(body.metrics.map(m => [m.label, m.value]).sort()).toEqual([
+      ['ai-latency-doc-prompts: Prompt A', 51.67],
+      ['ai-latency-doc-prompts: Prompt B', 130.5],
+      ['ai-latency-short-answers', 3],
+    ]);
+    const gates = body.tests.filter(t => t.test_key.startsWith('latency-gate'));
+    expect(gates.map(t => [t.test_key, t.status]).sort()).toEqual([
+      ['latency-gate::ai-latency-doc-prompts: Prompt A [model-a]', 'passed'],
+      ['latency-gate::ai-latency-doc-prompts: Prompt B [model-a]', 'failed'],
+      ['latency-gate::ai-latency-short-answers [model-a]', 'passed'],
+    ]);
+  });
+
   it('posts a latency breach as a failed gate test only when the workflow flags one', async () => {
     const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
     report.stats.unexpected = 0;
