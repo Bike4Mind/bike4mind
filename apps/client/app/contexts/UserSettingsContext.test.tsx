@@ -292,6 +292,63 @@ describe('UserSettingsContext - concurrent toggles vs. a failed write', () => {
   });
 });
 
+describe('UserSettingsContext - telemetry deletion outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStores();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('sends the re-run flag with the save and resolves with the reported outcome', async () => {
+    vi.mocked(updateUserToServer).mockResolvedValue({
+      id: 'u1',
+      telemetryDeletion: { verified: false, remainingCount: 2 },
+    });
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>>;
+    await act(async () => {
+      saved = await result.current.updatePreferences(
+        { contextTelemetryLevel: 'none' },
+        { rerunTelemetryDeletion: true }
+      );
+    });
+
+    expect(updateUserToServer).toHaveBeenCalledWith('u1', {
+      preferences: expect.objectContaining({ contextTelemetryLevel: 'none' }),
+      rerunTelemetryDeletion: true,
+    });
+    expect(saved!).toEqual({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+  });
+
+  it('leaves the flag out of an ordinary save and reports no deletion', async () => {
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>>;
+    await act(async () => {
+      saved = await result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(vi.mocked(updateUserToServer).mock.calls[0][1]).not.toHaveProperty('rerunTelemetryDeletion');
+    expect(saved!).toEqual({ telemetryDeletion: undefined });
+  });
+
+  it('resolves undefined when the write does not land', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(500));
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    let saved: Awaited<ReturnType<typeof result.current.updatePreferences>> = {};
+    await act(async () => {
+      saved = await result.current.updatePreferences(
+        { contextTelemetryLevel: 'none' },
+        { rerunTelemetryDeletion: true }
+      );
+    });
+
+    expect(saved).toBeUndefined();
+  });
+});
+
 describe('UserSettingsContext - preferences write failure feedback', () => {
   beforeEach(() => {
     vi.clearAllMocks();

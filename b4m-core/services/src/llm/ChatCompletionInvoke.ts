@@ -12,8 +12,10 @@ import {
   IUserDocument,
   LLMModelConfig,
   ModelInfo,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   PromptMeta,
   PromptMetaZodSchema,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -32,11 +34,13 @@ import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompl
 import {
   createModelAdmission,
   isModelRequiresSubscriptionError,
+  isOrgModelNotAllowedError,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
 } from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
+import { orgDisallowedTools } from './orgToolPolicy';
 import { filterBuiltInTools } from './tools/toolManager';
 
 export class ChatCompletionInvoke {
@@ -204,6 +208,17 @@ export class ChatCompletionInvoke {
       throw new ForbiddenError('You do not have access to this session');
     }
 
+    // An API-key caller chose these tools, so it is told which ones the org disallows. Session and
+    // platform (internal) turns have them dropped silently when ChatCompletionProcess assembles the list.
+    if (authOrigin === 'apiKey') {
+      const disallowedTools = orgDisallowedTools(tools ?? [], readOrgModelPolicy(organization?.modelPolicy));
+      if (disallowedTools.length > 0) {
+        throw new ForbiddenError(`Tools not allowed by your organization: ${disallowedTools.join(', ')}`, {
+          errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+        });
+      }
+    }
+
     // Get model info (depends on apiKeyTable, so must be sequential)
     let modelInfo = this.modelInfoCache;
     if (!modelInfo && apiKeyTable) {
@@ -260,6 +275,23 @@ export class ChatCompletionInvoke {
     // resolveQuestModelType falls back.
     if (model.type && !isPromptMetaModelType(model.type)) {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
+    }
+
+    // An API-key caller gets the org model refusal as a real 403 before any quest exists; other admission
+    // refusals, and session turns, still surface through the quest below.
+    if (authOrigin === 'apiKey') {
+      const orgAdmission = createModelAdmission({
+        user: this.user,
+        configs: [],
+        models: modelInfo,
+        enforceCredits: false,
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      });
+      for (const gatedModelId of [model.id, ...researchModelIds]) {
+        await orgAdmission.assert(gatedModelId).catch(err => {
+          if (isOrgModelNotAllowedError(err)) throw err;
+        });
+      }
     }
 
     // Start sessions.update early (will await later in parallel with admin settings)
@@ -479,6 +511,7 @@ export class ChatCompletionInvoke {
         models: modelInfo,
         enforceCredits: enforceCredits === true,
         freeTierAllowedModels,
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
       });
       for (const gatedModelId of [originalModel, ...researchModelIds]) {
         await admission.assert(gatedModelId).catch(async err => {
