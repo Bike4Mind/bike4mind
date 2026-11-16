@@ -95,7 +95,7 @@ const run = async (
 };
 
 const SCOPE_ID = 'a'.repeat(24);
-const validBody = { scopeType: 'Organization', scopeId: SCOPE_ID, reason: 'suspected abuse' };
+const validBody = { scopeType: 'Organization', scopeId: SCOPE_ID, reason: 'admin review' };
 const AUDIT = { actor: { kind: 'user', userId: 'admin-1' }, context: { route: '/x' } };
 const freeze = { id: 'f1', scopeType: 'Organization', scopeId: SCOPE_ID, reason: 'r' };
 
@@ -121,7 +121,7 @@ describe('spend freeze admin routes', () => {
           scope: { scopeType: 'Organization', scopeId: SCOPE_ID },
           actor: { kind: 'admin', userId: 'admin-1' },
           audit: AUDIT,
-          reason: 'suspected abuse',
+          reason: 'admin review',
         }),
         expect.anything()
       );
@@ -253,7 +253,7 @@ describe('spend freeze admin routes', () => {
 
       expect(res._getJSONData()).toEqual({ freeze, lifted: true });
       expect(h.unfreezeSpend).toHaveBeenCalledWith(
-        expect.objectContaining({ actor: { kind: 'admin', userId: 'admin-1' }, reason: 'suspected abuse' }),
+        expect.objectContaining({ actor: { kind: 'admin', userId: 'admin-1' }, reason: 'admin review' }),
         expect.anything()
       );
     });
