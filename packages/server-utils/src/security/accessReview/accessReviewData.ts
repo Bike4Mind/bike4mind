@@ -126,7 +126,8 @@ export interface CollectAccessReviewOptions {
   allApiKeys?: boolean;
 }
 
-const ADMIN_FILTER = {
+/** Every account holding admin access: the full role, a direct permission, or an admin role. */
+export const ACCESS_REVIEW_ADMIN_FILTER = {
   $or: [{ isAdmin: true }, { 'adminPermissions.0': { $exists: true } }, { 'adminRoleIds.0': { $exists: true } }],
 };
 
@@ -267,7 +268,7 @@ async function countAccess(now: Date, adminIds: string[], fullAdmins: number): P
 
 /** Counts only: reads no email, username or key name, for callers that log or post the result. */
 export async function collectAccessReviewCounts(now: Date): Promise<AccessReviewCounts> {
-  const adminDocs = await User.find(ADMIN_FILTER, { isAdmin: 1 })
+  const adminDocs = await User.find(ACCESS_REVIEW_ADMIN_FILTER, { isAdmin: 1 })
     .read('secondaryPreferred')
     .lean<Array<{ _id: unknown; isAdmin?: boolean }>>();
   const fullAdmins = adminDocs.filter(doc => doc.isAdmin === true).length;
@@ -283,7 +284,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
   const c = collections();
   const f = accessFilters(now);
 
-  const adminDocs = await User.find(ADMIN_FILTER, {
+  const adminDocs = await User.find(ACCESS_REVIEW_ADMIN_FILTER, {
     email: 1,
     username: 1,
     isAdmin: 1,
