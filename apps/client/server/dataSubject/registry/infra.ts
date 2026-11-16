@@ -410,7 +410,13 @@ export const infraHolders = {
   Organization: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['billingContact'] },
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'anonymize',
+        alsoRedact: ['billingContact'],
+        afterSubjectDeleted: true,
+      },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },

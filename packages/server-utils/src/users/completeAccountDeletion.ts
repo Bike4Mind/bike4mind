@@ -16,6 +16,8 @@ export type AccountDeletionSkipReason = 'not_due' | 'not_found' | 'busy';
 export type AccountDeletionCompletion = { deleted: true } | { deleted: false; reason: AccountDeletionSkipReason };
 
 export type ErasureSubject = { userId: string; email: string | null };
+/** `beforeDelete` holds back the references `hardDeleteUser` still reads (an organization's owner); `afterDelete` writes only those. */
+export type ErasureStage = 'beforeDelete' | 'afterDelete';
 
 /**
  * The data holder registry's view of one person, for an admin data subject erasure. The registry
@@ -25,8 +27,8 @@ export type ErasureSubject = { userId: string; email: string | null };
 export type ErasureRegistry = {
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
-  /** Deletes, anonymizes or detaches every row the registry finds naming the subject. Idempotent. */
-  erase(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<void>;
+  /** Deletes, anonymizes or detaches every row the registry finds naming the subject, or one stage of them. Idempotent. */
+  erase(subject: ErasureSubject, assertLease: () => Promise<void>, stage?: ErasureStage): Promise<void>;
   /** After the purge: what still names the subject outside the stated retentions, and the models not checked. */
   audit(subject: ErasureSubject): Promise<{ remaining: AdminErasureCollection[]; unclassified: string[] }>;
 };
@@ -123,6 +125,7 @@ export async function completeAccountDeletion(
   const erasure = user.deletion?.source === 'admin' ? { requestedBy: user.deletion.requestedBy ?? null } : null;
   const subject = { userId, email: user.email ?? null };
 
+  let deleteCommitted = false;
   try {
     // Snapshot once: a retry after a partial purge would count less, and the record must describe it all.
     let scope = user.deletion?.erasureScope;
@@ -139,10 +142,8 @@ export async function completeAccountDeletion(
       { userId },
       { db: { realtimeConnections: realtimeConnectionRepository } }
     );
-    // Erasure anonymizes Organization.userId, which would blind the in-transaction guard to an
-    // organization acquired since the start check; anything acquired after this still names the person.
     await assertNoOwnedOrganizations(userId);
-    await erasureRegistry.erase(subject, assertLease);
+    await erasureRegistry.erase(subject, assertLease, 'beforeDelete');
     await hardDeleteUser(
       userId,
       {
@@ -179,10 +180,17 @@ export async function completeAccountDeletion(
             { db: { adminAuditLog: adminAuditLogRepository }, logger }
           );
         },
+        onDeleteCommitted: () => {
+          deleteCommitted = true;
+        },
       },
       users => users.delete(userId)
     );
   } catch (error) {
+    if (deleteCommitted) {
+      await eraseAfterDelete(subject, erasureRegistry, logger);
+      throw error;
+    }
     try {
       await User.updateOne(
         { _id: userId, 'deletion.purgeLeaseId': leaseId },
@@ -194,6 +202,7 @@ export async function completeAccountDeletion(
     throw error;
   }
 
+  await eraseAfterDelete(subject, erasureRegistry, logger);
   if (erasure) {
     logger.info(`[AccountDeletion] Deleted user ${userId} for an admin data subject erasure`);
     await recordErasureCompleted(subject, erasure.requestedBy, erasureRegistry, logger);
@@ -209,6 +218,22 @@ export async function completeAccountDeletion(
     }
   }
   return { deleted: true };
+}
+
+/**
+ * The references held back until the user row is gone, written once the delete commits. A retry could not
+ * find the user, so a failure is logged at error, not thrown; an erasure's completion audit lists what is left.
+ */
+async function eraseAfterDelete(
+  subject: ErasureSubject,
+  erasureRegistry: ErasureRegistry,
+  logger: DeletionLogger
+): Promise<void> {
+  try {
+    await erasureRegistry.erase(subject, async () => {}, 'afterDelete');
+  } catch (error) {
+    logger.error(`Failed to finish erasure for deleted user ${subject.userId}: ${String(error)}`);
+  }
 }
 
 /**

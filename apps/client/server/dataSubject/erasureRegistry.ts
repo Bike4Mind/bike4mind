@@ -1,8 +1,9 @@
 import { mongoose } from '@bike4mind/database';
 import { retainDeletedSignupTraces } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
-import type { ErasureRegistry } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import type { ErasureRegistry, ErasureStage } from '@bike4mind/server-utils/users/completeAccountDeletion';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
+import type { DataHolder, DataHolderRegistry } from './types';
 import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
 import { assertEveryModelClassified } from './subjectMatcher';
@@ -23,6 +24,22 @@ function beforeErasureHooks(): string[] {
   return [...new Set(names)];
 }
 
+/** The registry split at `afterSubjectDeleted`: the references written before the user row goes, or only those after. */
+function registryForStage(stage: ErasureStage, registry: DataHolderRegistry = DATA_HOLDER_REGISTRY) {
+  const after = stage === 'afterDelete';
+  const staged: Record<string, DataHolder> = {};
+  for (const [model, holder] of Object.entries(registry)) {
+    if (holder.kind !== 'holder') {
+      if (!after) staged[model] = holder;
+      continue;
+    }
+    const [first, ...rest] = holder.references.filter(reference => Boolean(reference.afterSubjectDeleted) === after);
+    if (first) staged[model] = { ...holder, references: [first, ...rest] };
+    else if (!after) throw new Error(`${model} has only references written after the user row is deleted`);
+  }
+  return staged;
+}
+
 /** The data holder registry the account purge (completeAccountDeletion.ts) plans, erases and checks against. */
 export const erasureRegistry: ErasureRegistry = {
   async scope(subject, assertLease) {
@@ -31,14 +48,19 @@ export const erasureRegistry: ErasureRegistry = {
   },
   // No classification check here: it would block self-serve deletion on a deploy that registers
   // models outside this registry. Only registry holders are walked; audit lists the rest as unclassified.
-  async erase(subject, assertLease) {
+  async erase(subject, assertLease, stage) {
+    if (stage === 'afterDelete') {
+      await new SubjectErasureExecutor(subject, assertLease, registryForStage(stage)).run();
+      return;
+    }
     for (const name of beforeErasureHooks()) {
       const hook = BEFORE_ERASURE_HOOKS[name];
       if (!hook) throw new Error(`No beforeErasure function is registered under ${name}`);
       await assertLease();
       await hook(subject.userId);
     }
-    await new SubjectErasureExecutor(subject, assertLease).run();
+    const registry = stage ? registryForStage(stage) : DATA_HOLDER_REGISTRY;
+    await new SubjectErasureExecutor(subject, assertLease, registry).run();
   },
   async audit(subject) {
     // A model the registry does not classify was not checked, so it is listed rather than passed over.

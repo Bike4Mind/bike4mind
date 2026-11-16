@@ -127,6 +127,12 @@ export type UserReference = ErasureAction & {
    * record, as for an `anonymize`.
    */
   exportScope?: 'reference';
+  /**
+   * The account purge (completeAccountDeletion.ts) writes this reference only after the user row is
+   * deleted: `hardDeleteUser` follows it to the Stripe customers it cancels, and its delete guard to
+   * the organizations the person still owns. A plain `erase` writes it with everything else.
+   */
+  afterSubjectDeleted?: true;
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };

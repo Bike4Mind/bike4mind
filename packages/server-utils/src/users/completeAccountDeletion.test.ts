@@ -62,9 +62,9 @@ const erasureRegistry: ErasureRegistry = {
     h.assertClassified(['Alpha', 'Beta']);
     return h.collections(assertLease);
   },
-  async erase(_subject, assertLease) {
+  async erase(_subject, assertLease, stage) {
     await assertLease();
-    h.order.push('erase');
+    h.order.push(`erase:${stage}`);
   },
   async audit() {
     const collections: { deleted: number; anonymized: number }[] = await h.collections();
@@ -164,7 +164,17 @@ describe('completeAccountDeletion', () => {
         },
       }
     );
-    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'erase', 'delete', 'audit', 'email']);
+    expect(h.order).toEqual([
+      'orgs',
+      'files',
+      'content',
+      'realtime',
+      'erase:beforeDelete',
+      'delete',
+      'audit',
+      'erase:afterDelete',
+      'email',
+    ]);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }
@@ -300,7 +310,7 @@ describe('completeAccountDeletion', () => {
       expect.objectContaining({ logger })
     );
     expect(JSON.stringify(h.recordAdminAction.mock.calls[0][0])).not.toContain('leaving@example.com');
-    expect(h.order.slice(-3)).toEqual(['delete', 'audit', 'email']);
+    expect(h.order.slice(-4)).toEqual(['delete', 'audit', 'erase:afterDelete', 'email']);
   });
 
   it('falls back to the user id when the deleted row is unreadable', async () => {

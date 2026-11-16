@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
-import { AdminAuditLogModel, Session, mongoose } from '@bike4mind/database';
+import { AdminAuditLogModel, ErasureRecordModel, Session, mongoose } from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
@@ -19,11 +19,22 @@ vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', async importOriginal 
 }));
 vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: vi.fn() }));
 vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: vi.fn() }));
-vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
-  readAccountSubscriptionCustomerIds: vi.fn(async () => []),
-  cancelAccountSubscriptions: vi.fn(async () => ({ canceled: [], failed: [] })),
+// Customer IDs are resolved for real; only the Stripe calls are stubbed, recording what each cancel would bill.
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/stripe/stripe')>()),
+  isStripeConfigured: () => true,
 }));
+const billed = vi.hoisted(() => new Map<string, readonly string[]>());
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>();
+  return {
+    ...actual,
+    cancelAccountSubscriptions: vi.fn(async (input: { userId: string; customerIds?: readonly string[] }) => {
+      billed.set(input.userId, input.customerIds ?? (await actual.readAccountSubscriptionCustomerIds(input.userId)));
+      return { canceled: [], failed: [] };
+    }),
+  };
+});
 vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: vi.fn() }),
@@ -34,7 +45,10 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
+import { reapplyErasure } from '../users/reapplyErasure';
 import { erasureRegistry } from './erasureRegistry';
+import { DELETED_USER_ID } from './placeholder';
 import { SubjectErasurePlan } from './subjectErasurePlan';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -265,4 +279,40 @@ describe('self-serve deletion and admin erasure', () => {
       rows.find(row => row.model === 'AdminAuditLog')?.retained ?? 0;
     expect(auditRows(adminLeft)).toBe(auditRows(selfLeft) + 1);
   });
+});
+
+describe('a sole-owned paid organization tombstoned before the purge', () => {
+  it.each(['self', 'admin'] as const)(
+    'is billed by the %s completion cancel and loses its owner once the user row is gone, and again on replay',
+    async source => {
+      const { userId } = await seedAccount(source);
+      const stripeCustomerId = `cus_${userId}`;
+      const paid = await insert('Organization', {
+        name: 'Paid',
+        userId,
+        stripeCustomerId,
+        personal: false,
+        deletedAt: new Date(Date.now() - 3_600_000),
+        users: [{ userId, role: 'owner' }],
+      });
+
+      await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
+        deleted: true,
+      });
+      expect(billed.get(userId)).toEqual([stripeCustomerId]);
+      const organizations = mongoose.model('Organization').collection;
+      expect(String((await organizations.findOne({ _id: paid }))!.userId)).toBe(DELETED_USER_ID);
+
+      // A restore brings back the row and the owner link; replay must anonymize it again.
+      await insert('User', {
+        _id: new mongoose.Types.ObjectId(userId),
+        username: `restored-${userId}`,
+        deletion: { requestedAt: new Date(), scheduledFor: new Date(), source },
+      });
+      await organizations.updateOne({ _id: paid }, { $set: { userId } });
+      const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) }).lean())!;
+      await reapplyErasure(userId, { record, logger: logger as never });
+      expect(String((await organizations.findOne({ _id: paid }))!.userId)).toBe(DELETED_USER_ID);
+    }
+  );
 });
