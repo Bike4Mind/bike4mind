@@ -102,12 +102,13 @@ export async function updateAdminRole(
   deps: AdminRolesDeps
 ): Promise<AdminRoleWithMembers> {
   assertCanEditRoles(actor);
-  const before = await deps.roles.findById(roleId);
-  if (!before) throw notFound();
-  // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
-  const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
-  if (diff(before.permissions, requested).granted.length > 0) await deps.requireStepUp();
+  // Read inside the transaction so a concurrent edit conflicts instead of skewing the step-up decision and audit diff.
   return deps.transaction(async () => {
+    const before = await deps.roles.findById(roleId);
+    if (!before) throw notFound();
+    // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
+    const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
+    if (diff(before.permissions, requested).granted.length > 0) await deps.requireStepUp();
     let after: AdminRole | null;
     try {
       after = await deps.roles.update(roleId, patch);
