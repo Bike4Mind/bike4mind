@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
-import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
+import { MFA_STATUS_QUERY_KEY, useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
 import { describePasskeyError, useEnrollPasskeyFactor } from '@client/app/hooks/data/passkeys';
 import { useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -11,7 +11,6 @@ import { registerMfaEnrollmentInterceptor } from '@client/app/utils/mfaEnrollmen
 import { readMfaEnrolledHint, writeMfaEnrolledHint } from '@client/app/utils/mfaEnrollmentHint';
 import { reportMfaEnrollmentAbandoned } from '@client/app/utils/mfaEnrollmentFunnel';
 import { api } from '@client/app/contexts/ApiContext';
-import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
 import {
   MFA_SETUP_DESCRIPTION,
@@ -51,35 +50,33 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Backup codes from a passkey enrolled as the factor, shown until the user continues.
   const [passkeyBackupCodes, setPasskeyBackupCodes] = useState<string[] | null>(null);
 
-  // Get MFA enforcement setting from admin settings
-  const enforceMFA = adminSettings?.enforceMFA === 'true';
+  const isImpersonating = useAccessToken(s => s.impersonating);
+  const userId = currentUser?.id;
 
-  // Only call MFA status API if enforcement is enabled
-  const shouldCheckMFA = !!enforceMFA;
-
-  // Start the status check while admin settings are still loading rather than after, so the two
-  // round trips overlap; once settings say enforcement is off, the check is skipped.
-  const mfaStatusQuery = useMFAStatus(shouldCheckMFA || adminSettingsLoading);
+  // The server decides who owes enrollment: the status reads its own enforceMFA, so a missing or
+  // stale client settings copy cannot hide the setup screen from a user every call refuses.
+  const mfaStatusQuery = useMFAStatus(!!userId && !isImpersonating);
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
   // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
   // so a reload rehydrates without it until /api/identify lands, and reading it here fired a
   // step-up-gated setup call at an enrolled user, which then 409'd.
-  // `required: false` is the server exempting this user (a test persona); an older server omits it.
-  const needsEnrollment = !mfaStatus?.enabled && mfaStatus?.required !== false;
+  // `required: false` is the server exempting this user (a test persona) or enforcement being off.
+  // An older server omits `required`; then only a refusal, never a missing field, asks for setup.
+  const needsEnrollment =
+    !mfaStatus?.enabled && (mfaStatus?.required === true || (enrollmentRefused && mfaStatus?.required !== false));
 
-  // A user this browser last saw enrolled skips the loader; the check still runs behind the app.
-  // A server refusal withdraws the pass, and a status saying "not enrolled" reaches the
-  // enforcement screen below, which is checked before the app is rendered.
-  const userId = currentUser?.id;
+  // The app renders at once, with the check still running behind it, for a user this browser last
+  // saw enrolled or while this tab's settings say enforcement is off: most users owe nothing, and
+  // both are only hints. A server refusal withdraws the pass, and a status saying enrollment is
+  // owed reaches the enforcement screen below, which is checked before the app is rendered.
   const knownEnrolled = useMemo(() => readMfaEnrolledHint(userId), [userId]);
-  const optimisticPass = knownEnrolled && !enrollmentRefused;
+  const settingsSayNotEnforced = !adminSettingsLoading && adminSettings?.enforceMFA !== 'true';
+  const optimisticPass = (knownEnrolled || settingsSayNotEnforced) && !enrollmentRefused;
 
   useEffect(() => {
     if (userId && mfaStatus) writeMfaEnrolledHint(userId, mfaStatus.enabled);
   }, [userId, mfaStatus]);
-
-  const isImpersonating = useAccessToken(s => s.impersonating);
 
   // MFA mutations
   const setupMFA = useSetupMFA();
@@ -120,10 +117,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   }, [setupMFAMutate, mfaStatusQuery.refetch]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
-  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on a
-  // refusal so the enrollment flow renders instead of an app whose every call fails. One refetch
-  // at a time: a burst of refusals would otherwise re-run the settings load once per 403. Re-arm
-  // when it settles, since a failed or stale refetch must not leave later refusals ignored.
+  // enforceMFA, which can be after this tab last read the status. Refetch it on a refusal so the
+  // enrollment flow renders instead of an app whose every call fails. One refetch at a time: a
+  // burst of refusals would otherwise re-run it once per 403. Re-arm when it settles, since a
+  // failed or stale refetch must not leave later refusals ignored.
   // Layout effect: must register before any child's on-mount request (child effects run first).
   const refusalRefetchInFlightRef = useRef(false);
   useLayoutEffect(
@@ -132,12 +129,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         if (refusalRefetchInFlightRef.current) return;
         refusalRefetchInFlightRef.current = true;
         setEnrollmentRefused(true);
-        void Promise.allSettled([
-          queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY }),
-          queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] }),
-        ]).then(() => {
+        const rearm = () => {
           refusalRefetchInFlightRef.current = false;
-        });
+        };
+        void queryClient.invalidateQueries({ queryKey: MFA_STATUS_QUERY_KEY }).then(rearm, rearm);
       }),
     [queryClient]
   );
@@ -154,33 +149,19 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       return;
     }
 
-    // Wait for admin settings to load before making any MFA decisions
-    if (adminSettingsLoading) {
-      return;
-    }
-
-    // If we don't need to check MFA at all, skip all MFA logic
-    if (!shouldCheckMFA) {
-      setIsLoading(false);
-      return;
-    }
-
-    // If we need to check MFA and the query is still loading, wait
-    if (shouldCheckMFA && mfaStatusQuery.isLoading) {
+    if (mfaStatusQuery.isLoading) {
       return;
     }
 
     setIsLoading(false);
 
-    // If MFA query failed (and we were checking), skip enforcement (allow normal app access) -
-    // unless the server itself already refused a call for enrollment, which settles the question.
-    if (shouldCheckMFA && mfaQueryFailed && !enrollmentRefused) {
+    // If the status query failed, skip enforcement (allow normal app access) - unless the server
+    // itself already refused a call for enrollment, which settles the question.
+    if (mfaQueryFailed && !enrollmentRefused) {
       return;
     }
 
-    // If MFA is enforced and user doesn't have it configured, force setup.
-    // When enforced it applies to ALL users (no "internal" distinction).
-    if (enforceMFA && needsEnrollment) {
+    if (needsEnrollment) {
       // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
       // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
       // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
@@ -193,9 +174,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   }, [
     isImpersonating,
     currentUser,
-    enforceMFA,
     needsEnrollment,
-    shouldCheckMFA,
     mfaStatus,
     mfaStatusQuery.isLoading,
     mfaStatusQuery.data,
@@ -205,8 +184,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     setupMFAIsPending,
     setupMFAData,
     setupMFAIsError,
-    adminSettings,
-    adminSettingsLoading,
     enrollmentRefused,
   ]);
 
@@ -296,9 +273,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     return <>{children}</>;
   }
 
-  // Show loading while checking MFA status (only if we need to check MFA)
-  const showLoading =
-    !optimisticPass && (isLoading || (shouldCheckMFA && mfaStatusQuery.isLoading) || adminSettingsLoading);
+  const showLoading = !optimisticPass && (isLoading || mfaStatusQuery.isLoading);
 
   if (showLoading) {
     return (
@@ -322,16 +297,11 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     );
   }
 
-  // If MFA is enforced and user hasn't configured it, block access.
   // A failed status query normally leaves the app alone, but an observed enrollment refusal is
   // the server telling us this session owes enrollment, so it blocks regardless. An unanswered
-  // status only blocks on a refusal: otherwise it means an optimistic pass is still confirming.
-  if (
-    enforceMFA &&
-    (!mfaQueryFailed || enrollmentRefused) &&
-    needsEnrollment &&
-    (mfaStatus !== undefined || enrollmentRefused)
-  ) {
+  // status only blocks on a refusal (see needsEnrollment): otherwise an optimistic pass is still
+  // confirming.
+  if ((!mfaQueryFailed || enrollmentRefused) && needsEnrollment) {
     return (
       <Box
         data-testid="mfa-enforcement-required-screen"
@@ -426,7 +396,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     );
   }
 
-  // If we get here, either MFA is not enforced or user has it configured
+  // If we get here, the server does not require enrollment or the user has it configured
   return <>{children}</>;
 };
 

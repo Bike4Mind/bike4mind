@@ -4,7 +4,6 @@ import { render, waitFor, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 
 // The api layer: MFA status resolves (so enforcement logic runs), but /api/auth/mfa/setup
 // PERSISTENTLY fails - the exact condition that used to spin the auto-setup effect forever.
@@ -23,7 +22,8 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   isPublicPath: () => false,
 }));
 
-// enforceMFA on, admin settings loaded (individual tests flip either).
+// enforceMFA on, admin settings loaded (individual tests flip either). The setting is only a hint
+// for rendering the app before the status answers; the status decides whether setup is owed.
 const { adminSettings, adminSettingsState } = vi.hoisted(() => ({
   adminSettings: { enforceMFA: 'true' },
   adminSettingsState: { isLoading: false },
@@ -128,13 +128,16 @@ const renderWrapper = () => {
   return { ...view, queryClient };
 };
 
+// The server's answer for an unenrolled user it requires to enroll.
+const OWES_ENROLLMENT = { enabled: false, required: true };
+
 const mfaSetupCalls = () => post.mock.calls.filter(([url]) => url === '/api/auth/mfa/setup').length;
 
 describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure', () => {
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } }); // MFA status: not yet enabled
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     post.mockRejectedValue(new Error('setup failed')); // /api/auth/mfa/setup always errors
   });
 
@@ -177,7 +180,7 @@ describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     post.mockRejectedValue(new Error(CANCELLED));
   });
 
@@ -202,7 +205,7 @@ describe('MFAEnforcementWrapper - a session stuck at the verification prompt', (
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     // Setup waits on the "Confirm it's you" prompt the user never completes.
     post.mockReturnValue(new Promise(() => {}));
   });
@@ -250,6 +253,12 @@ const enrollmentRefusal = () => ({
   response: { status: 403, data: { mfaEnrollmentRequired: true } },
 });
 
+const statusRefetches = (invalidate: { mock: { calls: unknown[][] } }) =>
+  invalidate.mock.calls.filter(([arg]) => {
+    const key = (arg as { queryKey?: readonly unknown[] } | undefined)?.queryKey;
+    return key?.[0] === 'mfa' && key?.[1] === 'status';
+  }).length;
+
 const registeredRefusalHandler = async () => {
   await waitFor(() => expect(interceptorUse).toHaveBeenCalled());
   return interceptorUse.mock.calls[0][1] as (error: unknown) => Promise<unknown>;
@@ -261,7 +270,7 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     get.mockReset();
     interceptorUse.mockClear();
     interceptorEject.mockClear();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     post.mockRejectedValue(new Error('setup failed'));
   });
 
@@ -269,7 +278,7 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     vi.clearAllMocks();
   });
 
-  it('refetches admin settings and MFA status on the first refusal, and ejects on unmount', async () => {
+  it('refetches the MFA status on the first refusal, and ejects on unmount', async () => {
     const { queryClient, unmount } = renderWrapper();
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
 
@@ -277,8 +286,7 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     const refusal = enrollmentRefusal();
     await expect(onRejected(refusal)).rejects.toBe(refusal);
 
-    // Both queries feed the enrollment decision; a stale one renders a broken app.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
+    // The status feeds the enrollment decision; a stale one renders a broken app.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['mfa', 'status'] });
 
     unmount();
@@ -292,30 +300,24 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     const onRejected = await registeredRefusalHandler();
     await Promise.all([1, 2, 3, 4].map(() => onRejected(enrollmentRefusal()).catch(() => undefined)));
 
-    expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY)).toHaveLength(1);
+    expect(statusRefetches(invalidate)).toBe(1);
   });
 
-  it('handles a refusal again once the refetch settles, even if it still reads enforcement off', async () => {
-    // The refusing server instance can be ahead of the one answering the settings refetch.
-    adminSettings.enforceMFA = 'false';
-    try {
-      const { queryClient } = renderWrapper();
-      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-      const adminSettingsRefetches = () =>
-        invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY).length;
+  it('handles a refusal again once the refetch settles, even if it still reads not required', async () => {
+    // The refusing server instance can be ahead of the one answering the status refetch.
+    get.mockResolvedValue({ data: { enabled: false, required: false } });
+    const { queryClient } = renderWrapper();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
 
-      const onRejected = await registeredRefusalHandler();
-      await onRejected(enrollmentRefusal()).catch(() => undefined);
-      expect(adminSettingsRefetches()).toBe(1);
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+    expect(statusRefetches(invalidate)).toBe(1);
 
-      await Promise.allSettled(invalidate.mock.results.map(r => r.value));
-      await new Promise(resolve => setTimeout(resolve, 0));
+    await Promise.allSettled(invalidate.mock.results.map(r => r.value));
+    await new Promise(resolve => setTimeout(resolve, 0));
 
-      await onRejected(enrollmentRefusal()).catch(() => undefined);
-      expect(adminSettingsRefetches()).toBe(2);
-    } finally {
-      adminSettings.enforceMFA = 'true';
-    }
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+    expect(statusRefetches(invalidate)).toBe(2);
   });
 
   it('renders the enrollment flow when the refusal arrives but the status query has failed', async () => {
@@ -340,7 +342,7 @@ describe('MFAEnforcementWrapper - failed setup verification', () => {
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     post.mockImplementation((url: string) =>
       url === '/api/auth/mfa/setup'
         ? Promise.resolve({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } })
@@ -388,7 +390,7 @@ describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', ()
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
   });
 
@@ -408,7 +410,7 @@ describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', ()
   });
 
   it('refreshes status instead of toasting when setup answers 409', async () => {
-    get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
+    get.mockResolvedValueOnce({ data: OWES_ENROLLMENT }).mockResolvedValue({ data: { enabled: true } });
     post.mockRejectedValue(
       Object.assign(new Error('Request failed'), {
         isAxiosError: true,
@@ -466,7 +468,7 @@ describe('MFAEnforcementWrapper - a user this browser knows is enrolled', () => 
   it('blocks and starts setup when the fresh status says the user is no longer enrolled', async () => {
     // e.g. an admin force-reset their MFA since the hint was written.
     writeMfaEnrolledHint('u1', true);
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
 
     renderWrapper();
 
@@ -482,7 +484,7 @@ describe('MFAEnforcementWrapper - a user this browser knows is enrolled', () => 
 
   it('withdraws the app on a server refusal, then blocks once the status answers', async () => {
     writeMfaEnrolledHint('u1', true);
-    let answer: (value: { data: { enabled: boolean } }) => void = () => {};
+    let answer: (value: { data: { enabled: boolean; required?: boolean } }) => void = () => {};
     get.mockImplementation(() => new Promise(resolve => (answer = resolve)));
 
     renderWrapper();
@@ -495,7 +497,7 @@ describe('MFAEnforcementWrapper - a user this browser knows is enrolled', () => 
     await screen.findByTestId('mfa-enforcement-loading');
     expect(screen.queryByTestId('app-content')).toBeNull();
 
-    answer({ data: { enabled: false } });
+    answer({ data: OWES_ENROLLMENT });
     await screen.findByTestId('mfa-enforcement-required-screen');
     expect(screen.queryByTestId('app-content')).toBeNull();
   });
@@ -592,7 +594,7 @@ describe('MFAEnforcementWrapper - a user with no hint (first load on this browse
   });
 
   it('holds the app behind the loader until the status answers, then lets an enrolled user in', async () => {
-    let answer: (value: { data: { enabled: boolean } }) => void = () => {};
+    let answer: (value: { data: { enabled: boolean; required?: boolean } }) => void = () => {};
     get.mockImplementation(() => new Promise(resolve => (answer = resolve)));
 
     renderWrapper();
@@ -612,7 +614,7 @@ describe('MFAEnforcementWrapper - a user with no hint (first load on this browse
   });
 
   it('still blocks an unenrolled user under enforcement', async () => {
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
 
     renderWrapper();
 
@@ -650,14 +652,15 @@ describe('MFAEnforcementWrapper - a user with no hint (first load on this browse
     expect(mfaSetupCalls()).toBe(0);
   });
 
-  it('does not check status at all when enforcement is off and settings have loaded', async () => {
+  it('renders the app at once when settings say enforcement is off, and still asks the status', async () => {
     adminSettings.enforceMFA = 'false';
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockImplementation(neverSettles);
 
     renderWrapper();
 
-    await screen.findByTestId('app-content');
-    expect(mfaStatusCalls()).toBe(0);
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+    expect(screen.queryByTestId('mfa-enforcement-loading')).toBeNull();
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
   });
 });
 
@@ -677,7 +680,7 @@ describe('MFAEnforcementWrapper - enrolling a passkey as the factor', () => {
   beforeEach(() => {
     post.mockReset();
     get.mockReset();
-    get.mockResolvedValue({ data: { enabled: false } });
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
     startRegistration.mockReset();
     startRegistration.mockResolvedValue({ id: 'cred' });
   });
@@ -784,5 +787,83 @@ describe('MFAEnforcementWrapper - a user the server exempts from enrollment', ()
     await screen.findByTestId('mfa-enforcement-required-screen');
     expect(screen.queryByTestId('app-content')).toBeNull();
     await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+});
+
+describe('MFAEnforcementWrapper - the server decides, not the settings copy in this tab', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+    // This tab's settings copy is stale or missing: it reads enforcement off.
+    adminSettings.enforceMFA = 'false';
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    adminSettings.enforceMFA = 'true';
+  });
+
+  it('blocks and starts setup when the status says enrollment is required', async () => {
+    get.mockResolvedValue({ data: OWES_ENROLLMENT });
+
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+
+  it('blocks after a server refusal, even when the status omits required (an older server)', async () => {
+    get.mockResolvedValue({ data: { enabled: false } });
+    renderWrapper();
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    expect(await screen.findByTestId('app-content')).not.toBeNull();
+
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+
+  it('never asks for setup on a status that omits required, without a refusal', async () => {
+    get.mockResolvedValue({ data: { enabled: false } });
+
+    renderWrapper();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('lets the app back in when the status refetched after a refusal says not required', async () => {
+    // e.g. enforcement was turned off between the refused call and the refetch.
+    get.mockResolvedValue({ data: { enabled: false, required: false } });
+    renderWrapper();
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(2));
+    await screen.findByTestId('app-content');
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('does not re-prompt an enrolled user the server requires', async () => {
+    get.mockResolvedValue({ data: { enabled: true, required: true } });
+
+    renderWrapper();
+
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.getByTestId('app-content')).not.toBeNull();
+    expect(screen.queryByTestId('mfa-enforcement-required-screen')).toBeNull();
+    expect(mfaSetupCalls()).toBe(0);
   });
 });
