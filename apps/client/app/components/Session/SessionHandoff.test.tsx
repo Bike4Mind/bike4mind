@@ -68,4 +68,14 @@ describe('session handoff UI', () => {
     fireEvent.click(screen.getByTestId('session-handoff-continue-btn'));
     expect(h.navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: sessionId } });
   });
+  it('does not offer the previous list when refreshing destinations fails', async () => {
+    wrap(<SessionHandoffButton sessionId={sessionId} />);
+    fireEvent.click(screen.getByTestId('session-handoff-open-btn'));
+    await waitFor(() => expect(screen.getAllByTestId('session-handoff-device-btn')).toHaveLength(2));
+    fireEvent.click(screen.getByTestId('session-handoff-close-btn'));
+    h.get.mockRejectedValueOnce(new Error('Offline'));
+    fireEvent.click(screen.getByTestId('session-handoff-open-btn'));
+    expect(await screen.findByTestId('session-handoff-feedback')).toHaveTextContent('Could not load devices');
+    expect(screen.queryAllByTestId('session-handoff-device-btn')).toHaveLength(0);
+  });
 });

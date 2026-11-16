@@ -16,6 +16,7 @@ export function SessionHandoffButton({ sessionId, compact = false }: { sessionId
     if (!open) return;
     let cancelled = false;
     setBusy(true);
+    setDevices([]);
     setMessage('');
     api
       .get('/api/v1/handoff-devices')
