@@ -36,3 +36,14 @@ export const soundEffectsRequestSchema = z.object({
 });
 
 export type SoundEffectsRequest = z.infer<typeof soundEffectsRequestSchema>;
+
+/** A sound-effect job's request: the generation fields of soundEffectsRequestSchema, without delivery and billing. */
+export const soundEffectJobRequestSchema = soundEffectsRequestSchema.pick({
+  provider: true,
+  text: true,
+  durationSeconds: true,
+  promptInfluence: true,
+  format: true,
+});
+
+export type SoundEffectJobRequest = z.infer<typeof soundEffectJobRequestSchema>;

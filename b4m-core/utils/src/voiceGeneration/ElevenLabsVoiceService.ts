@@ -76,6 +76,7 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       headers: { 'Content-Type': 'application/json', 'xi-api-key': this.apiKey },
       params: { output_format: outputFormat },
       responseType: 'arraybuffer',
+      signal: options.signal,
     });
 
     // Checked before returning, since callers bill on a successful result.

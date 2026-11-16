@@ -107,6 +107,20 @@ export const ttsRequestSchema = z.object({
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
 
+/** A speech job's request: the synthesis fields of ttsRequestSchema, without a route's delivery and billing options. */
+export const speechJobRequestSchema = ttsRequestSchema.pick({
+  text: true,
+  provider: true,
+  model: true,
+  voice: true,
+  format: true,
+  stability: true,
+  similarityBoost: true,
+  languageCode: true,
+});
+
+export type SpeechJobRequest = z.infer<typeof speechJobRequestSchema>;
+
 /**
  * JSON body of `POST /api/ai/tts` for `encoding: 'base64'`: the shared generated-audio
  * body plus the TTS fields. `provider`/`fallbackFrom` appear only when the requested

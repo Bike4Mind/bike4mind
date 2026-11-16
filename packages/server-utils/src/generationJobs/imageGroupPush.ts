@@ -1,4 +1,4 @@
-import { studioCompletionLink, type PushNotificationEvent } from '@bike4mind/common';
+import { generationJobPrompt, studioCompletionLink, type PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { GroupCompletion, GroupCompletionSubscriber } from '@bike4mind/services/generationJobs';
 import {
@@ -25,7 +25,7 @@ const titleOf = ({ readyCount, members, cancelledCount }: GroupCompletion): stri
 };
 
 const bodyOf = ({ anchor, readyCount }: GroupCompletion): string =>
-  generationPushBody(anchor.payload.request.prompt, readyCount > 1 ? 'Your images are ready.' : 'Your image is ready.');
+  generationPushBody(generationJobPrompt(anchor), readyCount > 1 ? 'Your images are ready.' : 'Your image is ready.');
 
 /**
  * One `generation_ready` push per finished image batch ("make N" pushes once, not N times), from the group completion

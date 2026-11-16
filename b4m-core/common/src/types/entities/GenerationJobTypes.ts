@@ -1,12 +1,14 @@
 import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
+import type { VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const;
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image', 'speech', 'sound_effect'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
 /** The kinds a chat message can start. An image job is started from Studio only, so it never lands on a quest. */
@@ -142,11 +144,69 @@ export type ImageJobPayload = {
   billedBlock?: boolean;
 };
 
+/** A clip's storage fields; its duration is known only when the audio could be measured (MP3). */
+export type AudioJobOutput = Omit<VideoJobOutput, 'durationSeconds'> & { durationSeconds?: number };
+
+/** The validated speech request as persisted: `provider` is the one asked for, with the default applied. */
+export type StoredSpeechRequest = {
+  text: string;
+  provider: VoiceGenerationVendor;
+  model?: string;
+  voice?: string;
+  format?: VoiceOutputFormat;
+  stability?: number;
+  similarityBoost?: number;
+  languageCode?: string;
+};
+
+/**
+ * Speech providers return the finished clip from one blocking call, so the output is stored in the submit step,
+ * as for music.
+ */
+export type SpeechJobPayload = {
+  request: StoredSpeechRequest;
+  /**
+   * Vendors to try in order, the requested one first. A later one stands in only when an earlier one has no usable
+   * key or rejects it, so nothing was generated. Fixed at create, since the hold is sized to cover each of them.
+   */
+  candidates: VoiceGenerationVendor[];
+  /** The user's stored voice preference at create; read by OpenAI only. */
+  preferredVoice?: string;
+  /** false for a throwaway preview: the clip is kept outside Files. */
+  saveToFiles: boolean;
+  /** The notebook the clip was made in, for in-chat producers. */
+  sessionId?: string;
+  /** The vendor that produced the clip and the model it is billed on; set on success. */
+  producedBy?: { provider: VoiceGenerationVendor; model: string };
+  output?: AudioJobOutput;
+};
+
+/** The validated sound-effect request as persisted, with the default provider applied. */
+export type StoredSoundEffectRequest = {
+  text: string;
+  provider: SoundGenerationVendor;
+  durationSeconds?: number;
+  promptInfluence?: number;
+  format?: string;
+};
+
+/** As SpeechJobPayload: one blocking provider call, stored in the submit step. */
+export type SoundEffectJobPayload = {
+  request: StoredSoundEffectRequest;
+  providerId: SoundGenerationVendor;
+  /** As SpeechJobPayload.saveToFiles. */
+  saveToFiles: boolean;
+  sessionId?: string;
+  output?: AudioJobOutput;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
   music: MusicJobPayload;
   image: ImageJobPayload;
+  speech: SpeechJobPayload;
+  sound_effect: SoundEffectJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;
@@ -202,6 +262,17 @@ export type IGenerationJobOf<K extends GenerationJobKind> = Extract<IGenerationJ
 export type IGenerationJobDocument = IGenerationJob & IMongoDocument;
 
 export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGenerationJobDocument, { kind: K }>;
+
+/** The text a job was made from, for titles and notifications: audio kinds take `text`, the rest a prompt. */
+export const generationJobPrompt = (job: IGenerationJob): string => {
+  switch (job.kind) {
+    case 'speech':
+    case 'sound_effect':
+      return job.payload.request.text;
+    default:
+      return job.payload.request.prompt;
+  }
+};
 
 export const isGenerationJobOfKind = <K extends GenerationJobKind>(
   job: IGenerationJobDocument,

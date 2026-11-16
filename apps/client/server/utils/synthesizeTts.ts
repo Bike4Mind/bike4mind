@@ -2,7 +2,7 @@ import { VOICE_VENDOR_SUPPORTED_FORMATS, VoiceGenerationVendor, VoiceOutputForma
 import { aiVoiceService, type VoiceSynthesisResult } from '@bike4mind/utils';
 import { type Logger } from '@bike4mind/observability';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from './resolveTtsProvider';
-import { ttsCandidates } from './ttsCandidates';
+import { ttsCandidates } from '@bike4mind/common';
 
 /**
  * HTTP status of an upstream provider failure. The OpenAI SDK exposes it as

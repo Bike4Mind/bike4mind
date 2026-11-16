@@ -17,7 +17,7 @@ export class OpenAIVoiceService extends AIVoiceService {
     const model = options.model ?? DEFAULT_MODEL;
     const openai = new OpenAI({ apiKey: this.apiKey });
 
-    const response = await openai.audio.speech.create({
+    const params: OpenAI.Audio.Speech.SpeechCreateParams = {
       model,
       // OpenAI ships a fixed set of voice names; the caller-supplied string is
       // validated by OpenAI (400 on an unknown voice) rather than by us, so the
@@ -25,7 +25,10 @@ export class OpenAIVoiceService extends AIVoiceService {
       voice: (options.voice ?? DEFAULT_VOICE) as OpenAI.Audio.Speech.SpeechCreateParams['voice'],
       input: text,
       response_format: format,
-    });
+    };
+    const response = options.signal
+      ? await openai.audio.speech.create(params, { signal: options.signal })
+      : await openai.audio.speech.create(params);
 
     const audio = Buffer.from(await response.arrayBuffer());
     return { audio, contentType: CONTENT_TYPE_BY_FORMAT[format], format, model, characters: text.length };

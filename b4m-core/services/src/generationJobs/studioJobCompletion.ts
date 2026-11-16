@@ -1,6 +1,7 @@
 import {
   STUDIO_COMPLETION_TITLE_MAX_CHARS,
   studioCompletionLink,
+  generationJobPrompt,
   type GenerationJobKind,
   type StudioCompletionMedium,
   type StudioJobCompletedEvent,
@@ -11,6 +12,8 @@ const MEDIUM_BY_KIND: Record<GenerationJobKind, StudioCompletionMedium> = {
   image: 'image',
   video: 'video',
   music: 'music',
+  speech: 'speech',
+  sound_effect: 'sound-effects',
 };
 
 const UNTITLED = 'Untitled';
@@ -44,7 +47,7 @@ export const studioCompletionSubscriber = (
       readyCount,
       failedCount,
       cancelledCount,
-      title: studioCompletionTitle(anchor.payload.request.prompt),
+      title: studioCompletionTitle(generationJobPrompt(anchor)),
       link: studioCompletionLink(medium, groupId),
       completedAt: completedAt.toISOString(),
     });

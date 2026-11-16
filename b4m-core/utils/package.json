@@ -240,6 +240,16 @@
         "default": "./dist/musicProviders/index.cjs"
       }
     },
+    "./audioProviders": {
+      "import": {
+        "types": "./dist/audioProviders/index.d.mts",
+        "default": "./dist/audioProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioProviders/index.d.cts",
+        "default": "./dist/audioProviders/index.cjs"
+      }
+    },
     "./security": {
       "import": {
         "types": "./dist/security/index.d.mts",

@@ -15,6 +15,17 @@ export async function assertMediaModelAdmission(
   await (await createModelAdmission(adminRoleWithheld ? withholdAdminRole(loaded) : loaded)).assert(modelId);
 }
 
+/** assertMediaModelAdmission's rule as a yes/no, for a caller that skips a model rather than refusing the request. */
+export async function isMediaModelAdmitted(
+  userId: string,
+  modelId: string,
+  adminRoleWithheld?: boolean
+): Promise<boolean> {
+  const loaded = await userRepository.findById(userId);
+  if (!loaded) return false;
+  return (await createModelAdmission(adminRoleWithheld ? withholdAdminRole(loaded) : loaded)).admits(modelId);
+}
+
 export async function filterAdmittedMediaModels<Model extends { id: string }>(
   user: IUserDocument,
   models: Model[]

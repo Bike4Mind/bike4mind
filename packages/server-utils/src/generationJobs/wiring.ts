@@ -37,6 +37,8 @@ import {
 } from '@bike4mind/services/generationJobs';
 import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { createSoundEffectJobHandler, createSpeechJobHandler } from '@bike4mind/services/audioJobs';
+import { getSoundEffectJobDeps, getSpeechJobDeps } from './audioJobWiring';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
 import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
@@ -347,7 +349,12 @@ export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
   return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
 };
 
-const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
+export const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({
+  key,
+  bytes,
+  contentType,
+  signal,
+}) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);
   return { s3Key: key };
 };
@@ -651,6 +658,8 @@ export const getGenerationJobEngine = (): GenerationJobEngine => {
       createVideoJobHandler(getVideoJobDeps()),
       createMusicJobHandler(getMusicJobDeps()),
       createImageJobHandler(getImageJobDeps()),
+      createSpeechJobHandler(getSpeechJobDeps()),
+      createSoundEffectJobHandler(getSoundEffectJobDeps()),
     ],
     enqueue: enqueueGenerationJob,
     notify,
