@@ -26,4 +26,10 @@ describe('browserPresignConfig', () => {
       forcePathStyle: true,
     });
   });
+
+  it.each(['localhost:9000', 'minio', 'ftp://files.example.com'])('rejects %s, which no browser can post to', value => {
+    expect(() => browserPresignConfig({ S3_PRESIGN_ENDPOINT: value })).toThrow(
+      'S3_PRESIGN_ENDPOINT must be an absolute HTTP or HTTPS URL'
+    );
+  });
 });

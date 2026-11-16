@@ -46,10 +46,18 @@ export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
 const TRANSCRIPTION_REQUEST_TIMEOUT_MS = 45_000;
 
 const s3Client = new S3Client(storageClientConfig(process.env));
-const presignConfig = browserPresignConfig(process.env);
-const presignS3Client = presignConfig
-  ? new S3Client({ ...presignConfig, credentials: s3Client.config.credentials })
-  : s3Client;
+// Built on first use: a malformed S3_PRESIGN_ENDPOINT then fails the upload request that needs
+// it, with its reason, instead of failing this module's load.
+let presignS3Client: S3Client | undefined;
+function getPresignS3Client(): S3Client {
+  if (!presignS3Client) {
+    const presignConfig = browserPresignConfig(process.env);
+    presignS3Client = presignConfig
+      ? new S3Client({ ...presignConfig, credentials: s3Client.config.credentials })
+      : s3Client;
+  }
+  return presignS3Client;
+}
 const bucketName = Resource.appFilesBucket.name;
 
 // The transcription credit helpers throw BadRequestError only for a caller who cannot pay (or does not exist).
@@ -83,7 +91,7 @@ export async function createTranscribeUpload({
 
   const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 
-  const { url, fields } = await createPresignedPost(presignS3Client, {
+  const { url, fields } = await createPresignedPost(getPresignS3Client(), {
     Bucket: bucketName,
     Key: fileKey,
     Conditions: [

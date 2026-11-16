@@ -16,9 +16,22 @@ export function storageClientConfig(env: EndpointEnv): S3ClientConfig {
 /**
  * The endpoint an upload form is signed against when it differs from the server's own: the form
  * goes to a browser, which cannot reach an address only the server resolves. Null when the
- * server's client already signs a reachable URL.
+ * server's client already signs a reachable URL. Throws on a value that is not an absolute
+ * HTTP or HTTPS URL.
  */
 export function browserPresignConfig(env: EndpointEnv): S3ClientConfig | null {
   const endpoint = env.S3_PRESIGN_ENDPOINT?.trim();
-  return endpoint ? { endpoint, forcePathStyle: true } : null;
+  if (!endpoint) return null;
+  // Same rule and message as S3Storage in b4m-core/fab-pipeline: a value without a scheme
+  // would sign a form the browser cannot post to.
+  let protocol: string;
+  try {
+    protocol = new URL(endpoint).protocol;
+  } catch {
+    protocol = '';
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error('S3_PRESIGN_ENDPOINT must be an absolute HTTP or HTTPS URL');
+  }
+  return { endpoint, forcePathStyle: true };
 }
