@@ -9,6 +9,7 @@ import {
   isOrgServiceAccountOf,
   type CompletionSource,
 } from '@bike4mind/common';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
 
 /**
@@ -248,6 +249,7 @@ export async function deductCreditsWithOrgSupport(
         creditsDelta: credits,
         lastCreditUsedAt: new Date(),
       });
+      await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId: user.id });
     }
   }
 

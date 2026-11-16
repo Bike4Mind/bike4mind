@@ -5,6 +5,7 @@ import {
   userRepository,
   withTransaction,
   deleteFeedbackAiForUser,
+  deleteOrgAlertsForUser,
   eraseOrganizationRetentionForUser,
   FeedbackNoteModel,
   type IErasureRecord,
@@ -51,6 +52,7 @@ export async function reapplyErasure(
     await withTransaction(async session => {
       await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
       await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
       await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
@@ -59,6 +61,7 @@ export async function reapplyErasure(
   } else {
     await withTransaction(async session => {
       await deleteFeedbackAiForUser(userId, { session });
+      await deleteOrgAlertsForUser(userId, { session });
       await eraseOrganizationRetentionForUser(userId, { session });
       await FeedbackNoteModel.deleteMany({ userId: userId.toLowerCase() }, { session });
       await userRepository.delete(userId);
