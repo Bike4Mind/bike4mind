@@ -168,6 +168,17 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(setBadge).toHaveBeenLastCalledWith(0);
   });
 
+  it('adds the Desktop loops waiting on the user to the badge, recounted when they change', async () => {
+    let loops = 2;
+    monitor = new NeedsYouMonitor({ ...deps, extraCount: () => loops });
+    monitor.recount();
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(2);
+    loops = 0;
+    await enter('agent');
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+  });
+
   it('keeps working after an update fails', async () => {
     deps.listSessions = vi.fn().mockRejectedValueOnce(new Error('disk')).mockResolvedValue(sessions);
     await enter('agent');

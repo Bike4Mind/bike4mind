@@ -198,7 +198,31 @@ describe('loop needs-you items', () => {
     ]);
   });
 
-  it('adds up the waiting tickets across loops', () => {
-    expect(loopNeedsYouCount([{ needsYou: 2 }, { needsYou: 0 }, { needsYou: 1 }] as never)).toBe(3);
+  it('adds up the waiting tickets across loops, plus one per capped or errored loop', () => {
+    const live = { status: 'live' };
+    expect(
+      loopNeedsYouCount([
+        { needsYou: 2, loop: live },
+        { needsYou: 0, loop: { status: 'error' } },
+        { needsYou: 1, loop: { ...live, cappedUntil: '2026-01-02T00:00:00.000Z' } },
+      ] as never)
+    ).toBe(5);
+  });
+
+  it('puts the loop itself first when it is capped, in error, or stalled since its last run', () => {
+    const top = (patch: object) => loopNeedsYouItems({ ...detail, ...patch } as LocalLoopDetail)[0];
+    expect(top({ loop: { id: 'l1', name: 'Docs', status: 'error', error: 'boom' } })).toEqual({
+      loopId: 'l1',
+      loopName: 'Docs',
+      title: 'Docs',
+      reason: 'Error: boom',
+    });
+    expect(top({ loop: { id: 'l1', name: 'Docs', cappedUntil: 'x' }, idleReason: 'capped until 01:00' }).reason).toBe(
+      'capped until 01:00'
+    );
+    const alarm = { id: 'a', loopId: 'l1', kind: 'alarm', reason: 'Ready work but no run for 30 min', createdAt: '5' };
+    expect(top({ events: [alarm] }).reason).toBe('Stalled: Ready work but no run for 30 min');
+    // A run started after the alarm: no longer stalled.
+    expect(top({ events: [alarm], runs: [{ startedAt: '6' }] }).ticketId).toBe('stuck');
   });
 });

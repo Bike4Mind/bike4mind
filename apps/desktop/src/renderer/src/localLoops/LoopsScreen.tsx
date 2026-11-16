@@ -326,6 +326,7 @@ function LoopPane({
           detail={detail}
           onAnswer={request => void act(() => api.answerEvent(request))}
           onReopen={id => void moveTicket(id, { status: 'open' })}
+          onResume={() => void act(() => api.setStatus({ id: loop.id, status: 'live' }))}
         />
       )}
       {tab === 'activity' && <LoopActivity detail={detail} />}

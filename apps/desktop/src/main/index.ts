@@ -210,7 +210,9 @@ void app.whenReady().then(async () => {
   const needsYou = attention.watchNeedsYou({
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+    extraCount: () => localLoops?.needsYouCount() ?? 0,
   });
+  localLoops?.onChanged(() => needsYou.recount());
   // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
   const watch = registerWatch({
     sources: {

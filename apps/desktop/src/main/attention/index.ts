@@ -14,7 +14,7 @@ export type Attention = {
   /** Raise the app window on a session, as clicking its notice does; reopens it if every window is closed. */
   openSession(open: AttentionOpenEvent): void;
   /** Starts main's own needs-you watch, for when no window is open to run the renderer's. */
-  watchNeedsYou(sources: Pick<NeedsYouMonitorDeps, 'listSessions' | 'sessionMessages'>): NeedsYouMonitor;
+  watchNeedsYou(sources: Pick<NeedsYouMonitorDeps, 'listSessions' | 'sessionMessages' | 'extraCount'>): NeedsYouMonitor;
 };
 
 /**

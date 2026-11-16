@@ -99,28 +99,48 @@ export function needsYouBody(messages: readonly ChatMessage[]): string {
   return `${call.name} ${describeToolInput(call)}`.trim();
 }
 
-/** A Desktop loop ticket parked on the owner: a question it asked, or a block no other ticket will clear. */
+/**
+ * A Desktop loop ticket parked on the owner (a question it asked, or a block no other ticket will clear), or, with
+ * no `ticketId`, the loop itself: capped, in error, or stalled per the watchdog.
+ */
 export interface LoopNeedsYouItem {
   loopId: string;
   loopName: string;
-  ticketId: string;
+  ticketId?: string;
   title: string;
   reason: string;
   /** The ticket's latest unanswered question, when it asked one: answer it with localLoops.answerEvent. */
   eventId?: string;
 }
 
+/** Why the loop itself needs the owner, if it does: an error, a cap, or a watchdog alarm no run has followed. */
+function loopLevelReason(detail: LocalLoopDetail): string | undefined {
+  const { loop } = detail;
+  if (loop.status === 'error') return `Error: ${loop.error ?? 'unknown'}`;
+  if (loop.cappedUntil) return detail.idleReason ?? 'Capped';
+  const latest = detail.events[0];
+  const lastRun = detail.runs[0]?.startedAt ?? '';
+  if (latest && (latest.kind === 'alarm' || latest.kind === 'watchdog') && latest.createdAt > lastRun)
+    return `Stalled: ${latest.reason}`;
+  return undefined;
+}
+
 /**
- * The loop's tickets waiting on the owner, newest first. The same tickets the scheduler's summary counts as
- * `needsYou` (main/loops/local/LocalLoopScheduler.ts summary): blocked, and not on another ticket.
+ * The loop's items waiting on the owner: the loop-level one first, then its tickets newest first. The tickets are
+ * the ones the scheduler's summary counts as `needsYou` (main/loops/local/LocalLoopScheduler.ts summary): blocked,
+ * and not on another ticket.
  */
 export function loopNeedsYouItems(detail: LocalLoopDetail): LoopNeedsYouItem[] {
+  const loopReason = loopLevelReason(detail);
+  const loopItem: LoopNeedsYouItem[] = loopReason
+    ? [{ loopId: detail.loop.id, loopName: detail.loop.name, title: detail.loop.name, reason: loopReason }]
+    : [];
   const asked = new Map<string, string>();
   // events are newest first, so the first unanswered one per ticket is its latest question.
   for (const event of detail.events)
     if (event.kind === 'asked' && !event.resolution && event.ticketId && !asked.has(event.ticketId))
       asked.set(event.ticketId, event.id);
-  return detail.tickets
+  const tickets = detail.tickets
     .filter(ticket => ticket.status === 'blocked' && !ticket.blockedOn)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(ticket => {
@@ -134,9 +154,13 @@ export function loopNeedsYouItems(detail: LocalLoopDetail): LoopNeedsYouItem[] {
         ...(eventId ? { eventId } : {}),
       };
     });
+  return [...loopItem, ...tickets];
 }
 
-/** Desktop loop tickets waiting on the owner, across loops: added to the dock badge. */
+/** Desktop loop tickets waiting on the owner, plus each capped or errored loop, across loops: added to the dock badge. */
 export function loopNeedsYouCount(summaries: readonly LocalLoopSummary[]): number {
-  return summaries.reduce((sum, summary) => sum + summary.needsYou, 0);
+  return summaries.reduce(
+    (sum, { needsYou, loop }) => sum + needsYou + (loop.status === 'error' || loop.cappedUntil ? 1 : 0),
+    0
+  );
 }
