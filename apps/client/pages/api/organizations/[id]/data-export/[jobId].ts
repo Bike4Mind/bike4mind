@@ -8,8 +8,8 @@ import {
 
 const query = organizationExportQuery.extend({ jobId: z.uuid(), download: z.enum(['true', 'false']).optional() });
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  const { id, jobId, download } = query.parse(req.query);
-  await requireOrganizationExportOwner(req.user, id);
+  const { id: requestedId, jobId, download } = query.parse(req.query);
+  const { id } = await requireOrganizationExportOwner(req.user, requestedId);
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(await organizationExportStatus(id, req.user.id, jobId, download === 'true'));
 });
