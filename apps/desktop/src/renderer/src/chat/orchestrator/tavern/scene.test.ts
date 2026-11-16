@@ -14,7 +14,7 @@ import {
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
-  needsYouBubbles,
+  needsYouGroups,
   placeAgents,
   poseFor,
   zoneFor,
@@ -399,7 +399,14 @@ describe('nameLabelLayout', () => {
   });
 });
 
-describe('needsYouBubbles', () => {
+const needsYouBubbles = (seats: Parameters<typeof needsYouGroups>[0]) =>
+  new Map([...needsYouGroups(seats)].map(([id, group]) => [id, group.length]));
+
+describe('needsYouGroups', () => {
+  it('lists the agents a bubble speaks for left to right', () => {
+    expect(needsYouGroups([atBar('c', 2), atBar('a', 0), atBar('b', 1)])).toEqual(new Map([['b', ['a', 'b', 'c']]]));
+  });
+
   const bar = TAVERN_SLOTS.bar;
   const atBar = (id: string, slot: number) => ({ id, zone: 'bar' as const, point: bar[slot] });
 

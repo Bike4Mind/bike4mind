@@ -8,12 +8,15 @@ import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
 import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
+import { FocusPanel } from './FocusPanel';
 import { NeedsYouCard } from './NeedsYouCard';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ViewSwitcher } from './ViewSwitcher';
+import { toViewSnapshot } from './viewSnapshot';
+import { acceptViewAction, type ViewAction } from '@shared/viewSnapshot';
 
 export interface AgentActions {
   open(id: string): void;
@@ -56,6 +59,12 @@ export interface InnkeeperDesk {
   openRequest?: { seq: number; seed: string };
 }
 
+/** Focus mode (FocusPanel): owned by the shell, which also keeps the ambient settle off while it is on. */
+export interface StageFocus {
+  on: boolean;
+  onToggle(on: boolean): void;
+}
+
 /** The Tavern's chrome settling out when idle (ambient.ts); owned by the shell, which hides the dock and composer. */
 export interface StageAmbient {
   settled: boolean;
@@ -90,6 +99,7 @@ export interface OrchestratorStageProps {
   dockControl?: ReactNode;
   desk?: InnkeeperDesk;
   ambient?: StageAmbient;
+  focus?: StageFocus;
 }
 
 const NO_PARENT: ParentView = {};
@@ -117,6 +127,7 @@ export function OrchestratorStage({
   dockControl,
   desk,
   ambient,
+  focus,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -126,6 +137,7 @@ export function OrchestratorStage({
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
   const hasSelection = selected !== null;
   const settled = ambient?.settled === true;
+  const focused = focus?.on === true && rootId !== undefined && agents.length > 0;
 
   useEffect(() => {
     if (!focusAgent) return;
@@ -177,7 +189,7 @@ export function OrchestratorStage({
   }, [finale.shown]);
 
   // The Tavern seats the banner on its scene rather than in the letterbox above it.
-  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0;
+  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
@@ -202,6 +214,18 @@ export function OrchestratorStage({
     sceneOverlay: bannerInScene ? banner : undefined,
     desk,
     settled: ambient?.settled === true,
+  };
+
+  const snapshot = useMemo(
+    () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent) : undefined),
+    [focused, rootId, agents, parent]
+  );
+  // Through the same gate a view that does not ship with the app will go through.
+  const runViewAction = (action: ViewAction) => {
+    const accepted = snapshot && acceptViewAction(snapshot, action);
+    if (!accepted) return;
+    if (accepted.kind === 'open-root') onParentFocus?.();
+    else setSelectedId(accepted.agentId);
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
@@ -240,6 +264,7 @@ export function OrchestratorStage({
             view={view}
             onViewChange={onViewChange}
             ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
+            focus={focus}
           />
           <Typography
             level="body-sm"
@@ -300,6 +325,8 @@ export function OrchestratorStage({
               tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
               onExampleQuest={onExampleQuest}
             />
+          ) : snapshot ? (
+            <FocusPanel snapshot={snapshot} onAction={runViewAction} />
           ) : renderView ? (
             renderView(view, viewProps)
           ) : (

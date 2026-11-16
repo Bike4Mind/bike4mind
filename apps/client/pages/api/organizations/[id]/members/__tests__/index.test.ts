@@ -52,6 +52,8 @@ const leave = vi.hoisted(() =>
 );
 const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(1));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
+const refreshSeatEntitlements = vi.hoisted(() => vi.fn(async (_userId: string) => ({ committed: txState.committed })));
+vi.mock('@server/organizations/refreshSeatEntitlements', () => ({ refreshSeatEntitlements }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { leave } }));
 // A factory must name every export the module graph reaches, or the missing binding throws. The
 // lake repos the route passes to the service throw when the handler runs; the audit pair behind
@@ -175,6 +177,7 @@ describe('DELETE /api/organizations/[id]/members (leave) - personal-lake shares 
 
   it('never notifies when the service call rejects', async () => {
     reportAndNotifyKeptPersonalLakeShares.mockClear();
+    refreshSeatEntitlements.mockClear();
     leave.mockRejectedValueOnce(new Error('boom'));
     const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
     (req as any).user = { id: 'member2', isAdmin: false };
@@ -183,5 +186,18 @@ describe('DELETE /api/organizations/[id]/members (leave) - personal-lake shares 
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('boom');
 
     expect(reportAndNotifyKeptPersonalLakeShares).not.toHaveBeenCalled();
+    expect(refreshSeatEntitlements).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the leaver's seat entitlements after the commit", async () => {
+    refreshSeatEntitlements.mockClear();
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    Object.assign(req, { user: { id: 'member2', isAdmin: false }, ability: {} });
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(refreshSeatEntitlements).toHaveBeenCalledTimes(1);
+    expect(refreshSeatEntitlements).toHaveBeenCalledWith('member2');
+    await expect(refreshSeatEntitlements.mock.results[0].value).resolves.toEqual({ committed: true });
   });
 });

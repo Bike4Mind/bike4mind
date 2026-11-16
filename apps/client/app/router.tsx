@@ -26,6 +26,7 @@ import { billingLandingHref, parseBillingView } from '@client/app/utils/billingD
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
+import { captureUnsubscribeToken } from './routes/email/unsubscribeToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -1328,11 +1329,7 @@ const emailUnsubscribeRoute = createRoute({
       <EmailUnsubscribePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
+  beforeLoad: () => captureUnsubscribeToken(),
 });
 
 // Desktop app download page - no layout, public, so it can be linked from anywhere.

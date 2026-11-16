@@ -83,6 +83,7 @@ export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';
 export * from './qa';
 export * from './imageApi';
+export * from './imageModels';
 export * from './videoGenerations';
 export * from './musicGenerations';
 export * from './decisions';
