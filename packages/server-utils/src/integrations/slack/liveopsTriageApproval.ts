@@ -63,12 +63,24 @@ export async function createLiveopsProposalBlocks(
     result: proposal,
     expiresAt: new Date(Date.now() + TTL_MS),
   });
+  const setupNotices: string[] = [];
+  if (!(config.approverIds || '').split(',').some(id => id.trim())) {
+    setupNotices.push(
+      'Approval unavailable: no approvers configured. Set approverIds to comma-separated Slack user IDs.'
+    );
+  }
+  if (!proposal.workspaceId) {
+    setupNotices.push('Approval unavailable: no Slack workspace configured. Set slackWorkspaceId before approving.');
+  }
   return [
     {
       type: 'section',
       text: {
         type: 'plain_text',
-        text: `Proposed issue (${issue.priority}): ${issue.title.slice(0, 500)}\n${issue.body.slice(0, 1000)}`,
+        text: [
+          ...setupNotices,
+          `Proposed issue (${issue.priority}): ${issue.title.slice(0, 500)}\n${issue.body.slice(0, 1000)}`,
+        ].join('\n'),
       },
     },
     {

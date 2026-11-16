@@ -101,6 +101,20 @@ describe('LiveOps approval', () => {
     expect(section.text?.type).toBe('plain_text');
     expect(section.text?.text.length).toBeLessThanOrEqual(3000);
   });
+  it.each(['', undefined, ' ,  '])('shows a setup notice for an empty approver list %j', async approverIds => {
+    const blocks = await createLiveopsProposalBlocks({ ...config, approverIds }, issue);
+    expect(blocks[0]).toMatchObject({
+      text: { type: 'plain_text', text: expect.stringContaining('no approvers configured') },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+  it('shows a setup notice for a missing workspace', async () => {
+    const blocks = await createLiveopsProposalBlocks({ ...config, slackWorkspaceId: undefined }, issue);
+    expect(blocks[0]).toMatchObject({
+      text: { type: 'plain_text', text: expect.stringContaining('no Slack workspace configured') },
+    });
+  });
   it.each(['', undefined, 'OTHER'])('denies legacy approver list %s', async approverIds => {
     await createLiveopsProposalBlocks(config, issue);
     const stored = mocks.persist.mock.calls[1][0];
