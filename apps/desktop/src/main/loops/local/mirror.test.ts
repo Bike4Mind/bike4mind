@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { loopMirrorSnapshotSchema } from '@bike4mind/common/loops';
 import type { LocalLoopDetail } from '@shared/localLoops';
-import { LoopMirror, MIRROR_MS, scrubLoop } from './mirror';
+import { LoopMirror, MIRROR_MS, scrubLoop, type MirrorApi } from './mirror';
 import { testLoop } from './testLoop';
 
 const SECRET = 'TOP-SECRET';
@@ -83,16 +83,26 @@ describe('scrubLoop', () => {
       spentToday: 7,
       budget: 50,
       needsYou: 1,
-      tickets: [{ title: 'Fix the guide', stage: 'todo', status: 'blocked', priority: 'p1', reason: 'CI is red' }],
+      tickets: [{ title: 'Fix the guide', stage: 'todo', status: 'blocked', priority: 'p1', reason: 'waiting on you' }],
     });
+    expect(JSON.stringify(snapshot)).not.toContain('CI is red');
     // The server's strict schema takes it as is.
     expect(loopMirrorSnapshotSchema.safeParse(snapshot).success).toBe(true);
+  });
+
+  it('sends an error loop as the state only, not the run error text', () => {
+    const snapshot = scrubLoop({
+      ...detail({ status: 'error', error: SECRET }),
+      idleReason: `error: 3 runs failed; last: ${SECRET}`,
+    });
+    expect(snapshot.idleReason).toBe('error');
   });
 });
 
 describe('LoopMirror', () => {
   let put: Mock<(path: string, body: unknown) => Promise<unknown>>;
   let del: Mock<(path: string) => Promise<unknown>>;
+  let get: Mock<(path: string) => Promise<unknown>>;
   let details: LocalLoopDetail[];
   let warn: Mock<(message: string) => void>;
   let mirror: LoopMirror;
@@ -101,9 +111,14 @@ describe('LoopMirror', () => {
     vi.useFakeTimers();
     put = vi.fn(async () => ({}));
     del = vi.fn(async () => ({}));
+    get = vi.fn(async () => ({ loops: [] }));
     warn = vi.fn<(message: string) => void>();
     details = [detail()];
-    mirror = new LoopMirror({ api: () => ({ put, delete: del }), details: () => details, logger: { warn } });
+    mirror = new LoopMirror({
+      api: () => ({ put, delete: del, get: get as MirrorApi['get'] }),
+      details: () => details,
+      logger: { warn },
+    });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -116,10 +131,12 @@ describe('LoopMirror', () => {
 
   it('never posts a loop with the mirror off, and takes one down once when it is turned off', async () => {
     details = [detail(), detail({ id: 'loop-2', mirror: false })];
+    // The server still has loop-2 (turned off) and loop-9 (deleted while the app was closed).
+    get.mockResolvedValue({ loops: [{ localLoopId: 'loop-1' }, { localLoopId: 'loop-2' }, { localLoopId: 'loop-9' }] });
     await mirror.flush();
     expect(put.mock.calls.map(([path]) => path)).toEqual(['/api/loops/mirror/loop-1']);
-    // The first post after launch also takes down a loop turned off while the app was closed.
-    expect(del).toHaveBeenCalledWith('/api/loops/mirror/loop-2');
+    // The first post after launch takes down what the server has but should not.
+    expect(del.mock.calls.map(([path]) => path)).toEqual(['/api/loops/mirror/loop-2', '/api/loops/mirror/loop-9']);
     del.mockClear();
     details = [detail({ mirror: false })];
     await mirror.flush();
@@ -145,6 +162,15 @@ describe('LoopMirror', () => {
     vi.advanceTimersByTime(MIRROR_MS.backoffMin);
     await mirror.flush();
     expect(put).toHaveBeenCalledTimes(3);
+  });
+
+  it('a refused loop does not hold back the others or back off', async () => {
+    details = [detail(), detail({ id: 'loop-2' })];
+    put.mockRejectedValueOnce(Object.assign(new Error('400'), { response: { status: 400 } }));
+    await mirror.flush();
+    expect(put).toHaveBeenCalledTimes(2);
+    await mirror.flush();
+    expect(put).toHaveBeenCalledTimes(4);
   });
 
   it('posts nothing while signed out', async () => {

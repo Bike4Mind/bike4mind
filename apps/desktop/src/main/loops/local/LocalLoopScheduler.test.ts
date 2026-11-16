@@ -595,6 +595,7 @@ describe('LocalLoopScheduler', () => {
         alert: (_loop, event) => alerts.push(`${event.kind}: ${event.reason}`),
       });
       make();
+      make({ id: 'loop-2', cappedUntil: '2026-01-03T00:00:00.000Z' });
       ticket('a');
       hung.start();
       await settle();
@@ -606,6 +607,9 @@ describe('LocalLoopScheduler', () => {
       expect(store.loop('loop-1')).toMatchObject({ status: 'error', error: 'The loop scheduler kept stalling' });
       expect(alerts.filter(alert => alert.startsWith('watchdog:'))).toHaveLength(5);
       expect(alerts.at(-1)).toBe('error: The loop scheduler kept stalling');
+      // A capped loop is waiting on its reset: left live, with no watchdog events.
+      expect(store.loop('loop-2')?.status).toBe('live');
+      expect(store.events('loop-2')).toEqual([]);
       hung.stop();
     });
 
@@ -626,6 +630,22 @@ describe('LocalLoopScheduler', () => {
       // Taken again at once; the aborted run still counts.
       expect(chat.turns).toHaveLength(2);
       expect(store.ticket(t.id)).toMatchObject({ status: 'in_progress', runCount: 2 });
+    });
+
+    it('hands the owner a run aborted after it opened a PR instead of re-running it', async () => {
+      make();
+      const t = ticket('a');
+      chat.isSessionBusy = () => true;
+      scheduler.start();
+      await settle();
+      const first = store.openRuns()[0];
+      store.putRun({ ...first, prUrl: 'https://github.com/o/r/pull/1' });
+      vi.setSystemTime(Date.now() + 46 * MIN);
+      await scheduler.watchdog();
+      await settle();
+      expect(store.run(first.id)).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('pull/1') });
+      expect(store.ticket(t.id)?.status).toBe('blocked');
+      expect(chat.turns).toHaveLength(1);
     });
 
     it('frees a lane whose session died, uncounted', async () => {
@@ -668,16 +688,32 @@ describe('LocalLoopScheduler', () => {
     });
 
     it('keeps the Mac awake while a live loop has ready work, and lets it sleep once paused', async () => {
-      make();
+      // Paced: the work waits on the budget and runs later today.
+      make({ budgetCreditsPerDay: 2400 });
+      spent(1300.5);
       ticket('a');
-      otherLanes = 4;
       scheduler.start();
       await settle();
       expect(chat.turns).toEqual([]);
+      expect(scheduler.summary(store.loop('loop-1')!).idleReason).toMatch(/^paced until/);
       expect(blocker.start).toHaveBeenCalledTimes(1);
       store.putLoop({ ...store.loop('loop-1')!, status: 'paused' });
       await scheduler.tick();
       expect(blocker.stop).toHaveBeenCalledWith(7);
+    });
+
+    it('lets the Mac sleep when the machine gate holds the ready work (on battery)', async () => {
+      const onBattery = new LocalLoopScheduler({
+        ...schedulerDeps(),
+        machine: async () => ({ sample: { ...sample, onBattery: true }, settings: { runOnBattery: false } }),
+      });
+      make();
+      ticket('a');
+      onBattery.start();
+      await settle();
+      expect(chat.turns).toEqual([]);
+      expect(blocker.start).not.toHaveBeenCalled();
+      onBattery.stop();
     });
 
     it('starts nothing while asleep, says so, and dispatches at once on wake', async () => {

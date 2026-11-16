@@ -33,7 +33,8 @@ export function buildLoopRoster(detail: LocalLoopDetail): AgentView[] {
   }
 
   for (const item of loopNeedsYouItems(detail)) {
-    if (!item.ticketId) continue;
+    // Still running (it just asked): its working view already shows that session.
+    if (!item.ticketId || open.some(run => run.ticketId === item.ticketId)) continue;
     // runs are newest first: the ticket's latest session holds the question.
     const run = detail.runs.find(entry => entry.ticketId === item.ticketId && entry.sessionId);
     const ticket = detail.tickets.find(entry => entry.id === item.ticketId);

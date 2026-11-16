@@ -29,12 +29,16 @@ export function scrubLoop(detail: LocalLoopDetail): LoopMirrorSnapshot {
       stage: ticket.stage.slice(0, 100),
       status: ticket.status,
       ...(ticket.priority && { priority: ticket.priority }),
-      ...(ticket.status === 'blocked' && ticket.statusReason && { reason: ticket.statusReason.slice(0, 200) }),
+      // A category, not statusReason: that is model text (questions, declined commands, error messages).
+      ...(ticket.status === 'blocked' && {
+        reason: ticket.blockedOn === 'dependencies' ? 'waiting on other tickets' : 'waiting on you',
+      }),
     }));
   return {
     name: loop.name.slice(0, 200),
     status: loop.status,
-    ...(detail.idleReason && { idleReason: detail.idleReason.slice(0, 300) }),
+    // An error loop's idleReason carries the last run's error text (paths, commands): send the state only.
+    ...(detail.idleReason && { idleReason: loop.status === 'error' ? 'error' : detail.idleReason.slice(0, 300) }),
     ...(detail.asleepSince && { asleepSince: detail.asleepSince }),
     ...(loop.cappedUntil && { cappedUntil: loop.cappedUntil }),
     stages: loop.stages.slice(0, 20).map(stage => stage.slice(0, 100)),
@@ -48,6 +52,7 @@ export function scrubLoop(detail: LocalLoopDetail): LoopMirrorSnapshot {
 }
 
 export interface MirrorApi {
+  get<T>(path: string): Promise<T>;
   put(path: string, body: unknown): Promise<unknown>;
   delete(path: string): Promise<unknown>;
 }
@@ -107,12 +112,20 @@ export class LoopMirror {
       const details = this.deps.details();
       const mirrored = details.filter(detail => detail.loop.mirror);
       for (const detail of mirrored) {
-        await api.put(`${MIRROR_PATH}/${detail.loop.id}`, scrubLoop(detail));
-        this.sent.add(detail.loop.id);
+        try {
+          await api.put(`${MIRROR_PATH}/${detail.loop.id}`, scrubLoop(detail));
+          this.sent.add(detail.loop.id);
+        } catch (err) {
+          // One loop refused (e.g. past the server's loop cap) must not hold back the others.
+          if (!refused(err)) throw err;
+          this.deps.logger.warn(`LOOPS: mirror refused ${detail.loop.id}: ${String(err)}`);
+        }
       }
       const keep = new Set(mirrored.map(detail => detail.loop.id));
-      // After a relaunch nothing says what an earlier run posted: a loop turned off meanwhile is taken down too.
-      const off = this.synced ? [...this.sent] : details.map(detail => detail.loop.id);
+      // After a relaunch or sign-in, the server's list is what an earlier run posted, deleted loops included.
+      const off = this.synced
+        ? [...this.sent]
+        : (await api.get<{ loops: { localLoopId: string }[] }>(MIRROR_PATH)).loops.map(loop => loop.localLoopId);
       for (const id of off) {
         if (keep.has(id)) continue;
         await api.delete(`${MIRROR_PATH}/${id}`);
@@ -126,4 +139,10 @@ export class LoopMirror {
       this.retryAt = now + this.backoff;
     }
   }
+}
+
+/** A 4xx other than 429: the server will refuse this loop again, so backing off helps nothing. */
+function refused(err: unknown): boolean {
+  const status = (err as { response?: { status?: unknown } } | null)?.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 429;
 }

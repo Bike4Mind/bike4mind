@@ -90,6 +90,17 @@ describe('buildLoopRoster', () => {
     expect(roster[0]).toMatchObject({ id: 's9', state: 'needs-you', lastSnippet: 'UNSURE: which page?' });
   });
 
+  it('shows a ticket that asked during a still-open run once, as the working run', () => {
+    const roster = buildLoopRoster(
+      detail({
+        tickets: [ticket({ status: 'blocked', statusReason: 'UNSURE: which page?' })],
+        runs: [run({ ticketId: 't1', sessionId: 's9' })],
+        maxConcurrent: 1,
+      })
+    );
+    expect(roster.map(agent => [agent.id, agent.state])).toEqual([['s9', 'working']]);
+  });
+
   it('fills the free lanes with resting agents that carry the idle reason', () => {
     const roster = buildLoopRoster(
       detail({ runs: [run({ sessionId: 's1', ticketId: 't1' })], idleReason: 'capped until 09:00' })

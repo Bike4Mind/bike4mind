@@ -304,7 +304,8 @@ export class LocalLoopScheduler {
         break;
       }
     }
-    this.awake = live().some(loop => this.hasWork(loop, now));
+    // Pacing waits on budget and still runs today, so it keeps the Mac awake; a machine gate (battery, busy) does not.
+    this.awake = !this.waitingReason && live().some(loop => this.hasWork(loop, now));
   }
 
   private hasWork(loop: LocalLoop, now: Date): boolean {
@@ -536,6 +537,8 @@ export class LocalLoopScheduler {
       return false;
     }
     lane.sessionId = opened.sessionId;
+    // A slow open is not silence: the dead-lane check counts from here.
+    lane.lastEventAt = this.now();
     lane.run = store.putRun({ ...lane.run, sessionId: opened.sessionId });
 
     const prompt = ticket
@@ -769,7 +772,7 @@ export class LocalLoopScheduler {
     store.transaction(() => {
       const current = store.run(run.id) ?? run;
       // A run stopped after it opened a PR would open a second one if re-run: hand the ticket to the owner instead.
-      if (current.prUrl && UNCOUNTED.has(ended.stopReason ?? ended.outcome))
+      if (current.prUrl && (UNCOUNTED.has(ended.stopReason ?? ended.outcome) || ended.stopReason === 'watchdog'))
         ended = {
           outcome: 'blocked',
           reason: `${ended.reason ?? 'Stopped'} after opening ${current.prUrl}; continue that PR`,
@@ -978,7 +981,8 @@ export class LocalLoopScheduler {
     if (!this.running || this.asleepAt !== undefined) return;
     const { store } = this.deps;
     const now = this.now();
-    const live = store.loops().filter(loop => loop.status === 'live');
+    // A capped loop waits on its reset, not on the scheduler: never restarted, errored or alarmed for it.
+    const live = store.loops().filter(loop => loop.status === 'live' && !loop.cappedUntil);
     const stalled = schedulerStalled(
       { liveLoops: live.length, ticking: this.ticking, tickStartedAt: this.tickStartedAt, lastTickAt: this.lastTickAt },
       now
@@ -1031,11 +1035,13 @@ export class LocalLoopScheduler {
     }
     for (const id of checks.abort) {
       const lane = byRun.get(id)!;
+      if (lane.finished) continue;
       raiseFor(lane, 'watchdog', `Stopped the run on ${title(lane)}: no progress for 45 min`);
       await this.finish(lane, { stopReason: 'watchdog', reason: 'No progress for 45 min' });
     }
     for (const id of checks.dead) {
       const lane = byRun.get(id)!;
+      if (lane.finished) continue;
       raiseFor(lane, 'watchdog', `Freed the lane of ${title(lane)}: its session ended without finishing`);
       await this.finish(lane, { stopReason: 'requeued', reason: 'Its session ended without finishing' });
     }
@@ -1044,7 +1050,6 @@ export class LocalLoopScheduler {
     const idle = live.map(loop => ({
       id: loop.id,
       stuck:
-        !loop.cappedUntil &&
         !this.waitingReason &&
         !this.paced.has(loop.id) &&
         (this.capBackoff.get(loop.id) ?? 0) <= now &&
