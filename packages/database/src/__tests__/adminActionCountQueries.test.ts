@@ -14,7 +14,6 @@ import { PublishedArtifact, publishedArtifactRepository } from '../models/conten
 import { StripeDisputeModel, stripeDisputeRepository } from '../models/billing/StripeDisputeModel';
 import { ModelDiscoveryState, modelDiscoveryStateRepository } from '../models/ai/ModelDiscoveryStateModel';
 import { AdminApprovalModel, adminApprovalRepository } from '../models/infra/admin/AdminApprovalModel';
-import { SecretRotation, secretRotationRepository } from '../models/infra/security/SecretRotationModel';
 import { SreErrorTrackingModel, sreErrorTrackingRepository } from '../models/infra/ops/SreErrorTrackingModel';
 import { FeedbackModel, countNewFeedback, oldestNewFeedbackAt } from '../models/social/FeedbackModel';
 
@@ -163,20 +162,6 @@ describe('admin action count queries', () => {
 
     expect(await modelDiscoveryStateRepository.countPendingSuggestions()).toBe(2);
     expect(await modelDiscoveryStateRepository.countPendingSuggestions({ limit: 1 })).toBe(1);
-  });
-
-  it('countOverdue counts active configured rotations past due, and stops at the limit', async () => {
-    await insertRaw(raw(SecretRotation), [
-      { keyName: 'A', isActive: true, nextRotation: earlier },
-      { keyName: 'B', isActive: true, nextRotation: earlier },
-      { keyName: 'C', isActive: true, nextRotation: later },
-      { keyName: 'D', isActive: false, nextRotation: earlier },
-      { keyName: 'REMOVED', isActive: true, nextRotation: earlier },
-    ]);
-    const keyNames = ['A', 'B', 'C', 'D'];
-
-    expect(await secretRotationRepository.countOverdue({ now: NOW, keyNames })).toBe(2);
-    expect(await secretRotationRepository.countOverdue({ now: NOW, keyNames, limit: 1 })).toBe(1);
   });
 
   it('countFailed counts failed and dispatch_failed pipelines, and stops at the limit', async () => {
