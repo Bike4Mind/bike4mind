@@ -500,7 +500,7 @@ async function purgePersonalMemory(
  * into completion; the User deletion marker remains until every step resolves. Covers what needs more
  * than a row write (storage, CDN, memory keys, grant cascades, lake transfers); the rows that merely
  * name the person are erased afterwards from the data holder registry (ErasureRegistry.erase in
- * completeAccountDeletion.ts). Auth/security audit records follow their existing TTL and are not swept here.
+ * completeAccountDeletion.ts, and again by apps/client/server/users/reapplyErasure.ts). Auth/security audit records follow their existing TTL and are not swept here.
  */
 export async function purgeAccountContent(userId: string, { logger, assertLease }: PurgeOptions): Promise<void> {
   await assertLease();
@@ -535,6 +535,10 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     ownerId: { $in: personalOrganizationIds },
   });
   await collectionFor('Activity').deleteMany({ ownerType: 'Organization', ownerId: { $in: personalOrganizationIds } });
+  for (const model of ['AgentExecution', 'QuestExternalLink', 'ResearchData', 'ResearchTask', 'WorkItem']) {
+    await assertLease();
+    await collectionFor(model).deleteMany({ organizationId: { $in: personalOrganizationIds } });
+  }
   await embedConversationRepository.deleteAllForUser(userId);
   await integrationRequestRepository.deleteAllForUser(userId);
   await hideDeletedAuthorAnnotations(userId);

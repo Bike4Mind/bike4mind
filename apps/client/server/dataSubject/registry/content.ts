@@ -166,7 +166,8 @@ export const contentHolders = {
   QuestExternalLink: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
@@ -187,7 +188,10 @@ export const contentHolders = {
   ReleaseNote: { kind: 'noUserData', note: 'Platform release notes, not per person.' },
   ResearchData: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   ResearchLink: { kind: 'noUserData', note: 'Shared research link catalogue with no owner field.' },
   ResearchLinkCategory: { kind: 'noUserData', note: 'Shared research link categories with no owner field.' },

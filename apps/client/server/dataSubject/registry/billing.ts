@@ -14,7 +14,11 @@ export const billingHolders = {
   // the credit ledger and usage events, so it is erased rather than retained as a financial record.
   AgentExecution: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // An organization's execution stays with the organization, its owner cleared.
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
     // DAG node ids of other executions, not users.
     unrelatedPaths: ['blockedBy'],
   },

@@ -57,6 +57,15 @@ async function insert(model: string, doc: Record<string, unknown>) {
   return cast._id as InstanceType<typeof ObjectId>;
 }
 
+const TEAM_SCOPED_MODELS = [
+  Session.modelName,
+  'AgentExecution',
+  'QuestExternalLink',
+  'ResearchData',
+  'ResearchTask',
+  'WorkItem',
+];
+
 async function seedAccount(source: 'self' | 'admin' = 'admin') {
   const subject = new ObjectId();
   const admin = new ObjectId();
@@ -144,15 +153,25 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
     role: 'reader',
   });
   const sharedNotebook = await insert(Session.modelName, { userId: String(other), users: [{ userId }] });
+  // The person's rows in a team organization stay with it; their personal copies go.
+  const teamRows: { model: string; personal: InstanceType<typeof ObjectId>; team: InstanceType<typeof ObjectId> }[] =
+    [];
+  for (const model of TEAM_SCOPED_MODELS) {
+    teamRows.push({
+      model,
+      personal: await insert(model, { userId }),
+      team: await insert(model, { userId, organizationId: String(shared) }),
+    });
+  }
   // Soft-deleted rows still name the person and must go too.
   await insert('Project', { name: 'Trashed project', userId, deletedAt: new Date() });
   await insert('DeepAgentEpisode', { agentId, deletedAt: new Date() });
-  return { userId, email: `erase-${userId}@example.test`, sharedNotebook };
+  return { userId, email: `erase-${userId}@example.test`, sharedNotebook, teamRows };
 }
 
 describe('admin erasure against the real data holder registry', () => {
   it('leaves nothing naming the user outside the stated retentions, and no unclassified model', async () => {
-    const { userId, sharedNotebook } = await seedAccount();
+    const { userId, sharedNotebook, teamRows } = await seedAccount();
     await expect(completeAccountDeletion(userId, { logger: logger as never, erasureRegistry })).resolves.toEqual({
       deleted: true,
     });
@@ -172,6 +191,13 @@ describe('admin erasure against the real data holder registry', () => {
     expect(await mongoose.model(Session.modelName).collection.findOne({ _id: sharedNotebook })).toMatchObject({
       users: [],
     });
+    for (const { model, personal, team } of teamRows) {
+      const collection = mongoose.model(model).collection;
+      expect(await collection.findOne({ _id: personal }), model).toBeNull();
+      const kept = await collection.findOne({ _id: team });
+      expect(kept, model).not.toBeNull();
+      expect(String(kept!.userId), model).not.toBe(userId);
+    }
   });
 });
 

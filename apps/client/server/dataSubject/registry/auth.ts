@@ -208,7 +208,9 @@ export const authHolders = {
   SessionModel: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // A personal notebook goes; an organization's stays with the organization, its owner cleared.
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       // The payer of a live voice hold; only ever set while a voice session is running.
       { path: 'voiceHoldUserId', matchBy: 'userId', action: 'anonymize' },

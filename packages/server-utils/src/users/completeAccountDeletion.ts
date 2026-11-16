@@ -139,7 +139,9 @@ export async function completeAccountDeletion(
       { userId },
       { db: { realtimeConnections: realtimeConnectionRepository } }
     );
-    // After the realtime invalidation, which finds the live sockets through the Connection rows this erases.
+    // Erasure anonymizes Organization.userId, which would blind the in-transaction guard to an
+    // organization acquired since the start check; anything acquired after this still names the person.
+    await assertNoOwnedOrganizations(userId);
     await erasureRegistry.erase(subject, assertLease);
     await hardDeleteUser(
       userId,

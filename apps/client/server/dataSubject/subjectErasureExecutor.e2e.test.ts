@@ -239,6 +239,32 @@ describe('SubjectErasureExecutor', () => {
     expect((await Team.collection.findOne({ _id: team._id }))?.memberIds).toEqual([me._id]);
   });
 
+  it('leaves a row reassigned between the read and the write', async () => {
+    const { me, other, subject } = await seedPerson();
+    const note = await Note.create({ ownerId: me._id });
+    const event = await Event.create({ actorId: me._id, actorName: 'Me' });
+    const collections = SubjectErasurePlan.prototype.collections;
+    const spy = vi.spyOn(SubjectErasurePlan.prototype, 'collections').mockImplementation(function (
+      this: SubjectErasurePlan,
+      checkpoint,
+      sink
+    ) {
+      return collections.call(this, checkpoint, async (model, entries) => {
+        await Note.collection.updateOne({ _id: note._id }, { $set: { ownerId: other._id } });
+        await Event.collection.updateOne({ _id: event._id }, { $set: { actorId: other._id } });
+        await sink?.(model, entries);
+      });
+    });
+    try {
+      await new SubjectErasureExecutor(subject, noLease, registry).run();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await Note.collection.findOne({ _id: note._id })).toMatchObject({ ownerId: other._id });
+    expect(await Event.collection.findOne({ _id: event._id })).toMatchObject({ actorId: other._id, actorName: 'Me' });
+  });
+
   it('changes nothing on a second run', async () => {
     const { me, other, subject } = await seedPerson();
     await Event.create({ actorId: me._id, actorName: 'Me', actorEmail: 'me@example.com' });

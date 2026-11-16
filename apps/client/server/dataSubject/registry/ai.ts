@@ -305,7 +305,10 @@ export const aiHolders = {
   },
   ResearchTask: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   SessionAgentConfig: {
     kind: 'holder',
@@ -383,6 +386,9 @@ export const aiHolders = {
   },
   WorkItem: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
 } satisfies DataHolderRegistry;

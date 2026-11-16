@@ -120,10 +120,26 @@ export class SubjectErasureExecutor {
   }
 
   private operationsFor(model: string, { outcome, matched, document }: ErasureEntry): Operation[] {
-    const filter = { _id: document._id } as mongoose.mongo.Filter<mongoose.mongo.Document>;
-    if (outcome === 'deleted') return [{ deleteOne: { filter } }];
+    // Each write re-checks the match it was planned from, so a row reassigned since the read is left alone.
+    const stillMatching = (references: readonly UserReference[]) => {
+      // The values as read, not filterFor's forms: those miss a mixed-case stored email.
+      const clauses = references.flatMap(reference => {
+        const values = valuesAt(document, reference.path).filter(this.matcher.isSubject(reference));
+        return values.length > 0 ? [{ ...reference.where, [reference.path]: { $in: values } }] : [];
+      });
+      return {
+        _id: document._id,
+        ...(clauses.length > 0 ? { $or: clauses } : {}),
+      } as mongoose.mongo.Filter<mongoose.mongo.Document>;
+    };
+    if (outcome === 'deleted') {
+      // A viaParent child matches through its parent, so it has no own reference to re-check.
+      const filter = stillMatching(matched.filter(reference => reference.action === 'deleteDocument'));
+      return [{ deleteOne: { filter } }];
+    }
     return matched.flatMap(reference => {
       const write = this.updateFor(model, reference, document);
+      const filter = stillMatching([reference]);
       // Built from registry paths, which no static type describes.
       return write ? [{ updateOne: { filter, update: write.update as Update, arrayFilters: write.arrayFilters } }] : [];
     });
