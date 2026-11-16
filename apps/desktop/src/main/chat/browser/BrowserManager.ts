@@ -147,6 +147,8 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Any frame navigation invalidates a capture, even if that frame detaches before capture resolves. */
+  private frameGeneration = 0;
   /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
   private closing = false;
   /** In the app window but hidden for a moment; see hold(). */
@@ -220,6 +222,12 @@ class ElectronPage implements BrowserPage {
       if (!shortcut) return;
       event.preventDefault();
       this.hooks.onShortcut(shortcut);
+    });
+    contents.on('did-start-navigation', () => {
+      this.frameGeneration += 1;
+    });
+    contents.on('did-frame-navigate', () => {
+      this.frameGeneration += 1;
     });
     contents.on('did-navigate', (_event, url, status) => {
       this.commits += 1;
@@ -462,7 +470,10 @@ class ElectronPage implements BrowserPage {
 
   private async runScript<T>(code: string, what: string, userGesture: boolean, timeoutMs: number): Promise<T> {
     const contents = this.contents;
-    const run = contents.executeJavaScript(code, userGesture) as Promise<T>;
+    // Chromium may defer execution until a navigation finishes; bind the code to this call's origin.
+    const origin = new URL(contents.getURL()).origin;
+    const guarded = `(() => { if (location.origin !== ${JSON.stringify(origin)}) throw new Error("The page changed origin before this step could run. Read the new page before retrying."); return (${code}); })()`;
+    const run = contents.executeJavaScript(guarded, userGesture) as Promise<T>;
     const first = await within(run, timeoutMs);
     if (first !== TIMED_OUT) return first;
     if (!contents.isDestroyed() && contents.isLoadingMainFrame()) {
@@ -511,6 +522,7 @@ class ElectronPage implements BrowserPage {
 
   async press(key: string): Promise<void> {
     const contents = this.contents;
+    const origin = new URL(contents.getURL()).origin;
     // A parked page holds no OS focus, so Enter would not reach a form: submit it directly.
     if (key === 'Enter') {
       const submitted = await this.script<boolean>(
@@ -518,6 +530,9 @@ class ElectronPage implements BrowserPage {
         'Pressing Enter'
       );
       if (submitted) return;
+    }
+    if (new URL(contents.getURL()).origin !== origin) {
+      throw new Error('The page changed origin before this key could be sent. Read the new page before retrying.');
     }
     await this.asAgent(async () => {
       contents.focus();
@@ -529,11 +544,17 @@ class ElectronPage implements BrowserPage {
 
   async screenshot(): Promise<Buffer> {
     const controller = new AbortController();
+    const frameGeneration = this.frameGeneration;
     try {
       const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
       if (image === TIMED_OUT) {
         throw new Error(
           `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (frameGeneration !== this.frameGeneration) {
+        throw new Error(
+          'A frame changed while the screenshot was being captured. Read the settled page before retrying.'
         );
       }
       if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');

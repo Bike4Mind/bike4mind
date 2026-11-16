@@ -1,6 +1,7 @@
 import {
   BadRequestError,
   CreditHolderType,
+  ForbiddenError,
   insufficientCreditsError,
   type CreditHoldRecord,
   type ICreditHolder,
@@ -18,6 +19,7 @@ import {
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
+import { aiAccessDeniedMessage } from '../userService/accountState';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -92,6 +94,10 @@ export async function holdCredits(
 
   const user = await adapters.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
+  // Every hold reloads the user, so a queued job or continuation placing one after the account was blocked is
+  // refused here, whichever path placed it. Same gate as assertAiAccessAllowed.
+  const accessDenial = aiAccessDeniedMessage(user);
+  if (accessDenial) throw new ForbiddenError(accessDenial);
   let organization: IOrganizationDocument | null = null;
   if (organizationId) {
     organization = await adapters.organizations.findById(organizationId);

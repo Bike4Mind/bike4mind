@@ -122,83 +122,21 @@ describe('IssuesHandler', () => {
       expect(mockNotify).not.toHaveBeenCalled();
     });
 
-    it('should route "reopened" action to SRE dispatch', async () => {
-      const payload = createIssuesPayload({ action: 'reopened' });
-      await handler.handle(payload, mockMcpServer);
-      // No Slack notification for reopens (out of scope), but SRE must see it
-      // so the fix-loop guard can catch "fix didn't work" signals.
-      expect(mockNotify).not.toHaveBeenCalled();
-      expect(mockDispatchIssueToSre).toHaveBeenCalledTimes(1);
-      const [forwardedPayload] = mockDispatchIssueToSre.mock.calls[0];
-      expect(forwardedPayload).toBe(payload);
-    });
-
-    it('should route "labeled" action to SRE dispatch', async () => {
-      // Regression guard - covers the same SRE-routing path as reopened.
-      const payload = createIssuesPayload({ action: 'labeled' });
-      await handler.handle(payload, mockMcpServer);
-      expect(mockDispatchIssueToSre).toHaveBeenCalledTimes(1);
-    });
-
-    it('should route "opened" action to SRE dispatch', async () => {
-      // Regression guard - opened was the original SRE entry point.
-      const payload = createIssuesPayload({ action: 'opened' });
-      await handler.handle(payload, mockMcpServer);
-      expect(mockDispatchIssueToSre).toHaveBeenCalledTimes(1);
-    });
-
-    it('should NOT route "closed" action to SRE dispatch', async () => {
-      // Closing the issue must not re-enter the pipeline.
-      const payload = createIssuesPayload({ action: 'closed' });
-      (payload as GitHubIssuesPayload).sender = { login: 'closer-user' } as GitHubIssuesPayload['sender'];
-      await handler.handle(payload, mockMcpServer);
-      expect(mockDispatchIssueToSre).not.toHaveBeenCalled();
-    });
-
-    it.each(['opened', 'labeled', 'reopened'])(
-      'isolates SRE dispatch failures from the outer handler ("%s" action)',
+    it.each(['opened', 'labeled', 'reopened', 'closed'])(
+      'never dispatches or syncs SRE state for "%s" deliveries',
       async action => {
-        // Each handler wraps `dispatchToSreIfMatching` in try/catch so an SRE
-        // dispatch failure doesn't break existing notification flows. Verify
-        // by rejecting the mock and asserting handler.handle() still resolves.
-        mockDispatchIssueToSre.mockRejectedValueOnce(new Error('SQS unavailable'));
         const payload = createIssuesPayload({ action });
-        await expect(handler.handle(payload, mockMcpServer)).resolves.toBeDefined();
-        expect(mockDispatchIssueToSre).toHaveBeenCalled();
+        (payload as GitHubIssuesPayload).sender = { login: 'closer-user' } as GitHubIssuesPayload['sender'];
+        await handler.handle(payload, mockMcpServer);
+        expect(mockDispatchIssueToSre).not.toHaveBeenCalled();
+        expect(mockSyncSreIssueState).not.toHaveBeenCalled();
       }
     );
-  });
 
-  describe('githubIssueState sync (admin "hide closed issues" filter)', () => {
-    it('syncs issue state on "closed" so the tracking doc reflects the close', async () => {
-      const payload = createIssuesPayload({ action: 'closed' });
-      (payload as GitHubIssuesPayload).sender = { login: 'closer-user' } as GitHubIssuesPayload['sender'];
-      await handler.handle(payload, mockMcpServer);
-      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
-      expect(mockSyncSreIssueState.mock.calls[0][0]).toBe(payload);
-    });
-
-    it('syncs issue state on "closed" even when the author closed their own issue (no Slack notification path)', async () => {
-      // Author == closer short-circuits the Slack notification, but the state
-      // sync must still run - it's placed before that early return.
-      const payload = createIssuesPayload({ action: 'closed', author: 'self-closer' });
-      (payload as GitHubIssuesPayload).sender = { login: 'self-closer' } as GitHubIssuesPayload['sender'];
-      await handler.handle(payload, mockMcpServer);
-      expect(mockNotify).not.toHaveBeenCalled();
-      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
-    });
-
-    it('syncs issue state on "reopened"', async () => {
+    it('does not notify on "reopened"', async () => {
       const payload = createIssuesPayload({ action: 'reopened' });
       await handler.handle(payload, mockMcpServer);
-      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
-      expect(mockSyncSreIssueState.mock.calls[0][0]).toBe(payload);
-    });
-
-    it('does not sync issue state on "opened" (state is already open at creation)', async () => {
-      const payload = createIssuesPayload({ action: 'opened' });
-      await handler.handle(payload, mockMcpServer);
-      expect(mockSyncSreIssueState).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
     });
   });
 

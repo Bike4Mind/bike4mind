@@ -41,7 +41,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.count.mockReturnValue({ maxTimeMS: mocks.maxTimeMS });
   mocks.aggregate.mockReturnValue({ option: mocks.option });
-  mocks.maxTimeMS.mockResolvedValue(3);
+  // clearAllMocks keeps queued once-values, so reset or unconsumed pairs leak into later tests.
+  mocks.maxTimeMS.mockReset().mockResolvedValueOnce(3).mockResolvedValueOnce(5);
   mocks.option.mockResolvedValue([{ count: 2 }]);
   mocks.send.mockResolvedValue(undefined);
 });
@@ -53,7 +54,17 @@ describe('account creation census', () => {
       until: new Date('2026-01-02T12:00:00Z'),
     });
     expect(() => accountCreationWindow('bad')).toThrow();
-    expect(accountCreationMetricData(event.time, 3, 2)).toEqual(accountCreationMetricData(event.time, 3, 2));
+    expect(accountCreationMetricData(event.time, 3, 2, 5)).toEqual(accountCreationMetricData(event.time, 3, 2, 5));
+  });
+
+  it('counts accounts currently below zero credits, excluding system, synthetic and soft-deleted accounts', () => {
+    const { since, until } = accountCreationWindow(event.time);
+    expect(accountCreationQueries(since, until).negativeBalances).toEqual({
+      $or: [{ isSynthetic: { $ne: true } }, { isPersona: true }],
+      isSystem: { $ne: true },
+      deletedAt: { $exists: false },
+      currentCredits: { $lt: 0 },
+    });
   });
 
   it('counts persisted creations, not login events or requests, in a half-open window', () => {
@@ -89,6 +100,7 @@ describe('account creation census', () => {
           MetricData: [
             { MetricName: 'SuccessfulSignups', Value: 3, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
             { MetricName: 'NewAccountApiKeys', Value: 2, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
+            { MetricName: 'NegativeBalances', Value: 5, Unit: 'Count', Timestamp: new Date('2026-01-02T12:00:00Z') },
             { MetricName: 'CensusCompleted', Value: 1, Unit: 'Count', Timestamp: new Date('2026-01-02T11:00:00Z') },
           ],
         },
@@ -97,11 +109,11 @@ describe('account creation census', () => {
   });
 
   it('emits explicit zeros for an empty hour', async () => {
-    mocks.maxTimeMS.mockResolvedValue(0);
+    mocks.maxTimeMS.mockReset().mockResolvedValue(0);
     mocks.option.mockResolvedValue([]);
     await handler(event);
     expect(mocks.send.mock.calls[0][0].input.MetricData.map((metric: { Value: number }) => metric.Value)).toEqual([
-      0, 0, 1,
+      0, 0, 0, 1,
     ]);
   });
 
@@ -142,6 +154,33 @@ describe('account creation census', () => {
       const queries = accountCreationQueries(since, until);
       expect(await db.collection('keys').aggregate(queries.keys).toArray()).toEqual([{ count: 3 }]);
       expect(await db.collection('users').countDocuments(queries.signups)).toBe(3);
+    } finally {
+      await connection.close();
+      await server.stop();
+    }
+  });
+
+  it('executes the negative-balance filter against MongoDB, counting only live external accounts below zero', async () => {
+    const server = await createMongoServer();
+    const connection = await mongoose.createConnection(server.getUri()).asPromise();
+    try {
+      const db = connection.db!;
+      await db
+        .collection('users')
+        .insertMany([
+          { currentCredits: -1 },
+          { currentCredits: -0.5, isBanned: true },
+          { currentCredits: -2, isSynthetic: true, isPersona: true },
+          { currentCredits: -3, isSynthetic: true },
+          { currentCredits: -4, isSystem: true },
+          { currentCredits: -5, deletedAt: new Date('2026-01-01T00:00:00Z') },
+          { currentCredits: 0 },
+          { currentCredits: 10 },
+          {},
+        ]);
+      const { since, until } = accountCreationWindow(event.time);
+      const queries = accountCreationQueries(since, until);
+      expect(await db.collection('users').countDocuments(queries.negativeBalances)).toBe(3);
     } finally {
       await connection.close();
       await server.stop();

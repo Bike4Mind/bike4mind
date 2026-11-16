@@ -23,6 +23,7 @@ const detection = (id: string, userIds: string[]) => ({
   detectedAt: new Date('2026-11-01T00:00:00Z'),
 });
 const assessment = (detectionId: string, result: string, assessedAt: string, confidence: number | null = 0.7) => ({
+  id: `a-${detectionId}`,
   detectionId,
   result,
   confidence,
@@ -53,6 +54,7 @@ describe('findRiskReviewAdvisories', () => {
     expect(h.findLatestJudged).toHaveBeenCalledWith(['d1']);
     expect([...advisories.keys()]).toEqual([USER_A]);
     expect(advisories.get(USER_A)).toEqual({
+      assessmentId: 'a-d1',
       detectionId: 'd1',
       detector: 'signupNetworkBurst',
       result: 'insufficient_evidence',

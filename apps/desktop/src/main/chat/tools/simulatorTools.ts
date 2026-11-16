@@ -220,7 +220,6 @@ export const simulatorBuild: ToolDefinition = {
     return {
       detail: `Build the scheme "${scheme}" of ${container} with xcodebuild\n\nA build runs the project's own build scripts.`,
       key: `simulator_build\x00${container}\x00${scheme}`,
-      askInAuto: true,
     };
   },
   async run(input, context) {
