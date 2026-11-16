@@ -91,7 +91,32 @@ describe('useAuditLogSearchParams', () => {
     vi.runAllTimers();
     const next = lastSearchUpdate({ tab: 'audit-log', entryId: 'x', severity: 'critical', other: 'keep' });
     const clearedFilters = Object.fromEntries(Object.keys(AuditLogFiltersSchema.shape).map(key => [key, undefined]));
-    expect(next).toEqual({ ...clearedFilters, tab: undefined, entryId: undefined, other: 'keep' });
+    expect(next).toEqual({
+      ...clearedFilters,
+      tab: undefined,
+      entryId: undefined,
+      auditWindow: undefined,
+      other: 'keep',
+    });
+  });
+
+  it('reads the summary window from the URL and falls back to the default on an invalid value', () => {
+    mocks.search = { auditWindow: '7' };
+    expect(renderHook(() => useAuditLogSearchParams()).result.current.windowDays).toBe(7);
+    mocks.search = { auditWindow: 90 };
+    expect(renderHook(() => useAuditLogSearchParams()).result.current.windowDays).toBe(90);
+    mocks.search = { auditWindow: '14' };
+    expect(renderHook(() => useAuditLogSearchParams()).result.current.windowDays).toBe(30);
+  });
+
+  it('setWindowDays writes the window and leaves the default out of the URL', () => {
+    mocks.search = { severity: 'critical', entryId: 'abc' };
+    const { result } = renderHook(() => useAuditLogSearchParams());
+    act(() => result.current.setWindowDays(7));
+    const next = lastSearchUpdate(mocks.search);
+    expect(next).toMatchObject({ tab: 'audit-log', auditWindow: 7, severity: 'critical', entryId: 'abc' });
+    act(() => result.current.setWindowDays(30));
+    expect(lastSearchUpdate({ auditWindow: 7 }).auditWindow).toBeUndefined();
   });
 
   it('does not navigate on unmount once the location has left /admin', () => {

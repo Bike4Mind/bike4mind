@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Alert, Stack } from '@mui/joy';
 import { AdminPageHeader } from '../shared/AdminPageHeader';
-import type { AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind/common';
+import type { AuditEntry, AuditLogFilters } from '@bike4mind/common';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { useAuditAlertStatus, useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
 import { AuditEntryDrawer, AuditEventTable } from './shared';
@@ -17,7 +17,6 @@ const RELATED_EVENTS_LIMIT = 20;
 const LIST_ERROR_MESSAGE = 'Could not load audit events. Refresh to try again.';
 const ENTRY_UNAVAILABLE_MESSAGE = 'That audit entry could not be loaded.';
 const NO_FILTERS: AuditLogFilters = {};
-const DEFAULT_SUMMARY_WINDOW: AuditSummaryWindow = 30;
 
 const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilters | null => {
   const impersonationSessionId = entry?.related?.impersonationSessionId;
@@ -28,9 +27,9 @@ const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilter
 };
 
 const AuditLogPage: React.FC = () => {
-  const { filters, entryId, setFilters, patchFilters, openEntry } = useAuditLogSearchParams();
+  const { filters, entryId, windowDays, setFilters, patchFilters, openEntry, setWindowDays } =
+    useAuditLogSearchParams();
   const { showSnackbar } = useSnackbar();
-  const [windowDays, setWindowDays] = useState<AuditSummaryWindow>(DEFAULT_SUMMARY_WINDOW);
   const { data: alertStatus } = useAuditAlertStatus();
   const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } = useAuditLog(filters);
 

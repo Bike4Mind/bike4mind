@@ -6,7 +6,9 @@ import {
   AUDIT_ENTRY_ID_PARAM,
   AuditLogFiltersSchema,
   type AuditLogFilters,
+  type AuditSummaryWindow,
 } from '@bike4mind/common';
+import { AUDIT_SUMMARY_WINDOW_PARAM, auditSummaryWindowSearchValue, readAuditSummaryWindow } from './auditLogTabSearch';
 
 const FILTER_KEYS = Object.keys(AuditLogFiltersSchema.shape) as Array<keyof AuditLogFilters>;
 
@@ -26,7 +28,7 @@ const parseFilters = (search: SearchRecord): AuditLogFilters => {
 const filterKeysOf = (filters: AuditLogFilters): SearchRecord =>
   Object.fromEntries(FILTER_KEYS.map(key => [key, filters[key]]));
 
-/** The URL is the source of truth for the page's filters and the open entry. */
+/** The URL is the source of truth for the page's filters, the open entry and the summary window. */
 export const useAuditLogSearchParams = () => {
   const search = useSearch({ strict: false }) as SearchRecord;
   const navigate = useNavigate();
@@ -34,6 +36,7 @@ export const useAuditLogSearchParams = () => {
   const pendingCleanupRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const filters = useMemo(() => parseFilters(search), [search]);
+  const windowDays = readAuditSummaryWindow(search[AUDIT_SUMMARY_WINDOW_PARAM]);
   const entryId = typeof search[AUDIT_ENTRY_ID_PARAM] === 'string' ? (search[AUDIT_ENTRY_ID_PARAM] as string) : null;
 
   const writeSearch = useCallback(
@@ -75,6 +78,16 @@ export const useAuditLogSearchParams = () => {
     [writeSearch]
   );
 
+  const setWindowDays = useCallback(
+    (next: AuditSummaryWindow) =>
+      writeSearch(previous => ({
+        ...previous,
+        [ADMIN_TAB_PARAM]: ADMIN_AUDIT_LOG_TAB_SLUG,
+        [AUDIT_SUMMARY_WINDOW_PARAM]: auditSummaryWindowSearchValue(next),
+      })),
+    [writeSearch]
+  );
+
   // Leaving the tab must not leave stale filters in the URL for the next tab. Only our keys are
   // removed (tab only when it is ours), so unrelated params survive. The strip is deferred a tick so a
   // StrictMode mount/cleanup/mount cancels it instead of wiping deep-link filters, and it is skipped
@@ -93,11 +106,12 @@ export const useAuditLogSearchParams = () => {
           [ADMIN_TAB_PARAM]:
             previous[ADMIN_TAB_PARAM] === ADMIN_AUDIT_LOG_TAB_SLUG ? undefined : previous[ADMIN_TAB_PARAM],
           [AUDIT_ENTRY_ID_PARAM]: undefined,
+          [AUDIT_SUMMARY_WINDOW_PARAM]: undefined,
           ...filterKeysOf({}),
         }));
       }, 0);
     };
   }, [router, writeSearch]);
 
-  return { filters, entryId, setFilters, patchFilters, openEntry };
+  return { filters, entryId, windowDays, setFilters, patchFilters, openEntry, setWindowDays };
 };
