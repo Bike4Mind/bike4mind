@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   admit: vi.fn(),
 }));
 
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {

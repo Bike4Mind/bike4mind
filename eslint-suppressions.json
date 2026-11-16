@@ -3009,11 +3009,6 @@
       "count": 3
     }
   },
-  "apps/client/server/models/UserSubscription.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/server/queueHandlers/questProcessor.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -3124,16 +3119,6 @@
       "count": 23
     }
   },
-  "apps/workers/src/cron/accountCampaignSweep.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/accountCampaignSweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/cron/accountDeletionSweep.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3154,32 +3139,12 @@
       "count": 1
     }
   },
-  "apps/workers/src/cron/apiProbeScoring.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/apiProbeScoring.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/personaExpirySweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/events/dlqTriage.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
   },
   "apps/workers/src/events/dlqTriage.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/sessionSummarization.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
@@ -3229,11 +3194,6 @@
       "count": 2
     }
   },
-  "apps/workers/src/organizations/retentionCleanup.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
@@ -3241,12 +3201,12 @@
   },
   "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 3
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExport.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
@@ -3266,12 +3226,7 @@
   },
   "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
     "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/agentExecutor.push.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
+      "count": 3
     }
   },
   "apps/workers/src/queueHandlers/agentExecutor.ts": {
@@ -3284,16 +3239,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 4
-    }
-  },
-  "apps/workers/src/queueHandlers/generatedMediaPurge.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
-    }
-  },
   "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -3302,11 +3247,6 @@
   "apps/workers/src/queueHandlers/notebookCuration.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
-    }
-  },
-  "apps/workers/src/queueHandlers/researchEngineQueue.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
     }
   },
   "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
@@ -4715,6 +4655,11 @@
     }
   },
   "packages/server-utils/src/models/Subscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/models/UserSubscription.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

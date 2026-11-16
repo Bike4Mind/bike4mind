@@ -1,12 +1,8 @@
 import { FabFile, Quest, Session, questRepository, sessionRepository } from '@bike4mind/database';
-import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import {
-  MAX_PATHS_PER_BATCH,
-  createCdnInvalidationBatch,
-  generatedCdnPath,
-} from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
-import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
-import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
+import { getGeneratedImageStorage } from '../utils/storage/index';
+import { MAX_PATHS_PER_BATCH, createCdnInvalidationBatch, generatedCdnPath } from '../services/cdn/invalidateRouterCdn';
+import { enqueueGeneratedMediaPurge } from './generatedMediaPurgeQueue';
+import type { MinimalLogger } from '../services/publish/minimalLogger';
 
 export type PurgeRequestLogger = MinimalLogger & { error: (msg: string) => void };
 

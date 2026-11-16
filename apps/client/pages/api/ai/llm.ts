@@ -28,7 +28,7 @@ import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion

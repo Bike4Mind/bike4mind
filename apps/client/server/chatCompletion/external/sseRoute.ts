@@ -68,7 +68,7 @@ import {
   admitApiKeyCompletion,
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
-} from '@server/utils/untrustedCompletionQuota';
+} from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';

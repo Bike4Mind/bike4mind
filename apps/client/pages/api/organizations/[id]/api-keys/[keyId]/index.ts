@@ -19,7 +19,7 @@ import {
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { z } from 'zod';
 
 const UpdateOrgApiKeyBodySchema = z

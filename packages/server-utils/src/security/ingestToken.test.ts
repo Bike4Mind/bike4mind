@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Request } from 'express';
 
 const sst = vi.hoisted(() => ({ simulationToken: undefined as string | undefined }));
 vi.mock('sst', () => ({
@@ -11,6 +10,8 @@ vi.mock('sst', () => ({
 }));
 
 import { ATTACK_SIMULATION_HEADER, INGEST_TOKEN_REFUSED_MESSAGE, verifyIngestToken } from './ingestToken';
+
+type Request = Parameters<typeof verifyIngestToken>[0];
 
 const HEADER = 'x-security-ingest-token';
 const EXPECTED = 'expected-ingest-token';

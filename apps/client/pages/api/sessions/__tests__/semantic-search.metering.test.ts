@@ -17,7 +17,7 @@ const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
   const release = vi.fn().mockResolvedValue(undefined);
   return { quotaAdmission: vi.fn().mockResolvedValue({ release }), quotaRelease: release };
 });
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
 
 const m = vi.hoisted(() => ({
   enforce: true,

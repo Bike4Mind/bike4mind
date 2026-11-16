@@ -3,7 +3,7 @@ import { sessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { assertRequestCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { NotebookCurateRequestSchema } from '../../../types/api';

@@ -54,7 +54,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
-import { publishLiveActivityUpdate } from '@server/utils/liveActivityPush';
+import { publishLiveActivityUpdate } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';

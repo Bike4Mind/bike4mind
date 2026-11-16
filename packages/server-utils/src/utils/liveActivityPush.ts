@@ -1,7 +1,7 @@
 import { LiveActivityPushEventSchema, type LiveActivityPushEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { isPushDeliveryConfigured } from '@bike4mind/server-utils/utils/pushDelivery';
-import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { isPushDeliveryConfigured } from './pushDelivery';
+import { NotificationEvents } from './eventBus';
 
 /**
  * Publish-side helpers for `notification.liveActivity` (delivered by apps/workers/src/events/sendPush.ts).

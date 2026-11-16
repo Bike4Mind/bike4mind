@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from 'crypto';
-import type { Request } from 'express';
 import {
   ConflictError,
   PERSONA_NAME_PATTERN,
@@ -19,9 +18,9 @@ import {
   type IUserDocument,
   type StoredAuditContext,
 } from '@bike4mind/common';
-import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { hardDeleteUser } from '@bike4mind/server-utils/services/hardDeleteUser';
+import { persistedIsAdmin } from '../auth/apiKeyAdminScope';
+import { recordAdminActionFromRequest, type AuditRequest } from '../utils/adminAudit';
+import { hardDeleteUser } from '../services/hardDeleteUser';
 import {
   User,
   adminAuditLogRepository,
@@ -33,8 +32,8 @@ import {
 import { adminAuditService, userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
+import { entitlementsForEmail } from '../lib/entitlements/registry';
+import { partnerSignupGrantForEmail } from '../entitlements/partnerRules';
 
 /** Every persona username the server builds matches this; nothing else is a persona. */
 export const PERSONA_USERNAME_PATTERN = /^persona-[a-z0-9]{1,24}-\d+$/;
@@ -286,7 +285,7 @@ export async function revokePersonaSessions(userId: string, logger?: Logger): Pr
  * path, which re-checks the persona fence inside the transaction and writes the audit entry there.
  */
 export async function deletePersonaAccount(
-  req: Request,
+  req: AuditRequest & { logger: Logger },
   target: { id: string; username?: string | null; email?: string | null },
   summary: string
 ): Promise<void> {

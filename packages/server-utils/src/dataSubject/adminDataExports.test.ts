@@ -6,8 +6,8 @@ vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: { list: h.list },
   userRepository: { findById: h.findById },
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+vi.mock('../utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('../utils/adminAudit', () => ({
   denySelfAdminAction: h.deny,
   isSelfOrImpersonator: (user: { id: string; impersonatedBy?: string }, targetId: string) =>
     user.id === targetId || user.impersonatedBy === targetId,
@@ -195,10 +195,13 @@ describe('findDataExportTarget', () => {
 });
 
 describe('denySelfDataExport', () => {
-  const target = { user: { id: USER_ID }, auditTarget: { kind: 'user' as const, id: USER_ID, displayName: USER_ID } };
+  // Built by the real lookup so the fixture keeps the DataExportTarget shape without a cast.
+  let target: Awaited<ReturnType<typeof findDataExportTarget>>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     h.deny.mockReset().mockRejectedValue(new ForbiddenError('own account'));
+    h.findById.mockResolvedValue({ id: USER_ID });
+    target = await findDataExportTarget({ isAdmin: true }, USER_ID);
   });
 
   it('denies an admin their own account and the account they impersonate', async () => {
