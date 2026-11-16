@@ -205,7 +205,6 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
-      ...(organizationId ? { billingOrganizationId: organizationId } : {}),
       ...(req.apiKeyInfo?.billingOwnerType ? { apiKeyBillingOwnerType: req.apiKeyInfo.billingOwnerType } : {}),
       ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),

@@ -228,9 +228,10 @@ describe('POST /api/v1/voice/sessions - spend freeze', () => {
     expect(h.signToken).not.toHaveBeenCalled();
   });
 
-  it('mints the key org so the proxy checks it, not the home org', async () => {
+  // The proxy turn checks the org it reserves against, so the token carries no separate freeze org.
+  it('reserves the voice-minutes hold against the key org and mints no freeze org claim', async () => {
     await run({ ...key, billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' });
-    expect(h.signToken.mock.calls[0][0]).toMatchObject({ billingOrganizationId: 'key-org' });
+    expect(h.signToken.mock.calls[0][0]).not.toHaveProperty('billingOrganizationId');
     expect(h.reserve).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'key-org' }));
   });
 });
