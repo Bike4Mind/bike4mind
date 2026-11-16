@@ -48,6 +48,8 @@ export type StudioSegmentOption<Value extends string> = {
   value: Value;
   label: ReactNode;
   testId?: string;
+  /** `tabs` mode: the id of the panel this tab controls (aria-controls). */
+  panelId?: string;
   /** `nav` mode: render the segment as a link to this route, so open-in-new-tab works. */
   link?: LinkComponentProps<typeof SegmentLink>;
 };
@@ -149,6 +151,7 @@ const StudioSegmentedControl = <Value extends string>({
             type="button"
             role={segmentRole}
             aria-selected={isTabs ? isSelected : undefined}
+            aria-controls={isTabs ? option.panelId : undefined}
             aria-checked={segmentRole === 'radio' ? isSelected : undefined}
             aria-current={isNav && isSelected ? 'page' : undefined}
             tabIndex={isNav || isSelected ? 0 : -1}

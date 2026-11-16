@@ -126,6 +126,21 @@ describe('StudioSegmentedControl', () => {
     expect(screen.getByRole('tab', { name: '16:9' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('names the panel each tab controls, in tabs mode only', () => {
+    const paneled = [
+      { value: 'square', label: '1:1', panelId: 'panel-square' },
+      { value: 'wide', label: '16:9' },
+    ] as const;
+    const { unmount } = renderInStudio(
+      <StudioSegmentedControl aria-label="Areas" semantics="tabs" options={paneled} value="square" onChange={vi.fn()} />
+    );
+    expect(screen.getByRole('tab', { name: '1:1' })).toHaveAttribute('aria-controls', 'panel-square');
+    expect(screen.getByRole('tab', { name: '16:9' })).not.toHaveAttribute('aria-controls');
+    unmount();
+    renderInStudio(<StudioSegmentedControl aria-label="Shape" options={paneled} value="square" onChange={vi.fn()} />);
+    expect(screen.getByTestId('studio-segmented-control-square')).not.toHaveAttribute('aria-controls');
+  });
+
   it('as nav, renders each option as a link with the current one marked as the page', () => {
     const linked = [
       { value: 'square', label: '1:1', link: { to: '/studio/$modality', params: { modality: 'image' } } },
