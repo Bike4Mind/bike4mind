@@ -445,13 +445,17 @@ test.describe('Teams', () => {
   test('a team with an active subscription cannot be deleted', async ({ page, teamsPage, request }) => {
     await teamsPage.gotoTeam(disposableTeamId, 'settings');
     await page.getByTestId('organization-settings-delete-btn').click();
-    await teamsPage.confirm();
-
-    await expect(page.getByText('Organization has active subscriptions', { exact: false }).first()).toBeVisible({
+    const dialog = teamsPage.deleteTeamDialog();
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(dialog.getByTestId('delete-organization-plan-blocking')).toBeVisible({
       timeout: TIMEOUTS.VISIBLE,
     });
+    await teamsPage.deleteTeamNameInput().fill(DISPOSABLE_TEAM);
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
     await expect(page).toHaveURL(new RegExp(`/organizations/${disposableTeamId}`));
     expect(await apiGetTeam(request, owner.accessToken, disposableTeamId)).not.toBeNull();
+    await dialog.getByTestId('delete-organization-cancel-btn').click();
+    await expect(dialog).toBeHidden({ timeout: TIMEOUTS.MODAL });
   });
 
   test('deleting a team returns to the list without it', async ({ page, teamsPage, request }) => {
@@ -460,7 +464,15 @@ test.describe('Teams', () => {
 
     await teamsPage.gotoTeam(disposableTeamId, 'settings');
     await page.getByTestId('organization-settings-delete-btn').click();
-    await teamsPage.confirm();
+    const dialog = teamsPage.deleteTeamDialog();
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(dialog.getByTestId('delete-organization-plan-none')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
+    await teamsPage.deleteTeamNameInput().fill(`${DISPOSABLE_TEAM} wrong`);
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
+    await teamsPage.deleteTeamNameInput().fill(DISPOSABLE_TEAM);
+    await expect(teamsPage.deleteTeamConfirm()).toBeEnabled();
+    await teamsPage.deleteTeamConfirm().click();
 
     await page.waitForURL(/\/organizations\/?(?:\?|$)/, { timeout: TIMEOUTS.NAVIGATION });
     await expect(teamsPage.teamCard(mainTeamId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });

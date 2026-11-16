@@ -112,6 +112,18 @@ export class TeamsPage extends BasePage {
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
   }
 
+  deleteTeamDialog(): Locator {
+    return this.page.getByTestId('delete-organization-modal');
+  }
+
+  deleteTeamNameInput(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-name-input');
+  }
+
+  deleteTeamConfirm(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-confirm-btn');
+  }
+
   /**
    * Revoke access opens the offboarding dialog (OffboardMemberDialog), not the plain confirmation
    * modal. Its Remove button stays disabled until the member's content inventory has loaded; the
