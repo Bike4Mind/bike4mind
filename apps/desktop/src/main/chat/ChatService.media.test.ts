@@ -249,6 +249,17 @@ describe('ChatService generation tools', () => {
     if (call?.approvalId) approvals.resolve(call.approvalId, { decision: 'deny' });
   });
 
+  it('looks up the server config without options on a hosted turn', async () => {
+    await build({ media: true, roots: [] });
+    const { id } = await service.createSession();
+    apiGet.mockClear();
+    await service.send(id, 'hi');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    expect(apiGet.mock.calls.filter(([path]) => path === '/api/settings/serverConfig')).toEqual([
+      ['/api/settings/serverConfig'],
+    ]);
+  });
+
   it('offers hosted media and web tools to local inference without a folder grant', async () => {
     const local = vi.fn<OllamaLocal['stream']>(async (_request, emit) => {
       emit({ type: 'content', text: 'Ready', stopReason: 'end_turn' });
@@ -276,7 +287,10 @@ describe('ChatService generation tools', () => {
       'loop',
       'generate_video',
     ]);
-    expect(apiGet.mock.calls).toEqual([['/api/settings/serverConfig'], ['/api/v1/video-models', { timeout: 5_000 }]]);
+    expect(apiGet.mock.calls).toEqual([
+      ['/api/settings/serverConfig', { timeout: 5_000 }],
+      ['/api/v1/video-models', { timeout: 5_000 }],
+    ]);
     expect(apiPost).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
   });

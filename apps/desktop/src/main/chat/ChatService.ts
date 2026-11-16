@@ -514,6 +514,9 @@ const SUGGESTION_TIMEOUT_MS = 5_000;
  */
 const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
 
+/** A local turn has no network dependency otherwise, so its config lookup must not stall inference. */
+const LOCAL_SERVER_CONFIG_TIMEOUT_MS = 5_000;
+
 /**
  * How long a compaction may take before it is abandoned.
  *
@@ -3891,7 +3894,9 @@ export class ChatService {
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
       const serverConfig =
-        api && (!localTurn || this.deps.media) ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+        api && (!localTurn || this.deps.media)
+          ? await this.resolveServerConfig(api, localTurn ? LOCAL_SERVER_CONFIG_TIMEOUT_MS : undefined)
+          : { endpoint: '', cdnUrl: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {
@@ -8295,13 +8300,16 @@ export class ChatService {
    * non-fatal - the same-origin path is the right guess for deploys that omit the field, and an
    * empty `cdnUrl` only means image generation falls back to the URLs the quest itself carries.
    */
-  private async resolveServerConfig(api: AuthenticatedApiClient): Promise<ResolvedServerConfig> {
+  private async resolveServerConfig(api: AuthenticatedApiClient, timeout?: number): Promise<ResolvedServerConfig> {
     const environmentUrl = this.deps.getEnvironmentUrl();
     if (this.serverConfigCache?.environmentUrl === environmentUrl) return this.serverConfigCache.config;
 
     const config: ResolvedServerConfig = { endpoint: DEFAULT_COMPLETIONS_PATH, cdnUrl: '' };
     try {
-      const served = await api.get<ServerTransportConfig>('/api/settings/serverConfig');
+      const served =
+        timeout === undefined
+          ? await api.get<ServerTransportConfig>('/api/settings/serverConfig')
+          : await api.get<ServerTransportConfig>('/api/settings/serverConfig', { timeout });
       if (served?.sseCompletionsUrl) config.endpoint = served.sseCompletionsUrl;
       if (served?.cdnUrl) config.cdnUrl = served.cdnUrl;
     } catch (err) {
