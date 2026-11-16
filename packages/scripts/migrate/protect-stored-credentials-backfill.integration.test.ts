@@ -32,6 +32,7 @@ beforeEach(async () => {
   vi.stubEnv('MEMORY_KEY_SECRET', 'persistent-test-memory-master');
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -203,13 +204,31 @@ describe('TOTP seed backfill', () => {
     await protectStoredCredentials();
     expect(await User.collection.find({ _id: { $in: Object.values(ids) } }).toArray()).toEqual(first);
     expect(info).toHaveBeenCalledWith('TOTP seeds encrypted: 0');
-    info.mockRestore();
   });
 
   it('does not overwrite a seed that changed after it was read', async () => {
     const row = await User.collection.insertOne({ mfa: { totpSecret: 'SEEDAAAA', totpEnabled: true } });
     await User.collection.updateOne({ _id: row.insertedId }, { $set: { 'mfa.totpSecret': 'SEEDBBBB' } });
     expect(await encryptLegacyTotpSecret(row.insertedId, 'SEEDAAAA')).toBe(false);
+    expect((await mfaOf(row.insertedId))!.totpSecret).toBe('SEEDBBBB');
+  });
+
+  it('leaves a seed replaced between the pass reading and writing it', async () => {
+    const row = await User.collection.insertOne({ mfa: { totpSecret: 'SEEDAAAA', totpEnabled: true } });
+    const original = User.collection.updateOne.bind(User.collection);
+    let raced = false;
+    vi.spyOn(User.collection, 'updateOne').mockImplementation(((...args: Parameters<typeof original>) => {
+      if (!raced) {
+        raced = true;
+        return original({ _id: row.insertedId }, { $set: { 'mfa.totpSecret': 'SEEDBBBB' } }).then(() =>
+          original(...args)
+        );
+      }
+      return original(...args);
+    }) as typeof original);
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await protectStoredCredentials();
+    expect(raced).toBe(true);
     expect((await mfaOf(row.insertedId))!.totpSecret).toBe('SEEDBBBB');
   });
 
@@ -223,6 +242,5 @@ describe('TOTP seed backfill', () => {
     expect(output).toContain('TOTP seeds encrypted: 1');
     expect(output).not.toContain(seed);
     for (const id of Object.values(ids)) expect(output).not.toContain(String(id));
-    spies.forEach(spy => spy.mockRestore());
   });
 });
