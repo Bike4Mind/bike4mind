@@ -49,4 +49,16 @@ describe('captureUnsubscribeToken', () => {
     expect(getCapturedUnsubscribeToken()).toBeUndefined();
     expect(window.location.search + window.location.hash).toBe('?x=1#other=1');
   });
+
+  it('forgets an earlier token when the next visit carries none', async () => {
+    const { captureUnsubscribeToken, getCapturedUnsubscribeToken } = await load();
+    window.history.replaceState(null, '', '/email/unsubscribe#token=abc');
+    captureUnsubscribeToken();
+    expect(getCapturedUnsubscribeToken()).toBe('abc');
+
+    window.history.replaceState(null, '', '/email/unsubscribe');
+    captureUnsubscribeToken();
+
+    expect(getCapturedUnsubscribeToken()).toBeUndefined();
+  });
 });

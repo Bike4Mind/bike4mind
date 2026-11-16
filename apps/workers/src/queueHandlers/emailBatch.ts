@@ -266,7 +266,7 @@ export function renderTemplate(
   html = wrapLinksForTracking(html, trackingToken, baseUrl);
 
   // 5. Inject unsubscribe link variable
-  // Fragment, not query: the token never reaches a server log (app/routes/email/unsubscribeToken.ts).
+  // Fragment, not query: the token stays out of the unsubscribe URL sent to a server (app/routes/email/unsubscribeToken.ts).
   const unsubscribeUrl = `${baseUrl}/email/unsubscribe#token=${trackingToken}`;
   html = html.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);
   subject = subject.replace(/{{unsubscribeUrl}}/g, () => unsubscribeUrl);

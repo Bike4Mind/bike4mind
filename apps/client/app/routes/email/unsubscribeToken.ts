@@ -1,7 +1,7 @@
 /**
  * Emailed unsubscribe links carry their token as `/email/unsubscribe#token=...` (built in
- * apps/workers/src/queueHandlers/emailBatch.ts). The fragment never reaches a server, so the token stays
- * out of edge and access logs; the page sends it to pages/api/email/unsubscribe.ts in a header.
+ * apps/workers/src/queueHandlers/emailBatch.ts). The fragment keeps the token out of the unsubscribe URL
+ * as sent to a server and out of Referer/history; the page sends it to pages/api/email/unsubscribe.ts in a header.
  * Emails sent before the fragment form carry `?token=`; those stay accepted, since an already-sent
  * unsubscribe link must keep working.
  */
@@ -14,6 +14,7 @@ let capturedToken: string | undefined;
  * history entry carries it. Runs in the route's beforeLoad, before the page renders.
  */
 export function captureUnsubscribeToken(): void {
+  capturedToken = undefined;
   const search = new URLSearchParams(window.location.search);
   const fragmentToken = new URLSearchParams(window.location.hash.slice(1)).get(TOKEN_PARAM);
   const queryToken = search.get(TOKEN_PARAM);
