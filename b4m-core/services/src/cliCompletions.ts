@@ -107,15 +107,35 @@ import {
   affordableRoundBudget,
   capRoundOutput,
   gateEveryRound,
+  roundCreditRange,
   type RoundBudget,
 } from './completionCreditBudget';
 import { fallbackThinkingVisibility } from './thinkingVisibility';
 
+/**
+ * Asks to claim part of a run's budget alongside a hold: `wantedCredits` is what the first round can
+ * cost at its full output budget, `minimumCredits` what even a short answer costs.
+ */
+export type CompletionRunBudgetClaim = { runId: string; wantedCredits: number; minimumCredits: number };
+
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
 export type CompletionCreditHolds = {
-  reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
+  /**
+   * Debits the hold, and claims run budget when `runClaim` names a budgeted run. Resolves to the credits
+   * claimed, which cap everything the completion may charge; undefined when the run has no budget. Throws
+   * a 422 (`run_budget_exhausted`) when the run cannot spare `minimumCredits`, before anything is debited.
+   */
+  reserve(
+    hold: Omit<CreditHoldRecord, 'balanceAfterHold'>,
+    debit: () => Promise<ICreditHolder>,
+    runClaim?: CompletionRunBudgetClaim
+  ): Promise<number | undefined>;
   refund(refund: () => Promise<void>): Promise<boolean>;
-  settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+  /**
+   * `settle` returns the credits its ledger row recorded: at most `chargedCredits`, less when the
+   * floored debit found a concurrent spend had drained the balance. A run claim is released against it.
+   */
+  settle(chargedCredits: number, settle: () => Promise<number>): Promise<boolean>;
 };
 
 /** How a completion's credit settlement ended, reported once through `onSettled`. */
@@ -971,6 +991,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // prefix) and returns the output budget `availableCredits` can pay for on top of it; see
   // completionCreditBudget. Set only when credits are enforced.
   let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
+  // The run budget this completion claimed; undefined outside a budgeted run.
+  let runCredits: number | undefined;
+  const withinRunClaim = (availableCredits: number, spentCredits: number) =>
+    runCredits === undefined ? availableCredits : Math.min(availableCredits, runCredits - spentCredits);
   const refundReservation = async () => {
     const refund = async () => {
       await holderMethods.incrementCredits(holderId, reservedCredits);
@@ -1040,6 +1064,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       }
     }
 
+    const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
+    const toolSearch = completionsSupportsToolSearch(modelInfo);
+    // A run budget claim is the most the first round can cost, priced like the cap below, so a run's
+    // concurrent completions can never together be admitted past its budget.
+    const runClaim: CompletionRunBudgetClaim | undefined = runLineage && {
+      runId: runLineage.runId,
+      ...toRunClaimCredits(
+        roundCreditRange({
+          modelInfo: chargedModelInfo!,
+          inputUsd: conservativeRoundInputUsd(chargedModelInfo!, estimatedInputTokens, cacheTtl),
+          inputTokens: estimatedInputTokens,
+          minimumOutputTokens,
+          maximumOutputTokens: maxTokens,
+        })
+      ),
+    };
+
     let balanceAfterHold = 0;
     const debit = async (): Promise<ICreditHolder> => {
       // Atomically reserve credits using incrementCredits with negative value
@@ -1060,7 +1101,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       return holderAfterReservation;
     };
     if (params.creditHolds) {
-      await params.creditHolds.reserve(
+      runCredits = await params.creditHolds.reserve(
         {
           ownerId: holderId,
           ownerType: holderType,
@@ -1068,7 +1109,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           organizationId: billToOrg ? holderId : null,
           reservedCredits,
         },
-        debit
+        debit,
+        runClaim
       );
     } else {
       await debit();
@@ -1076,9 +1118,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
     // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
     // it, where an adapter raises the budget for thinking). Cap the round at what this holder can
-    // actually pay - its remaining balance plus its own hold - so settlement cannot overdraw.
-    const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
-    const toolSearch = completionsSupportsToolSearch(modelInfo);
+    // actually pay - its remaining balance plus its own hold - and, in a budgeted run, at its run
+    // claim, so settlement can neither overdraw nor charge the run past what it admitted.
     roundBudgetFor = (roundMessages, availableCredits) => {
       const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
@@ -1091,7 +1132,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         minimumOutputTokens,
       });
     };
-    const firstRound = roundBudgetFor(messages, balanceAfterHold + reservedCredits);
+    const firstRound = roundBudgetFor(messages, withinRunClaim(balanceAfterHold + reservedCredits, 0));
     if (!firstRound.affordable) {
       await refundReservation();
       const available = balanceAfterHold + reservedCredits;
@@ -1260,14 +1301,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           adoptAccumulatedUsage(roundOptions._internal);
           const spentCredits = usdToCredits(settledUsdCost(chargedModelInfo!));
           const balance = (await fetchHolder())?.currentCredits ?? 0;
-          const budget = roundBudget(roundMessages, balance + reservedCredits - spentCredits);
+          const budget = roundBudget(
+            roundMessages,
+            withinRunClaim(balance + reservedCredits - spentCredits, spentCredits)
+          );
           if (!budget.affordable) {
             stoppedForCredits = true;
-            logger?.info?.('[CLI_CREDITS] Tool loop stopped: the balance cannot pay for another round', {
+            logger?.info?.('[CLI_CREDITS] Tool loop stopped: the balance or run budget cannot pay for another round', {
               model,
               round,
               spentCredits,
               requiredCredits: budget.minimumCredits,
+              runCredits,
             });
             return null;
           }
@@ -1488,6 +1533,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         const balance = (await fetchHolder())?.currentCredits ?? 0;
         chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
       }
+      // A budgeted run is never charged past what it admitted. Every round was capped at the claim, so
+      // a cost past it is an estimate miss; unlike the floor above it goes uncollected even when the
+      // balance could pay, because collecting it would let the run settle past its budget.
+      const runCeiling = runCredits ?? Number.POSITIVE_INFINITY;
+      chargedCredits = Math.min(chargedCredits, runCeiling);
 
       let ledgerWritten = false;
       // settle() can be retried, so each attempt starts from the cap rather than a previous attempt's charge.
@@ -1607,12 +1657,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
           ledgerWritten = true;
         }
+        return actualCredits;
       };
       const settled = params.creditHolds
         ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
-      if (chargedCredits < finalCredits) {
+      if (finalCredits > runCeiling) {
+        logger?.warn?.('[CLI_CREDITS] Completion cost more than its run budget claim - charged the claim', {
+          userId,
+          holderId,
+          model,
+          runId: runLineage?.runId,
+          claimed: runCeiling,
+          actual: finalCredits,
+          uncollectedCredits: finalCredits - runCeiling,
+        });
+      }
+      if (chargedCredits < Math.min(finalCredits, runCeiling)) {
         // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
         logger?.error?.('[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero', {
           userId,
@@ -1699,4 +1761,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Settled and metered above; the caller still sees the abort it caused.
   if (abortError !== undefined) throw abortError;
+}
+
+/** Credits are whole numbers on the run's counter; a claim never asks for less than its own minimum. */
+function toRunClaimCredits(range: { minimumCredits: number; maximumCredits: number }) {
+  const minimumCredits = Math.max(1, range.minimumCredits);
+  return { minimumCredits, wantedCredits: Math.max(minimumCredits, range.maximumCredits) };
 }

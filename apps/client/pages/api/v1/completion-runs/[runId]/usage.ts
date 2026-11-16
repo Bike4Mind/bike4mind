@@ -8,7 +8,7 @@ import { getCompletionRunUsageContract, type CompletionRunUsage } from '@bike4mi
 import { creditTransactionRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { findCallerCompletionRun } from '@server/completionRuns/callerCompletionRun';
+import { findCallerCompletionRun, toCompletionRunBudgetState } from '@server/completionRuns/callerCompletionRun';
 
 export default nextRouteForContract(getCompletionRunUsageContract, {
   rateLimit: perUserRateLimit('GET /api/v1/completion-runs/[runId]/usage'),
@@ -28,6 +28,8 @@ export default nextRouteForContract(getCompletionRunUsageContract, {
     createdAt: run.createdAt.toISOString(),
     ...spend,
   };
+  const budget = toCompletionRunBudgetState(run, spend.settled);
+  if (budget) body.budget = budget;
   return res.status(200).json(body);
 });
 

@@ -433,6 +433,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
   },
+  raiseCompletionRunBudget: {
+    method: 'POST',
+    path: '/api/v1/completion-runs/{runId}/budget',
+  },
   registerPushToken: {
     method: 'POST',
     path: '/api/v1/push-tokens',

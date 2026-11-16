@@ -2,17 +2,21 @@ import { CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { record, claim, markSettled, findSettlement, transaction, findUser, assertSpendCap } = vi.hoisted(() => ({
-  findUser: vi.fn(),
-  assertSpendCap: vi.fn(),
-  record: vi.fn(),
-  claim: vi.fn(),
-  markSettled: vi.fn(),
-  findSettlement: vi.fn(),
-  transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
-}));
+const { record, claim, markSettled, findSettlement, transaction, findUser, assertSpendCap, claimBudget, releaseClaim } =
+  vi.hoisted(() => ({
+    claimBudget: vi.fn(),
+    releaseClaim: vi.fn(),
+    findUser: vi.fn(),
+    assertSpendCap: vi.fn(),
+    record: vi.fn(),
+    claim: vi.fn(),
+    markSettled: vi.fn(),
+    findSettlement: vi.fn(),
+    transaction: vi.fn(async <T>(callback: () => Promise<T>): Promise<T> => callback()),
+  }));
 vi.mock('@bike4mind/database', () => ({
   pendingCreditHoldRepository: { record, claim, markSettled, findSettlement },
+  completionRunRepository: { claimBudget, releaseClaim },
   withTransaction: transaction,
   userRepository: { findById: findUser },
   newAccountSpendCapAdapters: { name: 'spend-cap-adapters' },
@@ -89,7 +93,7 @@ describe('completion settlement commit recovery', () => {
       findSettlement.mockResolvedValue(chargedCredits);
       throw new Error('commit acknowledgement lost');
     });
-    const settle = vi.fn(async () => {});
+    const settle = vi.fn(async () => 10);
     expect(await lifecycle.settle(chargedCredits, settle)).toBe(true);
     expect(settle).toHaveBeenCalledTimes(1);
     expect(markSettled).toHaveBeenCalledTimes(1);
@@ -100,7 +104,7 @@ describe('completion settlement commit recovery', () => {
     await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }));
     markSettled.mockResolvedValue(false);
     findSettlement.mockResolvedValue(10);
-    const settle = vi.fn(async () => {});
+    const settle = vi.fn(async () => 10);
     expect(await lifecycle.settle(10, settle)).toBe(true);
     expect(settle).not.toHaveBeenCalled();
     expect(
@@ -126,5 +130,104 @@ describe('completion settlement commit recovery', () => {
     expect(events.filter(event => event.SettlementsAfterSweep === 1)).toEqual([
       expect.objectContaining({ ownerId: 'user', lifecycle: 'completion', holdId: 'pending' }),
     ]);
+  });
+});
+
+describe('run budget claims', () => {
+  const runClaim = { runId: 'run-1', wantedCredits: 120, minimumCredits: 20 };
+  const logger = new Logger({ metadata: { test: 'run budget' } });
+  const pendingWithClaim = (credits: number) => ({
+    ...hold,
+    id: 'pending',
+    balanceAfterHold: 70,
+    runClaim: { runId: 'run-1', credits },
+  });
+
+  it('claims run budget in the hold transaction and records the claim on the hold', async () => {
+    claimBudget.mockResolvedValue({ kind: 'claimed', credits: 90 });
+    record.mockResolvedValue(pendingWithClaim(90));
+    const debit = vi.fn(async () => ({ id: 'user', currentCredits: 70 }));
+
+    const claimed = await createCompletionCreditHolds(logger).reserve(hold, debit, runClaim);
+
+    expect(claimed).toBe(90);
+    expect(claimBudget).toHaveBeenCalledWith('run-1', 120, 20);
+    expect(claimBudget.mock.invocationCallOrder[0]).toBeLessThan(debit.mock.invocationCallOrder[0]);
+    expect(record).toHaveBeenCalledWith(expect.anything(), 'platform-key completion', expect.any(Date), {
+      runId: 'run-1',
+      credits: 90,
+    });
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with run_budget_exhausted and debits nothing when the run cannot cover a short answer', async () => {
+    claimBudget.mockResolvedValue({ kind: 'exhausted', budgetCredits: 500, committedCredits: 490 });
+    const debit = vi.fn();
+
+    const refusal = createCompletionCreditHolds(logger).reserve(hold, debit, runClaim);
+
+    await expect(refusal).rejects.toMatchObject({
+      statusCode: 422,
+      additionalInfo: { errorCode: 'run_budget_exhausted' },
+      message: expect.stringContaining('490 of its 500 credits'),
+    });
+    expect(debit).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('records no claim for a run without a budget', async () => {
+    claimBudget.mockResolvedValue({ kind: 'unbudgeted' });
+
+    const claimed = await createCompletionCreditHolds(logger).reserve(
+      hold,
+      async () => ({ id: 'user', currentCredits: 70 }),
+      runClaim
+    );
+
+    expect(claimed).toBeUndefined();
+    expect(record).toHaveBeenCalledWith(expect.anything(), 'platform-key completion', expect.any(Date), undefined);
+  });
+
+  it('swaps the claim for the recorded charge inside the settlement transaction', async () => {
+    claimBudget.mockResolvedValue({ kind: 'claimed', credits: 90 });
+    record.mockResolvedValue(pendingWithClaim(90));
+    const lifecycle = createCompletionCreditHolds(logger);
+    await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }), runClaim);
+
+    // A concurrent spend drained the balance, so the floored debit recorded 28 of the 35 charged.
+    expect(
+      await lifecycle.settle(
+        35,
+        vi.fn(async () => 28)
+      )
+    ).toBe(true);
+
+    expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 90 }, 28);
+    expect(transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not release the claim again when the receipt shows the settlement already committed', async () => {
+    claimBudget.mockResolvedValue({ kind: 'claimed', credits: 90 });
+    record.mockResolvedValue(pendingWithClaim(90));
+    const lifecycle = createCompletionCreditHolds(logger);
+    await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }), runClaim);
+    markSettled.mockResolvedValue(false);
+    findSettlement.mockResolvedValue(35);
+
+    expect(await lifecycle.settle(35, vi.fn())).toBe(true);
+    expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('returns the whole claim with a refund, and nothing when the sweep already claimed the hold', async () => {
+    claimBudget.mockResolvedValue({ kind: 'claimed', credits: 90 });
+    record.mockResolvedValue(pendingWithClaim(90));
+    const lifecycle = createCompletionCreditHolds(logger);
+    await lifecycle.reserve(hold, async () => ({ id: 'user', currentCredits: 70 }), runClaim);
+    claim.mockResolvedValueOnce(pendingWithClaim(90)).mockResolvedValueOnce(null);
+
+    expect(await lifecycle.refund(vi.fn(async () => {}))).toBe(true);
+    expect(await lifecycle.refund(vi.fn(async () => {}))).toBe(false);
+
+    expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 90 }, 0);
   });
 });

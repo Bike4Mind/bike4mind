@@ -11,6 +11,8 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
@@ -433,6 +435,19 @@ export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
 /** 404 when a completion names a `run` that does not exist or that another user or billing owner minted. */
 export const RunNotFoundErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(RUN_NOT_FOUND_ERROR_CODE),
+});
+
+/**
+ * The completions route's 422: a body that failed validation (no `errorCode`), a balance or member cap
+ * the caller cannot afford (QUEST_ERROR_CODES), or a `run` whose budget is used up.
+ */
+export const CompletionsUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.enum([...QUEST_ERROR_CODES, RUN_BUDGET_EXHAUSTED_ERROR_CODE]).optional(),
+});
+
+/** 409 when a run budget change would not raise it. */
+export const RunBudgetNotRaisedErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(RUN_BUDGET_NOT_RAISED_ERROR_CODE),
 });
 
 /** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */

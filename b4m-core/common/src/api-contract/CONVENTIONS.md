@@ -178,6 +178,8 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | A completion's `run`, or the run whose usage is read, does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
+| A completion's `run` was minted with a budget that cannot spare even a short answer (its settled charges plus in-flight claims leave too little) | `422` | `run_budget_exhausted` (retry once the run's in-flight requests settle and release their unused claims, or raise the run budget with `POST /api/v1/completion-runs/{runId}/budget`; buying credits does not raise it) |
+| A run budget change that does not raise it: the new budget is not above the current one, or the run was minted without a budget | `409` | `run_budget_not_raised` |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
