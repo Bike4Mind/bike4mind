@@ -141,6 +141,7 @@ export * from './adminAuditQuery';
 export * from './adminDataExport';
 export * from './adminDataErasure';
 export * from './adminAuditReview';
+export * from './adminAccessReview';
 export * from './adminApproval';
 export * from './adminUserActivity';
 export * from './adminUserTimeline';

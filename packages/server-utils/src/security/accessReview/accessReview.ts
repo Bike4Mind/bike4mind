@@ -108,6 +108,31 @@ export const reviewQuarter = (date: Date): string =>
 export const isAccessReviewReminderDay = (date: Date): boolean =>
   date.getUTCMonth() % 3 === 0 && date.getUTCDate() <= 7 && date.getUTCDay() === 1;
 
+export const ACCESS_REVIEW_DEFAULT_DORMANT_DAYS = 90;
+/** Days into a quarter before a review not yet completed in it counts as overdue. */
+export const ACCESS_REVIEW_GRACE_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Midnight UTC on the first day of the quarter holding `date`. */
+export const quarterStart = (date: Date): Date =>
+  new Date(Date.UTC(date.getUTCFullYear(), Math.floor(date.getUTCMonth() / 3) * 3, 1));
+
+/** Dormant when the last admin action is `days` or more before `now`; no recorded action counts as dormant. */
+export const isDormant = (lastActionAt: string | null, now: Date, days: number): boolean => {
+  if (!lastActionAt) return true;
+  const at = Date.parse(lastActionAt);
+  if (Number.isNaN(at)) return true;
+  return now.getTime() - at >= days * DAY_MS;
+};
+
+/** Overdue once the grace period of the current quarter has passed with no review completed inside it. */
+export const isAccessReviewOverdue = (latestCompletedAt: Date | null, now: Date): boolean => {
+  const start = quarterStart(now);
+  if (latestCompletedAt && latestCompletedAt.getTime() >= start.getTime()) return false;
+  return now.getTime() >= start.getTime() + ACCESS_REVIEW_GRACE_DAYS * DAY_MS;
+};
+
 const cell = (value: string | number | null | undefined): string =>
   value === null || value === undefined
     ? '-'
@@ -156,7 +181,15 @@ function countsTable(counts: AccessReviewCounts, baseline?: AccessReviewBaseline
 }
 
 const delegationRows = (rows: AccessReviewDelegation[]) =>
-  rows.map(row => [row.sessionId, row.adminEmail ?? row.adminId, row.userId, day(row.startedAt), day(row.expiresAt), '', '']);
+  rows.map(row => [
+    row.sessionId,
+    row.adminEmail ?? row.adminId,
+    row.userId,
+    day(row.startedAt),
+    day(row.expiresAt),
+    '',
+    '',
+  ]);
 
 /**
  * The review record: counts (with before/after when a baseline is given) and one row per grant of
@@ -236,11 +269,17 @@ export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, basel
     '',
     `## Active support access (${supportAccess.length})`,
     '',
-    ...table(['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(supportAccess)),
+    ...table(
+      ['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS],
+      delegationRows(supportAccess)
+    ),
     '',
     `## Active impersonation sessions (${impersonation.length})`,
     '',
-    ...table(['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS], delegationRows(impersonation)),
+    ...table(
+      ['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS],
+      delegationRows(impersonation)
+    ),
     '',
     '## Revocations',
     '',
