@@ -79,7 +79,7 @@ The Team owner, current Team managers and platform admins can open **View Detail
 - Turn on **Restrict built-in tools** to choose from the listed tools. Leaving every tool unchecked blocks those tools; turning the restriction off leaves them unrestricted.
 - Click **Save** to apply the policy, or **Reset to unrestricted** to remove the Team's restrictions. Unrestricted does not override platform or plan limits.
 
-The model picker refreshes when the selected Team's policy changes or its connection reconnects. Server checks enforce the policy when work starts and when governed tools choose a provider; an already running provider request is not cancelled by a policy edit.
+The model picker refreshes when you return to the tab and every few minutes, so it can briefly show a model the policy no longer allows. Server checks enforce the policy regardless, when work starts and when governed tools choose a provider; an already running provider request is not cancelled by a policy edit.
 
 ### Troubleshooting model policy
 
