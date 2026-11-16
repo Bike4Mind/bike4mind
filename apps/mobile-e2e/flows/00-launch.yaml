@@ -7,6 +7,7 @@ tags:
 - launchApp:
     clearState: true
     stopApp: true
+- runFlow: ../subflows/dismiss-anr.yaml
 - runFlow: ../subflows/skip-onboarding.yaml
 - extendedWaitUntil:
     visible:

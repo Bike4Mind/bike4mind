@@ -5,6 +5,7 @@ appId: com.bike4mind.app
 - launchApp:
     clearState: true
     stopApp: true
+- runFlow: dismiss-anr.yaml
 - runFlow: skip-onboarding.yaml
 - extendedWaitUntil:
     visible:

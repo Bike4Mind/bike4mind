@@ -158,7 +158,7 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          target: default
           profile: pixel_6
           disable-animations: true
           script: |
