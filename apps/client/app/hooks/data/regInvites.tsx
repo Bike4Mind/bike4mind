@@ -18,8 +18,9 @@ export function useGetRegInvites() {
 
 export function useUpdateRegInvites(options: { onSuccess?: () => void; onError?: () => void } = {}) {
   return useMutation({
-    mutationFn: async (data: Partial<IRegInviteDocument & { ids: string[]; status: RegInviteStatusType }>) =>
-      await updateRegInvites(data),
+    mutationFn: async (
+      data: Partial<IRegInviteDocument & { ids: string[]; status: RegInviteStatusType }> & { reason?: string }
+    ) => await updateRegInvites(data),
     onSuccess: () => {
       toast.success('Successfully updated registration invite(s)');
       if (options.onSuccess) options.onSuccess();

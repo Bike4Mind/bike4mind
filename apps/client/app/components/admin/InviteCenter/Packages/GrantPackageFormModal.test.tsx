@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { IGrantPackageDocument } from '@bike4mind/common';
@@ -12,6 +13,10 @@ const api = vi.hoisted(() => ({
   fetchGrantPackageLinks: vi.fn(),
   createRegInvites: vi.fn(),
   updateRegInvite: vi.fn(),
+  createPartnerSignupRule: vi.fn(),
+  updatePartnerSignupRule: vi.fn(),
+  searchOrganizations: vi.fn(),
+  fetchOrganizationById: vi.fn(),
 }));
 vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
   createGrantPackage: api.createGrantPackage,
@@ -23,6 +28,12 @@ vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
 vi.mock('@client/app/utils/regInviteAPICalls', () => ({
   createRegInvites: api.createRegInvites,
   updateRegInvite: api.updateRegInvite,
+}));
+vi.mock('@client/app/utils/partnerSignupRuleAPICalls', () => ({
+  createPartnerSignupRule: api.createPartnerSignupRule,
+  updatePartnerSignupRule: api.updatePartnerSignupRule,
+  searchOrganizations: api.searchOrganizations,
+  fetchOrganizationById: api.fetchOrganizationById,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const user = vi.hoisted(() => ({ current: { id: 'admin-1', isAdmin: true } as { id: string; isAdmin: boolean } }));
@@ -41,9 +52,9 @@ const pkg = {
   active: true,
   createdBy: 'admin-1',
 } as unknown as IGrantPackageDocument;
-const links = (invites: unknown[] = []) => ({
+const links = (invites: unknown[] = [], partnerRules: unknown[] = [], rulesTruncated = false) => ({
   invites: { data: invites, truncated: false },
-  partnerRules: { data: [], truncated: false },
+  partnerRules: { data: partnerRules, truncated: rulesTruncated },
 });
 
 const renderModal = (editing: IGrantPackageDocument | null) => {
@@ -301,7 +312,276 @@ describe('GrantPackageFormModal codes for a delegated admin', () => {
   it('explains codes are admin-only and offers no code controls or code fetch', async () => {
     renderModal(pkg);
     expect(screen.getByTestId('grant-package-codes-admin-only')).toBeInTheDocument();
+    expect(screen.getByTestId('grant-package-domains-admin-only')).toBeInTheDocument();
+    expect(screen.queryByTestId('grant-package-add-domain-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('grant-package-add-code-btn')).not.toBeInTheDocument();
     expect(api.fetchGrantPackageLinks).not.toHaveBeenCalled();
+  });
+});
+
+const ACME = { id: 'org1', name: 'Acme' };
+const rule = (domain: string, extra: Record<string, unknown> = {}) => ({
+  id: `r-${domain}`,
+  domain,
+  enabled: true,
+  organizationId: null,
+  ...extra,
+});
+const fillNewPackage = () => {
+  type('grant-package-name-input', 'Fresh');
+  type('grant-package-credits-input', '100');
+  type('grant-package-total-cap-input', '10');
+};
+const inputIn = (testId: string) => screen.getByTestId(testId).querySelector('input') as HTMLInputElement;
+const typeDomain = (domain: string) =>
+  fireEvent.change(inputIn('partner-rule-domain-input'), { target: { value: domain } });
+const pickAcme = async () => {
+  await userEvent.type(inputIn('partner-rule-org-input'), 'Ac');
+  await userEvent.click(await screen.findByRole('option', { name: 'Acme' }));
+};
+
+describe('GrantPackageFormModal partner domains', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.fetchGrantPackageLinks.mockResolvedValue(links());
+    api.createGrantPackage.mockResolvedValue({ ...pkg, id: 'p2', name: 'Fresh' });
+    api.updateGrantPackage.mockResolvedValue(pkg);
+    api.createRegInvites.mockResolvedValue([{ code: 'NEW1' }]);
+    api.createPartnerSignupRule.mockResolvedValue(rule('new.com'));
+    api.updatePartnerSignupRule.mockResolvedValue(rule('partner.com'));
+    api.searchOrganizations.mockResolvedValue([ACME]);
+    api.fetchOrganizationById.mockResolvedValue(ACME);
+  });
+
+  it('lists the linked domains with their state and organization', async () => {
+    api.fetchOrganizationById.mockImplementation(async (id: string) => (id === 'org1' ? ACME : null));
+    api.fetchGrantPackageLinks.mockResolvedValue(
+      links(
+        [],
+        [
+          rule('partner.com', { organizationId: 'org1' }),
+          rule('gone.com', { organizationId: 'org-gone', enabled: false }),
+          rule('solo.com'),
+        ],
+        true
+      )
+    );
+    renderModal(pkg);
+
+    await waitFor(() => expect(screen.getByTestId('grant-package-domain-row-partner.com')).toHaveTextContent('Acme'));
+    expect(screen.getByTestId('grant-package-domain-row-partner.com')).toHaveTextContent('Enabled');
+    await waitFor(() => expect(screen.getByTestId('grant-package-domain-row-gone.com')).toHaveTextContent('org-gone'));
+    expect(screen.getByTestId('grant-package-domain-row-gone.com')).toHaveTextContent('Disabled');
+    expect(screen.getByTestId('grant-package-domain-row-solo.com')).toHaveTextContent('No organization');
+    expect(screen.getByTestId('grant-package-domains-truncated')).toHaveTextContent('newest 3 domains');
+  });
+
+  it('says when no domain uses the package', async () => {
+    renderModal(pkg);
+    expect(await screen.findByTestId('grant-package-domains-empty')).toBeInTheDocument();
+  });
+
+  it('shows a failed links load', async () => {
+    api.fetchGrantPackageLinks.mockRejectedValue(new Error('links down'));
+    renderModal(pkg);
+    expect(await screen.findByTestId('grant-package-domains-load-error')).toHaveTextContent('links down');
+  });
+
+  it('adds a domain to the edited package straight away, linked to it', async () => {
+    renderModal(pkg);
+    await screen.findByTestId('grant-package-domains-empty');
+    fireEvent.click(screen.getByTestId('grant-package-add-domain-btn'));
+    expect(screen.getByTestId('grant-package-domain-add-save-btn')).toBeDisabled();
+    typeDomain(' new.com ');
+    await pickAcme();
+    fireEvent.click(inputIn('partner-rule-enabled-switch'));
+    fireEvent.click(screen.getByTestId('grant-package-domain-add-save-btn'));
+
+    await waitFor(() =>
+      expect(api.createPartnerSignupRule).toHaveBeenCalledWith({
+        domain: 'new.com',
+        entitlements: [],
+        signupCredits: 0,
+        enabled: false,
+        organizationId: 'org1',
+        grantPackageId: 'p1',
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId('grant-package-domain-add')).not.toBeInTheDocument());
+    await waitFor(() => expect(api.fetchGrantPackageLinks).toHaveBeenCalledTimes(2));
+    expect(api.updateGrantPackage).not.toHaveBeenCalled();
+  });
+
+  it('shows a domain already ruled elsewhere inline and keeps the editor open until cancelled', async () => {
+    api.createPartnerSignupRule.mockRejectedValue(new Error('A signup rule for "taken.com" already exists'));
+    renderModal(pkg);
+    await screen.findByTestId('grant-package-domains-empty');
+    fireEvent.click(screen.getByTestId('grant-package-add-domain-btn'));
+    typeDomain('taken.com');
+    fireEvent.click(screen.getByTestId('grant-package-domain-add-save-btn'));
+
+    expect(await screen.findByTestId('grant-package-domains-error')).toHaveTextContent('already exists');
+    expect(screen.getByTestId('grant-package-domain-add')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('grant-package-domain-add-cancel-btn'));
+    expect(screen.queryByTestId('grant-package-domain-add')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['expired', { expiresAt: new Date('2020-01-01') }, 'expired'],
+    ['inactive', { active: false }, 'inactive'],
+  ])('disables adding domains to an %s package', async (_label, patch, copy) => {
+    renderModal({ ...pkg, ...patch } as IGrantPackageDocument);
+    expect(screen.getByTestId('grant-package-add-domain-btn')).toBeDisabled();
+    expect(screen.getByTestId('grant-package-domains-closed')).toHaveTextContent(copy);
+  });
+
+  it('edits a linked domain, seeding its organization, and saves state and org', async () => {
+    api.fetchGrantPackageLinks.mockResolvedValue(links([], [rule('partner.com', { organizationId: 'org1' })]));
+    renderModal(pkg);
+    fireEvent.click(await screen.findByTestId('grant-package-domain-edit-btn-partner.com'));
+
+    expect(inputIn('partner-rule-domain-input')).toBeDisabled();
+    await waitFor(() => expect(inputIn('partner-rule-org-input')).toHaveValue('Acme'));
+    fireEvent.click(inputIn('partner-rule-enabled-switch'));
+    fireEvent.click(screen.getByTestId('grant-package-domain-edit-save-btn'));
+
+    await waitFor(() =>
+      expect(api.updatePartnerSignupRule).toHaveBeenCalledWith('r-partner.com', {
+        enabled: false,
+        organizationId: 'org1',
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId('grant-package-domain-edit')).not.toBeInTheDocument());
+  });
+
+  it('unlinks a domain from the package and shows a failed edit inline', async () => {
+    api.fetchGrantPackageLinks.mockResolvedValue(links([], [rule('solo.com', { organizationId: undefined })]));
+    api.updatePartnerSignupRule.mockRejectedValueOnce(new Error('Rule not found'));
+    renderModal(pkg);
+    fireEvent.click(await screen.findByTestId('grant-package-domain-edit-btn-solo.com'));
+
+    fireEvent.click(screen.getByTestId('grant-package-domain-edit-save-btn'));
+    expect(await screen.findByTestId('grant-package-domains-error')).toHaveTextContent('Rule not found');
+    expect(api.updatePartnerSignupRule).toHaveBeenLastCalledWith('r-solo.com', { enabled: true, organizationId: null });
+
+    fireEvent.click(screen.getByTestId('grant-package-domain-unlink-btn'));
+    await waitFor(() =>
+      expect(api.updatePartnerSignupRule).toHaveBeenLastCalledWith('r-solo.com', { grantPackageId: null })
+    );
+    await waitFor(() => expect(screen.queryByTestId('grant-package-domains-error')).not.toBeInTheDocument());
+    expect(api.fetchOrganizationById).not.toHaveBeenCalled();
+  });
+
+  it('discards a domain edit on cancel', async () => {
+    api.fetchGrantPackageLinks.mockResolvedValue(links([], [rule('solo.com')]));
+    renderModal(pkg);
+    fireEvent.click(await screen.findByTestId('grant-package-domain-edit-btn-solo.com'));
+    fireEvent.click(screen.getByTestId('grant-package-domain-edit-cancel-btn'));
+    expect(screen.queryByTestId('grant-package-domain-edit')).not.toBeInTheDocument();
+    expect(api.updatePartnerSignupRule).not.toHaveBeenCalled();
+  });
+
+  it('queues domains on a new package and creates them against it after the codes', async () => {
+    const props = renderModal(null);
+    fillNewPackage();
+    fireEvent.click(screen.getByTestId('grant-package-add-code-btn'));
+    for (const domain of ['keep.com', 'drop.com', 'off.com']) {
+      fireEvent.click(screen.getByTestId('grant-package-add-domain-btn'));
+      typeDomain(domain);
+      if (domain === 'off.com') fireEvent.click(inputIn('partner-rule-enabled-switch'));
+      fireEvent.click(screen.getByTestId('grant-package-domain-add-save-btn'));
+    }
+    const queued = screen.getByTestId('grant-package-domains-queued');
+    expect(queued).toHaveTextContent('off.com (disabled)');
+    fireEvent.click(screen.getByTestId('grant-package-queued-domain-remove-1'));
+    expect(queued).not.toHaveTextContent('drop.com');
+    expect(api.createPartnerSignupRule).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(
+      api.createPartnerSignupRule.mock.calls.map(([input]) => [input.domain, input.enabled, input.grantPackageId])
+    ).toEqual([
+      ['keep.com', true, 'p2'],
+      ['off.com', false, 'p2'],
+    ]);
+    expect(api.createRegInvites.mock.invocationCallOrder[0]).toBeLessThan(
+      api.createPartnerSignupRule.mock.invocationCallOrder[0]
+    );
+  });
+
+  it.each([
+    [
+      'a code',
+      () => api.createRegInvites.mockRejectedValue(new Error('boom')),
+      '1 of 1 codes and 1 of 1 partner domains',
+    ],
+    [
+      'a domain',
+      () => api.createPartnerSignupRule.mockRejectedValue(new Error('boom')),
+      'but 1 of 1 partner domains were not created',
+    ],
+  ])(
+    'on %s failure names every link left unsent and keeps editing the saved package',
+    async (_label, arrange, copy) => {
+      arrange();
+      const props = renderModal(null);
+      fillNewPackage();
+      fireEvent.click(screen.getByTestId('grant-package-add-code-btn'));
+      fireEvent.click(screen.getByTestId('grant-package-add-domain-btn'));
+      typeDomain('partner.com');
+      fireEvent.click(screen.getByTestId('grant-package-domain-add-save-btn'));
+      fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+
+      expect(await screen.findByTestId('grant-package-form-error')).toHaveTextContent(copy);
+      expect(props.onClose).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('grant-package-domains-queued')).not.toBeInTheDocument();
+      expect(await screen.findByTestId('grant-package-domains-empty')).toBeInTheDocument();
+    }
+  );
+});
+
+describe('GrantPackageFormModal package fields', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.fetchGrantPackageLinks.mockResolvedValue(links());
+  });
+
+  it('sends the daily cap and active state, and shows a failed save', async () => {
+    api.updateGrantPackage.mockRejectedValue(new Error('Package name taken'));
+    const props = renderModal(pkg);
+    type('grant-package-daily-cap-input', '5');
+    fireEvent.click(screen.getByTestId('grant-package-active-switch'));
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+
+    expect(await screen.findByTestId('grant-package-form-error')).toHaveTextContent('Package name taken');
+    expect(api.updateGrantPackage).toHaveBeenCalledWith('p1', expect.objectContaining({ dailyCap: 5, active: false }));
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stored daily cap and rejects caps below 1', () => {
+    renderModal({ ...pkg, dailyCap: 3 } as IGrantPackageDocument);
+    expect(screen.getByTestId('grant-package-daily-cap-input')).toHaveValue('3');
+    type('grant-package-total-cap-input', '0');
+    expect(screen.getByTestId('grant-package-save-btn')).toBeDisabled();
+  });
+
+  it('refuses a new package that already expired', () => {
+    renderModal(null);
+    fillNewPackage();
+    type('grant-package-expires-input', '2020-01-01');
+    expect(screen.getByTestId('grant-package-save-btn')).toBeDisabled();
+  });
+
+  it('sends the reason for a package over the large-grant threshold', async () => {
+    api.createGrantPackage.mockResolvedValue({ ...pkg, id: 'p2', name: 'Big' });
+    const props = renderModal(null);
+    type('grant-package-name-input', 'Big');
+    type('grant-package-credits-input', '60000');
+    fireEvent.click(screen.getByTestId('grant-package-reason-preset-0'));
+    fireEvent.click(screen.getByTestId('grant-package-save-btn'));
+
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(api.createGrantPackage).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.any(String) }));
   });
 });

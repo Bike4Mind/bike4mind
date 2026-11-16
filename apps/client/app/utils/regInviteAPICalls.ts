@@ -6,7 +6,9 @@ export const getRegInvitesFromServer = async () => {
   return response.data;
 };
 
-export const updateRegInvites = async (invite: Partial<IRegInviteDocument & { ids: string[] }>) => {
+export const updateRegInvites = async (
+  invite: Partial<IRegInviteDocument & { ids: string[] }> & { reason?: string }
+) => {
   const response = await api.post(`/api/reg-invites/update`, invite);
   return response.data;
 };

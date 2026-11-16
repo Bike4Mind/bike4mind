@@ -1,7 +1,15 @@
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
-import { apiCreateInviteCode } from './helpers/api';
+import {
+  apiCloseInviteCode,
+  apiCreateGrantPackage,
+  apiCreateInviteCode,
+  apiCreatePackageInviteCode,
+  apiDeactivateGrantPackage,
+  apiDeleteInviteCode,
+  apiDeletePartnerRuleByDomain,
+} from './helpers/api';
 
 // Generate unique test data to avoid collisions across runs
 const timestamp = Date.now();
@@ -71,6 +79,29 @@ test.describe('Admin - Navigation', () => {
     await expect(adminPage.page.getByTestId('invite-center-section-waitlist')).toBeVisible();
     await expect(page).not.toHaveURL(/inviteSection=/);
   });
+
+  for (const [slug, section] of [
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'packages'],
+  ]) {
+    test(`retired ${slug} link lands on the ${section} Invite Center section`, async ({
+      page,
+      basePage,
+      adminPage,
+    }) => {
+      await page.goto(`/admin?tab=${slug}`);
+      await page.waitForLoadState('domcontentloaded');
+      await basePage.dismissModals();
+
+      await expect(adminPage.page.getByTestId(`invite-center-section-${section}`)).toBeVisible({
+        timeout: TIMEOUTS.NAVIGATION,
+      });
+      await expect(page).toHaveURL(
+        new RegExp(`tab=waitlist.*inviteSection=${section}|inviteSection=${section}.*tab=waitlist`)
+      );
+      expect(await page.evaluate(() => window.location.search)).not.toContain(slug);
+    });
+  }
 });
 
 // Independent tests - can run in parallel within workers
@@ -219,5 +250,84 @@ test.describe.serial('Admin - Invite Code Management', () => {
       await adminPage.refreshInvites();
       await adminPage.waitForAvailableCount(availableBaseline);
     });
+  });
+});
+
+test.describe.serial('Admin - Grant package partner domains', () => {
+  test('adds, edits and unlinks a partner domain inside the package form', async ({ adminPage, request }) => {
+    const { accessToken } = getTestUsers().admin;
+    const domain = `pkg-${timestamp}-e2e.com`;
+    const { id: packageId } = await apiCreateGrantPackage(request, accessToken, `E2E domains ${timestamp}`);
+    const page = adminPage.page;
+
+    try {
+      await test.step('add a domain to the saved package', async () => {
+        await page.goto('/admin?tab=waitlist&inviteSection=packages');
+        await page.getByTestId(`grant-package-row-${packageId}`).click();
+        await expect(page.getByTestId('grant-package-domains-empty')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+        await page.getByTestId('grant-package-add-domain-btn').click();
+        await page.getByTestId('partner-rule-domain-input').locator('input').fill(domain);
+        await page.getByTestId('grant-package-domain-add-save-btn').click();
+        await expect(page.getByTestId(`grant-package-domain-row-${domain}`)).toContainText('Enabled', {
+          timeout: TIMEOUTS.ACTION,
+        });
+      });
+
+      await test.step('disable it from the package form', async () => {
+        await page.getByTestId(`grant-package-domain-edit-btn-${domain}`).click();
+        await page.getByTestId('partner-rule-enabled-switch').click();
+        await page.getByTestId('grant-package-domain-edit-save-btn').click();
+        await expect(page.getByTestId(`grant-package-domain-row-${domain}`)).toContainText('Disabled', {
+          timeout: TIMEOUTS.ACTION,
+        });
+      });
+
+      await test.step('unlink it; the rule stays listed under Partner signups', async () => {
+        await page.getByTestId(`grant-package-domain-edit-btn-${domain}`).click();
+        await page.getByTestId('grant-package-domain-unlink-btn').click();
+        await expect(page.getByTestId('grant-package-domains-empty')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+        await page.getByTestId('grant-package-cancel-btn').click();
+
+        await page.getByTestId('invite-center-sections-partners-btn').click();
+        await page.getByTestId('partner-rule-search-input').fill(domain);
+        await expect(page.getByTestId(`partner-rule-row-${domain}`)).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      });
+    } finally {
+      await apiDeletePartnerRuleByDomain(request, accessToken, domain);
+      await apiDeactivateGrantPackage(request, accessToken, packageId);
+    }
+  });
+
+  test('asks for a reason before reopening a closed package-linked code', async ({ adminPage, request }) => {
+    const { accessToken } = getTestUsers().admin;
+    const { id: packageId } = await apiCreateGrantPackage(request, accessToken, `E2E reopen ${timestamp}`);
+    const { id: inviteId, code } = await apiCreatePackageInviteCode(request, accessToken, packageId);
+    await apiCloseInviteCode(request, accessToken, inviteId);
+    const page = adminPage.page;
+
+    try {
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToInviteCenter();
+      await adminPage.switchToInviteCodesTab();
+      await page.getByTestId('invite-used-tab').click();
+      const row = page.getByTestId('invite-code-card').filter({ hasText: code });
+      await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+      await row.getByTestId(/^invite-row-actions-/).click();
+      await page.getByTestId('invite-set-open-btn').click();
+
+      const dialog = page.getByTestId('invite-reopen-reason-dialog');
+      await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+      await page.getByTestId('invite-reopen-reason-dialog-reason-input-preset-0').click();
+      await page.getByTestId('invite-reopen-reason-dialog-confirm-btn').click();
+      await expect(dialog).toBeHidden({ timeout: TIMEOUTS.ACTION });
+
+      await page.getByTestId('invite-available-tab').click();
+      await expect(page.getByTestId('invite-code-card').filter({ hasText: code })).toBeVisible({
+        timeout: TIMEOUTS.ACTION,
+      });
+    } finally {
+      await apiDeleteInviteCode(request, accessToken, inviteId);
+      await apiDeactivateGrantPackage(request, accessToken, packageId);
+    }
   });
 });

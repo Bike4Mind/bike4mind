@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
+import { adminTabLinkSearch } from '@client/app/components/admin/adminTabSlugs';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -33,7 +33,7 @@ export function useNavigationExecutor() {
           // Navigate first so the settings leave-page guard can preserve unsaved drafts.
           const tabIndex = parseInt(intent.target, 10);
           // Carry the slug so an already-mounted admin page doesn't lose ?tab= to a bare /admin
-          navigate({ to: '/admin', search: { tab: adminTabToSlug(tabIndex) } });
+          navigate({ to: '/admin', search: adminTabLinkSearch(tabIndex) });
           break;
         }
 

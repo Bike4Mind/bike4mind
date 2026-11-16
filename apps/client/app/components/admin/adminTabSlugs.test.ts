@@ -2,9 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import { ADMIN_WAITLIST_TAB_SLUG } from './adminTabParams';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import {
+  ADMIN_TAB_SLUG_REDIRECTS,
+  adminTabFromSlug,
+  adminTabLinkSearch,
+  adminTabRedirectFromSlug,
+  adminTabToSlug,
+} from './adminTabSlugs';
 
-const ALL_TABS = Object.values(AdminTab).filter((value): value is AdminTab => typeof value === 'number');
+const RETIRED_TABS = [AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules];
+const ALL_TABS = Object.values(AdminTab).filter(
+  (value): value is AdminTab => typeof value === 'number' && !RETIRED_TABS.includes(value)
+);
 
 describe('adminTabToSlug', () => {
   it('gives every AdminTab member a URL-safe slug', () => {
@@ -34,6 +43,51 @@ describe('adminTabToSlug', () => {
     expect(adminTabToSlug('some-injected-tab')).toBeUndefined();
     expect(adminTabToSlug(9999 as AdminTab)).toBeUndefined();
   });
+
+  it.each(RETIRED_TABS)('has no slug of its own for retired tab %s', tab => {
+    expect(adminTabToSlug(tab)).toBeUndefined();
+  });
+});
+
+describe('adminTabRedirectFromSlug', () => {
+  it.each([
+    ['subscribers', undefined],
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'packages'],
+  ])('sends %s to the waitlist tab with section %s', (slug, section) => {
+    const redirect = adminTabRedirectFromSlug(slug);
+    expect(redirect?.tab).toBe(AdminTab.Waitlist);
+    expect(redirect?.search?.inviteSection).toBe(section);
+    expect(adminTabFromSlug(slug)).toBeUndefined();
+  });
+
+  it('never redirects a current slug', () => {
+    for (const slug of ADMIN_TAB_SLUG_REDIRECTS.keys()) {
+      expect(ALL_TABS.map(tab => adminTabToSlug(tab))).not.toContain(slug);
+    }
+    expect(adminTabRedirectFromSlug('waitlist')).toBeUndefined();
+  });
+
+  it.each([undefined, '', 'toString', 'constructor', '__proto__'])('reports %j as no redirect', slug => {
+    expect(adminTabRedirectFromSlug(slug)).toBeUndefined();
+  });
+});
+
+describe('adminTabLinkSearch', () => {
+  it('links a current tab by its slug', () => {
+    expect(adminTabLinkSearch(AdminTab.Users)).toEqual({ tab: 'users' });
+  });
+
+  it.each([
+    [AdminTab.RegistrationInvites, 'invites'],
+    [AdminTab.PartnerSignupRules, 'packages'],
+  ])('links retired tab %s to its Invite Center section', (tab, section) => {
+    expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('names no tab for a value that is not a member', () => {
+    expect(adminTabLinkSearch(Number.NaN)).toEqual({ tab: undefined });
+  });
 });
 
 describe('adminTabFromSlug', () => {
@@ -45,9 +99,8 @@ describe('adminTabFromSlug', () => {
     expect(adminTabFromSlug(ADMIN_AUDIT_LOG_TAB_SLUG)).toBe(AdminTab.AuditLog);
   });
 
-  it('resolves the renamed waitlist slug and its legacy alias to the waitlist tab', () => {
+  it('resolves the renamed waitlist slug to the waitlist tab', () => {
     expect(adminTabFromSlug('waitlist')).toBe(AdminTab.Waitlist);
-    expect(adminTabFromSlug('subscribers')).toBe(AdminTab.Waitlist);
     expect(adminTabToSlug(AdminTab.Waitlist)).toBe(ADMIN_WAITLIST_TAB_SLUG);
     expect(ADMIN_WAITLIST_TAB_SLUG).toBe('waitlist');
   });

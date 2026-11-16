@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
 import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { adminTabFromSlug, adminTabRedirectFromSlug, adminTabToSlug } from './adminTabSlugs';
 import { adminSearchForTab } from './adminTabParams';
 
 /** The admin tab store holds non-member strings too, written by other surfaces. */
@@ -57,11 +57,22 @@ export function useAdminTabUrlSync(
   // load, a pasted link, back/forward). It also re-runs when a gate resolves, re-checking a slug
   // that arrived while the gate was still unknown.
   useEffect(() => {
+    const redirect = adminTabRedirectFromSlug(requestedTabSlug);
+    if (redirect) {
+      // Navigate only: the run for the rewritten slug selects the tab (see the contract above).
+      const slug = adminTabToSlug(redirect.tab) as string;
+      navigate({
+        to: '/admin',
+        search: previous => ({ ...adminSearchForTab(previous, slug), ...redirect.search }),
+        replace: true,
+      });
+      return;
+    }
     const requestedTab = resolveRequestedTab(requestedTabSlug);
     if (requestedTab !== undefined) {
       setActiveTab(requestedTab);
     }
-  }, [requestedTabSlug, setActiveTab, resolveRequestedTab]);
+  }, [requestedTabSlug, setActiveTab, resolveRequestedTab, navigate]);
 
   // A tab the console cannot render would leave a blank pane. The selection can come from the
   // URL, another surface, or a gate that resolved after the tab was chosen, so correct the store
@@ -83,7 +94,11 @@ export function useAdminTabUrlSync(
     // Never write a slug while the URL names a tab the console can render: on mount that would
     // overwrite a deep link before the effect above has applied it, including on StrictMode's
     // double-run, which a first-run flag misses.
-    if (!tabChanged && resolveRequestedTab(requestedTabSlug) !== undefined) return;
+    if (
+      !tabChanged &&
+      (resolveRequestedTab(requestedTabSlug) !== undefined || adminTabRedirectFromSlug(requestedTabSlug))
+    )
+      return;
     const slug = adminTabToSlug(activeTab);
     if (slug === undefined || slug === requestedTabSlug) return;
     navigate({

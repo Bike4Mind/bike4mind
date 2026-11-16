@@ -52,6 +52,15 @@ export class PartnerSignupRuleRepository
     };
   }
 
+  /** Newest rules linked to a grant package, at most `limit`, plus whether more exist. */
+  async listByGrantPackage(grantPackageId: string, limit: number) {
+    const rows = await this.model
+      .find({ grantPackageId })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1);
+    return { data: rows.slice(0, limit).map(row => row.toJSON()), truncated: rows.length > limit };
+  }
+
   async countByGrantPackage(ids: string[]) {
     const counts = new Map<string, { domains: number; enabledDomains: number }>();
     if (ids.length === 0) return counts;

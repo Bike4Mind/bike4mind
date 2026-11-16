@@ -32,8 +32,10 @@ import {
 } from '@client/app/components/admin/shared';
 import { createGrantPackage, updateGrantPackage } from '@client/app/utils/grantPackageAPICalls';
 import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
+import { createPartnerSignupRule } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
+import { GrantPackageDomainsSection, domainRuleInput, type QueuedDomain } from './GrantPackageDomainsSection';
 
 type Props = {
   open: boolean;
@@ -78,9 +80,10 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
   const [draft, setDraft] = useState<Draft>(() => toDraft(editing));
   const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const [formError, setFormError] = useState<string | null>(null);
-  // Set when a create saved the package but a queued code failed; the form then keeps editing that package.
+  // Set when a create saved the package but a queued code or domain failed; the form then keeps editing that package.
   const [saved, setSaved] = useState<IGrantPackageDocument | null>(null);
   const [queuedCodes, setQueuedCodes] = useState<QueuedCode[]>([]);
+  const [queuedDomains, setQueuedDomains] = useState<QueuedDomain[]>([]);
   const current = saved ?? editing;
 
   const creditsText = draft.credits.trim();
@@ -104,6 +107,8 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
 
   const save = useMutation({
     mutationFn: async () => {
+      // Unreachable while the save button is disabled for an invalid draft; kept so `valid` narrows the fields.
+      /* v8 ignore next */
       if (!valid) throw new Error('Fix the highlighted fields first');
       const body = {
         name: draft.name.trim(),
@@ -116,14 +121,32 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
       };
       if (current) return { pkg: await updateGrantPackage(current.id, body), failure: null };
       const pkg = await createGrantPackage(body);
-      for (const [index, code] of queuedCodes.entries()) {
+      // Codes first, then domains; the first failure stops the run and names everything left unsent.
+      const links = [
+        ...queuedCodes.map(code => ({
+          isCode: true,
+          create: () => createRegInvites({ multiple: 1, unlimitedUse: code.unlimitedUse, grantPackageId: pkg.id }),
+        })),
+        ...queuedDomains.map(domain => ({
+          isCode: false,
+          create: () => createPartnerSignupRule(domainRuleInput(domain, pkg.id)),
+        })),
+      ];
+      for (const [index, link] of links.entries()) {
         try {
-          await createRegInvites({ multiple: 1, unlimitedUse: code.unlimitedUse, grantPackageId: pkg.id });
+          await link.create();
         } catch (error) {
-          const missing = queuedCodes.length - index;
+          const missingCodes = links.slice(index).filter(rest => rest.isCode).length;
+          const missingDomains = links.length - index - missingCodes;
+          const missing = [
+            missingCodes > 0 ? `${missingCodes} of ${queuedCodes.length} codes` : null,
+            missingDomains > 0 ? `${missingDomains} of ${queuedDomains.length} partner domains` : null,
+          ]
+            .filter(Boolean)
+            .join(' and ');
           return {
             pkg,
-            failure: `Created ${pkg.name}, but ${missing} of ${queuedCodes.length} codes were not created: ${getErrorMessage(error)}. Add them below.`,
+            failure: `Created ${pkg.name}, but ${missing} were not created: ${getErrorMessage(error)}. Add them below.`,
           };
         }
       }
@@ -134,6 +157,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
       if (failure) {
         setSaved(pkg);
         setQueuedCodes([]);
+        setQueuedDomains([]);
         setFormError(failure);
         return;
       }
@@ -241,6 +265,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
             </>
           )}
           <GrantPackageCodesSection pkg={current} queued={queuedCodes} onQueuedChange={setQueuedCodes} />
+          <GrantPackageDomainsSection pkg={current} queued={queuedDomains} onQueuedChange={setQueuedDomains} />
           {blocked && <FormHelperText data-testid="grant-package-blocked-hint">{blocked}</FormHelperText>}
         </Stack>
       </DialogContent>

@@ -467,6 +467,75 @@ export async function apiDeleteInviteCode(
   }
 }
 
+async function adminApiCall<T>(
+  request: APIRequestContext,
+  adminToken: string,
+  method: 'get' | 'post' | 'patch' | 'delete',
+  path: string,
+  data?: unknown
+): Promise<T> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request[method](`${baseURL}${path}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    ...(data === undefined ? {} : { data }),
+  });
+  if (!response.ok()) {
+    throw new Error(`${method.toUpperCase()} ${path} failed: ${response.status()} ${response.statusText()}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** A small capped package, below the large-grant threshold so no reason is needed. */
+export async function apiCreateGrantPackage(
+  request: APIRequestContext,
+  adminToken: string,
+  name: string
+): Promise<{ id: string }> {
+  const pkg = await adminApiCall<{ id: string }>(request, adminToken, 'post', '/api/admin/grant-packages', {
+    name,
+    credits: 10,
+    totalCap: 1,
+    dailyCap: null,
+  });
+  return { id: pkg.id };
+}
+
+/** Packages are never deleted, so cleanup deactivates them. */
+export async function apiDeactivateGrantPackage(request: APIRequestContext, adminToken: string, id: string) {
+  await adminApiCall(request, adminToken, 'patch', `/api/admin/grant-packages/${id}`, { active: false });
+}
+
+export async function apiCreatePackageInviteCode(
+  request: APIRequestContext,
+  adminToken: string,
+  grantPackageId: string
+): Promise<{ id: string; code: string }> {
+  const invites = await adminApiCall<Array<{ _id?: string; id?: string; code: string }>>(
+    request,
+    adminToken,
+    'post',
+    '/api/reg-invites/create',
+    { multiple: 1, grantPackageId }
+  );
+  return { id: String(invites[0]._id ?? invites[0].id), code: invites[0].code };
+}
+
+export async function apiCloseInviteCode(request: APIRequestContext, adminToken: string, id: string) {
+  await adminApiCall(request, adminToken, 'post', '/api/reg-invites/update', { ids: [id], status: 'used' });
+}
+
+export async function apiDeletePartnerRuleByDomain(request: APIRequestContext, adminToken: string, domain: string) {
+  const rules = await adminApiCall<{ data: Array<{ id: string; domain: string }> }>(
+    request,
+    adminToken,
+    'get',
+    `/api/admin/partner-signup-rules?page=1&limit=10&search=${encodeURIComponent(domain)}`
+  );
+  for (const rule of rules.data.filter(match => match.domain === domain)) {
+    await adminApiCall(request, adminToken, 'delete', `/api/admin/partner-signup-rules/${rule.id}`);
+  }
+}
+
 export async function apiUpdateUserPreferences(
   request: APIRequestContext,
   token: string,

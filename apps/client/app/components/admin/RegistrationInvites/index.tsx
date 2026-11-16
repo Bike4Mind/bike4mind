@@ -24,6 +24,8 @@ import { EmptyState } from '../shared/EmptyState';
 import { ErrorState } from '../shared/ErrorState';
 import { LoadingState } from '../shared/LoadingState';
 import { ViewTabs } from '../shared/ViewTabs';
+import { ActionDialog } from '../shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '../shared/adminReason';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { InviteTable } from './components/InviteTable';
 import { CreateInviteModal } from './components/CreateInviteModal';
@@ -34,6 +36,12 @@ const BULK_STATUS_ACTIONS = [
   { status: RegInviteStatusType.waiting, label: 'Set Multiple Waiting', icon: <HourglassBottomIcon /> },
   { status: RegInviteStatusType.used, label: 'Set Multiple Used', icon: <CloseFullscreenIcon /> },
 ];
+
+// Mirrors isClosed in pages/api/reg-invites/update.ts, which refuses reopening these without a reason.
+const reopensPackageCode = (invite: RegInviteData, status: RegInviteStatusType) =>
+  !!invite.grantPackageId &&
+  status !== RegInviteStatusType.used &&
+  (invite.status === RegInviteStatusType.used || (!!invite.used && !invite.unlimitedUse));
 
 const ActionControls: React.FC<{
   onRefetch: () => void;
@@ -131,10 +139,12 @@ const RegistrationInvitesTab: React.FC = () => {
       void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
   });
+  const [pendingReopen, setPendingReopen] = useState<{ ids: string[]; status: RegInviteStatusType } | null>(null);
   const regInviteUpdate = useUpdateRegInvites({
     onSuccess: () => {
       query.refetch();
       setOperating(false);
+      setPendingReopen(null);
       setUnusedSelected([]);
       setUsedSelected([]);
     },
@@ -156,29 +166,20 @@ const RegistrationInvitesTab: React.FC = () => {
 
   const formatDate = (dateString: Date | string | undefined | null) => {
     if (!dateString) return 'N/A';
-
-    try {
-      const date = dateString instanceof Date ? dateString : new Date(dateString);
-      return isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
-    } catch {
-      return 'N/A';
-    }
+    const date = new Date(dateString);
+    return isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
   };
 
   const [now] = useState(() => Date.now());
 
   const sortedInvites = useMemo(() => {
-    if (!query?.data || query.data.length === 0) return { unused: [], used: [], availableCount: 0, usedCount: 0 };
+    if (!query.data || query.data.length === 0) return { unused: [], used: [], availableCount: 0, usedCount: 0 };
 
     const isAvailable = (invite: RegInviteData) => {
       if (invite.status === RegInviteStatusType.used) return false;
-      if (invite.unlimitedUse) {
-        if (invite.expiresAt) {
-          const expiresAtDate = invite.expiresAt instanceof Date ? invite.expiresAt : new Date(invite.expiresAt);
-          if (Number.isNaN(expiresAtDate.getTime())) return false;
-          return expiresAtDate.getTime() >= now;
-        }
-        return true;
+      if (invite.unlimitedUse && invite.expiresAt) {
+        const expiresAt = new Date(invite.expiresAt).getTime();
+        return !Number.isNaN(expiresAt) && expiresAt >= now;
       }
       return true;
     };
@@ -188,21 +189,17 @@ const RegistrationInvitesTab: React.FC = () => {
 
     const sortInvites = (invites: RegInviteData[], sortDirection: 'asc' | 'desc') => {
       return [...invites].sort((a, b) => {
-        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : null;
-        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : null;
+        const dateA = new Date(a.createdAt).getTime();
+        const dateB = new Date(b.createdAt).getTime();
 
-        if (dateA && dateB && !isNaN(dateA) && !isNaN(dateB)) {
+        if (!isNaN(dateA) && !isNaN(dateB)) {
           return sortDirection === 'desc' ? dateB - dateA : dateA - dateB;
         }
 
         // Otherwise, fall back to ObjectId timestamps
-        try {
-          const timestampA = a.id ? parseInt(a.id.substring(0, 8), 16) * 1000 : 0;
-          const timestampB = b.id ? parseInt(b.id.substring(0, 8), 16) * 1000 : 0;
-          return sortDirection === 'desc' ? timestampB - timestampA : timestampA - timestampB;
-        } catch (error) {
-          return 0;
-        }
+        const timestampA = parseInt(a.id.substring(0, 8), 16);
+        const timestampB = parseInt(b.id.substring(0, 8), 16);
+        return sortDirection === 'desc' ? timestampB - timestampA : timestampA - timestampB;
       });
     };
 
@@ -217,32 +214,23 @@ const RegistrationInvitesTab: React.FC = () => {
     };
   }, [query.data, unusedSortDirection, usedSortDirection, now]);
 
-  const hasInvites = (query?.data ?? []).length > 0;
+  const hasInvites = (query.data ?? []).length > 0;
 
-  const handleSubmit = async (data: CreateInviteFormData) => {
-    try {
-      regInviteCreate.mutate(data);
-    } catch {
-      console.log('Failed to create invites');
+  const handleSubmit = (data: CreateInviteFormData) => regInviteCreate.mutate(data);
+
+  const handleUpdate = (ids: string[], status: RegInviteStatusType) => {
+    const selected = new Set(ids);
+    if (query.data?.some(invite => selected.has(invite.id) && reopensPackageCode(invite, status))) {
+      setPendingReopen({ ids, status });
+      return;
     }
+    setOperating(true);
+    regInviteUpdate.mutate({ ids, status });
   };
 
-  const handleUpdate = async (ids: string[], status: RegInviteStatusType) => {
+  const handleDelete = (ids: string[]) => {
     setOperating(true);
-    try {
-      regInviteUpdate.mutate({ ids, status });
-    } catch {
-      console.log('Failed to update invites');
-    }
-  };
-
-  const handleDelete = async (ids: string[]) => {
-    setOperating(true);
-    try {
-      regInviteDelete.mutate(ids);
-    } catch {
-      console.log('Failed to delete invites');
-    }
+    regInviteDelete.mutate(ids);
   };
 
   const handleMultiDelete = () => {
@@ -390,6 +378,22 @@ const RegistrationInvitesTab: React.FC = () => {
             }
           />
         </>
+      )}
+      {pendingReopen && (
+        <ActionDialog
+          open
+          onClose={() => setPendingReopen(null)}
+          title="Reopen closed package codes"
+          description="Some of these codes redeem a grant package and were closed or used up. Reopening lets them hand out more of the package."
+          reasonPresets={ADMIN_REASON_PRESETS.grantPackage}
+          confirmLabel="Reopen codes"
+          pending={operating}
+          onConfirm={reason => {
+            setOperating(true);
+            regInviteUpdate.mutate({ ...pendingReopen, reason });
+          }}
+          data-testid="invite-reopen-reason-dialog"
+        />
       )}
       <CreateInviteModal onSubmit={handleSubmit} isLoading={regInviteCreate.isPending} />
       <DeleteConfirmModal onConfirm={handleMultiDelete} />

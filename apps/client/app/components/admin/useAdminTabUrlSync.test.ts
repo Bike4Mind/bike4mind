@@ -88,16 +88,23 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
-  it('replaces a legacy subscribers link with the waitlist slug', () => {
+  it('replaces a legacy subscribers link with the waitlist slug without setting the store', () => {
     routerMock.search = { tab: 'subscribers' };
 
-    const { result } = renderHook(() => useHarness(AdminTab.Users));
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Users));
 
-    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(result.current.activeTab).toBe(AdminTab.Users);
     expect(routerMock.navigate).toHaveBeenCalledTimes(1);
-    const { replace, search } = lastNavigation();
+    const { to, replace, search } = lastNavigation();
+    expect(to).toBe('/admin');
     expect(replace).toBe(true);
     expect(search({ tab: 'subscribers' }).tab).toBe('waitlist');
+
+    // The router commits the rewrite; the next run selects the tab and writes nothing more.
+    routerMock.search = { tab: 'waitlist' };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the invite section when rewriting a legacy subscribers link', () => {
@@ -109,6 +116,29 @@ describe('useAdminTabUrlSync', () => {
       tab: 'waitlist',
       inviteSection: 'pending',
     });
+  });
+
+  it.each([
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'packages'],
+  ])('rewrites the retired %s link to the %s Invite Center section, once', (slug, section) => {
+    routerMock.search = { tab: slug };
+
+    const { result, rerender } = renderHook(() => useHarness(AdminTab.Dashboard), { wrapper: StrictMode });
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+    for (const [call] of routerMock.navigate.mock.calls) {
+      expect(call.replace).toBe(true);
+      expect(call.search({ tab: slug, q: 'stale' })).toMatchObject({ tab: 'waitlist', inviteSection: section });
+      expect(call.search({ tab: slug, q: 'stale' }).q).toBeUndefined();
+    }
+    expect(routerMock.navigate).toHaveBeenCalled();
+
+    routerMock.navigate.mockClear();
+    routerMock.search = { tab: 'waitlist', inviteSection: section };
+    rerender();
+    expect(result.current.activeTab).toBe(AdminTab.Waitlist);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
   it('drops the invite section when leaving the waitlist tab', () => {
@@ -259,6 +289,12 @@ describe('useAdminTabUrlSync', () => {
 
     expect(result.current.activeTab).toBe(AdminTab.Modals);
     expect(lastNavigation().search({}).tab).toBe('modals');
+  });
+
+  it('leaves the store alone when no sidebar tab can render', () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, () => false));
+
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
   });
 
   it("applies a delegate's deep link when the store default is a tab they cannot render", () => {

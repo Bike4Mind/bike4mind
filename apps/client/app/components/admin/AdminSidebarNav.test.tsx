@@ -169,7 +169,7 @@ describe('SidebarNav', () => {
       renderNav();
 
       expect(screen.getByTestId('admin-users-tab-btn')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
       const more = screen.getByTestId('admin-sidebar-more-people-btn');
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveTextContent('More');
@@ -182,17 +182,17 @@ describe('SidebarNav', () => {
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'true');
       expect(more).toHaveTextContent('Less');
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
 
       fireEvent.click(more);
       expect(more).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.queryByRole('link', { name: 'Partner signups' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Signup domain holds' })).toBeNull();
     });
 
     it('keeps an active item past the cut visible', () => {
-      renderNav({ activeTab: AdminTab.PartnerSignupRules });
+      renderNav({ activeTab: AdminTab.SignupDomainHolds });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toHaveAttribute('aria-current', 'page');
       expect(screen.queryByRole('link', { name: 'Feedback' })).toBeNull();
     });
 
@@ -279,7 +279,7 @@ describe('SidebarNav', () => {
 
       fireEvent.change(filterInput(), { target: { value: 'people' } });
 
-      expect(screen.getByRole('link', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Signup domain holds' })).toBeInTheDocument();
       expect(screen.queryByTestId('admin-sidebar-more-people-btn')).toBeNull();
     });
 
@@ -466,7 +466,7 @@ describe('SidebarNav', () => {
 
       fireEvent.click(screen.getByTestId('admin-sidebar-rail-people-btn'));
 
-      expect(screen.getByRole('menuitem', { name: 'Partner signups' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Signup domain holds' })).toBeInTheDocument();
     });
   });
 });

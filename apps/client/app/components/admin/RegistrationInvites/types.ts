@@ -13,6 +13,8 @@ export interface RegInviteData {
   tags?: string[];
   startingCredits?: number;
   startingStorage?: number;
+  grantPackageId?: string;
+  used?: Date | string;
 }
 
 export interface InviteTableProps {
