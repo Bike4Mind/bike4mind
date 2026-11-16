@@ -19,8 +19,9 @@ node scripts/adaptive-effort-eval.mjs analyze /absolute/private/path/observation
 ```
 
 `plan` prints a stable SHA-256 corpus hash, 10 long-form, 10 reasoning and 10
-multi-step tool tasks and a 60-observation schedule. Even-numbered pairs start
-with default, odd-numbered pairs with medium. This counterbalances first-arm
+multi-step tool tasks and a 60-observation schedule. Pairs at even zero-based
+indices (longform-1, longform-3, ...) start with default; odd indices start with
+medium. This counterbalances first-arm
 position but is not randomized; report the order and temporal drift limitation.
 Prompts are candidates until classified **complex by the production path** with
 the real settings. If any fail that criterion, revise and freeze the corpus
@@ -82,8 +83,8 @@ exactly one observation per `(promptId, arm)`. Each row requires:
 Evidence references are operator attestations, not cryptographic verification of
 provider behavior or reviewer independence. `blindReviewId` is only checked for
 presence; the analyzer does not verify how outputs were blinded or paired.
-Review the linked evidence before
-accepting a study. Unknown provenance is a blocker, never a guessed value.
+Review the linked evidence before accepting a study. Unknown provenance is a
+blocker, never a guessed value.
 The analyzer rejects missing/duplicate rows, missing traces, non-complex queries,
 retries, restarts, mismatched settings/model, invalid timing and missing grades.
 Equal effective arms return `blocked-non-distinct-arms`. Quality/tool regressions
