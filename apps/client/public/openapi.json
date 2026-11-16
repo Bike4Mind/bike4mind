@@ -5612,7 +5612,8 @@
                         "reason": {
                           "type": "string",
                           "enum": [
-                            "requires_paid_plan"
+                            "requires_paid_plan",
+                            "org_policy"
                           ]
                         }
                       },
@@ -6116,7 +6117,8 @@
                         "reason": {
                           "type": "string",
                           "enum": [
-                            "requires_paid_plan"
+                            "requires_paid_plan",
+                            "org_policy"
                           ]
                         }
                       },

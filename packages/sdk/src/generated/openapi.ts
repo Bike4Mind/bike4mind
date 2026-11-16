@@ -4275,7 +4275,7 @@ export interface components {
             /** @enum {boolean} */
             locked: true;
             /** @enum {string} */
-            reason: 'requires_paid_plan';
+            reason: 'requires_paid_plan' | 'org_policy';
           };
         }[];
         locked_models: {
@@ -4435,7 +4435,7 @@ export interface components {
             /** @enum {boolean} */
             locked: true;
             /** @enum {string} */
-            reason: 'requires_paid_plan';
+            reason: 'requires_paid_plan' | 'org_policy';
           };
         }[];
         superseded_models: {
