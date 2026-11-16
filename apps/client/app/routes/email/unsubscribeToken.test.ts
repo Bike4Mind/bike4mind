@@ -20,24 +20,14 @@ describe('captureUnsubscribeToken', () => {
     expect(window.location.pathname + window.location.search + window.location.hash).toBe('/email/unsubscribe?x=1');
   });
 
-  it('accepts a legacy ?token= link before the cutoff and strips it from the address', async () => {
-    const { captureUnsubscribeToken, getCapturedUnsubscribeToken, LEGACY_QUERY_TOKEN_CUTOFF_MS } = await load();
+  it('accepts a legacy ?token= link and strips it from the address', async () => {
+    const { captureUnsubscribeToken, getCapturedUnsubscribeToken } = await load();
     window.history.replaceState(null, '', '/email/unsubscribe?token=legacy&x=1');
 
-    captureUnsubscribeToken(LEGACY_QUERY_TOKEN_CUTOFF_MS - 1);
+    captureUnsubscribeToken();
 
     expect(getCapturedUnsubscribeToken()).toBe('legacy');
     expect(window.location.pathname + window.location.search).toBe('/email/unsubscribe?x=1');
-  });
-
-  it('refuses a legacy ?token= link from the cutoff on, still stripping it', async () => {
-    const { captureUnsubscribeToken, getCapturedUnsubscribeToken, LEGACY_QUERY_TOKEN_CUTOFF_MS } = await load();
-    window.history.replaceState(null, '', '/email/unsubscribe?token=legacy');
-
-    captureUnsubscribeToken(LEGACY_QUERY_TOKEN_CUTOFF_MS);
-
-    expect(getCapturedUnsubscribeToken()).toBeUndefined();
-    expect(window.location.pathname + window.location.search).toBe('/email/unsubscribe');
   });
 
   it('prefers the fragment over a query token', async () => {
