@@ -49,6 +49,7 @@ export const ADMIN_REASON_PRESETS = {
   rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
+  rolePermissionsChange: ['Role scope updated for new duties', 'Role change on the team', 'Least-privilege cleanup'],
   permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],

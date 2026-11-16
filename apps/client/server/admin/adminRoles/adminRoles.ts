@@ -1,5 +1,4 @@
 import {
-  BadRequestError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -11,7 +10,7 @@ import {
   type AdminRoleUpdate,
 } from '@bike4mind/common';
 import type { IAdminRoleRepository } from '@bike4mind/database';
-import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 /**
@@ -110,9 +109,7 @@ export async function updateAdminRole(
     // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
     const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
     const requestedDiff = diff(before.permissions, requested);
-    if ((requestedDiff.granted.length > 0 || requestedDiff.revoked.length > 0) && !reason) {
-      throw new BadRequestError('A reason is required to change role permissions');
-    }
+    if (requestedDiff.granted.length > 0 || requestedDiff.revoked.length > 0) parseAdminActionReason(reason);
     if (requestedDiff.granted.length > 0) await deps.requireStepUp();
     let after: AdminRole | null;
     try {
