@@ -24,7 +24,7 @@ describe('stagingSeedUri', () => {
     expect(stagingSeedUri(isPreviewStageName('pr1234'), uri)).toBe(uri);
   });
 
-  it.each(['dev', 'staging', 'production', 'michaeljymsgutierrez'])('returns empty on stage %s', stage => {
+  it.each(['dev', 'staging', 'production', 'personal-stage'])('returns empty on stage %s', stage => {
     expect(stagingSeedUri(isPreviewStageName(stage), uri)).toBe('');
   });
 
