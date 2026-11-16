@@ -67,18 +67,11 @@ vi.mock('@bike4mind/services', () => ({
     getFreezeHistory: h.getFreezeHistory,
   },
 }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', async () => {
-  const { BadRequestError } = await import('@bike4mind/common');
-  return {
-    resolveAdminAuditFromRequest: h.resolveAudit,
-    parseAdminActionReason: (value: unknown) => {
-      if (typeof value !== 'string' || !value.trim() || value.length > 1000) {
-        throw new BadRequestError('A reason is required');
-      }
-      return value;
-    },
-  };
-});
+// Only the audit-actor resolution is stubbed; reason validation is the real shared rule.
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  resolveAdminAuditFromRequest: h.resolveAudit,
+}));
 
 import indexRoute from '../index';
 import liftRoute from '../lift';
@@ -183,6 +176,31 @@ describe('spend freeze admin routes', () => {
       await expect(
         run(indexRoute, { method: 'POST', body: validBody, user: { id: 'u', isAdmin: false } })
       ).rejects.toBeInstanceOf(ForbiddenError);
+    });
+  });
+
+  describe.each([
+    ['POST /spend-freezes', indexRoute],
+    ['POST /spend-freezes/lift', liftRoute],
+  ])('%s reason bounds', (_name, route) => {
+    it.each([
+      ['4-char', 'abcd'],
+      ['501-char', 'a'.repeat(501)],
+    ])('400s a %s reason', async (_label, reason) => {
+      await expect(run(route, { method: 'POST', body: { ...validBody, reason } })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(h.freezeSpend).not.toHaveBeenCalled();
+      expect(h.unfreezeSpend).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['5-char', 'abcde'],
+      ['500-char', 'a'.repeat(500)],
+    ])('accepts a %s reason', async (_label, reason) => {
+      const res = await run(route, { method: 'POST', body: { ...validBody, reason } });
+
+      expect(res._getStatusCode()).toBe(200);
     });
   });
 
