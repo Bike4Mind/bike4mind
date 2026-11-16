@@ -3,6 +3,10 @@ name: Mobile E2E
 # One Maestro suite (apps/mobile-e2e) run against the iOS simulator and the Android emulator. The two lanes are
 # separate jobs on purpose: a flow that breaks on one platform fails only that platform's job.
 #
+# CI cost: a PR runs only the lane(s) for the platform it touches, and only the smoke flows (about 5 minutes).
+# The full suite (live flows against staging) runs on pushes to main, nightly, on demand (Run workflow), and on
+# PRs that change the suite or this workflow itself.
+#
 # Staging test-user secrets (repo secrets; the lanes skip the live flows with a warning when they are unset):
 #   MOBILE_E2E_SERVER_URL      origin of the staging server the Debug builds sign in to
 #   MOBILE_E2E_EMAIL           a staging test user whose address ends in -e2e@test.com
@@ -23,7 +27,15 @@ on:
       - 'apps/android/**'
       - '.github/workflows/mobile-e2e.yml'
       - '.github/scripts/install-maestro.sh'
+  schedule:
+    - cron: '0 19 * * *'
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'smoke = smoke + fixture flows only; full = also the live flows against staging'
+        type: choice
+        options: [full, smoke]
+        default: full
 
 permissions:
   contents: read
@@ -38,8 +50,49 @@ env:
   MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
 
 jobs:
+  # Decides which lanes a run needs. PRs run only the platform they touch; every other trigger runs both.
+  changes:
+    name: Select lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ios: ${{ steps.select.outputs.ios }}
+      android: ${{ steps.select.outputs.android }}
+      scope: ${{ steps.select.outputs.scope }}
+    steps:
+      - name: Select lanes and scope
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISPATCH_SCOPE: ${{ inputs.scope }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "scope=${DISPATCH_SCOPE:-full}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" -q '.[].filename')
+          # The suite, the runner and the workflow itself exercise both platforms and need the full pass.
+          shared='^(apps/mobile-e2e/|\.github/workflows/mobile-e2e\.yml$|\.github/scripts/install-maestro\.sh$)'
+          ios=false; android=false; scope=smoke
+          if echo "$files" | grep -Eq '^apps/ios/'; then ios=true; fi
+          if echo "$files" | grep -Eq '^apps/android/'; then android=true; fi
+          if echo "$files" | grep -Eq "$shared"; then ios=true; android=true; scope=full; fi
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
+          echo "android=$android" >> "$GITHUB_OUTPUT"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+
   ios:
     name: iOS simulator
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -103,19 +156,22 @@ jobs:
         run: apps/mobile-e2e/scripts/run-flows.sh ios
         env:
           REPORT_DIR: ${{ github.workspace }}/maestro-report
-          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
-          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
-          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
+          MOBILE_E2E_SCOPE: ${{ needs.changes.outputs.scope }}
+          B4M_E2E_SERVER_URL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_SERVER_URL || '' }}
+          B4M_E2E_EMAIL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_EMAIL || '' }}
+          B4M_E2E_CLEANUP_SECRET: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_CLEANUP_SECRET || '' }}
 
       # Quarantined flows never fail the lane; their result is still visible in the job log and report.
       - name: Run quarantined flows (non-blocking)
+        if: needs.changes.outputs.scope == 'full'
         continue-on-error: true
         run: apps/mobile-e2e/scripts/run-flows.sh ios --quarantine
         env:
           REPORT_DIR: ${{ github.workspace }}/maestro-report
-          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
-          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
-          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
+          MOBILE_E2E_SCOPE: ${{ needs.changes.outputs.scope }}
+          B4M_E2E_SERVER_URL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_SERVER_URL || '' }}
+          B4M_E2E_EMAIL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_EMAIL || '' }}
+          B4M_E2E_CLEANUP_SECRET: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_CLEANUP_SECRET || '' }}
 
       - name: Upload Maestro report
         if: always()
@@ -127,6 +183,8 @@ jobs:
 
   android:
     name: Android emulator
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -152,7 +210,7 @@ jobs:
       - name: Build Debug app
         working-directory: apps/android
         env:
-          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
+          B4M_E2E_SERVER_URL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_SERVER_URL || '' }}
         run: |
           if [ -n "$B4M_E2E_SERVER_URL" ]; then
             ./gradlew --no-daemon :app:assembleDebug "-Pb4m.serverUrl=$B4M_E2E_SERVER_URL"
@@ -163,9 +221,10 @@ jobs:
       - name: Run flows on an emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
-          B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
-          B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
+          MOBILE_E2E_SCOPE: ${{ needs.changes.outputs.scope }}
+          B4M_E2E_SERVER_URL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_SERVER_URL || '' }}
+          B4M_E2E_EMAIL: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_EMAIL || '' }}
+          B4M_E2E_CLEANUP_SECRET: ${{ needs.changes.outputs.scope == 'full' && secrets.MOBILE_E2E_CLEANUP_SECRET || '' }}
         with:
           api-level: 34
           arch: x86_64
@@ -175,7 +234,7 @@ jobs:
           script: |
             adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
             REPORT_DIR="$GITHUB_WORKSPACE/maestro-report" apps/mobile-e2e/scripts/run-flows.sh android
-            REPORT_DIR="$GITHUB_WORKSPACE/maestro-report" apps/mobile-e2e/scripts/run-flows.sh android --quarantine || echo "::warning::Quarantined Android flows failed (non-blocking)"
+            [ "$MOBILE_E2E_SCOPE" != full ] || REPORT_DIR="$GITHUB_WORKSPACE/maestro-report" apps/mobile-e2e/scripts/run-flows.sh android --quarantine || echo "::warning::Quarantined Android flows failed (non-blocking)"
 
       - name: Upload Maestro report
         if: always()

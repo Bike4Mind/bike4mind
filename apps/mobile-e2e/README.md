@@ -52,6 +52,19 @@ apps/mobile-e2e/scripts/run-flows.sh android
 Install Maestro (needs a JDK 17+) from the pinned release in `.github/workflows/mobile-e2e.yml`, or see
 https://docs.maestro.dev. Reports and screenshots land in `$REPORT_DIR` (default `./report`, gitignored).
 
+## What runs when (CI cost)
+
+A 15-minute blocking lane on every mobile PR is too much, so `mobile-e2e.yml` is selective:
+
+| Trigger | Lanes | Flows |
+|---|---|---|
+| PR touching only `apps/ios` or only `apps/android` | that platform only | smoke + fixture (`MOBILE_E2E_SCOPE=smoke`, no staging secrets) |
+| PR touching `apps/mobile-e2e`, the runner or the workflow itself | both | full (live flows too) |
+| push to `main`, nightly schedule, Run workflow (choose `smoke` or `full`) | both | full by default |
+
+To get the full pass on a PR that only touches an app, run the workflow from the Actions tab on the PR branch.
+Locally, `MOBILE_E2E_SCOPE=smoke scripts/run-flows.sh <platform>` runs the fast pass.
+
 ## Flake policy: quarantine, never delete
 
 A flaky flow must not block merges and must not be deleted (deleting hides the drift it was written to catch).
