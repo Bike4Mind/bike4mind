@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { makeAuditEntry } from '@client/app/components/admin/AuditLog/shared/auditTestFixtures';
 import { buildProfile, ProfileTestWrapper } from '../profileTestUtils';
 
@@ -203,5 +203,67 @@ describe('OverviewTab file indexing window reset row', () => {
     mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
     renderTab();
     expect(screen.getByTestId('user-actions-reset-file-embedding-window')).toBeEnabled();
+  });
+});
+
+describe('OverviewTab Access card admin access', () => {
+  const SUPPORT_ROLE = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const BILLING_ROLE = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const SUPPORT_AGENT = { id: SUPPORT_ROLE, name: 'Support agent', permissions: ['support:read', 'users:moderate'] };
+
+  // Routes the role list to the admin-roles query and a benign payload to the timeline fetch.
+  const serveRoles = (roles: unknown[] | Error) =>
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.includes('admin-roles')) {
+        if (roles instanceof Error) throw roles;
+        return { data: { roles } };
+      }
+      return { data: { entries: [], nextCursor: null, notes: [], items: [] } };
+    });
+
+  const renderCard = (user: Parameters<typeof buildProfile>[0]) =>
+    render(
+      <OverviewTab user={buildProfile(user)} onAction={vi.fn()} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />,
+      { wrapper: ProfileTestWrapper }
+    );
+
+  beforeEach(() => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+  });
+
+  it('names held roles and labels each effective permission with its source', async () => {
+    serveRoles([SUPPORT_AGENT]);
+    renderCard({ adminPermissions: ['users:moderate'], adminRoleIds: [SUPPORT_ROLE] });
+
+    expect(await screen.findByText('Support agent')).toBeInTheDocument();
+    expect(await screen.findByTestId('user-profile-admin-permission-support-read')).toHaveTextContent(
+      'Support read (from Support agent)'
+    );
+    expect(screen.getByTestId('user-profile-admin-permission-users-moderate')).toHaveTextContent(
+      'Moderate users (from Support agent; granted directly)'
+    );
+  });
+
+  it('falls back to a role count when the list cannot name them', async () => {
+    serveRoles(new Error('boom'));
+    renderCard({ adminRoleIds: [SUPPORT_ROLE, BILLING_ROLE] });
+
+    await waitFor(() => expect(screen.getByTestId('user-profile-fact-admin-roles')).toHaveTextContent('2 roles'));
+  });
+
+  it('shows All (Super Admin) and no Edit for a Super Admin, with no Admin roles row', () => {
+    serveRoles([SUPPORT_AGENT]);
+    renderCard({ isAdmin: true, adminRoleIds: [SUPPORT_ROLE] });
+
+    expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('All (Super Admin)');
+    expect(screen.queryByTestId('user-profile-fact-admin-roles')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-admin-permissions-btn')).not.toBeInTheDocument();
+  });
+
+  it('offers no Edit on the viewer own profile', () => {
+    serveRoles([SUPPORT_AGENT]);
+    renderCard({ id: 'admin1', adminPermissions: ['support:read'] });
+
+    expect(screen.queryByTestId('user-profile-admin-permissions-btn')).not.toBeInTheDocument();
   });
 });
