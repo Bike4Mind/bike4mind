@@ -58,7 +58,7 @@ async function judgedMembers(
 }
 
 /** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
-async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
+export async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(

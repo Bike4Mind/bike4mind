@@ -180,7 +180,26 @@ const TOO_MANY_SIGNUPS = () =>
   );
 
 /**
- * Every active-eligible user (counted, not banned or AI-held, like the rollup) created in [start, end), old
+ * The active-eligible users (counted, not banned or AI-held, like the rollup) whose createdAt matches
+ * `createdAt`, with USER_FLAG_FIELDS plus `extraFields` selected. More than FUNNEL_COHORT_MAX matches is
+ * refused with a 422 rather than truncated. Shared by the activation funnel and the acquisition cohorts.
+ */
+export async function findEligibleSignups<T extends object = object>(
+  createdAt: Record<string, Date>,
+  { ctx, maxTimeMS, extraFields }: { ctx: CountingContext; maxTimeMS: number; extraFields?: string }
+): Promise<(UserFlags & { createdAt: Date } & T)[]> {
+  const users = await User.find({ createdAt })
+    .select(extraFields ? `${USER_FLAG_FIELDS} ${extraFields}` : USER_FLAG_FIELDS)
+    .hint({ createdAt: 1 })
+    .limit(FUNNEL_COHORT_MAX + 1)
+    .maxTimeMS(maxTimeMS)
+    .lean<(UserFlags & { createdAt: Date } & T)[]>();
+  if (users.length > FUNNEL_COHORT_MAX) throw TOO_MANY_SIGNUPS();
+  return users.filter(user => isActiveEligible(user, ctx));
+}
+
+/**
+ * Every active-eligible user created in [start, end), old
  * enough to judge at `now`, with the furthest step they reached. `withTooNew` also returns the ids of the
  * active-eligible users in the window who are not old enough yet; they are read separately so they never count
  * toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
@@ -201,16 +220,8 @@ export async function classifyFunnelCohort(
   // Each query's limit shrinks to what is left of `expiresAt`, so no read outlives the request's budget.
   const timeLeft = () =>
     expiresAt === undefined ? deadlineMs : Math.max(1, Math.min(deadlineMs, expiresAt - Date.now()));
-  const findEligible = async (createdAt: Record<string, Date>, ctx: CountingContext) => {
-    const users = await User.find({ createdAt })
-      .select(USER_FLAG_FIELDS)
-      .hint({ createdAt: 1 })
-      .limit(FUNNEL_COHORT_MAX + 1)
-      .maxTimeMS(timeLeft())
-      .lean<(UserFlags & { createdAt: Date })[]>();
-    if (users.length > FUNNEL_COHORT_MAX) throw TOO_MANY_SIGNUPS();
-    return users.filter(user => isActiveEligible(user, ctx));
-  };
+  const findEligible = (createdAt: Record<string, Date>, ctx: CountingContext) =>
+    findEligibleSignups(createdAt, { ctx, maxTimeMS: timeLeft() });
   const ctx = await loadCountingContext();
   const [counted, tooNew] = await Promise.all([
     findEligible({ $gte: start, $lt: end, $lte: judgeableUntil }, ctx),
