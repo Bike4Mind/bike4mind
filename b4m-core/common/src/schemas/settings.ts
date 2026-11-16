@@ -2362,6 +2362,7 @@ export const LiveopsTriageConfigSchema = z.object({
     .max(LT.regressionGracePeriodHours.max)
     .default(LT.regressionGracePeriodHours.default),
   autoCreateIssues: z.boolean().default(false),
+  approverIds: z.string().default(''),
 
   // Custom prompt template (optional)
   promptTemplate: z
