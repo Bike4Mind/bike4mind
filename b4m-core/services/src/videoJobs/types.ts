@@ -1,4 +1,5 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
@@ -82,6 +83,8 @@ export type CreateVideoJobInput = {
   source: GenerationJobSource;
   /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
   apiKeyId?: string;
+  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;

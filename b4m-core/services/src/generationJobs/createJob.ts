@@ -5,6 +5,7 @@ import {
   isGenerationJobOfKind,
   type GenerationJobCreateInput,
   type GenerationJobKind,
+  type ApiKeyBillingOwnerType,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
@@ -106,6 +107,7 @@ export async function holdJobCredits(
     requiredCredits: number;
     featureLabel: string;
     apiKeyId?: string | null;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
   },
   deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
 ): Promise<{ ok: true; hold: CreditHold | null } | InsufficientCredits> {
@@ -115,6 +117,7 @@ export async function holdJobCredits(
       userId: params.user.id,
       organizationId: params.user.organizationId,
       apiKeyId: params.apiKeyId,
+      apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
     });
     await assertSpendNotFrozen(subject, { db: { spendFreezes: deps.credits.spendFreezes } });
     return { ok: true, hold: null };
@@ -128,6 +131,7 @@ export async function holdJobCredits(
         featureLabel: params.featureLabel,
         logger: deps.logger,
         apiKeyId: params.apiKeyId,
+        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
       },
       deps.credits
     );

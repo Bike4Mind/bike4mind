@@ -1,3 +1,4 @@
+import { CreditHolderType } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
 
 const { holdCredits } = vi.hoisted(() => ({ holdCredits: vi.fn() }));
@@ -27,9 +28,15 @@ describe('imageCreditHolds.hold', () => {
       featureLabel: 'image generation',
       logger,
       apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.User,
     });
     expect(holdCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', organizationId: 'org1', apiKeyId: 'k1' }),
+      expect.objectContaining({
+        userId: 'u1',
+        organizationId: 'org1',
+        apiKeyId: 'k1',
+        apiKeyBillingOwnerType: CreditHolderType.User,
+      }),
       expect.objectContaining({ spendFreezes: expect.anything() })
     );
   });

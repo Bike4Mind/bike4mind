@@ -109,11 +109,10 @@ describe('checkSessionOperationalCredits', () => {
   });
 
   // Self-host does not meter credits, so it pays for no holder reads at all.
-  it('allows without reading the holder when credits are not enforced', async () => {
+  it('allows without reading the billing gates when credits are not enforced', async () => {
     mockCreditsEnforced.mockResolvedValueOnce(false);
 
     await expect(preflight()).resolves.toEqual({ allowed: true });
-    expect(mockFindUserById).not.toHaveBeenCalled();
     expect(mockBillingEnabled).not.toHaveBeenCalled();
   });
 
@@ -158,7 +157,6 @@ describe('checkSessionOperationalCredits', () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
 
     await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
-    expect(mockFindUserById).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error), {
       failedRead: 'settings',
     });
@@ -335,9 +333,17 @@ describe('checkSessionOperationalCredits', () => {
       await expect(preflight()).rejects.toThrow('mongo down');
     });
 
-    it('does not read the freeze when operational billing does not apply', async () => {
-      await preflight();
-      expect(mockFindFreeze).not.toHaveBeenCalled();
+    it('refuses a frozen payer even when operational billing does not apply', async () => {
+      mockFindFreeze.mockResolvedValueOnce(freeze);
+      const verdict = await preflight();
+      expect(verdict).toMatchObject({ allowed: false });
+    });
+
+    it('refuses a frozen payer even when credits are not enforced', async () => {
+      mockCreditsEnforced.mockResolvedValueOnce(false);
+      mockFindFreeze.mockResolvedValueOnce(freeze);
+      const verdict = await preflight();
+      expect(verdict).toMatchObject({ allowed: false });
     });
   });
 
@@ -628,6 +634,20 @@ describe('filterSessionIdsByOperationalCredits', () => {
       error,
       { failedRead: 'settings' }
     );
+  });
+
+  it('excludes the sessions, rather than throwing, when the freeze cannot be read', async () => {
+    mockFindFreeze.mockRejectedValueOnce(new Error('mongo down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: '' },
+      ],
+      logger
+    );
+    expect(allowed).toEqual(new Set(['s2']));
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it('skips all billing reads for an empty batch', async () => {

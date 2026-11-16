@@ -1,4 +1,5 @@
 import type {
+  ApiKeyBillingOwnerType,
   GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
@@ -96,6 +97,8 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */
   delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */

@@ -236,7 +236,11 @@ describe('holdCredits spend freeze', () => {
   const frozen = (scopeType: ISpendFreeze['scopeType']) => ({ scopeType, frozenAt: new Date('2026-11-16T00:00:00Z') });
   const hold = (
     adapters: CreditHoldAdapters,
-    extra: { organizationId?: string | null; apiKeyId?: string | null } = {}
+    extra: {
+      organizationId?: string | null;
+      apiKeyId?: string | null;
+      apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+    } = {}
   ) =>
     holdCredits(
       {
@@ -246,6 +250,7 @@ describe('holdCredits spend freeze', () => {
         featureLabel: 'video',
         logger,
         apiKeyId: extra.apiKeyId,
+        apiKeyBillingOwnerType: extra.apiKeyBillingOwnerType,
       },
       adapters
     );
@@ -275,7 +280,11 @@ describe('holdCredits spend freeze', () => {
   it('refuses a frozen API key when one is given, and checks it without the creator for an org-billed key', async () => {
     const { adapters, state } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.spendFreezes.findActiveForSubject).mockResolvedValueOnce(frozen('apiKey') as ISpendFreeze);
-    const error = await hold(adapters, { organizationId: 'o1', apiKeyId: 'k1' }).catch((err: unknown) => err);
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.Organization,
+    }).catch((err: unknown) => err);
     expect(isSpendFrozenError(error)).toBe(true);
     expect(state.org).toBe(100);
     expect(adapters.spendFreezes.findActiveForSubject).toHaveBeenCalledWith({
@@ -283,6 +292,30 @@ describe('holdCredits spend freeze', () => {
       organizationId: 'o1',
       apiKeyId: 'k1',
     });
+  });
+
+  it('refuses a frozen owner of a user-billed key whose spend lands on an organization', async () => {
+    const { adapters, state } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockImplementation(async subject =>
+      subject.userId === 'u1' ? (frozen('User') as ISpendFreeze) : null
+    );
+    const error = await hold(adapters, {
+      organizationId: 'o1',
+      apiKeyId: 'k1',
+      apiKeyBillingOwnerType: CreditHolderType.User,
+    }).catch((err: unknown) => err);
+    expect(isSpendFrozenError(error)).toBe(true);
+    expect(state.org).toBe(100);
+  });
+
+  it('lets an org-billed key through when only its creator is frozen', async () => {
+    const { adapters } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.spendFreezes.findActiveForSubject).mockImplementation(async subject =>
+      subject.userId === 'u1' ? (frozen('User') as ISpendFreeze) : null
+    );
+    await expect(
+      hold(adapters, { organizationId: 'o1', apiKeyId: 'k1', apiKeyBillingOwnerType: CreditHolderType.Organization })
+    ).resolves.toMatchObject({ ownerType: CreditHolderType.Organization });
   });
 
   it('checks the user alongside a user-billed key', async () => {

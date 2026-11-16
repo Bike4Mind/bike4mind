@@ -1,4 +1,4 @@
-import type { PersistedCreditHold } from '@bike4mind/common';
+import type { ApiKeyBillingOwnerType, PersistedCreditHold } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 
@@ -23,6 +23,7 @@ export type ImageCreditHolds = {
       requiredCredits: number;
       /** The UserApiKey the queued job was created with, if any; its freeze is checked too. */
       apiKeyId?: string;
+      apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     }
   ): Promise<PersistedCreditHold>;
   /** Return the whole hold: the run failed or stopped before producing a billable image. */

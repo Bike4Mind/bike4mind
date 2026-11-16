@@ -39,7 +39,7 @@ export function spendFrozenError(freeze: Pick<ISpendFreeze, 'scopeType' | 'froze
   });
 }
 
-export function isSpendFrozenError(error: unknown): boolean {
+export function isSpendFrozenError(error: unknown): error is ForbiddenError {
   return getQuestErrorCode(error) === SPEND_FROZEN_ERROR_CODE;
 }
 

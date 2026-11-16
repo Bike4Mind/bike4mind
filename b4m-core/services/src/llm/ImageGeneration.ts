@@ -23,6 +23,7 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  type ApiKeyBillingOwnerType,
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
@@ -130,6 +131,8 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   adminRoleWithheld: z.boolean().optional(),
   /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
   apiKeyId: z.string().optional(),
+  /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+  apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -299,9 +302,11 @@ export class ImageGenerationService {
     userId,
     adminRoleWithheld,
     apiKeyId,
+    apiKeyBillingOwnerType,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
   }) {
@@ -476,6 +481,7 @@ export class ImageGenerationService {
           generationId: uuidv4(),
           adminRoleWithheld,
           apiKeyId,
+          apiKeyBillingOwnerType,
         })
       );
 
@@ -838,6 +844,7 @@ export class ImageGenerationService {
       userId,
       adminRoleWithheld,
       apiKeyId,
+      apiKeyBillingOwnerType,
       prompt,
       model,
       n = 1,
@@ -1032,6 +1039,7 @@ export class ImageGenerationService {
           featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
           logger,
           apiKeyId,
+          apiKeyBillingOwnerType,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;

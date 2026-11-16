@@ -8,6 +8,7 @@ import {
   type ICreditHolderMethods,
   type IOrganizationDocument,
   type IUserDocument,
+  type ApiKeyBillingOwnerType,
   type ISpendFreezeRepository,
   type IUserRepository,
 } from '@bike4mind/common';
@@ -87,6 +88,8 @@ export async function holdCredits(
     logger: ILogger;
     /** The UserApiKey that authenticated the request, when there is one; its freeze is checked too. */
     apiKeyId?: string | null;
+    /** Whether that key bills its owner or an organization; only an org-billed key drops the user from the spend freeze check. */
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
     /** The caller already ran assertSpendNotFrozen for this reservation; skips the second lookup. */
     spendFreezeChecked?: boolean;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
@@ -114,9 +117,17 @@ export async function holdCredits(
   }
 
   if (!params.spendFreezeChecked) {
-    await assertSpendNotFrozen(spendFreezeSubjectForHold({ userId, organizationId, apiKeyId: params.apiKeyId }), {
-      db: { spendFreezes: adapters.spendFreezes },
-    });
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId,
+        apiKeyId: params.apiKeyId,
+        apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
+      }),
+      {
+        db: { spendFreezes: adapters.spendFreezes },
+      }
+    );
   }
 
   params.assertBillable?.(user, organization);

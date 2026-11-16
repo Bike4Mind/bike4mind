@@ -6,6 +6,7 @@ import {
   resolveLegacyImageModel,
   usdToCredits,
   validateImageRequest,
+  type ApiKeyBillingOwnerType,
   type ImageJobRequest,
   type ImageModelCatalogEntry,
   type StoredImageRequest,
@@ -158,7 +159,13 @@ export async function createImageJobs(
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
   const holds = await holdBatch(
     missingIndexes.length,
-    { enforceCredits, user: input.user, requiredCredits, apiKeyId: input.apiKeyId },
+    {
+      enforceCredits,
+      user: input.user,
+      requiredCredits,
+      apiKeyId: input.apiKeyId,
+      apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+    },
     deps
   );
   if (!holds.ok) return holds;
@@ -183,6 +190,7 @@ type HoldParams = {
   user: CreateImageJobsInput['user'];
   requiredCredits: number;
   apiKeyId?: string;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
 };
 
 async function holdBatch(

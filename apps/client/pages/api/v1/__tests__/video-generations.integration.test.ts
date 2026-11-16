@@ -338,6 +338,19 @@ describe('POST /api/v1/video-generations', () => {
       h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
     });
 
+    it('carries the key billing owner type to the job so only an org-billed key drops its creator from the freeze check', async () => {
+      orgKey();
+      const first = post(base);
+      await handler(first.req, first.res);
+      expect(h.createVideoJob.mock.calls[0][0].apiKeyBillingOwnerType).toBe(CreditHolderType.Organization);
+
+      h.createVideoJob.mockClear();
+      validateWithScopes([ApiKeyScope.AI_GENERATE], 'user-1', { billingOwnerType: CreditHolderType.User });
+      const second = post(base);
+      await handler(second.req, second.res);
+      expect(h.createVideoJob.mock.calls[0][0].apiKeyBillingOwnerType).toBe(CreditHolderType.User);
+    });
+
     it('bills the key org when the body names none', async () => {
       orgKey();
       const { req, res } = post(base);
