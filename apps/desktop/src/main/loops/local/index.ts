@@ -277,7 +277,11 @@ export function registerLocalLoops(
     }
     const updated = store.transaction(() => updateTicket(store, loopOf(ticket.loopId), ticket, fields, 'owner'));
     // Closed, blocked or reopened by the owner while a run works it: that run stops, uncounted.
-    if (ticket.status === 'in_progress' && updated.status !== 'in_progress') await scheduler.stopTicketRun(id);
+    // The owner's change is already stored, so a failed stop is logged rather than reported as a refused move.
+    if (ticket.status === 'in_progress' && updated.status !== 'in_progress')
+      await scheduler
+        .stopTicketRun(id)
+        .catch(err => logger.warn(`LOOPS: stopping the run of ticket ${id} failed: ${String(err)}`));
     scheduler.poke();
     return updated;
   });
