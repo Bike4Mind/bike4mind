@@ -5,6 +5,7 @@ import {
   ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
+  PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
@@ -39,6 +40,8 @@ declare global {
       createdAt?: Date;
       /** OAuth client that minted this key, present only for a federated exchange key. */
       oauthExchangeClientId?: string;
+      /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
+      payerStanding?: PayerStanding;
     }
 
     interface ApiKeyUsageInfo {
@@ -50,6 +53,8 @@ declare global {
       startTime: number;
       source: ApiKeyCompletionSource;
       ownerType: ApiKeyBillingOwnerType;
+      oauthClientId?: string;
+      payerStanding?: PayerStanding;
     }
 
     interface Request {

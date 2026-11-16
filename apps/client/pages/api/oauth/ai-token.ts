@@ -33,12 +33,14 @@ import {
   UserApiKeyAuditLog,
 } from '@bike4mind/database/auth';
 import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError, type PayerStanding } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { holdsPaidStanding } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { logAndRecordSideAppMintRefusal } from '@server/auth/oauthErrorLog';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
@@ -255,6 +257,17 @@ const handler = baseApi({ auth: false })
           .json({ error: SUBSCRIPTION_REQUIRED_ERROR, error_description: API_KEY_ACCESS_DENIED_MESSAGE });
       }
 
+      // Strict, so a failed org-seat read leaves the field off instead of labelling a seat holder unpaid.
+      let payerStanding: PayerStanding | undefined;
+      try {
+        const subscriptions = await getActiveSubscriptionsForUser(b4mUserId, { strict: true });
+        payerStanding = holdsPaidStanding(user, subscriptions) ? 'paid' : 'unpaid';
+      } catch (err) {
+        req.logger.warn(`[OAUTH_AI_TOKEN] payer standing unavailable for client ${client_id}; minting without it`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       const clientIp = getClientIp(req);
       const userAgent = req.headers['user-agent'];
 
@@ -299,6 +312,7 @@ const handler = baseApi({ auth: false })
               clientIP: clientIp,
               userAgent,
               oauthClientId: client_id,
+              ...(payerStanding ? { payerStanding } : {}),
             },
           },
           { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }

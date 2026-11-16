@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
   isApiKeyAccessAllowed: vi.fn(),
   tryIncrement: vi.fn(),
   logOAuthError: vi.fn(),
+  getActiveSubscriptions: vi.fn(),
+  createExchangeKey: vi.fn(),
+  auditCreate: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -37,16 +40,19 @@ vi.mock('@bike4mind/database/auth', () => ({
   oauthClientRepository: { verifyClientSecret: h.verifyClientSecret },
   userApiKeyRepository: { findByUserId: h.findByUserId },
   userRepository: { findById: h.findById },
-  UserApiKeyAuditLog: {},
+  UserApiKeyAuditLog: { create: h.auditCreate },
 }));
 vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'API_KEY_USER_CAP',
-  userApiKeyService: { MAX_EXCHANGE_KEY_TTL_MS: 3_600_000 },
+  userApiKeyService: { MAX_EXCHANGE_KEY_TTL_MS: 3_600_000, createExchangeUserApiKey: h.createExchangeKey },
 }));
 vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
   isApiKeyAccessAllowed: h.isApiKeyAccessAllowed,
+}));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: h.getActiveSubscriptions,
 }));
 vi.mock('@server/auth/federatedGrantGate', () => ({ checkFederatedGrant: h.checkFederatedGrant }));
 vi.mock('@server/auth/verifyFederatedIdToken', () => ({
@@ -63,6 +69,7 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 }));
 vi.mock('@server/auth/oauthErrorLog', () => ({ logAndRecordSideAppMintRefusal: h.logOAuthError }));
 
+import { TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import handler from '../ai-token';
 
@@ -242,5 +249,50 @@ describe('POST /api/oauth/ai-token account gates', () => {
       expect(serverErrors()).toHaveLength(1);
       expect(lastRefusal()).toMatchObject({ error: 'server_error', status: 500, verified: false });
     });
+  });
+});
+
+describe('POST /api/oauth/ai-token payer standing', () => {
+  const USER = { id: 'user-1', aupAcceptedVersion: 'v1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.verifyClientSecret.mockResolvedValue({ ...CLIENT, name: 'App' });
+    h.tryIncrement.mockResolvedValue({ success: true });
+    h.verifyFederatedIdToken.mockResolvedValue({ b4mUserId: 'user-1' });
+    h.checkFederatedGrant.mockResolvedValue(null);
+    h.isApiKeyAccessAllowed.mockResolvedValue(true);
+    h.getActiveSubscriptions.mockResolvedValue([]);
+    h.findByUserId.mockResolvedValue([]);
+    h.createExchangeKey.mockResolvedValue({ id: 'key-1', key: 'raw-key' });
+  });
+
+  const mintedMetadata = () => h.createExchangeKey.mock.calls[0][1].metadata;
+
+  it('stores paid for an account that bought credits', async () => {
+    h.findById.mockResolvedValue({ ...USER, lastCreditsPurchasedAt: new Date() });
+    expect((await run())._getStatusCode()).toBe(200);
+    expect(mintedMetadata()).toMatchObject({ oauthClientId: 'client-1', payerStanding: 'paid' });
+  });
+
+  it('stores paid for an account with an active paid subscription', async () => {
+    h.findById.mockResolvedValue(USER);
+    h.getActiveSubscriptions.mockResolvedValue([{ priceId: TEAM_PLAN.priceId }]);
+    expect((await run())._getStatusCode()).toBe(200);
+    expect(h.getActiveSubscriptions).toHaveBeenCalledWith('user-1', { strict: true });
+    expect(mintedMetadata().payerStanding).toBe('paid');
+  });
+
+  it('stores unpaid for an account with neither', async () => {
+    h.findById.mockResolvedValue(USER);
+    expect((await run())._getStatusCode()).toBe(200);
+    expect(mintedMetadata().payerStanding).toBe('unpaid');
+  });
+
+  it('mints without a standing when the subscription read fails', async () => {
+    h.findById.mockResolvedValue(USER);
+    h.getActiveSubscriptions.mockRejectedValue(new Error('read failed'));
+    expect((await run())._getStatusCode()).toBe(200);
+    expect(mintedMetadata()).not.toHaveProperty('payerStanding');
   });
 });

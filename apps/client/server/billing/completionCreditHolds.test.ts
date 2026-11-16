@@ -16,6 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: transaction,
   userRepository: { findById: findUser },
   newAccountSpendCapAdapters: { name: 'spend-cap-adapters' },
+  warmExchangeAttribution: vi.fn(),
 }));
 vi.mock('@bike4mind/services', () => ({ creditService: { assertNewAccountSpendWithinCap: assertSpendCap } }));
 import { createCompletionCreditHolds } from './completionCreditHolds';

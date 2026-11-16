@@ -188,7 +188,8 @@ export const authHolders = {
       { path: 'promptMeta.humanReview.reviewedBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Authors of cited works and attachments, not platform users.
-    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author'],
+    // The exchange key and connected app behind the quest: ids only, not credentials.
+    unrelatedPaths: ['promptMeta.citables.author', 'attachmentList.attachments.author', 'apiKeyId', 'oauthClientId'],
     // `signupActivity` is a retired field: never exported, though its `userId` is still anonymized.
     secretPaths: ['callback.url', 'signupActivity'],
   },
