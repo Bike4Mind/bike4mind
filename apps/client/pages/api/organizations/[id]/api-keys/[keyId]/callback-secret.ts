@@ -1,6 +1,6 @@
 // POST /api/organizations/:id/api-keys/:keyId/callback-secret
 // Mints or replaces an org-owned key's generation-callback signing secret and returns the plaintext
-// once. Owner, current manager or platform admin (verifyOrgAccess); browser session only.
+// once. Owner, current manager or platform admin (`manageKeys`); browser session only.
 
 import { ApiKeyStatus } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/database';
@@ -11,7 +11,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgOwnedKey } from '@server/organizations/orgApiKeys';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 
 const stringParam = (value: unknown): string => (typeof value === 'string' ? value : '');
 
@@ -23,7 +23,7 @@ function assertNotRevoked(key: { status: ApiKeyStatus }): void {
 
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, unknown, { id?: string; keyId?: string }>(async (req, res) => {
-    const org = await verifyOrgAccess(req.user!, stringParam(req.query.id));
+    const org = await verifyOrgPermission(req.user!, stringParam(req.query.id), 'manageKeys');
     const { serviceAccount, apiKey } = await loadOrgOwnedKey(org.id, stringParam(req.query.keyId));
     assertNotRevoked(apiKey);
 

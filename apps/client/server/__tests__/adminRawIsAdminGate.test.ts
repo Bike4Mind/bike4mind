@@ -49,14 +49,15 @@ const OUTSIDE_ADMIN_GATE = new Map<string, string>([
  */
 const PERMISSION_CHECKED_IN_HANDLER = new Map<string, string>([
   ['admin/session-usage.ts', 'org owner reads own org; otherwise requireAdminPermission support:read'],
-  ['admin/transactions.ts', 'org owner reads own ledger; verifyOrgAccess takes hasAdminPermission support:read'],
+  [
+    'admin/transactions.ts',
+    'viewUsage holder reads own ledger; verifyOrgPermission takes hasAdminPermission support:read',
+  ],
   ['admin/modal-tool.ts', 'CASL manage Modal, which settings:manage grants'],
   ['admin/llm-models/configurations.ts', 'GET serves every signed-in picker; PUT is assertFullAdmin on purpose'],
   ['admin/release-notes/index.ts', 'assertCanAdministerReleaseNotes also admits the release-notes:write job key'],
   ['admin/release-notes/[id].ts', 'assertCanAdministerReleaseNotes also admits the release-notes:write job key'],
 ]);
-
-const ORG_MANAGER_REASON = 'org owner or manager operates the org; verifyOrgAccess lets an admin through';
 
 /**
  * Routes that serve ordinary users (owner, org member, author, self) where `isAdmin` only widens
@@ -92,37 +93,107 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['inbox/read.ts', 'receiver marks own inbox read; admin may mark any'],
   ['memory/[kind]/[id].ts', 'lake owner deletes lake memory; admin override in canShredLakeMemory'],
   ['oauth/federated-admin.ts', "reports target user's isAdmin as data to a relying party; no caller admin gate"],
-  ['organizations/[id]/api-keys/[keyId]/callback-secret.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/[keyId]/index.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/[keyId]/revoke.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/[keyId]/rotate.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/index.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/members/[keyId]/revoke.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/members/index.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/api-keys/options.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/custom-mcp/connections.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/custom-mcp/policy.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/feedback-report.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/feedback-report/[feedbackId].ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/feedback-report/items.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/feedback-summary.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/github/connection.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/github/rate-limit.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/github/repositories.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/github/rotate-key.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/github/rotate-pat.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/github/test.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
+  [
+    'organizations/[id]/api-keys/[keyId]/callback-secret.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/[keyId]/index.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/[keyId]/revoke.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/[keyId]/rotate.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/index.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/members/[keyId]/revoke.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/members/index.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/api-keys/options.ts',
+    'manageKeys holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/custom-mcp/connections.ts',
+    'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/custom-mcp/policy.ts',
+    'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/feedback-report.ts',
+    'manageContent holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/feedback-report/[feedbackId].ts',
+    'manageContent holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/feedback-report/items.ts',
+    'manageContent holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/feedback-summary.ts',
+    'manageContent holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/retention.ts',
+    'org member reads the policy, managePolicies holder writes it; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/upload-logo.ts',
+    'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/connection.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/rate-limit.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/repositories.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/rotate-key.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/rotate-pat.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  [
+    'organizations/[id]/github/test.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
   [
     'organizations/[id]/integrations/slack/channels.ts',
-    'org owner manages the org; verifyOrgOwner lets an admin through',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
   ],
   [
     'organizations/[id]/integrations/slack/connect.ts',
-    'org owner manages the org; verifyOrgOwner lets an admin through',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
   ],
-  ['organizations/[id]/integrations/slack/index.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/invoices.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
+  [
+    'organizations/[id]/integrations/slack/index.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
+  ['organizations/[id]/invoices.ts', 'manageBilling holder manages the org; verifyOrgPermission lets an admin through'],
   [
     'organizations/[id]/member-credit-budget.ts',
     'isAdmin only passed to toSafeOrganization; org authority checked in service',
@@ -137,28 +208,28 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   [
-    'organizations/[id]/retention.ts',
-    'org member reads the policy, owner or manager writes it; verifyOrgAccess lets an admin through',
-  ],
-  [
     'organizations/[id]/storage-usage.ts',
     'owner, manager or appointed admin reads storage; verifyOrgAdminRead lets an admin through',
   ],
-  ['organizations/[id]/upload-logo.ts', ORG_MANAGER_REASON],
-  ['organizations/[id]/webhooks/github.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
+  [
+    'organizations/[id]/webhooks/github.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
   [
     'organizations/[id]/webhooks/github/replay-dlq.ts',
-    'org owner manages the org; verifyOrgOwner lets an admin through',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
   ],
   [
     'organizations/[id]/webhooks/github/rotate-secret.ts',
-    'org owner manages the org; verifyOrgOwner lets an admin through',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
   ],
-  ['organizations/[id]/webhooks/github/test.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
+  [
+    'organizations/[id]/webhooks/github/test.ts',
+    'manageIntegrations holder manages the org; verifyOrgPermission lets an admin through',
+  ],
   ['organizations/stats.ts', 'members see own orgs stats; admin sees all orgs'],
-  ['organizations/subscriptions/subscribe.ts', 'org owner (verifyOrgOwner) subscribes the org'],
-  ['organizations/subscriptions/update-seats.ts', 'billing owner or admin may change seats'],
-  ['organizations/users.ts', 'org owner/manager reports; admin may pick another org via verifyOrgAccess'],
+  ['organizations/subscriptions/subscribe.ts', 'manageBilling holder (verifyOrgPermission) subscribes the org'],
+  ['organizations/users.ts', 'manageMembers holder reports; admin may pick another org via verifyOrgPermission'],
   ['otc/verify.ts', 'sign-in; reads the signing-in account isAdmin as data for the self-host first-admin bootstrap'],
   [
     'publish/[publicId]/restore.ts',
