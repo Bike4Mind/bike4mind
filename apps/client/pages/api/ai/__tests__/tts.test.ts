@@ -82,9 +82,10 @@ const AUDIO = Buffer.from([1, 2, 3]);
 const run = (
   body: Record<string, unknown>,
   user: Record<string, unknown> | undefined = { id: 'u1' },
-  apiKeyInfo?: Record<string, unknown>
+  apiKeyInfo?: Record<string, unknown>,
+  headers: Record<string, string | string[]> = {}
 ) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user, logger, ...(apiKeyInfo && { apiKeyInfo }) });
   return { res, logger, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -395,9 +396,10 @@ describe('POST /api/ai/tts', () => {
         { output: undefined }
       )
     );
-    const { res, logger, promise } = run({ text: 'hi' });
+    const { res, logger, promise } = run({ text: 'hi' }, undefined, undefined, { prefer: 'respond-async, wait=10' });
     await promise;
     expect(res._getStatusCode()).toBe(202);
+    expect(res.getHeader('Preference-Applied')).toBe('respond-async');
     const body = SpeechGenerationSchema.parse(res._getJSONData());
     expect(body).toMatchObject({ id: 'job-1', state: 'running', text: 'hi', output: null, error: null });
     expect(mocks.generationJobFindById).toHaveBeenCalledWith('job-1');
@@ -406,6 +408,23 @@ describe('POST /api/ai/tts', () => {
       expect.stringContaining('background'),
       expect.objectContaining({ jobId: 'job-1' })
     );
+  });
+
+  it('answers 504 request_timeout naming the job, and leaves it running, when the caller did not opt in to 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(speechJob({ state: 'running' }, { output: undefined }));
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(504);
+    expect(res._getJSONData()).toEqual({
+      error: expect.stringContaining('Retrying makes and bills a second clip'),
+      provider: 'openai',
+      errorCode: 'request_timeout',
+      jobId: 'job-1',
+    });
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res.getHeader('Preference-Applied')).toBeUndefined();
+    expect(mocks.requestAudioJobCancel).not.toHaveBeenCalled();
   });
 
   it('waits only for what the request has left since it arrived, keeping time to deliver', async () => {

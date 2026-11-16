@@ -188,6 +188,8 @@ export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchem
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(TTS_ERROR_CODES).optional(),
+  /** The job a 504 left running (see unretrievableAudioResponse). */
+  jobId: z.string().optional(),
 });
 
 /**

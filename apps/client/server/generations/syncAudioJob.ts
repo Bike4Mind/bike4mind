@@ -1,3 +1,4 @@
+import type { IncomingHttpHeaders } from 'node:http';
 import {
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   TERMINAL_GENERATION_JOB_STATES,
@@ -40,11 +41,31 @@ export function audioJobInlineOptions(receivedAt: Date | undefined, minStepMs: n
   } satisfies RunJobInlineOptions;
 }
 
+/**
+ * Whether the caller sent `Prefer: respond-async` (RFC 7240), the opt-in to a 202 job body for a clip that outlasts
+ * the request. The header may repeat or be comma-separated, tokens are case-insensitive and may carry parameters.
+ */
+export function prefersRespondAsync(req: { headers: IncomingHttpHeaders }): boolean {
+  const raw = req.headers.prefer;
+  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+  return values
+    .flatMap(value => value.split(','))
+    .some(preference => preference.split(';')[0].split('=')[0].trim().toLowerCase() === 'respond-async');
+}
+
+/** Response header naming the job a 504 left running, for callers that read headers rather than the body. */
+export const GENERATION_JOB_ID_HEADER = 'X-B4M-Generation-Job-Id';
+
+/** The message of the 504 for a clip still being saved to Files that the caller did not opt in to a 202 for. */
+export const STILL_GENERATING_MESSAGE =
+  'The clip is still being generated and will be saved to your Files when it finishes. It is billed only if it ' +
+  'succeeds. Retrying makes and bills a second clip.';
+
 type AudioJobKind = 'speech' | 'sound_effect';
 
 /**
  * How the inline wait for an audio job ended. `ended`: terminal, to deliver or map to an error. `outlasting`: still
- * going and saving to Files, answered 202. `unretrievable`: still going but not saving to Files, so nothing could
+ * going and saving to Files, answered 202 to a caller that prefers respond-async and 504 to any other. `unretrievable`: still going but not saving to Files, so nothing could
  * pick the clip up later; a cancel was requested (refused once its provider call has started). `gone`: no such job.
  */
 export type InlineAudioJobOutcome<K extends AudioJobKind> =

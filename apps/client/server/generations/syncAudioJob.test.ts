@@ -22,6 +22,7 @@ import {
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   isRateLimitedFailure,
+  prefersRespondAsync,
   providerStatusOf,
   retryAfterSecondsOf,
   savedCopyOf,
@@ -238,5 +239,26 @@ describe('rate-limited failures', () => {
   it('reads the provider status from the job error, since rawProviderError is never read back', () => {
     const job = { ...failedJob({ code: 'provider_error', message: 'x' }), rawProviderError: { status: 429 } };
     expect(providerStatusOf(job)).toBeUndefined();
+  });
+});
+
+describe('prefersRespondAsync', () => {
+  it.each([
+    ['respond-async', true],
+    ['Respond-Async', true],
+    ['respond-async, wait=10', true],
+    ['return=minimal, respond-async', true],
+    ['wait=5; respond-async', false],
+    ['respond-async=1', true],
+    ['return=minimal', false],
+    ['not-respond-async', false],
+    ['', false],
+  ])('reads %j as %s', (prefer, expected) => {
+    expect(prefersRespondAsync({ headers: { prefer } })).toBe(expected);
+  });
+
+  it('reads a repeated header and an absent one', () => {
+    expect(prefersRespondAsync({ headers: { prefer: ['return=minimal', 'respond-async'] } })).toBe(true);
+    expect(prefersRespondAsync({ headers: {} })).toBe(false);
   });
 });

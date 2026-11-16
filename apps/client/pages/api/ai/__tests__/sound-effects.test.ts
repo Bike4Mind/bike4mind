@@ -83,9 +83,10 @@ const AUDIO = Buffer.from('boom');
 const run = (
   body: unknown,
   apiKeyInfo?: Record<string, unknown>,
-  user: Record<string, unknown> = { id: 'u1', organizationId: null }
+  user: Record<string, unknown> = { id: 'u1', organizationId: null },
+  headers: Record<string, string | string[]> = {}
 ) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   const logger = { error: vi.fn(), warn: vi.fn() };
   Object.assign(req, { user, logger, ...(apiKeyInfo && { apiKeyInfo }) });
   return { res, logger, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -340,9 +341,12 @@ describe('POST /api/ai/sound-effects', () => {
         { output: undefined }
       )
     );
-    const { res, logger, promise } = run({ text: 'door creak' });
+    const { res, logger, promise } = run({ text: 'door creak' }, undefined, undefined, {
+      prefer: ['return=minimal', 'Respond-Async'],
+    });
     await promise;
     expect(res._getStatusCode()).toBe(202);
+    expect(res.getHeader('Preference-Applied')).toBe('respond-async');
     const body = SoundEffectGenerationSchema.parse(res._getJSONData());
     expect(body).toMatchObject({ id: 'job-1', state: 'running', text: 'door creak', output: null, error: null });
     expect(mocks.generationJobFindById).toHaveBeenCalledWith('job-1');
@@ -365,6 +369,22 @@ describe('POST /api/ai/sound-effects', () => {
     // 58s from arrival, less 3s to read the clip back and answer, less the 10s already gone.
     expect(timeoutMs).toBeGreaterThan(44_000);
     expect(timeoutMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it('answers 504 request_timeout naming the job, and leaves it running, when the caller did not opt in to 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(soundJob({ state: 'running' }, { output: undefined }));
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(504);
+    expect(res._getJSONData()).toEqual({
+      error: expect.stringContaining('Retrying makes and bills a second clip'),
+      errorCode: 'request_timeout',
+      jobId: 'job-1',
+    });
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res.getHeader('Preference-Applied')).toBeUndefined();
+    expect(mocks.requestAudioJobCancel).not.toHaveBeenCalled();
   });
 
   it('delivers a job that ended just after the inline wait gave up on it, instead of answering 202', async () => {

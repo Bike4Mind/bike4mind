@@ -3677,6 +3677,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3712,6 +3715,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3821,6 +3827,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3887,6 +3896,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3922,6 +3934,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3957,6 +3972,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -3992,6 +4010,9 @@
               "provider_rejected",
               "request_timeout"
             ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -4647,6 +4668,34 @@
               "insufficient_credits",
               "spend_cap_exceeded"
             ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "generateSoundEffectResponse504": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "request_timeout"
+            ]
+          },
+          "jobId": {
+            "type": "string"
           }
         },
         "required": [
@@ -28584,17 +28633,16 @@
             }
           },
           "202": {
-            "description": "The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/synthesizeSpeechResponse202"
-                }
-              }
-            },
+            "description": "Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Preference-Applied": {
+                "description": "`respond-async`, confirming the opt-in.",
                 "schema": {
                   "type": "string"
                 }
@@ -28633,6 +28681,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse202"
                 }
               }
             }
@@ -29237,17 +29292,16 @@
             }
           },
           "504": {
-            "description": "The speech took longer than this request can wait, and it would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. Tagged `errorCode: \"request_timeout\"`. The generation is cancelled and its credits returned, unless the provider had already started it: that one finishes and is billed. Retrying generates a new clip.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/synthesizeSpeechResponse504"
-                }
-              }
-            },
+            "description": "The speech took longer than this request can wait. Tagged `errorCode: \"request_timeout\"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Generation-Job-Id": {
+                "description": "The job left running (case 2 only).",
                 "schema": {
                   "type": "string"
                 }
@@ -29286,6 +29340,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse504"
                 }
               }
             }
@@ -30261,17 +30322,16 @@
             }
           },
           "202": {
-            "description": "The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/generateSoundEffectResponse202"
-                }
-              }
-            },
+            "description": "Returned only when the request sends `Prefer: respond-async` (RFC 7240), and echoed by `Preference-Applied: respond-async`. The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Preference-Applied": {
+                "description": "`respond-async`, confirming the opt-in.",
                 "schema": {
                   "type": "string"
                 }
@@ -30310,6 +30370,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse202"
                 }
               }
             }
@@ -30926,17 +30993,16 @@
             }
           },
           "504": {
-            "description": "The sound effect took longer than this request can wait, and it would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. Tagged `errorCode: \"request_timeout\"`. The generation is cancelled and its credits returned, unless the provider had already started it: that one finishes and is billed. Retrying generates a new clip.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "The sound effect took longer than this request can wait. Tagged `errorCode: \"request_timeout\"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Generation-Job-Id": {
+                "description": "The job left running (case 2 only).",
                 "schema": {
                   "type": "string"
                 }
@@ -30975,6 +31041,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse504"
                 }
               }
             }

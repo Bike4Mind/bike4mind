@@ -85,7 +85,8 @@ export function generatedAudioResponses(options: {
 /**
  * The 202 a generated-audio endpoint answers when the clip outlasts the request. `noun` names the clip, `schema` is
  * the endpoint's job resource. Speech and sound effects only: music has its own job API. Answered only for a clip
- * that is being saved to the file browser, the one place it can be picked up later (see unretrievableAudioResponse).
+ * that is being saved to the file browser, the one place it can be picked up later, and only to a caller that sent
+ * `Prefer: respond-async`; any other caller gets the 504 (see unretrievableAudioResponse).
  */
 export function outlastedAudioResponse(options: {
   noun: string;
@@ -94,27 +95,35 @@ export function outlastedAudioResponse(options: {
 }): ResponseSpec {
   return {
     description:
-      `The ${options.noun} took longer than this request can wait (about 55 seconds), so no audio is returned. ` +
-      'Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the ' +
+      `Returned only when the request sends \`Prefer: respond-async\` (RFC 7240), and echoed by ` +
+      `\`Preference-Applied: respond-async\`. The ${options.noun} took longer than this request can wait ` +
+      '(about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the ' +
       'file browser if your storage quota still has room for it. Credits are settled only if it succeeds and ' +
       'returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of ' +
       'retrying, which would generate (and bill) a second clip.',
+    headers: { 'Preference-Applied': '`respond-async`, confirming the opt-in.' },
     schema: options.schema,
     example: options.example,
   };
 }
 
 /**
- * The 504 a speech or sound-effect endpoint answers when the clip outlasts the request and would not be saved to
- * the file browser (a `preview` call, or a storage quota with no room), so nothing could ever retrieve it.
+ * The 504 a speech or sound-effect endpoint answers when the clip outlasts the request and either would not be saved
+ * to the file browser (a `preview` call, or a storage quota with no room), so nothing could ever retrieve it, or is
+ * being saved but the caller did not send `Prefer: respond-async`, so it could not use the 202.
  */
 export function unretrievableAudioResponse(options: { noun: string; schema: z.ZodTypeAny }): ResponseSpec {
   return {
     description:
-      `The ${options.noun} took longer than this request can wait, and it would not be saved to the file ` +
-      'browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. ' +
-      'Tagged `errorCode: "request_timeout"`. The generation is cancelled and its credits returned, unless the ' +
-      'provider had already started it: that one finishes and is billed. Retrying generates a new clip.',
+      `The ${options.noun} took longer than this request can wait. Tagged \`errorCode: "request_timeout"\`. ` +
+      'Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no ' +
+      'room for it), so it could never be retrieved: the generation is cancelled and its credits returned, ' +
+      'unless the provider had already started it, in which case that one finishes and is billed. Retrying ' +
+      'generates a new clip. (2) It is being saved to the file browser but the request did not send ' +
+      '`Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file ' +
+      'browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and ' +
+      'bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+    headers: { 'X-B4M-Generation-Job-Id': 'The job left running (case 2 only).' },
     schema: options.schema,
   };
 }

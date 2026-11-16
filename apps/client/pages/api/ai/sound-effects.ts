@@ -17,9 +17,12 @@ import {
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
+  GENERATION_JOB_ID_HEADER,
   isRateLimitedFailure,
+  prefersRespondAsync,
   retryAfterSecondsOf,
   savedCopyOf,
+  STILL_GENERATING_MESSAGE,
 } from '@server/generations/syncAudioJob';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
@@ -33,8 +36,10 @@ const GENERATION_FAILED = { error: 'Sound generation failed' };
 // request: the job holds the duration-driven cost, settles it on success and returns it otherwise, records usage and
 // keeps the saved copy. Bills the organization's shared pool for org-billed API keys and for org-seat members;
 // otherwise the user. Scope-gated (AI_GENERATE) so an under-scoped API key can't drive paid provider generation.
-// A clip that outlasts the request is answered 202 with the sound-effect job resource; it lands in Files when done.
-// One not being saved to Files could never be picked up, so its job is cancelled and the request answered 504.
+// A clip that outlasts the request and is saving to Files lands there when done: a caller that sent
+// `Prefer: respond-async` is answered 202 with the sound-effect job resource (and `Preference-Applied`), any other
+// caller 504 naming the job, which keeps running. One not saving to Files could never be picked up, so its job is
+// cancelled and the request answered 504.
 //
 // Auth mode, required scopes, and request validation all come from generateSoundEffectContract (the same source of
 // truth that drives the OpenAPI spec); `req.validated` is the parsed, typed body.
@@ -99,6 +104,15 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
         jobId: waited.job.id,
         provider,
       });
+      if (!prefersRespondAsync(req)) {
+        res.setHeader(GENERATION_JOB_ID_HEADER, waited.job.id);
+        return res.status(504).json({
+          error: STILL_GENERATING_MESSAGE,
+          errorCode: REQUEST_TIMEOUT_ERROR_CODE,
+          jobId: waited.job.id,
+        });
+      }
+      res.setHeader('Preference-Applied', 'respond-async');
       return res
         .status(202)
         .json(await toPublicGenerationJob(waited.job, mapperDeps, SOUND_EFFECT_GENERATION_PROJECTION));

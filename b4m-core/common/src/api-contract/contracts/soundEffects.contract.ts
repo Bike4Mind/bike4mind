@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
@@ -22,6 +23,12 @@ import {
 } from './audioResponses';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { SoundEffectGenerationSchema } from '../../schemas/audioGenerations';
+
+// The 504 names the job it left running; written (not thrown), so `jobId` rides beside the envelope.
+const soundEffectsTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('request_timeout').optional(),
+  jobId: z.string().optional(),
+});
 
 const exampleOutlastedJob = {
   id: EXAMPLE_RESOURCE_ID,
@@ -110,7 +117,7 @@ export const generateSoundEffectContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
-    504: unretrievableAudioResponse({ noun: 'sound effect', schema: ApiErrorSchema }),
+    504: unretrievableAudioResponse({ noun: 'sound effect', schema: soundEffectsTimeoutErrorSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

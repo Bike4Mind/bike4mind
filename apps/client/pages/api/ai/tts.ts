@@ -21,10 +21,13 @@ import {
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
+  GENERATION_JOB_ID_HEADER,
   isRateLimitedFailure,
+  prefersRespondAsync,
   providerStatusOf,
   retryAfterSecondsOf,
   savedCopyOf,
+  STILL_GENERATING_MESSAGE,
 } from '@server/generations/syncAudioJob';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { SPEECH_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
@@ -38,8 +41,10 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - generation, billing and the saved copy run as a speech job (createSpeechJob), stepped in this request; the
  *   response (encoding, oversized-audio URL, save headers) is written by the shared deliverGeneratedAudio. A clip
- *   that outlasts the request is answered 202 with the speech job resource instead (it lands in Files when done),
- *   or 504 when it is not being saved to Files, so nothing could pick it up later (its job is cancelled).
+ *   that outlasts the request and is saving to Files lands there when done: a caller that sent
+ *   `Prefer: respond-async` is answered 202 with the speech job resource (and `Preference-Applied`), any other
+ *   caller 504 naming the job, which keeps running. One not saving to Files could never be picked up, so its
+ *   job is cancelled and the request answered 504.
  * - when the chosen provider has no usable key or rejects our credentials, another configured provider stands in
  *   and the response reports the substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
@@ -127,6 +132,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         jobId: waited.job.id,
         provider: vendor,
       });
+      if (!prefersRespondAsync(req)) {
+        res.setHeader(GENERATION_JOB_ID_HEADER, waited.job.id);
+        return res.status(504).json({
+          error: STILL_GENERATING_MESSAGE,
+          provider: vendor,
+          errorCode: REQUEST_TIMEOUT_ERROR_CODE,
+          jobId: waited.job.id,
+        });
+      }
+      res.setHeader('Preference-Applied', 'respond-async');
       return res.status(202).json(await toPublicGenerationJob(waited.job, mapperDeps, SPEECH_GENERATION_PROJECTION));
     case 'unretrievable':
       req.logger.warn('TTS job did not finish in time and is not saved to Files; cancel requested', {
