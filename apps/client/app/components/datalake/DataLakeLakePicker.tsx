@@ -1,12 +1,11 @@
-import { useMemo, useState, type MouseEvent } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   Box,
   Button,
   Checkbox,
-  Chip,
   Dropdown,
+  IconButton,
   Input,
-  ListDivider,
   ListItem,
   ListItemContent,
   ListItemDecorator,
@@ -14,12 +13,12 @@ import {
   MenuButton,
   MenuItem,
   Skeleton,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
@@ -84,7 +83,7 @@ export interface DataLakeLakePickerProps {
   onOpen?: () => void;
 }
 
-/** Below this many lakes a filter box is noise rather than help. */
+/** Below this many lakes a filter box is noise rather than help, unless it has Create to sit beside. */
 const SEARCH_THRESHOLD = 8;
 
 /**
@@ -118,6 +117,7 @@ const TRIGGER_COUNT_SX = { fontFamily: 'monospace', flexShrink: 0 } as const;
  * like a disagreement). Every file count therefore names its unit, or sits under a column that does.
  */
 const fileCountLabel = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
+const lakeCountLabel = (n: number) => `${n} ${n === 1 ? 'lake' : 'lakes'}`;
 
 interface LakeGroup {
   key: string;
@@ -163,6 +163,70 @@ const groupLakesByOwner = (lakes: RetrievabilityLabeledDataLake[]): LakeGroup[] 
   return groups;
 };
 
+interface LakeRowProps {
+  lake: RetrievabilityLabeledDataLake;
+  count: number | undefined;
+  isSelected: boolean;
+  onToggle: (lakeId: string) => void;
+}
+
+/**
+ * One lake in the list. Memoized, and fed a stable `onToggle`, so ticking a lake or typing in the
+ * filter re-renders the rows that changed rather than every row: the list holds each lake the
+ * caller can reach, which for an admin is every tenant's.
+ */
+const LakeRow = memo(function LakeRow({ lake, count, isSelected, onToggle }: LakeRowProps) {
+  return (
+    <MenuItem
+      selected={isSelected}
+      // The row, not the box, owns the click: a Checkbox with its own handler
+      // inside a clickable row toggles twice and lands back where it started.
+      onClick={(e: MouseEvent & MenuDismissibleEvent) => {
+        keepMenuOpen(e);
+        onToggle(lake.id);
+      }}
+      data-testid={`datalake-lake-picker-lake-${lake.id}`}
+    >
+      <ListItemDecorator>
+        <Checkbox
+          size="sm"
+          checked={isSelected}
+          readOnly
+          tabIndex={-1}
+          // aria-hidden + the row's own aria-selected: announcing a checkbox the
+          // row already reports as selected reads the state twice.
+          aria-hidden
+          sx={{ pointerEvents: 'none' }}
+          slotProps={{ input: { 'data-testid': `datalake-lake-picker-check-${lake.id}` } }}
+        />
+      </ListItemDecorator>
+      <ListItemContent sx={{ minWidth: 0 }}>
+        <Typography noWrap level="body-sm" sx={{ color: 'text.primary' }}>
+          {lake.name}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+          <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
+            {lakeVisibilityLabelShort(lake)}
+          </Typography>
+          {isDraftLake(lake) && <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />}
+        </Box>
+      </ListItemContent>
+      {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
+        so an unmarked row would read as their own. */}
+      {lake.isOwn === false && <LakeOwnerIcon lake={lake} testId={`datalake-lake-picker-owner-icon-${lake.id}`} />}
+      {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
+      {isUnsearchable(lake) && (
+        <UnsearchableLakeIcon lake={lake} testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
+      )}
+      {typeof count === 'number' && (
+        <Typography level="body-xs" sx={COUNT_SX} aria-label={fileCountLabel(count)}>
+          {count}
+        </Typography>
+      )}
+    </MenuItem>
+  );
+});
+
 export default function DataLakeLakePicker({
   lakes,
   isLoading,
@@ -179,6 +243,9 @@ export default function DataLakeLakePicker({
 }: DataLakeLakePickerProps) {
   const { copy } = useDataLakeSurface();
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  // The box keeps up with typing; the list narrows a beat later when it is long.
+  const deferredQuery = useDeferredValue(query);
 
   const selectedIdSet = useMemo(() => new Set(selectedLakeIds), [selectedLakeIds]);
 
@@ -191,14 +258,19 @@ export default function DataLakeLakePicker({
 
   const filtered = useMemo(() => {
     if (!lakes) return [];
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     if (!q) return lakes;
     return lakes.filter(l => l.name.toLowerCase().includes(q) || l.fileTagPrefix.toLowerCase().includes(q));
-  }, [lakes, query]);
+  }, [lakes, deferredQuery]);
 
   const groups = useMemo(() => groupLakesByOwner(filtered), [filtered]);
 
-  const showSearch = (lakes?.length ?? 0) >= SEARCH_THRESHOLD;
+  const showSearch = (lakes?.length ?? 0) >= SEARCH_THRESHOLD || !!onCreate || !!onDiscover;
+  const leaveFor = (action: () => void) => {
+    setOpen(false);
+    setQuery('');
+    action();
+  };
 
   // Only the two scopes with an HONEST figure print one. The per-lake counts are distinct live
   // files per lake, so a multi-lake scope would have to sum them - and a file that sits in two
@@ -212,36 +284,56 @@ export default function DataLakeLakePicker({
         ? totalFileCount
         : lakeFileCounts?.[selectedLakes[0].datalakeTag];
 
-  const toggleLake = (lakeId: string) =>
-    onChange(selectedIdSet.has(lakeId) ? selectedLakeIds.filter(id => id !== lakeId) : [...selectedLakeIds, lakeId]);
+  // Read at click time through a ref, so the callback the rows hold never changes identity and a
+  // tick does not re-render every other row.
+  const latest = useRef({ selectedLakeIds, onChange });
+  useEffect(() => {
+    latest.current = { selectedLakeIds, onChange };
+  });
+  const toggleLake = useCallback((lakeId: string) => {
+    const { selectedLakeIds: ids, onChange: change } = latest.current;
+    change(ids.includes(lakeId) ? ids.filter(id => id !== lakeId) : [...ids, lakeId]);
+  }, []);
 
-  const lakeTotal = lakes?.length ?? 0;
-  // While a filter is narrowing the list, the bare total reads as a stale count sitting under a
-  // shorter set of rows (or under "No matches"), so name both numbers.
-  const lakeCountLabel =
-    query && filtered.length !== lakeTotal
-      ? `${filtered.length} of ${lakeTotal} lakes`
-      : `${lakeTotal} ${lakeTotal === 1 ? 'lake' : 'lakes'}`;
+  // The all-lakes trigger reads as its two counts alone ("36 lakes, 1539 files"): the figures
+  // already say this is the lake list, and it is the one place the count of reachable lakes is
+  // printed. Until the list has loaded there is no lake count to print, so the row's own label
+  // stands in rather than a confident zero.
+  const allLakesScope = selectedLakes.length === 0 && !noLakeScope;
+  const allLakesSummary =
+    lakes && !isError
+      ? [
+          lakeCountLabel(lakes.length),
+          ...(typeof selectedCount === 'number' ? [fileCountLabel(selectedCount)] : []),
+        ].join(', ')
+      : copy.allLakesLabel;
 
   return (
     <Box sx={{ px: '12px', pt: '12px' }}>
       {/* The filter is scratch state for one browse, not a setting: a query left over from a
           previous open would greet the next one with a narrowed list and a "1 of 10 lakes"
           chip, which reads as a broken picker rather than a remembered choice. */}
-      <Dropdown onOpenChange={(_, isOpen) => (isOpen ? onOpen?.() : setQuery(''))}>
+      <Dropdown
+        open={open}
+        onOpenChange={(_, isOpen) => {
+          setOpen(isOpen);
+          if (isOpen) onOpen?.();
+          else setQuery('');
+        }}
+      >
         <MenuButton
           variant="outlined"
           color="neutral"
           size="sm"
           data-testid="datalake-lake-picker-btn"
-          endDecorator={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
+          endDecorator={
+            <ExpandMoreIcon
+              sx={{ fontSize: 18, transition: 'transform 0.2s ease', transform: open ? 'rotate(180deg)' : 'none' }}
+            />
+          }
           sx={{ width: '100%', justifyContent: 'flex-start', gap: '8px', fontWeight: 400 }}
         >
-          {soleSelectedLake ? (
-            <FolderOutlinedIcon sx={{ fontSize: 16, flexShrink: 0, color: 'text.tertiary' }} />
-          ) : (
-            <LayersOutlinedIcon sx={{ fontSize: 16, flexShrink: 0, color: 'text.tertiary' }} />
-          )}
+          {soleSelectedLake && <FolderOutlinedIcon sx={{ fontSize: 16, flexShrink: 0, color: 'text.tertiary' }} />}
           {/* textColor=inherit is load-bearing: Joy defaults `body-sm`/`body-xs` to
               `text.tertiary`, which this theme defines as the brand hue at 50% alpha (~2.2:1 on
               the light surface). That is fine for a subtitle but not for the label naming the
@@ -260,21 +352,21 @@ export default function DataLakeLakePicker({
           >
             {noLakeScope
               ? copy.noLakesLabel
-              : selectedLakes.length === 0
-                ? copy.allLakesLabel
+              : allLakesScope
+                ? allLakesSummary
                 : (soleSelectedLake?.name ?? `${selectedLakes.length} lakes`)}
           </Typography>
           {/* Withheld only while the count is UNKNOWN. A known zero prints 0: suppressing it too
               made an empty lake indistinguishable from a still-loading one, which is the very
               ambiguity this guard exists to prevent. */}
-          {typeof selectedCount === 'number' && (
+          {!allLakesScope && typeof selectedCount === 'number' && (
             <Typography
               level="body-xs"
               textColor="inherit"
               sx={TRIGGER_COUNT_SX}
               data-testid="datalake-lake-picker-count"
             >
-              {fileCountLabel(selectedCount)}
+              ({fileCountLabel(selectedCount)})
             </Typography>
           )}
         </MenuButton>
@@ -287,7 +379,7 @@ export default function DataLakeLakePicker({
             // 2px, matching the row action menu: this list is dense and can run long.
             ...menuItemListSx(theme, { gap: '2px' }),
             minWidth: 236,
-            maxWidth: 300,
+            maxWidth: 320,
             maxHeight: 360,
             overflowY: 'auto',
           })}
@@ -295,7 +387,7 @@ export default function DataLakeLakePicker({
           {showSearch && (
             /* The menu owns arrow-key navigation and typeahead, both of which would steal the
                keystrokes meant for this box, so its keydowns stop here. */
-            <ListItem sx={{ px: '4px', pb: '6px' }} onKeyDown={e => e.stopPropagation()}>
+            <ListItem sx={{ px: '4px', pb: '6px', gap: '6px' }} onKeyDown={e => e.stopPropagation()}>
               <Input
                 size="sm"
                 autoFocus
@@ -304,8 +396,37 @@ export default function DataLakeLakePicker({
                 onChange={e => setQuery(e.target.value)}
                 startDecorator={<SearchIcon sx={{ fontSize: 16 }} />}
                 slotProps={{ input: { 'data-testid': 'datalake-lake-picker-search' } }}
-                sx={{ width: '100%' }}
+                sx={{ flex: 1, minWidth: 0 }}
               />
+              {/* Icon buttons, not MenuItems, so nothing dismisses the list for them. */}
+              {onDiscover && (
+                <Tooltip title="Discover" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    aria-label="Discover"
+                    onClick={() => leaveFor(onDiscover)}
+                    data-testid="datalake-lake-picker-discover-btn"
+                  >
+                    <TravelExploreIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
+              {onCreate && (
+                <Tooltip title={copy.createLabel} disableInteractive>
+                  <IconButton
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    aria-label={copy.createLabel}
+                    onClick={() => leaveFor(onCreate)}
+                    data-testid="datalake-lake-picker-create-btn"
+                  >
+                    <AddIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </ListItem>
           )}
 
@@ -335,37 +456,14 @@ export default function DataLakeLakePicker({
             </ListItem>
           ) : (
             <>
-              {/* All-lakes stays an explicit ROW rather than an unlabelled default, so
-                  cross-lake browse is something the user chose. It is the CLEAR action for the
-                  set, not a member of it, so it carries no checkbox - ticking every lake by hand
-                  and choosing "all" are different scopes once a new lake appears. */}
-              <MenuItem
-                selected={selectedLakes.length === 0 && !noLakeScope}
-                onClick={(e: MouseEvent & MenuDismissibleEvent) => {
-                  keepMenuOpen(e);
-                  onChange([]);
-                }}
-                data-testid="datalake-lake-picker-all"
-              >
-                <ListItemDecorator>
-                  <LayersOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary' }} />
-                </ListItemDecorator>
-                <ListItemContent>
-                  <Typography noWrap level="body-sm">
-                    {copy.allLakesLabel}
-                  </Typography>
-                </ListItemContent>
-                <Typography level="body-xs" sx={COUNT_SX} data-testid="datalake-lake-picker-all-count">
-                  {typeof totalFileCount === 'number' ? fileCountLabel(totalFileCount) : '-'}
-                </Typography>
-              </MenuItem>
-
+              {/* No all-lakes row: the trigger already reads as that scope's counts, and unticking
+                  the last lake returns to it - the empty set IS the all-lakes scope. */}
               {filtered.length === 0 ? (
                 <ListItem>
                   <Typography level="body-xs" sx={{ px: 1, py: 1, color: 'text.tertiary' }}>
                     {/* rootLabel, not allLakesLabel: the latter is the "All data lakes" ROW label,
                         which reads as "No all data lakes yet" in a sentence. */}
-                    {query ? 'No matches' : `No ${copy.rootLabel.toLowerCase()} yet`}
+                    {deferredQuery ? 'No matches' : `No ${copy.rootLabel.toLowerCase()} yet`}
                   </Typography>
                 </ListItem>
               ) : (
@@ -390,108 +488,18 @@ export default function DataLakeLakePicker({
                       files
                     </Typography>
                   </ListItem>,
-                  ...group.lakes.map(lake => {
-                    const count = lakeFileCounts?.[lake.datalakeTag];
-                    const isSelected = selectedIdSet.has(lake.id);
-                    return (
-                      <MenuItem
-                        key={lake.id}
-                        selected={isSelected}
-                        // The row, not the box, owns the click: a Checkbox with its own handler
-                        // inside a clickable row toggles twice and lands back where it started.
-                        onClick={(e: MouseEvent & MenuDismissibleEvent) => {
-                          keepMenuOpen(e);
-                          toggleLake(lake.id);
-                        }}
-                        data-testid={`datalake-lake-picker-lake-${lake.id}`}
-                      >
-                        <ListItemDecorator>
-                          <Checkbox
-                            size="sm"
-                            checked={isSelected}
-                            readOnly
-                            tabIndex={-1}
-                            // aria-hidden + the row's own aria-selected: announcing a checkbox the
-                            // row already reports as selected reads the state twice.
-                            aria-hidden
-                            sx={{ pointerEvents: 'none' }}
-                            slotProps={{ input: { 'data-testid': `datalake-lake-picker-check-${lake.id}` } }}
-                          />
-                        </ListItemDecorator>
-                        <ListItemContent sx={{ minWidth: 0 }}>
-                          <Typography noWrap level="body-sm">
-                            {lake.name}
-                          </Typography>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-                            <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
-                              {lakeVisibilityLabelShort(lake)}
-                            </Typography>
-                            {isDraftLake(lake) && (
-                              <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />
-                            )}
-                          </Box>
-                        </ListItemContent>
-                        {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
-                          so an unmarked row would read as their own. */}
-                        {lake.isOwn === false && (
-                          <LakeOwnerIcon lake={lake} testId={`datalake-lake-picker-owner-icon-${lake.id}`} />
-                        )}
-                        {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
-                        {isUnsearchable(lake) && (
-                          <UnsearchableLakeIcon lake={lake} testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
-                        )}
-                        {typeof count === 'number' && (
-                          <Typography level="body-xs" sx={COUNT_SX} aria-label={fileCountLabel(count)}>
-                            {count}
-                          </Typography>
-                        )}
-                      </MenuItem>
-                    );
-                  }),
+                  ...group.lakes.map(lake => (
+                    <LakeRow
+                      key={lake.id}
+                      lake={lake}
+                      count={lakeFileCounts?.[lake.datalakeTag]}
+                      isSelected={selectedIdSet.has(lake.id)}
+                      onToggle={toggleLake}
+                    />
+                  )),
                 ])
               )}
             </>
-          )}
-
-          {(onCreate || onDiscover) && <ListDivider sx={{ my: '6px' }} />}
-          {onCreate && (
-            <MenuItem onClick={onCreate} data-testid="datalake-lake-picker-create-btn">
-              <ListItemDecorator>
-                <AddIcon sx={{ fontSize: 16 }} />
-              </ListItemDecorator>
-              <Typography noWrap level="body-sm">
-                {copy.createLabel}
-              </Typography>
-            </MenuItem>
-          )}
-          {/* A shortcut, not a restoration: Discover was already reachable through Manage ->
-              the manager's own Discover button, and still is. It is duplicated here because it
-              is a "find more lakes" action and this is the lake list, so it belongs one click
-              from the scope you are trying to change rather than two through a modal. */}
-          {onDiscover && (
-            <MenuItem onClick={onDiscover} data-testid="datalake-lake-picker-discover-btn">
-              <ListItemDecorator>
-                <TravelExploreIcon sx={{ fontSize: 16 }} />
-              </ListItemDecorator>
-              <Typography noWrap level="body-sm">
-                Discover
-              </Typography>
-            </MenuItem>
-          )}
-          {/* Count of reachable lakes: the honest answer to "do I have lakes?", withheld while
-              loading or erroring so it never reads as a confident zero. */}
-          {!isLoading && !isError && (
-            <ListItem sx={{ mt: '6px' }}>
-              <Chip
-                size="sm"
-                variant="soft"
-                color="neutral"
-                data-testid="datalake-lake-picker-lake-count"
-                sx={{ fontSize: '11px' }}
-              >
-                {lakeCountLabel}
-              </Chip>
-            </ListItem>
           )}
         </Menu>
       </Dropdown>
