@@ -10,8 +10,9 @@ import {
   classifyFirstPaid,
   loadPaymentLedger,
   paidWithinDays,
+  utcDayStart,
   type LedgerPayment,
-  type PaymentKind,
+  type LedgerPaymentKind,
   type PaymentLedger,
 } from './paymentLedger';
 import { loadCountingContext } from './signupCohort';
@@ -49,7 +50,6 @@ export async function attributedSignups(
 
 const DAY_MS = 86_400_000;
 const LEDGER_BATCH = 1000;
-const utcDayStart = (date: Date) => Date.parse(`${date.toISOString().slice(0, 10)}T00:00:00.000Z`);
 
 export type ConversionOptions = { windowDays: number; followUpDays: number; now: Date };
 
@@ -98,7 +98,7 @@ export function deriveRenewal(subscription: LedgerPayment, followUpEnd: Date): R
 export type MemberOutcome = {
   /** The conversion window has closed, so the member counts toward the conversion rate. */
   mature: boolean;
-  firstPaid: { kind: PaymentKind; at: Date; both: boolean } | null;
+  firstPaid: { kind: LedgerPaymentKind; at: Date; both: boolean } | null;
   /** An organization the member owns was paid for inside the conversion window. */
   orgBuyer: boolean;
   /** Paid inside the window and at least one of those payments is still not refunded or disputed. */

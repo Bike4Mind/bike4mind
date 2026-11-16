@@ -7,16 +7,16 @@ import { UNPAID_SUBSCRIPTION_STATUSES } from './activationFunnel';
 /**
  * Each person's own Stripe payments, for the acquisition section's conversion metrics: completed credit-pack
  * purchases (one per payment intent) and Stripe-billed subscriptions, each marked reversed when refunded or
- * lost to a dispute. Payments on an organization the person owns only set `orgBuyer`; they never enter the
+ * lost to a dispute. Payments on an organization the person owns only set `orgBuyerAt`; they never enter the
  * personal subscription/credit split.
  */
 
 const DAY_MS = 86_400_000;
 
-export type PaymentKind = 'subscription' | 'credit';
+export type LedgerPaymentKind = 'subscription' | 'credit';
 
 export type LedgerPayment = {
-  kind: PaymentKind;
+  kind: LedgerPaymentKind;
   at: Date;
   /** Refunded, or under an open or lost dispute. */
   reversed: boolean;
@@ -210,7 +210,7 @@ export async function loadPaymentLedger(
   return ledgers;
 }
 
-const utcDayStart = (date: Date) => Date.parse(`${date.toISOString().slice(0, 10)}T00:00:00.000Z`);
+export const utcDayStart = (date: Date) => Date.parse(`${date.toISOString().slice(0, 10)}T00:00:00.000Z`);
 
 /** Whether `paidAt` falls on the signup's UTC day or within `windowDays` UTC days after it. */
 export function paidWithinDays(signupAt: Date, paidAt: Date, windowDays: number): boolean {
@@ -218,7 +218,7 @@ export function paidWithinDays(signupAt: Date, paidAt: Date, windowDays: number)
   return days >= 0 && days <= windowDays;
 }
 
-export type FirstPaid = { kind: PaymentKind; at: Date; reversed: boolean; both: boolean };
+export type FirstPaid = { kind: LedgerPaymentKind; at: Date; reversed: boolean; both: boolean };
 
 /**
  * The first personal payment inside the conversion window, or null. `both` is true when the other kind was

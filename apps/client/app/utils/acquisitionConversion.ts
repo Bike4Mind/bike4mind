@@ -12,7 +12,6 @@ import { analyticsOverviewQuerySchema, type AnalyticsSignupsMode } from './analy
  */
 
 export const ACQUISITION_TOUCHES = ['first', 'last'] as const satisfies readonly AcquisitionTouchKind[];
-export type AcquisitionTouch = AcquisitionTouchKind;
 /** Days after signup a first payment may land and still count as converting. */
 export const ACQUISITION_CONVERSION_WINDOWS = ['7', '30', '90'] as const;
 /** Days after the first payment over which repeat purchases and retention are judged. */
@@ -87,7 +86,7 @@ export type AcquisitionConversion =
   | {
       status: 'ok';
       signups: AnalyticsSignupsMode;
-      touch: AcquisitionTouch;
+      touch: AcquisitionTouchKind;
       /** The Users list's created window, [createdFrom, createdTo). */
       window: { createdFrom: string; createdTo: string };
       /** Share of signups carrying a touch; `pct` is null when there are no signups. */
