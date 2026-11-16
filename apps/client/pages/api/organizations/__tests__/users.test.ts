@@ -126,7 +126,7 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
   });
 
   it('ignores filters.orgId for an admin calling with an API key that lacks the admin scope', async () => {
-    verifyOrgAccess.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
+    verifyOrgPermission.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
     findById.mockImplementation(() => chainable(null));
     const otherOrgId = '0123456789abcdef01234567';
 
@@ -135,7 +135,7 @@ describe('GET /api/organizations/users - verifyOrgPermission gate', () => {
     const { req, res } = mocks(keyUser, { 'filters[orgId]': otherOrgId });
     await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 404 });
 
-    expect(verifyOrgAccess).toHaveBeenCalledWith(req.user, 'org1');
-    expect(verifyOrgAccess).not.toHaveBeenCalledWith(expect.anything(), otherOrgId);
+    expect(verifyOrgPermission).toHaveBeenCalledWith(req.user, 'org1', 'manageMembers');
+    expect(verifyOrgPermission).not.toHaveBeenCalledWith(expect.anything(), otherOrgId);
   });
 });
