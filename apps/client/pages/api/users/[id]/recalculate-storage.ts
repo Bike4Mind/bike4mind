@@ -1,18 +1,12 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { userRepository, fabFileRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const userId = req.query.id!;
-    const currentUser = req.user;
-
-    if (!currentUser.isAdmin) {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
     const { counter, truth, drift, repaired } = await userService.recalculateUserStorage(
       { userId },
       {
