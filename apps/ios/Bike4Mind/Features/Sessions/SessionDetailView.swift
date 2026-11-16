@@ -6,11 +6,21 @@ import SwiftUI
 struct SessionDetailView: View {
   let session: SessionSummary
   @Environment(AppServices.self) private var services
+  @State private var showingHandoff = false
 
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
       agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Open on another device", systemImage: "arrow.up.forward.app") { showingHandoff = true }
+            .accessibilityIdentifier("session-handoff-open-btn")
+        }
+      }
+      .sheet(isPresented: $showingHandoff) {
+        SessionHandoffPicker(sessionID: session.id, client: services.sessionHandoff)
+      }
   }
 }
 

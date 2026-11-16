@@ -1,5 +1,5 @@
 import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
-import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, LiveHandoffRegistrationSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
@@ -208,10 +208,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       if (refusal) throw new ForbiddenError(refusal.message);
     }
 
+    const handoff = LiveHandoffRegistrationSchema.safeParse({
+      platform: event.queryStringParameters?.handoffPlatform,
+      name: event.queryStringParameters?.handoffName,
+    });
     await Connection.create({
       connectionId: event.requestContext.connectionId,
       userId: user.id,
       source,
+      ...(ticketIdentity &&
+        auth.sid &&
+        handoff.success && {
+          handoffPlatform: handoff.data.platform,
+          handoffName: handoff.data.name,
+        }),
       ...(scopes !== undefined && { scopes }),
       ...(auth.sid && { sid: auth.sid }),
       ...(tokenVersion !== undefined && { tokenVersion }),

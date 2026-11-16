@@ -563,6 +563,7 @@ const api: DesktopApi = {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
   },
   attention: {
+    openServerSessions: () => ipcRenderer.invoke(IPC_CHANNELS.handoffOpenServerSessions),
     notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
     claim: (sessionIds: string[]) => ipcRenderer.invoke(IPC_CHANNELS.attentionClaim, sessionIds),
     setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),

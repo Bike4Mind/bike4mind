@@ -43,7 +43,9 @@ vi.mock('@bike4mind/services', () => ({
   isTokenTypeAcceptable: () => true,
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  LiveHandoffRegistrationSchema: (await importOriginal<typeof import('@bike4mind/common')>())
+    .LiveHandoffRegistrationSchema,
   ApiKeyScope: { AI_GENERATE: 'ai_generate', AI_CHAT: 'ai_chat', CC_BRIDGE: 'cc_bridge' },
 }));
 // The IP-block refusal path is covered in ../connect.test.ts; this suite stubs @bike4mind/common,
@@ -110,6 +112,17 @@ describe('web $connect ticket path', () => {
 
     await expect(call(eventWith({ ticket: 't-abc' }))).rejects.toThrow('Session expired');
     expect(h.connectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('registers handoff metadata only for a session-bound ticket', async () => {
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
+    await call(eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'My Mac' }));
+    expect(h.connectionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ handoffPlatform: 'desktop', handoffName: 'My Mac', sid: 'sid-1' })
+    );
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5 });
+    await call(eventWith({ ticket: 't2', handoffPlatform: 'web', handoffName: 'Browser' }));
+    expect(h.connectionCreate.mock.calls.at(-1)?.[0]).not.toHaveProperty('handoffPlatform');
   });
 
   it('falls back to the gateway cap for a ticket minted without an expiry', async () => {

@@ -333,6 +333,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files',
   },
+  listHandoffDevices: {
+    method: 'GET',
+    path: '/api/v1/handoff-devices',
+  },
   listModels: {
     method: 'GET',
     path: '/api/v1/models',
@@ -476,6 +480,10 @@ export const operations = {
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
+  },
+  sendSessionHandoff: {
+    method: 'POST',
+    path: '/api/v1/session-handoffs',
   },
   startAgentExecution: {
     method: 'POST',

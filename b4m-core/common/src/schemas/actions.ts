@@ -9,6 +9,7 @@ import {
 import { FallbackInfoSchema } from './llm';
 import { TurnTimingSchema } from './turnTiming';
 import { StudioJobCompletionSchema } from './studioJobCompleted';
+import { SessionHandoffAction } from './sessionHandoff';
 import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
@@ -1582,6 +1583,7 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  SessionHandoffAction,
   GenerationJobUpdatedAction,
   StudioJobCompletedAction,
   DataSubscriptionUpdateAction,

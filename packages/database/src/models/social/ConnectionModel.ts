@@ -10,6 +10,8 @@ const connectionFields = {
   connectionId: { type: String, required: true, unique: true },
   userId: { type: String, ref: 'User', required: true },
   source: { type: String, enum: ['cli', 'web'] },
+  handoffPlatform: { type: String, enum: ['web', 'desktop'] },
+  handoffName: { type: String, maxlength: 80 },
   scopes: { type: [String] },
   sid: { type: String },
   tokenVersion: { type: Number },

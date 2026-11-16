@@ -49,6 +49,7 @@ export * from './llm';
 export * from './me';
 export * from './clientConfig';
 export * from './pushToken';
+export * from './sessionHandoff';
 export * from './personas';
 export * from './pendingActions';
 export * from './pushNotification';

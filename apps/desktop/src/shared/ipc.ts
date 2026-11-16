@@ -560,6 +560,7 @@ export const IPC_CHANNELS = {
   terminalsChanged: 'terminal:changed',
   /** A session needs the user while the app is in the background; see @shared/attention. */
   attentionNotify: 'attention:notify',
+  handoffOpenServerSessions: 'handoff:open-server-sessions',
   attentionClaim: 'attention:claim',
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
@@ -1408,6 +1409,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
      * needs-action, so main hands each entry to the first window that asks and the rest get nothing.

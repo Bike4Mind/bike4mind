@@ -147,6 +147,9 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var sessionHandoff: SessionHandoffClient {
+    SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
+  }
 
   var media: any MediaAPI {
     #if DEBUG

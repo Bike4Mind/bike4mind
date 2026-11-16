@@ -176,6 +176,8 @@ wss.on('connection', async (ws, req) => {
   const resp = await callApp('connect', {
     connectionId,
     ticket,
+    handoffPlatform: url.searchParams.get('handoffPlatform') || undefined,
+    handoffName: url.searchParams.get('handoffName') || undefined,
     headers: secWebSocketProtocol ? { 'sec-websocket-protocol': secWebSocketProtocol } : {},
   });
   if (!resp || !resp.ok) {

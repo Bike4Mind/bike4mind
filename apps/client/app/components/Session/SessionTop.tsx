@@ -23,6 +23,7 @@ import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { convertSessionToMarkdown } from '@client/app/utils/sessionMarkdownExport';
+import { SessionHandoffButton } from './SessionHandoff';
 
 type SessionTopProps = {
   listClosed?: boolean;
@@ -85,6 +86,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <DataLakeToggle />
+          {currentSessionId && <SessionHandoffButton key={currentSessionId} sessionId={currentSessionId} />}
           {project && (
             <Breadcrumbs
               items={[

@@ -23,6 +23,7 @@ import OrgDomainJoinBanner from '@client/app/components/OrgDomainJoinBanner';
 import CommandPalette from '../components/CommandPalette';
 import StudioJobCompletedListener from '@client/app/components/Studio/completion/StudioJobCompletedListener';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
+import { SessionHandoffReceiver } from '@client/app/components/Session/SessionHandoff';
 
 interface ProviderBundleProps {
   children: ReactNode;
@@ -79,6 +80,7 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           <ReferralRewardNotice />
           {/* Under AdminSettingsProvider: its feature gate reads admin settings. */}
           <StudioJobCompletedListener />
+          <SessionHandoffReceiver />
           <HelpModal />
           <PromptMetaInspector />
           <CreateTeamModal />

@@ -98,6 +98,7 @@ export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: strin
   chat_completed: { title: 'Reply ready', body: 'A new reply is ready.' },
   generation_ready: { title: 'Generation ready', body: 'Your generated media is ready.' },
   agent_message: { title: 'New message', body: 'An agent sent you a message.' },
+  session_handoff: { title: 'Continue your conversation', body: 'Tap to open the conversation you sent here.' },
 };
 
 export type PushRecipient = {
@@ -111,7 +112,13 @@ export type SendPushDeps = {
       userId: string,
       kind: 'device'
     ): Promise<
-      ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment; platform: PushTokenPlatform }>
+      ReadonlyArray<{
+        id?: string;
+        token: string;
+        sid: string;
+        environment: PushTokenEnvironment;
+        platform: PushTokenPlatform;
+      }>
     >;
     /** `sid` is the read-time session: a token re-registered under another session meanwhile is kept. */
     removeByToken(token: string, options: { sid: string }): Promise<boolean>;
@@ -139,7 +146,14 @@ export async function deliverPush(
   deps: SendPushDeps,
   logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ): Promise<PushDeliveryResult> {
-  const storedTokens = await deps.tokens.findByUser(event.userId, 'device');
+  const candidates = await deps.tokens.findByUser(event.userId, 'device');
+  const storedTokens =
+    event.category === 'session_handoff'
+      ? candidates.filter(
+          token =>
+            event.destinationId !== undefined && token.id === event.destinationId && token.sid === event.destinationSid
+        )
+      : candidates;
   const { tokens, pruned: orphansPruned } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
   if (tokens.length === 0) {
     logger.info('[Push] user has no device tokens; nothing to send', { category: event.category });

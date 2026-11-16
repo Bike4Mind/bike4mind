@@ -12,6 +12,7 @@ export const PUSH_NOTIFICATION_CATEGORIES = [
   'chat_completed',
   'generation_ready',
   'agent_message',
+  'session_handoff',
 ] as const;
 
 export type PushNotificationCategory = (typeof PUSH_NOTIFICATION_CATEGORIES)[number];
@@ -28,6 +29,8 @@ export const PushNotificationEventSchema = z.object({
   collapseId: z.string().optional(),
   questId: z.string().optional(),
   sessionId: z.string().optional(),
+  destinationId: z.string().optional(),
+  destinationSid: z.string().optional(),
   /**
    * `approval_needed` only: the `ts` of the pending action on `questId`. With it, the push carries the
    * approve/deny action identifiers so a client can answer from the notification itself.
@@ -48,6 +51,7 @@ export const PushNotificationPreferencesSchema = z.object({
   chat_completed: z.boolean().optional(),
   generation_ready: z.boolean().optional(),
   agent_message: z.boolean().optional(),
+  session_handoff: z.boolean().optional(),
 });
 
 export type PushNotificationPreferences = z.infer<typeof PushNotificationPreferencesSchema>;
