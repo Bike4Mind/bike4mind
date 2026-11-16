@@ -39,7 +39,7 @@ import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionP
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
-import { logOAuthError } from '@server/auth/oauthErrorLog';
+import { logAndRecordSideAppMintRefusal } from '@server/auth/oauthErrorLog';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   SUBSCRIPTION_REQUIRED_ERROR,
@@ -76,8 +76,17 @@ const handler = baseApi({ auth: false })
   // control is the in-handler check below.
   .use(rateLimit({ limit: PER_CLIENT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'oauth-ai-token' }))
   .post(async (req, res) => {
+    // The client id is only a claim until verifyClientSecret succeeds.
+    const refusalContext: { verified: boolean; userId?: string } = { verified: false };
     const logError = (error: string, status: number) =>
-      logOAuthError(req.logger, { route: 'oauth/ai-token', clientId: req.body?.client_id, error, status });
+      logAndRecordSideAppMintRefusal(req.logger, {
+        route: 'oauth/ai-token',
+        clientId: req.body?.client_id,
+        error,
+        status,
+        verified: refusalContext.verified,
+        userId: refusalContext.userId,
+      });
 
     const parsed = AiTokenRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -96,6 +105,8 @@ const handler = baseApi({ auth: false })
         .status(401)
         .json({ error: 'invalid_client', error_description: 'Unknown client or invalid client_secret' });
     }
+
+    refusalContext.verified = true;
 
     // 2. Federation gate - only clients with a populated federated trust config may mint AI keys.
     const federatedIdp = client.federatedIdp;
@@ -172,8 +183,10 @@ const handler = baseApi({ auth: false })
         logError('invalid_grant', 401);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }
+      logError('server_error', 500);
       throw err;
     }
+    refusalContext.userId = b4mUserId;
     if (federatedIdp.subjectSource !== 'sub') {
       req.logger.warn(
         `[OAUTH_AI_TOKEN] would-reject: client ${client_id} uses the self-asserted ` +
@@ -284,6 +297,7 @@ const handler = baseApi({ auth: false })
         logError('invalid_request', 400);
         return res.status(400).json({ error: 'invalid_request', error_description: err.message });
       }
+      logError('server_error', 500);
       throw err;
     }
 

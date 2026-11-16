@@ -31,6 +31,7 @@ import {
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
+import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 import { refuseIfSuspendedOwner } from '@bike4mind/server-utils/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
@@ -164,6 +165,7 @@ export const apiKeyAuth = (
           requiredScopes,
           alsoRequiredScopes,
           endpoint: endpointPath,
+          ...(validation.oauthExchangeClientId ? { oauthClientId: validation.oauthExchangeClientId } : {}),
         };
         if (gate.outcome === 'stagedAllow') {
           req.logger?.warn('API key scope check missed but staged - allowing', context);
@@ -171,6 +173,18 @@ export const apiKeyAuth = (
           if (shouldLogLegacyPass(validation.keyId, endpointPath)) req.logger?.info(LEGACY_SCOPE_PASS_LOG, context);
         } else {
           req.logger?.warn('API key scope check failed', context);
+          if (validation.oauthExchangeClientId) {
+            recordSideAppRefusal({
+              verified: true,
+              clientId: validation.oauthExchangeClientId,
+              stage: 'use',
+              reason: 'insufficient_scope',
+              status: 403,
+              userId: validation.userId,
+              keyId: validation.keyId,
+              endpoint: endpointPath,
+            });
+          }
           throw new ForbiddenError(
             'Insufficient API key permissions',
             scopeForbiddenDetail(requiredScopes, alsoRequiredScopes)
@@ -214,7 +228,20 @@ export const apiKeyAuth = (
           keyId: validation.keyId,
           userId: validation.userId,
           endpoint: endpointPath,
+          ...(validation.oauthExchangeClientId ? { oauthClientId: validation.oauthExchangeClientId } : {}),
         });
+        if (validation.oauthExchangeClientId) {
+          recordSideAppRefusal({
+            verified: true,
+            clientId: validation.oauthExchangeClientId,
+            stage: 'use',
+            reason: 'subscription_required',
+            status: 403,
+            userId: validation.userId,
+            keyId: validation.keyId,
+            endpoint: endpointPath,
+          });
+        }
         throw new ForbiddenError(API_KEY_ACCESS_DENIED_MESSAGE);
       }
 

@@ -1,4 +1,5 @@
 import type { Logger } from '@bike4mind/observability';
+import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 
 // Route and client can come from request input, so anything that could forge a log line or bloat it
 // is stripped. A value with nothing left logs as `unknown`. Only the route keeps `[]`, for templates
@@ -24,4 +25,23 @@ export function logOAuthError(
   } catch {
     // Logging must never turn an error response into a 500.
   }
+}
+
+/**
+ * `logOAuthError` plus a queryable per-app record. Pass `verified` only after the client secret has
+ * been checked; before that the id is a claim and only an hourly counter is bumped.
+ */
+export function logAndRecordSideAppMintRefusal(
+  logger: Pick<Logger, 'warn'> | undefined,
+  input: { route: string; clientId: unknown; error: string; status: number; verified: boolean; userId?: string }
+): void {
+  logOAuthError(logger, input);
+  recordSideAppRefusal({
+    verified: input.verified,
+    clientId: typeof input.clientId === 'string' ? input.clientId : undefined,
+    stage: 'mint',
+    reason: input.error,
+    status: input.status,
+    userId: input.userId,
+  });
 }

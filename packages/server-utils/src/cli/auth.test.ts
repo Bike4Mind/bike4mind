@@ -7,6 +7,8 @@ import {
   InternalServerError,
 } from '../utils/errors';
 
+const recordSideAppRefusalMock = vi.hoisted(() => vi.fn());
+vi.mock('../auth/sideAppRefusal', () => ({ recordSideAppRefusal: recordSideAppRefusalMock }));
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
 const assertCliSessionAllowedMock = vi.hoisted(() =>
@@ -734,6 +736,55 @@ describe('verifyApiKey exchange keys', () => {
     });
     await expect(verifyApiKey({}, { allowExchangeKeys: true })).rejects.toMatchObject({ statusCode: 403 });
     isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+  });
+
+  describe('refusal records', () => {
+    beforeEach(() => recordSideAppRefusalMock.mockClear());
+
+    it('records the wrong-route refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith({
+        verified: true,
+        clientId: 'client-1',
+        stage: 'use',
+        reason: 'route_not_allowed',
+        status: 403,
+        userId: 'u1',
+        keyId: 'k1',
+      });
+    });
+
+    it('records the missing-scope refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      await expect(
+        verifyApiKey({}, { allowExchangeKeys: true, requiredScopes: [ApiKeyScope.AI_CHAT] })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verified: true, clientId: 'client-1', reason: 'insufficient_scope', stage: 'use' })
+      );
+    });
+
+    it('records the access-gate refusal as verified', async () => {
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(exchangeKey);
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      await expect(verifyApiKey({}, { allowExchangeKeys: true })).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verified: true, clientId: 'client-1', reason: 'subscription_required' })
+      );
+    });
+
+    it('records nothing for a personal key refused on route, scope or access', async () => {
+      const personal = { ...exchangeKey, oauthExchangeClientId: undefined };
+      vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(personal);
+      await expect(verifyApiKey({}, { requiredScopes: [ApiKeyScope.AI_CHAT] })).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      await expect(verifyApiKey({})).rejects.toMatchObject({ statusCode: 403 });
+      expect(recordSideAppRefusalMock).not.toHaveBeenCalled();
+    });
   });
 
   it('leaves a personal key with the same scopes unchanged either way', async () => {

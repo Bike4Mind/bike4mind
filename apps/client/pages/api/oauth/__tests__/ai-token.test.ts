@@ -52,7 +52,7 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   verifyFederatedIdToken: h.verifyFederatedIdToken,
   FederatedIdTokenError: class FederatedIdTokenError extends Error {},
 }));
-vi.mock('@server/auth/oauthErrorLog', () => ({ logOAuthError: h.logOAuthError }));
+vi.mock('@server/auth/oauthErrorLog', () => ({ logAndRecordSideAppMintRefusal: h.logOAuthError }));
 
 import handler from '../ai-token';
 
@@ -61,10 +61,10 @@ const CLIENT = {
   allowedScopes: ['ai:generate'],
 };
 
-const run = async () => {
+const run = async (body: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({
     method: 'POST',
-    body: { client_id: 'client-1', client_secret: 'secret', id_token: 'id.token' },
+    body: { client_id: 'client-1', client_secret: 'secret', id_token: 'id.token', ...body },
   });
   (req as unknown as Record<string, unknown>).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
@@ -113,5 +113,49 @@ describe('POST /api/oauth/ai-token account gates', () => {
       error_description: 'Token subject does not resolve to a B4M user',
     });
     expect(h.checkFederatedGrant).not.toHaveBeenCalled();
+  });
+
+  const lastRefusal = () => h.logOAuthError.mock.calls.at(-1)?.[1];
+
+  it('records a malformed request as unverified, whatever id it claims', async () => {
+    const res = await run({ client_secret: undefined });
+    expect(res._getStatusCode()).toBe(400);
+    expect(lastRefusal()).toMatchObject({ error: 'invalid_request', status: 400, verified: false });
+  });
+
+  it('records a failed client authentication as unverified', async () => {
+    h.verifyClientSecret.mockResolvedValue(null);
+    const res = await run();
+    expect(res._getStatusCode()).toBe(401);
+    expect(lastRefusal()).toMatchObject({ error: 'invalid_client', status: 401, verified: false });
+  });
+
+  it('records refusals after client authentication as verified, with the user once resolved', async () => {
+    h.verifyClientSecret.mockResolvedValue({ ...CLIENT, federatedIdp: undefined });
+    await run();
+    expect(lastRefusal()).toMatchObject({ error: 'access_denied', status: 403, verified: true, userId: undefined });
+
+    h.verifyClientSecret.mockResolvedValue(CLIENT);
+    h.findById.mockResolvedValue({ id: 'user-1', aupAcceptedVersion: undefined });
+    await run();
+    expect(lastRefusal()).toMatchObject({ error: 'access_denied', verified: true, userId: 'user-1' });
+  });
+
+  it('records a refused scope as verified', async () => {
+    await run({ scope: 'ai:generate admin:all' });
+    expect(lastRefusal()).toMatchObject({ error: 'invalid_scope', status: 403, verified: true });
+  });
+
+  it('records the per-client rate limit as verified', async () => {
+    h.tryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 5000) });
+    const res = await run();
+    expect(res._getStatusCode()).toBe(429);
+    expect(lastRefusal()).toMatchObject({ error: 'temporarily_unavailable', status: 429, verified: true });
+  });
+
+  it('records an unexpected failure as a verified server_error before rethrowing', async () => {
+    h.verifyFederatedIdToken.mockRejectedValue(new Error('jwks unreachable'));
+    await expect(run()).rejects.toThrow('jwks unreachable');
+    expect(lastRefusal()).toMatchObject({ error: 'server_error', status: 500, verified: true });
   });
 });
