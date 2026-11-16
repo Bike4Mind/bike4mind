@@ -57,14 +57,16 @@ const ImageResult = ({
     target="_blank"
     rel="noopener noreferrer"
     aria-label="Open image full size"
-    sx={{ display: 'contents' }}
+    sx={{ display: 'block', width: '100%', height: '100%' }}
   >
+    {/* Sized here: AspectRatio only fits an img that is a direct child of its first child, and this one is inside the link. */}
     <img
       src={src}
       alt={job.prompt}
       loading="lazy"
       onError={onError}
       onLoad={onLoaded}
+      style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
       data-testid="image-job-card-image"
     />
   </Link>

@@ -94,6 +94,10 @@ describe('ImageJobCard', () => {
     const image = screen.getByTestId('image-job-card-image');
     expect(image.getAttribute('src')).toBe('https://signed.example/img.png');
     expect(image.getAttribute('alt')).toBe('a red fox');
+    // jsdom does no layout, so this pins the fit itself: AspectRatio does not size an img nested in the link.
+    expect(image.style.width).toBe('100%');
+    expect(image.style.height).toBe('100%');
+    expect(image.style.objectFit).toBe('contain');
     expect(screen.getByTestId('image-job-card-state').textContent).toBe('Ready');
     expect(screen.queryByTestId('image-job-card-download-btn')).toBeNull();
   });
