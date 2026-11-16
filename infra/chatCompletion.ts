@@ -13,7 +13,7 @@ import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, originVerifySecret, router, routePrefix } from './router';
+import { cdnUrlForLambdaEnv, managedAppDomain, originVerifySecret, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
@@ -150,6 +150,37 @@ const ecsSecretGroups = $dev
     ];
 const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));
 
+// Host name the load balancer serves HTTPS on. It sits under the app host so its records land in
+// the hosted zone the stage already writes to. Stages where SST does not manage the app domain
+// (no SERVER_DOMAIN, an operator-supplied certificate, `sst dev`) have none and keep HTTP only.
+const originDomain = !$dev && managedAppDomain ? `chat-origin.${managedAppDomain}` : undefined;
+const originDns = sst.aws.dns({ override: true });
+
+// Issued here instead of by the Service: the Service resolves its `url` only once every load
+// balancer input has, so handing it the validated ARN keeps the router route and the frontend
+// link on their current URL until the HTTPS listener can be created.
+function issueOriginCertificate(domainName: string) {
+  const certificate = new aws.acm.Certificate('ChatCompletionOriginCertificate', {
+    domainName,
+    validationMethod: 'DNS',
+  });
+  const validationRecords = certificate.domainValidationOptions.apply(options =>
+    options.map(option =>
+      originDns.createRecord(
+        'ChatCompletionOriginCertificate',
+        { type: option.resourceRecordType, name: option.resourceRecordName, value: option.resourceRecordValue },
+        {}
+      )
+    )
+  );
+  return new aws.acm.CertificateValidation(
+    'ChatCompletionOriginCertificateValidation',
+    { certificateArn: certificate.arn },
+    { dependsOn: validationRecords }
+  ).certificateArn;
+}
+const originCertificateArn = originDomain ? issueOriginCertificate(originDomain) : undefined;
+
 export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
@@ -164,9 +195,17 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // below) to exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend
   // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
   // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
+  // With an origin domain the service URL is https://<originDomain>/, so both callers use the
+  // HTTPS listener.
   loadBalancer: {
     public: true,
-    rules: [{ listen: '80/http', forward: '8080/http' }],
+    ...(originDomain && originCertificateArn
+      ? { domain: { name: originDomain, cert: originCertificateArn, dns: originDns } }
+      : {}),
+    rules: [
+      ...(originDomain ? ([{ listen: '443/https', forward: '8080/http' }] as const) : []),
+      { listen: '80/http', forward: '8080/http' },
+    ],
     health: {
       '8080/http': {
         path: '/health',
@@ -268,9 +307,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     },
     // Lock the public ALB's ingress to its two legitimate sources so /process is NOT reachable
     // from the open internet (defense-in-depth on top of the CHAT_COMPLETION_INTERNAL_SECRET
-    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on the listener port with:
+    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on each listener port with:
     //   1. CloudFront's origin-facing edge IPs -> /api/ai/v1/completions (the only route CloudFront
-    //      forwards here; CF terminates TLS + fronts WAF at the edge).
+    //      forwards here; CF fronts WAF at the edge).
     //   2. The VPC NAT egress IP -> the frontend Lambda's /process dispatch (it hairpins out through
     //      NAT to the ALB's public DNS - see the loadBalancer note above).
     // Health checks hit the tasks on 8080 via a separate SG rule, so they are unaffected.
@@ -290,30 +329,37 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
             .apply(eips => $util.all(eips.map(e => e.publicIp)))
             .apply(ips => ips.map(ip => `${ip}/32`));
 
-      sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) => [
-        {
-          protocol: 'tcp',
-          fromPort: 80,
-          toPort: 80,
-          prefixListIds: [plId],
-          description: 'CloudFront edge to public /api/ai/v1/completions',
-        },
-        {
-          protocol: 'tcp',
-          fromPort: 80,
-          toPort: 80,
-          cidrBlocks: cidrs,
-          description: 'VPC NAT egress to internal /process dispatch',
-        },
-      ]);
+      const listenerPorts = originDomain ? [443, 80] : [80];
+      sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) =>
+        listenerPorts.flatMap(port => [
+          {
+            protocol: 'tcp',
+            fromPort: port,
+            toPort: port,
+            prefixListIds: [plId],
+            description: 'CloudFront edge to public /api/ai/v1/completions',
+          },
+          {
+            protocol: 'tcp',
+            fromPort: port,
+            toPort: port,
+            cidrBlocks: cidrs,
+            description: 'VPC NAT egress to internal /process dispatch',
+          },
+        ])
+      );
       // egress left at SST's default (0.0.0.0/0): the ALB must reach the tasks.
+    },
+    // The provider default policy still negotiates TLS 1.0 and 1.1.
+    listener: listenerArgs => {
+      if (listenerArgs.protocol === 'HTTPS') listenerArgs.sslPolicy = 'ELBSecurityPolicy-TLS13-1-2-2021-06';
     },
   },
   // Local `sst dev`: run the server directly with tsx instead of building the image. Same
   // in-process loader as the image CMD (no pnpm wrapper) so local SIGTERM behaves the same.
   // The server defaults to port 8788 locally (8080 is commonly taken - e.g. Docker
   // Desktop binds host :8080 - which caused `EADDRINUSE :::8080`). The cloud container
-  // still listens on 8080 (Dockerfile ENV PORT=8080, ALB forwards 80->8080). dev.url must
+  // still listens on 8080 (Dockerfile ENV PORT=8080, the ALB forwards to it). dev.url must
   // match the local port so the frontend's dispatchQuest reaches the local server.
   dev: {
     command: 'node --import tsx server/chatCompletion/server.ts',
@@ -334,12 +380,13 @@ if (!$dev) {
   // Expose the CLI/3rd-party completions endpoint under the bike4mind domain via the shared
   // CloudFront router (same distribution as the app). This replaced the former `cliLlmHandler`
   // Lambda, which owned this same `/api/ai/v1/completions` path and has been removed.
-  // CloudFront terminates TLS at the edge and forwards to the public ALB over http (:80 ->
-  // container :8080). Only this path is routed through CloudFront; /process is reachable only
-  // via the ALB directly. routePrefix namespaces the path per-stage on the shared dev
-  // distribution (empty on deployed dev/production). Guarded on !$dev because the load balancer
-  // (and thus `.url`) only exists when the Service runs in the cloud - under `sst dev` it runs
-  // via dev.command with no ALB, and the CLI reaches it on localhost:8788.
+  // CloudFront terminates viewer TLS at the edge and connects to the public ALB with the scheme
+  // of `chatCompletion.url`: https where the stage has an origin domain, http otherwise (the ALB
+  // forwards to container :8080 either way). Only this path is routed through CloudFront;
+  // /process is reachable only via the ALB directly. routePrefix namespaces the path per-stage
+  // on the shared dev distribution (empty on deployed dev/production). Guarded on !$dev because
+  // the load balancer (and thus `.url`) only exists when the Service runs in the cloud - under
+  // `sst dev` it runs via dev.command with no ALB, and the CLI reaches it on localhost:8788.
   router.route(`${routePrefix}/api/ai/v1/completions`, chatCompletion.url);
 
   // Public embed chat endpoint (epic #41 Phase B). Same always-on origin as the
