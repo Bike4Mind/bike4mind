@@ -235,6 +235,9 @@ const RUN_SPEND_ACCUMULATORS = {
   cacheWriteTokens: { $sum: { $ifNull: ['$cacheWriteTokens', 0] } },
 };
 
+// $facet stages cannot spill to disk, and byAttempt groups on caller-supplied ids, so bound the read (ms).
+const COMPLETION_RUN_SPEND_MAX_TIME_MS = 10_000;
+
 // Largest spend first; the group key breaks ties so equal buckets keep a stable order.
 const groupRunSpendBy = (key: unknown) => [
   { $group: { _id: key, ...RUN_SPEND_ACCUMULATORS } },
@@ -730,40 +733,44 @@ export class CreditTransactionRepository
     runId: string,
     owner: { ownerId: string; ownerType: CreditHolderType }
   ): Promise<CompletionRunSpendBreakdown> {
-    const [facets] = await this.model.aggregate<{
-      settled: RunSpendRow<null>[];
-      byRole: RunSpendRow<CompletionRunRole>[];
-      byPurpose: RunSpendRow<CompletionRunPurpose>[];
-      byModel: RunSpendRow<string>[];
-      byAttempt: RunSpendRow<{ role: CompletionRunRole; taskId?: string; attemptId?: string }>[];
-    }>([
-      {
-        $match: {
-          'metadata.run.runId': runId,
-          ownerId: owner.ownerId,
-          ownerType: owner.ownerType,
-          type: 'completion_api_usage',
+    const [facets] = await this.model
+      .aggregate<{
+        settled: RunSpendRow<null>[];
+        byRole: RunSpendRow<CompletionRunRole>[];
+        byPurpose: RunSpendRow<CompletionRunPurpose>[];
+        byModel: RunSpendRow<string>[];
+        byAttempt: RunSpendRow<{ role: CompletionRunRole; taskId?: string; attemptId?: string }>[];
+      }>([
+        {
+          $match: {
+            'metadata.run.runId': runId,
+            ownerId: owner.ownerId,
+            ownerType: owner.ownerType,
+            // Settled-only by construction: cliCompletions.ts writes this row, negative, after the credit
+            // charge settles. A writer that records it earlier or unsigned breaks this sum and the $abs.
+            type: 'completion_api_usage',
+          },
         },
-      },
-      {
-        $facet: {
-          settled: groupRunSpendBy(null),
-          byRole: groupRunSpendBy('$metadata.run.role'),
-          // Stored as sent; a request sent without a purpose was a turn (UsageEventRun).
-          byPurpose: groupRunSpendBy({ $ifNull: ['$metadata.run.purpose', 'turn'] }),
-          byModel: groupRunSpendBy({ $ifNull: ['$model', 'unknown'] }),
-          // One more than the cap, so a cut-off list can be told apart from one that fits exactly.
-          byAttempt: [
-            ...groupRunSpendBy({
-              role: '$metadata.run.role',
-              taskId: '$metadata.run.taskId',
-              attemptId: '$metadata.run.attemptId',
-            }),
-            { $limit: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1 },
-          ],
+        {
+          $facet: {
+            settled: groupRunSpendBy(null),
+            byRole: groupRunSpendBy('$metadata.run.role'),
+            // Stored as sent; a request sent without a purpose was a turn (UsageEventRun).
+            byPurpose: groupRunSpendBy({ $ifNull: ['$metadata.run.purpose', 'turn'] }),
+            byModel: groupRunSpendBy({ $ifNull: ['$model', 'unknown'] }),
+            // One more than the cap, so a cut-off list can be told apart from one that fits exactly.
+            byAttempt: [
+              ...groupRunSpendBy({
+                role: '$metadata.run.role',
+                taskId: '$metadata.run.taskId',
+                attemptId: '$metadata.run.attemptId',
+              }),
+              { $limit: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1 },
+            ],
+          },
         },
-      },
-    ]);
+      ])
+      .option({ maxTimeMS: COMPLETION_RUN_SPEND_MAX_TIME_MS });
 
     const [settled] = facets?.settled ?? [];
     const attempts = facets?.byAttempt ?? [];

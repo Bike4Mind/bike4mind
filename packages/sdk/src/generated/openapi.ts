@@ -244,7 +244,7 @@ export interface paths {
     };
     /**
      * Get a completion run's spend
-     * @description Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` matches the `settled` stream events those requests sent, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     * @description Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
      */
     get: operations['getCompletionRunUsage'];
     put?: never;
@@ -3272,7 +3272,7 @@ export interface components {
       max_tokens?: number;
       /** @description Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise. */
       sessionId?: string;
-      /** @description Groups this request's spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`). */
+      /** @description Groups this request's spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`), as is a read of its spend. */
       run?: {
         /**
          * Format: uuid
@@ -3509,6 +3509,7 @@ export interface components {
          */
         purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
       }[];
+      /** @description Grouped by the model each request asked for, which is not always the model that ran. */
       byModel: {
         /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
         creditsCharged: number;

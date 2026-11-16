@@ -338,7 +338,7 @@ export const CompletionRunAttributionSchema = z
     ),
   })
   .describe(
-    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`).'
+    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`), as is a read of its spend.'
   );
 
 export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
@@ -390,7 +390,9 @@ export const CompletionRunUsageSchema = z.object({
       purpose: z.enum(COMPLETION_RUN_PURPOSES).describe('`turn` when sent without one.'),
     })
   ),
-  byModel: z.array(CompletionRunSpendSchema.extend({ model: z.string() })),
+  byModel: z
+    .array(CompletionRunSpendSchema.extend({ model: z.string() }))
+    .describe('Grouped by the model each request asked for, which is not always the model that ran.'),
   byAttempt: z
     .array(
       CompletionRunSpendSchema.extend({

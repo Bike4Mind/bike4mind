@@ -71,8 +71,8 @@ export const getCompletionRunUsageContract = defineEndpoint({
   description:
     'Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` ' +
     'whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, ' +
-    'model and task attempt. `creditsCharged` matches the `settled` stream events those requests sent, so a client ' +
-    'can reconcile its own totals against it. Only settled charges count: a request still running, one whose ' +
+    "model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a " +
+    'client can reconcile its own totals against it. Only settled charges count: a request still running, one whose ' +
     'credits never settled, and one sent without `run` are not included. Readable only with a credential of the ' +
     'same user and billing owner that minted the run; any other run id, including one that does not exist, ' +
     'gets `404` (`errorCode: "run_not_found"`).',
