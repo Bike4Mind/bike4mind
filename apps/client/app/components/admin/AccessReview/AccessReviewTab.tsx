@@ -166,7 +166,7 @@ export default function AccessReviewTab() {
   };
 
   const rowActions = ({ live }: ReviewRow) => {
-    if (!live || live.decision?.decision === 'revoked') return null;
+    if (!live) return null;
     const own = sameId(currentUser?.id, live.userId);
     return (
       <Stack direction="row" gap={1}>

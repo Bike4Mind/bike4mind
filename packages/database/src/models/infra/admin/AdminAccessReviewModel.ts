@@ -115,22 +115,25 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
     dormantDays: number,
     startedBy: AccessReviewReviewer,
     decision: AccessReviewDecision
-  ): Promise<AdminAccessReviewRecord> {
+  ): Promise<{ record: AdminAccessReviewRecord; changed: boolean }> {
     await this.ensureRecord(quarter, dormantDays, startedBy);
     const entry = toDecision(decision);
+    // A second revocation of the same admin (re-granted, then removed again) carries a new audit entry.
+    const differs =
+      entry.decision === 'revoked'
+        ? { $or: [{ decision: { $ne: entry.decision } }, { auditEntryId: { $ne: entry.auditEntryId } }] }
+        : { decision: { $ne: entry.decision } };
 
-    // Two passes: a concurrent confirm can land between a missed confirm->revoke and the guarded push.
+    // Two passes: a concurrent decision can land between a missed replace and the guarded push.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (entry.decision === 'revoked') {
-        const replaced = await this.reviewModel
-          .findOneAndUpdate(
-            { quarter, decisions: { $elemMatch: { userId: entry.userId, decision: 'confirmed' } } },
-            { $set: { 'decisions.$': entry } },
-            { new: true, runValidators: true }
-          )
-          .lean<AdminAccessReviewDocumentShape>();
-        if (replaced) return toAdminAccessReviewRecord(replaced);
-      }
+      const replaced = await this.reviewModel
+        .findOneAndUpdate(
+          { quarter, decisions: { $elemMatch: { userId: entry.userId, ...differs } } },
+          { $set: { 'decisions.$': entry } },
+          { new: true, runValidators: true }
+        )
+        .lean<AdminAccessReviewDocumentShape>();
+      if (replaced) return { record: toAdminAccessReviewRecord(replaced), changed: true };
 
       const pushed = await this.reviewModel
         .findOneAndUpdate(
@@ -139,15 +142,15 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
           { new: true, runValidators: true }
         )
         .lean<AdminAccessReviewDocumentShape>();
-      if (pushed) return toAdminAccessReviewRecord(pushed);
+      if (pushed) return { record: toAdminAccessReviewRecord(pushed), changed: true };
 
       const current = await this.findByQuarter(quarter);
       const existing = current?.decisions.find(({ userId }) => userId === entry.userId);
       if (!current || !existing) throw new Error(`Access review ${quarter} lost a decision write`);
-      if (existing.decision === entry.decision) return current;
-      if (existing.decision === 'revoked') {
-        throw new ConflictError('This admin access was already revoked in this review');
-      }
+      const same =
+        existing.decision === entry.decision &&
+        (entry.decision !== 'revoked' || existing.auditEntryId === entry.auditEntryId);
+      if (same) return { record: current, changed: false };
     }
     throw new ConflictError('This admin access decision changed concurrently; reload and try again');
   }
@@ -160,7 +163,7 @@ class AdminAccessReviewRepository implements IAdminAccessReviewRepository {
     return this.findByQuarter(quarter);
   }
 
-  private async ensureRecord(quarter: string, dormantDays: number, startedBy: AccessReviewReviewer): Promise<void> {
+  async ensureRecord(quarter: string, dormantDays: number, startedBy: AccessReviewReviewer): Promise<void> {
     const upsert = () =>
       this.reviewModel.updateOne(
         { quarter },

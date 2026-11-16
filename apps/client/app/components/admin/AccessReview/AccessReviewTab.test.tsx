@@ -126,8 +126,8 @@ describe('AccessReviewTab', () => {
         userId: DELEGATE,
         email: 'c@example.com',
         fullAdmin: false,
-        permissions: ['users:read', 'settings:manage'],
-        directPermissions: ['users:read'],
+        permissions: ['users:moderate', 'settings:manage'],
+        directPermissions: ['users:moderate', 'users:read'],
         adminRoleIds: ['support'],
         grantedBy: { userId: ME, name: 'Me', email: 'me@example.com' },
         grantedAt: '2026-10-01T00:00:00.000Z',
@@ -156,7 +156,7 @@ describe('AccessReviewTab', () => {
     expect(within(rowOf(OTHER_FULL)).getByText('Unknown (before audit log)')).toBeInTheDocument();
     expect(within(rowOf(ME)).queryByTestId('admin-access-review-dormant-chip')).toBeNull();
     expect(within(rowOf(ME)).queryByTestId('admin-access-review-no-mfa-chip')).toBeNull();
-    expect(within(rowOf(DELEGATE)).getByText('users:read, settings:manage')).toBeInTheDocument();
+    expect(within(rowOf(DELEGATE)).getByText('users:moderate, settings:manage')).toBeInTheDocument();
   });
 
   it('revokes a delegate through the permissions update, then records the decision', async () => {
@@ -164,7 +164,7 @@ describe('AccessReviewTab', () => {
     await revoke(DELEGATE);
     await waitFor(() => expect(mocks.calls).toEqual(['permissions', 'decision:revoked']));
     expect(mocks.updatePermissions).toHaveBeenCalledWith({
-      before: ['users:read'],
+      before: ['users:moderate'],
       adminPermissions: [],
       beforeAdminRoleIds: ['support'],
       adminRoleIds: [],

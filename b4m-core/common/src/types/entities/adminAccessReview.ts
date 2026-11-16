@@ -50,15 +50,22 @@ export interface IAdminAccessReviewRepository {
   findByQuarter(quarter: string): Promise<AdminAccessReviewRecord | null>;
   findLatestCompleted(): Promise<AdminAccessReviewRecord | null>;
   /**
-   * Creates the quarter's record on its first decision. Confirm may later become revoke; revoke is
-   * final, so revoke then confirm throws ConflictError. Repeating the same decision is a no-op.
+   * Creates the quarter's record if it is missing. Call it outside a transaction: a racing insert
+   * aborts a transaction, so the duplicate-key retry only works outside one.
+   */
+  ensureRecord(quarter: string, dormantDays: number, startedBy: AccessReviewReviewer): Promise<void>;
+  /**
+   * Creates the quarter's record on its first decision and replaces a different earlier decision
+   * (a confirm becoming a revoke, or a confirm after access was re-granted). Repeating the same
+   * decision, or the same revocation, is a no-op and returns `changed: false`. The caller decides
+   * which transitions are allowed.
    */
   recordDecision(
     quarter: string,
     dormantDays: number,
     startedBy: AccessReviewReviewer,
     decision: AccessReviewDecision
-  ): Promise<AdminAccessReviewRecord>;
+  ): Promise<{ record: AdminAccessReviewRecord; changed: boolean }>;
   /** Stamps completion once; a second call leaves the first completion in place. Null when no record exists. */
   markCompleted(quarter: string, at: Date, by: AccessReviewReviewer): Promise<AdminAccessReviewRecord | null>;
 }

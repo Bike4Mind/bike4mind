@@ -71,7 +71,16 @@ async function countByUser(collection: mongoose.Collection, filter: Filter, user
   return new Map(rows.map(row => [row._id, row.n]));
 }
 
-const PER_USER_GRANT_ACTIONS = ['user.permissions.updated', 'user.role.admin_granted'];
+// A permissions update counts only when it added a permission or role; one that only removed is no grant.
+const PER_USER_GRANT_MATCH = {
+  $or: [
+    { action: 'user.role.admin_granted' },
+    {
+      action: 'user.permissions.updated',
+      $or: [{ 'details.granted.0': { $exists: true } }, { 'details.rolesAdded.0': { $exists: true } }],
+    },
+  ],
+};
 
 async function latestByUser(
   collection: mongoose.Collection,
@@ -99,7 +108,7 @@ async function latestGrants(adminIds: string[]): Promise<Map<string, GrantRow>> 
   const rows = await AdminAuditLogModel.collection
     .aggregate<GrantRow>(
       [
-        { $match: { 'target.kind': 'user', 'target.id': { $in: adminIds }, action: { $in: PER_USER_GRANT_ACTIONS } } },
+        { $match: { 'target.kind': 'user', 'target.id': { $in: adminIds }, ...PER_USER_GRANT_MATCH } },
         { $sort: { occurredAt: -1 } },
         { $group: { _id: '$target.id', at: { $first: '$occurredAt' }, actor: { $first: '$actor' } } },
       ],

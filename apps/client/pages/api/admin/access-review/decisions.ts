@@ -39,13 +39,34 @@ type TargetDoc = {
   adminRoleIds?: unknown[] | null;
 };
 
-type RevocationEntry = {
+type AccessChangeEntry = {
   _id: unknown;
   action: string;
-  changes?: { field: string; before?: unknown }[];
+  changes?: { field: string; before?: unknown; after?: unknown }[];
 };
 
-const REVOCATION_ACTIONS = ['user.permissions.updated', 'user.role.admin_revoked'];
+type Removal = { entry: AccessChangeEntry; fullAdmin: boolean; permissions: string[]; roleIds: string[] };
+
+// Grants are read too: they end the run of removals that took the access away.
+const ACCESS_CHANGE_ACTIONS = ['user.permissions.updated', 'user.role.admin_granted', 'user.role.admin_revoked'];
+
+const asStrings = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+
+/** What one audit entry removed; null when it granted anything or removed nothing. */
+const removalOf = (entry: AccessChangeEntry): Removal | null => {
+  if (entry.action === 'user.role.admin_revoked') return { entry, fullAdmin: true, permissions: [], roleIds: [] };
+  if (entry.action !== 'user.permissions.updated') return null;
+  const removal: Removal = { entry, fullAdmin: false, permissions: [], roleIds: [] };
+  for (const change of entry.changes ?? []) {
+    if (change.field !== 'adminPermissions' && change.field !== 'adminRoleIds') continue;
+    const before = asStrings(change.before);
+    const after = asStrings(change.after);
+    if (after.some(id => !before.includes(id))) return null;
+    const gone = before.filter(id => !after.includes(id));
+    (change.field === 'adminPermissions' ? removal.permissions : removal.roleIds).push(...gone);
+  }
+  return removal.permissions.length > 0 || removal.roleIds.length > 0 ? removal : null;
+};
 
 const holdsAdminAccess = (user: TargetDoc) =>
   user.isAdmin === true || (user.adminPermissions?.length ?? 0) > 0 || (user.adminRoleIds?.length ?? 0) > 0;
@@ -81,6 +102,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
       name: req.user.name || req.user.username || req.user.id,
     };
 
+    await adminAccessReviewRepository.ensureRecord(quarter, dormantDays, reviewer);
     const result = await withTransaction(async () => {
       const target = await User.findById(userId)
         .select('email name username isAdmin adminPermissions adminRoleIds')
@@ -112,41 +134,59 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
             'Remove this admin access through the permission change first, then record the revocation.'
           );
         }
-        const revocation = await AdminAuditLogModel.findOne({
+        const history = await AdminAuditLogModel.find({
           'target.kind': 'user',
           'target.id': userId,
-          action: { $in: REVOCATION_ACTIONS },
+          action: { $in: ACCESS_CHANGE_ACTIONS },
           occurredAt: { $gte: quarterStart(now) },
         })
-          .sort({ occurredAt: -1 })
+          .sort({ occurredAt: -1, _id: -1 })
           .select('_id action changes')
-          .lean<RevocationEntry>();
-        if (!revocation) {
+          .lean<AccessChangeEntry[]>();
+        // A full admin loses the role and the direct permissions in two writes, so every removal since
+        // the last grant together is what was revoked.
+        const removals: Removal[] = [];
+        for (const change of history) {
+          const removal = removalOf(change);
+          if (!removal) break;
+          removals.push(removal);
+        }
+        if (removals.length === 0) {
           throw new ConflictError('No admin access removal for this account is on the audit log this quarter.');
         }
-        const removed = revocation.changes?.find(change => change.field === 'adminPermissions')?.before;
+        const roleIds = [...new Set(removals.flatMap(removal => removal.roleIds))];
+        const roles = roleIds.length > 0 ? await adminRoleRepository.findByIds(roleIds) : [];
         entry = {
           userId,
           email: target.email ?? null,
-          fullAdmin: revocation.action === 'user.role.admin_revoked',
-          permissions: Array.isArray(removed) ? removed.map(String) : [],
+          fullAdmin: removals.some(removal => removal.fullAdmin),
+          permissions: sortAdminPermissions([
+            ...removals.flatMap(removal => removal.permissions),
+            ...roles.flatMap(role => role.permissions),
+          ]),
           decision,
           reviewer,
           decidedAt: now,
-          auditEntryId: String(revocation._id),
+          auditEntryId: String(removals[0].entry._id),
         };
       }
 
-      let record = await adminAccessReviewRepository.recordDecision(quarter, dormantDays, reviewer, entry);
-      await recordAdminActionFromRequest(req, {
-        action,
-        target: { kind: 'user', id: userId, displayName },
-        summary: `${decision} admin access in the ${quarter} access review`,
-        details: { quarter, ...(entry.auditEntryId && { auditEntryId: entry.auditEntryId }) },
-      });
+      const recorded = await adminAccessReviewRepository.recordDecision(quarter, dormantDays, reviewer, entry);
+      let { record } = recorded;
+      if (recorded.changed) {
+        await recordAdminActionFromRequest(req, {
+          action,
+          target: { kind: 'user', id: userId, displayName },
+          summary: `${decision} admin access in the ${quarter} access review`,
+          details: { quarter, ...(entry.auditEntryId && { auditEntryId: entry.auditEntryId }) },
+        });
+      }
 
       const admins = await User.find(ACCESS_REVIEW_ADMIN_FILTER, { _id: 1 }).lean<{ _id: unknown }[]>();
-      const decided = new Set(record.decisions.map(({ userId: id }) => id));
+      // A revoked admin who holds access again (re-granted this quarter) needs a new decision.
+      const decided = new Set(
+        record.decisions.filter(({ decision: value }) => value === 'confirmed').map(({ userId: id }) => id)
+      );
       const pending = admins.map(({ _id }) => String(_id)).filter(id => !decided.has(id));
       let completed = false;
       if (pending.length === 0 && !record.completedAt) {

@@ -48,12 +48,16 @@ export const toAccessReviewRows = (
   now: Date,
   dormantDays: number
 ): AccessReviewRow[] =>
-  admins.map(admin => ({
-    ...admin,
-    dormant: isDormant(admin.lastAdminActionAt, now, dormantDays),
-    noMfa: !admin.mfaEnabled,
-    decision: record?.decisions.find(({ userId }) => userId === admin.userId) ?? null,
-  }));
+  admins.map(admin => {
+    const decision = record?.decisions.find(({ userId }) => userId === admin.userId) ?? null;
+    return {
+      ...admin,
+      dormant: isDormant(admin.lastAdminActionAt, now, dormantDays),
+      noMfa: !admin.mfaEnabled,
+      // A listed admin holds access, so a revoke recorded earlier was undone by a re-grant: decide again.
+      decision: decision?.decision === 'revoked' ? null : decision,
+    };
+  });
 
 // An explicit allow-list: the export never serializes an admin or user object wholesale.
 export const ACCESS_REVIEW_CSV_COLUMNS = [

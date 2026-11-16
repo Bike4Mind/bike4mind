@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Types } from 'mongoose';
-import { ConflictError, type AccessReviewDecision, type AccessReviewDecisionValue } from '@bike4mind/common';
+import { type AccessReviewDecision, type AccessReviewDecisionValue } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminAccessReviewModel, adminAccessReviewRepository } from './AdminAccessReviewModel';
 
@@ -39,36 +39,51 @@ describe('AdminAccessReviewRepository', () => {
   it('lets a confirm become a revoke, replacing the decision in place', async () => {
     const target = new Types.ObjectId().toHexString();
     await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, decisionFor(target, 'confirmed'));
-    const record = await adminAccessReviewRepository.recordDecision('2027-Q2', 90, GRACE, {
+    const { record, changed } = await adminAccessReviewRepository.recordDecision('2027-Q2', 90, GRACE, {
       ...decisionFor(target, 'revoked', GRACE),
       auditEntryId: 'audit-1',
     });
 
+    expect(changed).toBe(true);
     expect(record.decisions).toHaveLength(1);
     expect(record.decisions[0]).toMatchObject({ decision: 'revoked', reviewer: GRACE, auditEntryId: 'audit-1' });
   });
 
-  it('refuses to turn a revoke back into a confirm', async () => {
+  it('replaces a revoke with a confirm after access is re-granted, and records a second revocation', async () => {
     const target = new Types.ObjectId().toHexString();
-    await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, decisionFor(target, 'revoked'));
+    const revoke = (auditEntryId: string) => ({ ...decisionFor(target, 'revoked'), auditEntryId });
+    await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, revoke('audit-1'));
 
-    await expect(
-      adminAccessReviewRepository.recordDecision('2027-Q2', 90, GRACE, decisionFor(target, 'confirmed', GRACE))
-    ).rejects.toBeInstanceOf(ConflictError);
-    const record = await adminAccessReviewRepository.findByQuarter('2027-Q2');
-    expect(record?.decisions).toEqual([expect.objectContaining({ userId: target, decision: 'revoked' })]);
+    const confirmed = await adminAccessReviewRepository.recordDecision(
+      '2027-Q2',
+      90,
+      GRACE,
+      decisionFor(target, 'confirmed', GRACE)
+    );
+    expect(confirmed.changed).toBe(true);
+    expect(confirmed.record.decisions).toEqual([expect.objectContaining({ userId: target, decision: 'confirmed' })]);
+
+    await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, revoke('audit-1'));
+    const again = await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, revoke('audit-1'));
+    expect(again.changed).toBe(false);
+    const second = await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, revoke('audit-2'));
+    expect(second.changed).toBe(true);
+    expect(second.record.decisions).toEqual([
+      expect.objectContaining({ decision: 'revoked', auditEntryId: 'audit-2' }),
+    ]);
   });
 
   it('treats a repeated decision as a no-op', async () => {
     const target = new Types.ObjectId().toHexString();
     await adminAccessReviewRepository.recordDecision('2027-Q2', 90, ADA, decisionFor(target, 'confirmed'));
-    const record = await adminAccessReviewRepository.recordDecision(
+    const { record, changed } = await adminAccessReviewRepository.recordDecision(
       '2027-Q2',
       90,
       GRACE,
       decisionFor(target, 'confirmed', GRACE)
     );
 
+    expect(changed).toBe(false);
     expect(record.decisions).toHaveLength(1);
     expect(record.decisions[0]?.reviewer).toEqual(ADA);
   });

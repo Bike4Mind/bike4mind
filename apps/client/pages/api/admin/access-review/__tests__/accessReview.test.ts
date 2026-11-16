@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   findByQuarter: vi.fn(),
   findLatestCompleted: vi.fn(),
   recordDecision: vi.fn(),
+  ensureRecord: vi.fn(),
   markCompleted: vi.fn(),
   findById: vi.fn(),
   findAdmins: vi.fn(),
@@ -49,12 +50,13 @@ vi.mock('@bike4mind/server-utils/security/accessReview/accessReviewData', () => 
 }));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: mocks.findById, find: mocks.findAdmins },
-  AdminAuditLogModel: { findOne: mocks.findAudit },
+  AdminAuditLogModel: { find: mocks.findAudit },
   adminRoleRepository: { findByIds: mocks.findRoles },
   adminAccessReviewRepository: {
     findByQuarter: mocks.findByQuarter,
     findLatestCompleted: mocks.findLatestCompleted,
     recordDecision: mocks.recordDecision,
+    ensureRecord: mocks.ensureRecord,
     markCompleted: mocks.markCompleted,
   },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
@@ -134,8 +136,13 @@ const target = (fields: Record<string, unknown>) =>
   mocks.findById.mockReturnValue({
     select: () => ({ lean: async () => ({ name: 'Ada', email: 'ada@example.com', ...fields }) }),
   });
-const auditRow = (row: unknown) =>
-  mocks.findAudit.mockReturnValue({ sort: () => ({ select: () => ({ lean: async () => row }) }) });
+const auditRows = (rows: unknown[]) =>
+  mocks.findAudit.mockReturnValue({ sort: () => ({ select: () => ({ lean: async () => rows }) }) });
+const permissionsChange = (id: string, changes: { field: string; before: string[]; after: string[] }[]) => ({
+  _id: id,
+  action: 'user.permissions.updated',
+  changes,
+});
 const currentAdmins = (ids: string[]) =>
   mocks.findAdmins.mockReturnValue({ lean: async () => ids.map(_id => ({ _id })) });
 
@@ -150,7 +157,10 @@ beforeEach(() => {
   });
   mocks.findByQuarter.mockResolvedValue(null);
   mocks.findLatestCompleted.mockResolvedValue(null);
-  mocks.recordDecision.mockImplementation(async (_q, _d, _r, entry) => record({ decisions: [entry] }));
+  mocks.recordDecision.mockImplementation(async (_q, _d, _r, entry) => ({
+    record: record({ decisions: [entry] }),
+    changed: true,
+  }));
   mocks.markCompleted.mockImplementation(async () => record({ completedAt: NOW }));
   mocks.findRoles.mockResolvedValue([]);
   mocks.audit.mockResolvedValue({});
@@ -158,7 +168,7 @@ beforeEach(() => {
     throw Object.assign(new Error('denied'), { statusCode: 403 });
   });
   target({ isAdmin: false, adminPermissions: ['support:read'] });
-  auditRow(null);
+  auditRows([]);
   currentAdmins([REVIEWER, OTHER]);
 });
 
@@ -205,6 +215,14 @@ describe('GET report', () => {
     expect(body.admins[0]).toMatchObject({ userId: OTHER, dormant: true, noMfa: true, decision: null });
     expect(Object.keys(body)).not.toEqual(expect.arrayContaining(['apiKeys']));
     expect(JSON.stringify(body)).not.toMatch(/apiKeys|supportAccess|impersonation/);
+  });
+
+  it('shows no decision on a listed admin whose earlier revoke was undone by a re-grant', async () => {
+    mocks.findByQuarter.mockResolvedValue(
+      record({ decisions: [{ userId: OTHER, decision: 'revoked', permissions: [], auditEntryId: 'audit-1' }] })
+    );
+    const res = await call(report, 'GET');
+    expect(res._getJSONData().admins[0]).toMatchObject({ userId: OTHER, decision: null });
   });
 
   it.each(['', '0', 'abc', '366', '6', '30.5'])('rejects dormantDays=%j', async value => {
@@ -290,7 +308,7 @@ describe('POST decisions', () => {
     { isAdmin: false, adminPermissions: [], adminRoleIds: ['660000000000000000000001'] },
   ])('refuses a revoke while the account still holds admin access %j', async fields => {
     target(fields);
-    auditRow({ _id: 'a1', action: 'user.permissions.updated' });
+    auditRows([{ _id: 'a1', action: 'user.role.admin_revoked' }]);
     await expect(call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } })).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -307,11 +325,7 @@ describe('POST decisions', () => {
 
   it('records a revoke once access is gone, citing the removal audit entry', async () => {
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
-    auditRow({
-      _id: 'audit-1',
-      action: 'user.permissions.updated',
-      changes: [{ field: 'adminPermissions', before: ['support:read'], after: [] }],
-    });
+    auditRows([permissionsChange('audit-1', [{ field: 'adminPermissions', before: ['support:read'], after: [] }])]);
     currentAdmins([REVIEWER]);
     const res = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
     expect(res._getStatusCode()).toBe(200);
@@ -328,6 +342,115 @@ describe('POST decisions', () => {
       expect.anything(),
       expect.objectContaining({ action: 'access_review.revoked' })
     );
+  });
+
+  it('records a full admin who also held direct permissions as a full admin, from both removals', async () => {
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      permissionsChange('audit-2', [
+        { field: 'adminPermissions', before: ['users:moderate', 'users:read'], after: [] },
+      ]),
+      {
+        _id: 'audit-1',
+        action: 'user.role.admin_revoked',
+        changes: [{ field: 'isAdmin', before: true, after: false }],
+      },
+    ]);
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({ fullAdmin: true, permissions: ['users:moderate'], auditEntryId: 'audit-2' })
+    );
+  });
+
+  it('records a full-admin-only revoke from the role audit entry', async () => {
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([{ _id: 'audit-1', action: 'user.role.admin_revoked' }]);
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({ fullAdmin: true, permissions: [], auditEntryId: 'audit-1' })
+    );
+  });
+
+  it('snapshots the permissions a removed admin role carried, beside direct ones', async () => {
+    const roleId = '660000000000000000000001';
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      permissionsChange('audit-1', [
+        { field: 'adminPermissions', before: ['support:read'], after: [] },
+        { field: 'adminRoleIds', before: [roleId], after: [] },
+      ]),
+    ]);
+    mocks.findRoles.mockResolvedValue([{ id: roleId, name: 'Billing', permissions: ['credits:adjust'] }]);
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(mocks.findRoles).toHaveBeenCalledWith([roleId]);
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({
+        fullAdmin: false,
+        permissions: expect.arrayContaining(['support:read', 'credits:adjust']),
+      })
+    );
+  });
+
+  it.each([
+    [
+      'a permissions update that granted',
+      [permissionsChange('g1', [{ field: 'adminPermissions', before: [], after: ['users:read'] }])],
+    ],
+    ['a role grant', [{ _id: 'g1', action: 'user.role.admin_granted' }]],
+    [
+      'a removal followed by a grant',
+      [
+        permissionsChange('g2', [{ field: 'adminRoleIds', before: [], after: ['660000000000000000000001'] }]),
+        permissionsChange('r1', [{ field: 'adminPermissions', before: ['users:read'], after: [] }]),
+      ],
+    ],
+  ])('refuses %s as proof of a revoke', async (_label, rows) => {
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows(rows);
+    await expect(call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(mocks.recordDecision).not.toHaveBeenCalled();
+  });
+
+  it('writes no audit entry when the same decision is repeated', async () => {
+    mocks.recordDecision.mockImplementation(async (_q, _d, _r, entry) => ({
+      record: record({ decisions: [entry] }),
+      changed: false,
+    }));
+    const res = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.audit).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'access_review.confirmed' })
+    );
+  });
+
+  it('creates the review record before the decision transaction', async () => {
+    await call(decisions, 'POST', { body: { userId: OTHER, decision: 'confirmed' } });
+    expect(mocks.ensureRecord).toHaveBeenCalledWith(QUARTER, 90, { userId: REVIEWER, name: 'Rev' });
+    expect(mocks.ensureRecord.mock.invocationCallOrder[0]).toBeLessThan(mocks.findById.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps an admin revoked earlier this quarter but holding access again pending', async () => {
+    const revoked = { userId: OTHER, decision: 'revoked', permissions: [], auditEntryId: 'audit-1' };
+    mocks.recordDecision.mockImplementation(async (_q, _d, _r, entry) => ({
+      record: record({ decisions: [revoked, entry] }),
+      changed: true,
+    }));
+    currentAdmins([OTHER, DELEGATE]);
+    const res = await call(decisions, 'POST', { body: { userId: DELEGATE, decision: 'confirmed' } });
+    expect(mocks.markCompleted).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ completed: false, pending: 1 });
   });
 
   it('completes the review when the last current admin gets a decision', async () => {

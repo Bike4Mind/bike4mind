@@ -391,13 +391,22 @@ describe('collectAccessReview', () => {
       email: `${name}@example.org`,
       wasAdmin: true,
     });
-    const entry = (actorId: string, name: string, action: string, at: Date, targetId = 'settings') => ({
+    const entry = (
+      actorId: string,
+      name: string,
+      action: string,
+      at: Date,
+      targetId = 'settings',
+      details?: Record<string, string[]>
+    ) => ({
       _id: id(),
       action,
       occurredAt: at,
       actor: actor(actorId, name),
       target: { kind: targetId === 'settings' ? 'settings' : 'user', id: targetId, displayName: targetId },
+      ...(details && { details }),
     });
+    const granted = (ids: string[]) => ({ granted: ids, revoked: [], rolesAdded: [], rolesRemoved: [] });
     const auditIds: mongoose.Types.ObjectId[] = [];
     const authIds: mongoose.Types.ObjectId[] = [];
 
@@ -413,8 +422,15 @@ describe('collectAccessReview', () => {
       { _id: d, username: 'delta', isAdmin: false, adminPermissions: ['support:read'], mfa: { passkeyEnabled: true } },
     ]);
     const audit = [
-      entry(bId, 'bravo', 'user.permissions.updated', daysAgo(150), cId),
-      entry(aId, 'alpha', 'user.permissions.updated', daysAgo(10), cId),
+      entry(bId, 'bravo', 'user.permissions.updated', daysAgo(150), cId, granted(['users:read'])),
+      entry(aId, 'alpha', 'user.permissions.updated', daysAgo(10), cId, granted(['users:read', 'support:read'])),
+      // Newer, but it only removed a permission, so alpha stays the grantor.
+      entry(dId, 'delta', 'user.permissions.updated', daysAgo(4), cId, {
+        granted: [],
+        revoked: ['support:read'],
+        rolesAdded: [],
+        rolesRemoved: [],
+      }),
       entry(aId, 'alpha', 'settings.updated', daysAgo(3)),
       entry(aId, 'alpha', 'user.permissions.denied', daysAgo(1)),
       entry(bId, 'bravo', 'settings.updated', daysAgo(120)),
