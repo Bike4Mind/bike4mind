@@ -56,7 +56,11 @@ describe('buildPendingInviteRows', () => {
   });
 
   it('skips link invites, which name nobody', () => {
-    expect(buildPendingInviteRows([invite({ isLinkOnly: true })])).toEqual([]);
+    expect(
+      buildPendingInviteRows([
+        invite({ isLinkOnly: true, recipients: { pending: ['stray@example.com'], accepted: [], refused: [] } }),
+      ])
+    ).toEqual([]);
   });
 
   it('sorts newest first and tolerates a legacy invite with no inviter or date', () => {

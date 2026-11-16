@@ -1,4 +1,4 @@
-import { OrgInviteRole, roleForPermissions } from '@bike4mind/common';
+import { isLinkOnlyInvite, OrgInviteRole, roleForPermissions } from '@bike4mind/common';
 import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 
 /** Who a resend or cancel names: the invite routes accept exactly one of the two. */
@@ -30,6 +30,7 @@ const toDate = (value: unknown): Date | null => {
  */
 export function buildPendingInviteRows(invites: readonly ISharerInviteView[]): PendingInviteRow[] {
   const rows = invites.flatMap(invite => {
+    if (isLinkOnlyInvite(invite)) return [];
     const names = new Map((invite.recipientUsers ?? []).map(user => [user.userId, user.name]));
     const role = 'permissions' in invite ? roleForPermissions(invite.permissions) : null;
     return (invite.recipients?.pending ?? []).map((entry): PendingInviteRow => {
