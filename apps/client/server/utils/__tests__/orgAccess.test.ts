@@ -163,8 +163,7 @@ describe('verifyOrgAccess', () => {
 });
 
 /**
- * The read-tier sibling of verifyOrgAccess: admits an appointed org admin too, and reports whether the
- * caller would pass the write gate as `canManage`.
+ * The read-tier sibling of verifyOrgAccess: admits the same set and returns it with a `canManage` flag.
  */
 describe('verifyOrgAdminRead', () => {
   const orgWithAdmins = { ...org, adminUserIds: [APPOINTED_ADMIN, MANAGER] };
@@ -202,36 +201,37 @@ describe('verifyOrgAdminRead', () => {
     await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
   });
 
-  // The whole point of the tier: a manager whose users[] row has lapsed may read but not operate.
-  it('admits a manager with no users[] row for reading but reports canManage false', async () => {
-    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
-      org: orgWithAdmins,
-      canManage: false,
-    });
+  it('404s a manager with no users[] row, as verifyOrgAccess does', async () => {
+    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(
+      NotFoundError
+    );
     await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it('matches an appointed admin stored as a legacy ObjectId rather than a string', async () => {
-    mockFindById.mockResolvedValue({ ...org, adminUserIds: [{ toString: () => APPOINTED_ADMIN }] });
-    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toMatchObject({
-      canManage: false,
-    });
+  // A non-string entry never matches the shared predicate (includes), on the write gate too.
+  it('404s a legacy ObjectId-style adminUserIds entry, with or without a row', async () => {
+    const legacy = { toString: () => APPOINTED_ADMIN };
+    for (const users of [[], [{ userId: APPOINTED_ADMIN }]]) {
+      mockFindById.mockResolvedValue({ ...org, adminUserIds: [legacy], users });
+      await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(
+        NotFoundError
+      );
+    }
   });
 
-  // The read tier restates the write gate's owner/manager/platform-admin condition, so this pins
-  // `canManage` to exactly "verifyOrgAccess would admit this caller" and fails if the two drift.
+  // Read and write gates admit the same set; this fails if the two drift.
   it.each([
     { who: 'owner', user: { id: OWNER, isAdmin: false } },
     { who: 'manager', user: { id: MANAGER, isAdmin: false } },
     { who: 'platform admin', user: { id: STRANGER, isAdmin: true } },
     { who: 'appointed admin', user: { id: APPOINTED_ADMIN, isAdmin: false } },
-  ])('reports canManage exactly when verifyOrgAccess admits the $who', async ({ user }) => {
-    const { canManage } = await verifyOrgAdminRead(user, ORG);
-    const admittedByWriteGate = await verifyOrgAccess(user, ORG).then(
-      () => true,
-      () => false
-    );
-    expect(canManage).toBe(admittedByWriteGate);
+  ])('admits the $who exactly when verifyOrgAccess does', async ({ user }) => {
+    const admits = (p: Promise<unknown>) =>
+      p.then(
+        () => true,
+        () => false
+      );
+    expect(await admits(verifyOrgAdminRead(user, ORG))).toBe(await admits(verifyOrgAccess(user, ORG)));
   });
 
   it('404s a user with no standing, including when the org predates adminUserIds', async () => {

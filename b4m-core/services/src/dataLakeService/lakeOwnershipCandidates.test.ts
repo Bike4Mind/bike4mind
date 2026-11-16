@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  type IDataLakeAccessGrantDocument,
+  type IDataLakeDocument,
+  type IOrganizationDocument,
+} from '@bike4mind/common';
 import {
   isOrgAdminOf,
   isOrgOwnershipCandidate,
@@ -31,8 +36,8 @@ const org = (
   name: 'Acme',
   userId: 'billingOwner',
   adminUserIds: [],
-  users: [],
   ...over,
+  users: (over.users ?? []) as IOrganizationDocument['users'],
 });
 
 const makeAdapters = (
@@ -89,17 +94,21 @@ describe('listOrgOwnershipCandidateIds', () => {
   });
 });
 
-describe('isOrgAdminOf - the arm-for-arm mirror of administeredOrgIds', () => {
-  it('admits the billing owner and an appointed admin; nobody else', () => {
+describe('isOrgAdminOf - mirrors administeredOrgIds, including the roster-row rule', () => {
+  it('admits the billing owner and a rostered manager; nobody else', () => {
     const o = org({
       userId: 'billingOwner',
       adminUserIds: ['appointed'],
-      users: [{ userId: 'member' }],
+      users: [{ userId: 'member' }, { userId: 'appointed' }],
     });
     expect(isOrgAdminOf(o, 'billingOwner')).toBe(true);
     expect(isOrgAdminOf(o, 'appointed')).toBe(true);
     expect(isOrgAdminOf(o, 'member')).toBe(false);
     expect(isOrgAdminOf(o, '')).toBe(false);
+  });
+
+  it('rejects an adminUserIds entry with no users[] row', () => {
+    expect(isOrgAdminOf(org({ adminUserIds: ['stale'], users: [] }), 'stale')).toBe(false);
   });
 });
 

@@ -8,7 +8,7 @@
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`           - owner only
  * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster)
- * - `verifyOrgAdminRead`       - owner or manager, matching `adminUserIds` without the roster row (reads only)
+ * - `verifyOrgAdminRead`       - same set as `verifyOrgAccess`, returns `canManage` for flag shape (reads only)
  * - `verifyOrgMemberOrManager` - any member, or a manager whose row lacks a membership permission (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
@@ -68,34 +68,11 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
- * Read-tier sibling of `verifyOrgAccess` for status surfaces: admits the owner, any `adminUserIds`
- * manager and a platform admin. That is the same set `findIdsWithAdminRights` and
- * `canManageLake` resolve from the user's side, read here off the org document because the org is
- * already in hand: a manager is matched on `adminUserIds` alone, unlike `canAdministerOrganization`
- * (`b4m-core/common/src/constants/organization.ts`), which also requires a current `users[]` row - so
- * a manager whose row has lapsed may still see status but not operate. Never use it to guard a write
- * - `canManage` is the `verifyOrgAccess` answer, so a caller can render the write controls only for
- * who may use them.
- *
- * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
+ * `verifyOrgAccess` in the `{ org, canManage }` shape status surfaces expect; `canManage` is always
+ * true on success. Guard writes with `verifyOrgAccess` itself.
  */
 export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean }, orgId: string) {
-  if (!orgId || !isValidObjectId(orgId)) {
-    throw new BadRequestError('Invalid organization ID');
-  }
-
-  const org = await organizationRepository.findById(orgId);
-  if (!org) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  const canManage = canManageOrg(user, org);
-  const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
-  if (!canManage && !isAppointedAdmin) {
-    throw new NotFoundError('Organization not found');
-  }
-
-  return { org, canManage };
+  return { org: await verifyOrgAccess(user, orgId), canManage: true };
 }
 
 /**

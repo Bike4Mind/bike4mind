@@ -101,9 +101,8 @@ async function switchLakeToConnectorFed(req: Request, lakeId: string) {
  *        when the lake has no connection
  *
  * Mirrors drive-connection.ts: a 404 means the lake is missing or the caller has no standing on it. On
- * an org lake GET also admits an appointed org admin (the view is credential-free) while POST and
- * DELETE are org owner/manager (or platform admin) only, and `canManage` tells the client which
- * controls to offer. A personal lake admits its creator alone, on every verb.
+ * an org lake every verb admits the org owner or manager (or platform admin), and GET's `canManage` is
+ * always true there. A personal lake admits its creator alone, on every verb.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))

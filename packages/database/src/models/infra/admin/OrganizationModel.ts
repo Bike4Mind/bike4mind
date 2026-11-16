@@ -615,10 +615,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {
-    // Billing owner OR a manager (adminUserIds). Broader than findIdsAdministeredBy, which also
-    // requires the manager's users[] row - see the interface doc for why this is a separate method.
+    // Same set as findIdsAdministeredBy; kept as a separate name for its data-lake callers.
     const orgs = await this.organizationModel
-      .find({ $or: [{ userId }, { adminUserIds: userId }] })
+      .find({ $or: [{ userId }, { adminUserIds: userId, 'users.userId': userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
