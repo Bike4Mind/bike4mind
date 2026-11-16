@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
+  ForbiddenError,
   IChatHistoryItemDocument,
   IMessage,
   IUserDocument,
@@ -58,6 +59,7 @@ import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../Cha
 import { usageEventStatusForFinish } from '../earlyStopStamp';
 import type { ModelAdmission } from '../modelAdmission';
 import { executedModelFields } from '../shadowTier';
+import { aiAccessDeniedMessage } from '../../userService/accountState';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -644,6 +646,27 @@ export class ToolBuilder {
   }
 
   /**
+   * Re-reads the user before a paid media tool call so a suspension, ban or other AI-access
+   * block applied mid-turn refuses the call; the request-time `deps.user` snapshot cannot see
+   * it. Throws ForbiddenError on a denial. Exposed for unit-testing.
+   */
+  async assertToolAccountAllowed(toolName: string): Promise<void> {
+    let denial: string | null;
+    try {
+      const fresh = await this.deps.db.users.findById(this.deps.user.id);
+      denial = fresh ? aiAccessDeniedMessage(fresh) : 'User not found';
+    } catch (err) {
+      this.deps.logger.error(`[toolAccountCheck] account lookup failed before ${toolName}:`, err);
+      // Fail closed without passing DB error text through to the model.
+      throw new Error('Could not verify account status. Please try again.');
+    }
+    if (denial) {
+      this.deps.logger.warn(`[toolAccountCheck] refused ${toolName} for user ${this.deps.user.id}: ${denial}`);
+      throw new ForbiddenError(denial);
+    }
+  }
+
+  /**
    * Up-front affordability gate for audio_generation (onToolStart): throws
    * insufficient_credits before the paid provider call. Speech is gated on a conservative
    * per-character estimate (the resolved model is not known until synthesis returns);
@@ -1080,6 +1103,9 @@ export class ToolBuilder {
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolStart: async (toolName: string, data: any) => {
+          // Before status/preamble and the credit gates, so a refused call records no estimate.
+          if (GATED_TOOL_NAMES.has(toolName)) await this.assertToolAccountAllowed(toolName);
+
           // Chat: surface a live, input-enriched status so the wait reads as
           // productive work instead of a dead spinner. Fire-and-forget and
           // immediate so each tool transition is visible as it happens.
