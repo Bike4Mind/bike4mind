@@ -31,11 +31,22 @@ import {
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 const effects = vi.hoisted(() => ({
+  deleteImportPrefix: vi.fn(),
   storage: vi.fn(),
   cancel: vi.fn(),
   billingEvent: vi.fn(),
   email: vi.fn(),
   purge: vi.fn(),
+}));
+vi.mock('@bike4mind/fab-pipeline', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
+  S3Storage: class {
+    constructor(private readonly bucketName: string) {}
+    deletePermanently = effects.storage;
+    deletePrefixPermanently(prefix: string) {
+      return effects.deleteImportPrefix(this.bucketName, prefix);
+    }
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.storage, deletePermanently: effects.storage }),
@@ -263,6 +274,14 @@ describe('reapplyErasure after a simulated restore', () => {
     });
 
     const result = await reapplyErasure(id, { record: record!, logger });
+    if (initiatedBy === 'self') {
+      expect(effects.deleteImportPrefix).toHaveBeenCalledExactlyOnceWith(
+        'test-historyImportBucket',
+        `notebooks/${id}/`
+      );
+    } else {
+      expect(effects.deleteImportPrefix).not.toHaveBeenCalled();
+    }
 
     expect(result.ownedOrganizationIds).toEqual([]);
     expect(await FeedbackAiModel.countDocuments()).toBe(1);

@@ -56,6 +56,7 @@ if (typeof window !== 'undefined') {
 // Mock SST Resources to avoid deployment state dependency
 vi.mock('sst', () => ({
   Resource: {
+    historyImportBucket: { name: 'test-historyImportBucket' },
     MONGODB_URI: { value: 'mongodb://localhost:27017/test' },
     SESSION_SECRET: { value: 'test-session-secret' },
     JWT_SECRET: { value: 'test-jwt-secret' },
