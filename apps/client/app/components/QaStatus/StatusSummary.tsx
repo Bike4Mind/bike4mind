@@ -1,7 +1,9 @@
-import { FC } from 'react';
-import { Alert, Box, Card, Chip, Divider, Stack, Typography } from '@mui/joy';
-import type { QaE2eStats, QaLatencyStats, QaSummary, QaSummaryRow } from '@client/app/hooks/data/qaStatus';
+import { FC, ReactNode } from 'react';
+import { Alert, Box, Card, Stack, Typography } from '@mui/joy';
+import { useTheme } from '@mui/joy/styles';
+import type { QaSummary } from '@client/app/hooks/data/qaStatus';
 import { parseIsoDay, spanDays, type DayRange } from './dateRange';
+import { seriesColor } from './qaSeriesColors';
 
 /** 0.98765 -> "98.8%"; null -> "-". */
 export function formatPercent(rate: number | null): string {
@@ -9,8 +11,9 @@ export function formatPercent(rate: number | null): string {
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const e2eLine = (s: QaE2eStats) => `${s.cleanRuns} of ${plural(s.runs, 'run')} with no failures`;
-const latencyLine = (s: QaLatencyStats) => `${s.passedRuns} of ${plural(s.runs, 'run')} passed`;
+
+/** Product slugs are lowercase; the card title only raises the first letter. */
+export const productTitle = (product: string) => product.charAt(0).toUpperCase() + product.slice(1);
 
 const shortDay = (day: string) =>
   (parseIsoDay(day) as Date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -21,120 +24,123 @@ function rangeLine(range: DayRange): string {
   return `${plural(spanDays(range), 'day')} (${days})`;
 }
 
-const Figure: FC<{ label: string; value: string; detail: string; testId: string }> = ({
+/** "<b>7</b> of <b>13</b> runs with no failures" */
+const runsLine = (count: number, runs: number, tail: string): ReactNode => (
+  <>
+    <b>{count}</b> of <b>{runs}</b> {runs === 1 ? 'run' : 'runs'} {tail}
+  </>
+);
+
+const Figure: FC<{ label: string; value: string; detail: ReactNode; testId: string }> = ({
   label,
   value,
   detail,
   testId,
 }) => (
   <Box data-testid={testId} sx={{ minWidth: 0 }}>
-    <Typography level="body-xs" textTransform="uppercase" fontWeight="lg">
+    <Typography level="body-sm" textColor="text.tertiary">
       {label}
     </Typography>
-    <Typography level="h3">{value}</Typography>
-    <Typography level="body-sm">{detail}</Typography>
+    <Typography level="h2" fontWeight="md" sx={{ my: 0.5 }}>
+      {value}
+    </Typography>
+    <Typography level="body-sm" textColor="text.tertiary" sx={{ '& b': { color: 'text.primary' } }}>
+      {detail}
+    </Typography>
   </Box>
 );
 
-const Row: FC<{ row: QaSummaryRow }> = ({ row }) => (
-  <Stack
-    data-testid="qa-summary-row"
-    direction="row"
-    flexWrap="wrap"
-    alignItems="center"
-    useFlexGap
-    columnGap={1}
-    rowGap={0.25}
-  >
-    <Typography level="body-sm" fontWeight="md">
-      {row.suite}
-    </Typography>
-    <Chip size="sm" variant="soft" color={row.trigger === 'scheduled' ? 'primary' : 'neutral'}>
-      {row.triggerLabel}
-    </Chip>
-    <Typography level="body-sm" sx={{ ml: 'auto', textAlign: 'right' }}>
-      {row.kind === 'e2e'
-        ? `${formatPercent(row.stats.passRate)} . ${e2eLine(row.stats)}`
-        : `${formatPercent(row.stats.checkRate)} within limit . ${latencyLine(row.stats)}`}
-    </Typography>
-  </Stack>
-);
-
 /**
- * Ops summary over the selected range: one card per product with every suite and trigger
- * (scheduled, manual dispatch, after deploy), split per suite and trigger below the totals.
- * Definitions live in server/qa/summary.ts.
+ * Ops summary of scheduled runs over the selected range: one card per product with its E2E and
+ * latency figures. Definitions live in server/qa/summary.ts. `colorOrder` (every known product)
+ * keeps a product's square the same color whichever products are in range.
  */
-const StatusSummary: FC<{ summary: QaSummary; range: DayRange; branch: string; env?: string }> = ({
-  summary,
-  range,
-  branch,
-  env,
-}) => (
-  <Stack spacing={1.5} data-testid="qa-summary">
-    <Box>
-      <Typography level="title-md">Summary</Typography>
-      <Typography level="body-sm">
-        {rangeLine(range)} . branch {branch} . {env ?? 'all envs'} . all products and triggers
-      </Typography>
-    </Box>
-    {summary.truncated && (
-      <Alert color="warning" size="sm">
-        Too many runs in this range; the oldest were left out.
-      </Alert>
-    )}
-    {summary.products.length === 0 ? (
-      <Typography data-testid="qa-summary-empty" level="body-sm">
-        No runs in this range.
-      </Typography>
-    ) : (
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: {
-            xs: 'minmax(0, 1fr)',
-            md: 'repeat(2, minmax(0, 1fr))',
-            xl: 'repeat(3, minmax(0, 1fr))',
-          },
-          gap: 1.5,
-        }}
-      >
-        {summary.products.map(p => (
-          <Card key={p.product} variant="outlined" data-testid="qa-summary-card">
-            <Typography level="title-lg">{p.product}</Typography>
-            <Stack direction="row" flexWrap="wrap" useFlexGap columnGap={4} rowGap={1.5}>
-              {p.e2e && (
-                <Figure
-                  testId="qa-summary-e2e"
-                  label="E2E"
-                  value={formatPercent(p.e2e.passRate)}
-                  detail={e2eLine(p.e2e)}
-                />
-              )}
-              {p.latency && (
-                <Figure
-                  testId="qa-summary-latency"
-                  label="Latency"
-                  value={formatPercent(p.latency.checkRate)}
-                  detail={latencyLine(p.latency)}
-                />
-              )}
-            </Stack>
-            <Divider />
-            <Stack spacing={0.75}>
-              {p.rows.map(row => (
-                <Row key={`${row.suite}|${row.triggerLabel}`} row={row} />
-              ))}
-            </Stack>
-          </Card>
-        ))}
+const StatusSummary: FC<{
+  summary: QaSummary;
+  range: DayRange;
+  branch: string;
+  env?: string;
+  colorOrder?: string[];
+}> = ({ summary, range, branch, env, colorOrder = [] }) => {
+  const theme = useTheme();
+  const mode = theme.palette.mode === 'dark' ? 'dark' : 'light';
+  const colorFor = (product: string, i: number) => {
+    const known = colorOrder.indexOf(product);
+    return seriesColor(known >= 0 ? known : i, mode);
+  };
+  return (
+    <Stack spacing={1.5} data-testid="qa-summary">
+      <Box>
+        <Typography level="title-md">Summary</Typography>
+        <Typography level="body-sm">
+          {rangeLine(range)} . branch {branch} . {env ?? 'all envs'} . all products, scheduled runs
+        </Typography>
       </Box>
-    )}
-    <Typography level="body-xs">
-      E2E: passed tests out of all tests, not-started included. A run with no failures has no failed or not-started
-      tests. Latency: model checks within their time limit.
-    </Typography>
-  </Stack>
-);
+      {summary.truncated && (
+        <Alert color="warning" size="sm">
+          Too many runs in this range; the oldest were left out.
+        </Alert>
+      )}
+      {summary.products.length === 0 ? (
+        <Typography data-testid="qa-summary-empty" level="body-sm">
+          No scheduled runs in this range.
+        </Typography>
+      ) : (
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: {
+              xs: 'minmax(0, 1fr)',
+              md: 'repeat(2, minmax(0, 1fr))',
+            },
+            gap: 1.5,
+          }}
+        >
+          {summary.products.map((p, i) => (
+            <Card key={p.product} variant="outlined" data-testid="qa-summary-card" sx={{ gap: 2 }}>
+              <Stack direction="row" alignItems="center" spacing={1.25}>
+                <Box
+                  data-testid="qa-summary-swatch"
+                  aria-hidden
+                  sx={{ width: 14, height: 14, borderRadius: '3px', flexShrink: 0, bgcolor: colorFor(p.product, i) }}
+                />
+                <Typography level="title-lg">{productTitle(p.product)}</Typography>
+              </Stack>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  '& > * + *': { borderLeft: '1px solid', borderColor: 'divider', pl: { xs: 1.5, sm: 3 } },
+                  columnGap: { xs: 1.5, sm: 3 },
+                }}
+              >
+                {p.e2e && (
+                  <Figure
+                    testId="qa-summary-e2e"
+                    label="E2E"
+                    value={formatPercent(p.e2e.passRate)}
+                    detail={runsLine(p.e2e.cleanRuns, p.e2e.runs, 'with no failures')}
+                  />
+                )}
+                {p.latency && (
+                  <Figure
+                    testId="qa-summary-latency"
+                    label="Latency"
+                    value={formatPercent(p.latency.checkRate)}
+                    detail={runsLine(p.latency.passedRuns, p.latency.runs, 'passed')}
+                  />
+                )}
+              </Box>
+            </Card>
+          ))}
+        </Box>
+      )}
+      <Typography level="body-xs">
+        E2E: passed tests out of all tests, not-started included. A run with no failures has no failed or not-started
+        tests. Latency: model checks within their time limit.
+      </Typography>
+    </Stack>
+  );
+};
 
 export default StatusSummary;

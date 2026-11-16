@@ -2,7 +2,8 @@ import type { QaCounts, QaMetric, QaRunStatus } from '@bike4mind/common';
 
 /**
  * Period summary for the /status "Summary" section (weekly ops report). Pure, so the
- * definitions are unit-tested without a database; getQaSummary in reads.ts feeds it.
+ * definitions are unit-tested without a database; getQaSummary in reads.ts feeds it scheduled
+ * runs only.
  *
  * Definitions:
  * - E2E pass rate = passed / (passed + failed + skipped + notStarted), summed over runs.
@@ -11,12 +12,12 @@ import type { QaCounts, QaMetric, QaRunStatus } from '@bike4mind/common';
  * - A latency run passed when its status is passed.
  */
 
-export type QaTriggerKind = 'scheduled' | 'manual' | 'deploy' | 'other';
+/** CI sends "Run via Schedule" (or the raw GitHub event name "schedule"). */
+export const SCHEDULED_TRIGGER = /schedule/i;
 
 export interface QaSummaryRunInput {
   product: string;
   suite: string;
-  trigger: string;
   status: QaRunStatus;
   counts: QaCounts;
   metrics?: QaMetric[];
@@ -40,15 +41,10 @@ export interface QaLatencyStats {
   checkRate: number | null;
 }
 
-export type QaSummaryRow =
-  | { kind: 'e2e'; suite: string; trigger: QaTriggerKind; triggerLabel: string; stats: QaE2eStats }
-  | { kind: 'latency'; suite: string; trigger: QaTriggerKind; triggerLabel: string; stats: QaLatencyStats };
-
 export interface QaProductSummary {
   product: string;
   e2e: QaE2eStats | null;
   latency: QaLatencyStats | null;
-  rows: QaSummaryRow[];
 }
 
 export interface QaSummary {
@@ -57,26 +53,6 @@ export interface QaSummary {
   products: QaProductSummary[];
   /** True when a product hit the per-product run cap, so its oldest runs were left out. */
   truncated: boolean;
-}
-
-const TRIGGER_ORDER: Record<QaTriggerKind, number> = { scheduled: 0, manual: 1, deploy: 2, other: 3 };
-const TRIGGER_LABEL: Record<Exclude<QaTriggerKind, 'other'>, string> = {
-  scheduled: 'Scheduled',
-  manual: 'Manual dispatch',
-  deploy: 'After deploy',
-};
-
-/** CI sends "Run via Schedule" / "Run via Dispatch" / "Run via Deployer" (or the raw GitHub event name). */
-export function triggerKind(trigger: string): QaTriggerKind {
-  if (/schedule/i.test(trigger)) return 'scheduled';
-  if (/dispatch|manual/i.test(trigger)) return 'manual';
-  if (/deploy/i.test(trigger)) return 'deploy';
-  return 'other';
-}
-
-function triggerLabel(trigger: string): string {
-  const kind = triggerKind(trigger);
-  return kind === 'other' ? trigger : TRIGGER_LABEL[kind];
 }
 
 const ratio = (n: number, d: number) => (d > 0 ? n / d : null);
@@ -139,27 +115,10 @@ export function summarizeQaRuns(runs: QaSummaryRunInput[]): QaProductSummary[] {
       const e2eRuns = productRuns.filter(r => !latencySuites.has(r.suite));
       const latencyRuns = productRuns.filter(r => latencySuites.has(r.suite));
 
-      const rows = [...groupBy(productRuns, r => `${r.suite}\n${triggerLabel(r.trigger)}`).values()]
-        .map((group): QaSummaryRow => {
-          const { suite, trigger } = group[0];
-          const base = { suite, trigger: triggerKind(trigger), triggerLabel: triggerLabel(trigger) };
-          return latencySuites.has(suite)
-            ? { kind: 'latency', ...base, stats: latencyStats(group) }
-            : { kind: 'e2e', ...base, stats: e2eStats(group) };
-        })
-        .sort(
-          (a, b) =>
-            Number(a.kind === 'latency') - Number(b.kind === 'latency') ||
-            a.suite.localeCompare(b.suite) ||
-            TRIGGER_ORDER[a.trigger] - TRIGGER_ORDER[b.trigger] ||
-            a.triggerLabel.localeCompare(b.triggerLabel)
-        );
-
       return {
         product,
         e2e: e2eRuns.length > 0 ? e2eStats(e2eRuns) : null,
         latency: latencyRuns.length > 0 ? latencyStats(latencyRuns) : null,
-        rows,
       };
     });
 }

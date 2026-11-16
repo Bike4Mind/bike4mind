@@ -153,29 +153,26 @@ describe('getQaOverview', () => {
 describe('getQaSummary', () => {
   const SUMMARY_FILTERS = { branch: 'main', from: new Date(hoursAgo(24 * 7)), to: NOW };
 
-  it('covers every product, suite and trigger in range, on the branch and env', async () => {
-    await seed({ hours: 2, suite: 'Full', trigger: 'Run via Schedule', failing: [TEST_B] });
-    await seed({ hours: 3, suite: 'Full', trigger: 'Run via Dispatch' });
-    await seed({ hours: 4 });
-    await seed({ hours: 5, product: 'product-b' });
-    await seed({ hours: 6, branch: 'pr-1' });
-    await seed({ hours: 7, env: 'production' });
-    await seed({ hours: 24 * 8 });
+  it('covers every product and suite in range on the branch and env, scheduled runs only', async () => {
+    const scheduled = 'Run via Schedule';
+    await seed({ hours: 2, suite: 'Full', trigger: scheduled, failing: [TEST_B] });
+    await seed({ hours: 3, suite: 'Full', trigger: 'schedule' });
+    await seed({ hours: 4, suite: 'Full', trigger: 'Run via Dispatch' });
+    await seed({ hours: 4, suite: 'Core', trigger: 'Run via Deployer' });
+    await seed({ hours: 5, product: 'product-b', trigger: scheduled });
+    await seed({ hours: 6, branch: 'pr-1', trigger: scheduled });
+    await seed({ hours: 7, env: 'production', trigger: scheduled });
+    await seed({ hours: 24 * 8, trigger: scheduled });
     const summary = await getQaSummary(SUMMARY_FILTERS);
     expect(summary.truncated).toBe(false);
     expect(summary.from).toBe(hoursAgo(24 * 7));
     expect(summary.to).toBe(NOW.toISOString());
     expect(summary.products.map(p => [p.product, p.e2e?.runs, p.e2e?.cleanRuns])).toEqual([
-      ['product-a', 4, 3],
+      ['product-a', 3, 2],
       ['product-b', 1, 1],
     ]);
-    expect(summary.products[0].rows.map(r => [r.suite, r.triggerLabel, r.stats.runs])).toEqual([
-      ['Core', 'After deploy', 2],
-      ['Full', 'Scheduled', 1],
-      ['Full', 'Manual dispatch', 1],
-    ]);
     const staging = await getQaSummary({ ...SUMMARY_FILTERS, env: 'staging' });
-    expect(staging.products[0].e2e?.runs).toBe(3);
+    expect(staging.products[0].e2e?.runs).toBe(2);
   });
 });
 

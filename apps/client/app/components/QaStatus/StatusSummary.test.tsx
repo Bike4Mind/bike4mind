@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QaTestWrapper } from './testTheme';
-import StatusSummary, { formatPercent } from './StatusSummary';
+import StatusSummary, { formatPercent, productTitle } from './StatusSummary';
 import type { QaSummary } from '@client/app/hooks/data/qaStatus';
 
 const SUMMARY: QaSummary = {
@@ -13,31 +13,8 @@ const SUMMARY: QaSummary = {
       product: 'product-a',
       e2e: { runs: 13, cleanRuns: 7, passed: 988, tests: 1000, passRate: 0.988 },
       latency: { runs: 1, passedRuns: 1, checks: 8, checksWithinLimit: 8, checkRate: 1 },
-      rows: [
-        {
-          kind: 'e2e',
-          suite: 'Full',
-          trigger: 'scheduled',
-          triggerLabel: 'Scheduled',
-          stats: { runs: 12, cleanRuns: 6, passed: 900, tests: 910, passRate: 900 / 910 },
-        },
-        {
-          kind: 'e2e',
-          suite: 'Full',
-          trigger: 'manual',
-          triggerLabel: 'Manual dispatch',
-          stats: { runs: 1, cleanRuns: 1, passed: 88, tests: 90, passRate: 88 / 90 },
-        },
-        {
-          kind: 'latency',
-          suite: 'AI Latency',
-          trigger: 'scheduled',
-          triggerLabel: 'Scheduled',
-          stats: { runs: 1, passedRuns: 1, checks: 8, checksWithinLimit: 8, checkRate: 1 },
-        },
-      ],
     },
-    { product: 'product-b', e2e: null, latency: null, rows: [] },
+    { product: 'product-b', e2e: { runs: 1, cleanRuns: 1, passed: 10, tests: 10, passRate: 1 }, latency: null },
   ],
 };
 
@@ -49,22 +26,43 @@ describe('formatPercent', () => {
   });
 });
 
+describe('productTitle', () => {
+  it('raises only the first letter', () => {
+    expect(productTitle('product-a')).toBe('Product-a');
+    expect(productTitle('b4m')).toBe('B4m');
+  });
+});
+
 describe('StatusSummary', () => {
-  it('shows each product with its E2E and latency figures and a row per suite and trigger', () => {
-    render(<StatusSummary summary={SUMMARY} range={{ from: '2026-11-10', to: '2026-11-16' }} branch="main" />, {
-      wrapper: QaTestWrapper,
-    });
-    const [card, empty] = screen.getAllByTestId('qa-summary-card');
-    expect(card).toHaveTextContent('product-a');
-    expect(screen.getByTestId('qa-summary-e2e')).toHaveTextContent('E2E98.8%7 of 13 runs with no failures');
+  const RANGE = { from: '2026-11-10', to: '2026-11-16' };
+
+  it('shows each product with a swatch, its title and its E2E and latency figures', () => {
+    render(<StatusSummary summary={SUMMARY} range={RANGE} branch="main" />, { wrapper: QaTestWrapper });
+    const [a, b] = screen.getAllByTestId('qa-summary-card');
+    expect(a).toHaveTextContent(/^Product-a/);
+    expect(b).toHaveTextContent(/^Product-b/);
+    const [e2eA, e2eB] = screen.getAllByTestId('qa-summary-e2e');
+    expect(e2eA).toHaveTextContent('E2E98.8%7 of 13 runs with no failures');
+    expect(e2eB).toHaveTextContent('E2E100.0%1 of 1 run with no failures');
+    expect(screen.getAllByTestId('qa-summary-latency')).toHaveLength(1);
     expect(screen.getByTestId('qa-summary-latency')).toHaveTextContent('Latency100.0%1 of 1 run passed');
-    expect(screen.getAllByTestId('qa-summary-row').map(r => r.textContent)).toEqual([
-      'FullScheduled98.9% . 6 of 12 runs with no failures',
-      'FullManual dispatch97.8% . 1 of 1 run with no failures',
-      'AI LatencyScheduled100.0% within limit . 1 of 1 run passed',
-    ]);
-    expect(empty).toHaveTextContent('product-b');
-    expect(screen.getByTestId('qa-summary')).toHaveTextContent('7 days (Nov 10 - Nov 16) . branch main . all envs');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent(
+      '7 days (Nov 10 - Nov 16) . branch main . all envs . all products, scheduled runs'
+    );
+  });
+
+  it('colors each product by its place among every known product, not among the cards shown', () => {
+    const swatches = (order?: string[]) => {
+      const { unmount } = render(<StatusSummary summary={SUMMARY} range={RANGE} branch="main" colorOrder={order} />, {
+        wrapper: QaTestWrapper,
+      });
+      const colors = screen.getAllByTestId('qa-summary-swatch').map(el => getComputedStyle(el).backgroundColor);
+      unmount();
+      return colors;
+    };
+    const byCardOrder = swatches();
+    expect(new Set(byCardOrder).size).toBe(2);
+    expect(swatches(['product-b', 'product-a'])).toEqual([byCardOrder[1], byCardOrder[0]]);
   });
 
   it('names the env filter, warns when truncated, and says when the range is empty', () => {
@@ -78,8 +76,8 @@ describe('StatusSummary', () => {
       { wrapper: QaTestWrapper }
     );
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('1 day (Nov 16) . branch main');
-    expect(screen.getByTestId('qa-summary')).toHaveTextContent('staging . all products');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent('staging . all products, scheduled runs');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('oldest were left out');
-    expect(screen.getByTestId('qa-summary-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('qa-summary-empty')).toHaveTextContent('No scheduled runs in this range.');
   });
 });

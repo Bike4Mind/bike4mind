@@ -60,6 +60,7 @@ const QaStatusPage: FC = () => {
             range={resolveRange(effective)}
             branch={effective.branch || 'main'}
             env={effective.env}
+            colorOrder={products}
           />
         )}
         {overview.data && (

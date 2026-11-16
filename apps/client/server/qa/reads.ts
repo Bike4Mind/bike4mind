@@ -19,14 +19,13 @@ import { diffTests, median, type QaDiffTest, type QaRunDiff } from './runInsight
 import type { QaMediaStorage } from './storage';
 import { leadingNonPassing, stateKeyFilter } from './streak';
 import {
+  SCHEDULED_TRIGGER,
   summarizeQaRuns,
   type QaE2eStats,
   type QaLatencyStats,
   type QaProductSummary,
   type QaSummary,
-  type QaSummaryRow,
   type QaSummaryRunInput,
-  type QaTriggerKind,
 } from './summary';
 
 /** Read models for the admin /status page (app/hooks/data/qaStatus.ts imports these types). */
@@ -39,8 +38,6 @@ export type {
   QaLatencyStats,
   QaProductSummary,
   QaSummary,
-  QaSummaryRow,
-  QaTriggerKind,
 };
 
 const DAY_MS = 86_400_000;
@@ -320,8 +317,8 @@ export async function getQaOverview(f: QaFilters): Promise<QaOverview> {
 }
 
 /**
- * Every product's runs in the filter's date range, whatever their suite or trigger, for the weekly
- * ops summary. One query per product so each uses the { product, startedAt } index.
+ * Every product's scheduled runs in the filter's date range, any suite, for the weekly ops summary.
+ * One query per product so each uses the { product, startedAt } index.
  */
 export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
   const products = strings(await QaRun.distinct('product'));
@@ -332,11 +329,12 @@ export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
         product,
         branch: f.branch,
         ...(f.env ? { env: f.env } : {}),
+        trigger: SCHEDULED_TRIGGER,
         startedAt: { $gte: f.from, $lt: f.to },
       })
         .sort({ startedAt: -1 })
         .limit(QA_SUMMARY_MAX_RUNS)
-        .select('product suite trigger status counts metrics')
+        .select('product suite status counts metrics')
         .lean<QaSummaryRunInput[]>();
       if (runs.length === QA_SUMMARY_MAX_RUNS) truncated = true;
       return runs;
