@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
 import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
-import { adminTabFromSlug, adminTabRedirectFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { adminTabAlias, adminTabFromSlug, adminTabRedirectFromSlug, adminTabToSlug } from './adminTabSlugs';
 import { adminSearchForTab } from './adminTabParams';
 
 /** The admin tab store holds non-member strings too, written by other surfaces. */
@@ -59,6 +59,7 @@ export function useAdminTabUrlSync(
   useEffect(() => {
     const redirect = adminTabRedirectFromSlug(requestedTabSlug);
     if (redirect) {
+      if (!isOnAdminRoute || !isTabRenderable(redirect.tab)) return;
       // Navigate only: the run for the rewritten slug selects the tab (see the contract above).
       const slug = adminTabToSlug(redirect.tab) as string;
       navigate({
@@ -69,10 +70,18 @@ export function useAdminTabUrlSync(
       return;
     }
     const requestedTab = resolveRequestedTab(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
-    }
-  }, [requestedTabSlug, setActiveTab, resolveRequestedTab, navigate]);
+    if (requestedTab === undefined) return;
+    setActiveTab(requestedTab);
+    // A legacy slug becomes the current one, carrying the params that pick the page it used to name.
+    const alias = adminTabAlias(requestedTabSlug);
+    const slug = adminTabToSlug(requestedTab);
+    if (!alias || !isOnAdminRoute || slug === undefined) return;
+    navigate({
+      to: '/admin',
+      search: previous => adminSearchForTab({ ...previous, ...alias.search }, slug),
+      replace: true,
+    });
+  }, [requestedTabSlug, setActiveTab, resolveRequestedTab, isOnAdminRoute, navigate, isTabRenderable]);
 
   // A tab the console cannot render would leave a blank pane. The selection can come from the
   // URL, another surface, or a gate that resolved after the tab was chosen, so correct the store
@@ -94,11 +103,11 @@ export function useAdminTabUrlSync(
     // Never write a slug while the URL names a tab the console can render: on mount that would
     // overwrite a deep link before the effect above has applied it, including on StrictMode's
     // double-run, which a first-run flag misses.
-    if (
-      !tabChanged &&
-      (resolveRequestedTab(requestedTabSlug) !== undefined || adminTabRedirectFromSlug(requestedTabSlug))
-    )
-      return;
+    const redirect = adminTabRedirectFromSlug(requestedTabSlug);
+    const pendingRedirect = redirect !== undefined && isTabRenderable(redirect.tab);
+    if (!tabChanged && (resolveRequestedTab(requestedTabSlug) !== undefined || pendingRedirect)) return;
+    // The URL effect owns an alias's params until the router commits the rewrite.
+    if (adminTabAlias(requestedTabSlug)?.tab === activeTab) return;
     const slug = adminTabToSlug(activeTab);
     if (slug === undefined || slug === requestedTabSlug) return;
     navigate({
@@ -107,5 +116,5 @@ export function useAdminTabUrlSync(
       search: previous => adminSearchForTab(previous, slug),
       replace: true,
     });
-  }, [activeTab, isOnAdminRoute, navigate, requestedTabSlug, resolveRequestedTab]);
+  }, [activeTab, isOnAdminRoute, navigate, requestedTabSlug, resolveRequestedTab, isTabRenderable]);
 }

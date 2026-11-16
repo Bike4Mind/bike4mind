@@ -280,3 +280,51 @@ describe('PUT /api/organizations/[id] - admin credit edit', () => {
     expect(update).not.toHaveBeenCalled();
   });
 });
+
+describe('PUT /api/organizations/[id] - settings audit', () => {
+  beforeEach(() => {
+    update.mockClear();
+    credits.recordAdminAction.mockClear();
+    credits.findById.mockResolvedValueOnce({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      currentCredits: 100,
+      systemPrompt: 'old',
+    } as never);
+  });
+
+  it('records the changed fields, with the system prompt as a length only', async () => {
+    update.mockResolvedValueOnce({
+      id: 'org1',
+      userId: 'owner1',
+      name: 'Acme Labs',
+      systemPrompt: 'new prompt',
+    } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { name: 'Acme Labs', systemPrompt: 'new prompt' } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.settings.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: 'org1', displayName: 'Acme Labs' },
+        changes: [
+          { field: 'name', before: 'Acme', after: 'Acme Labs' },
+          { field: 'systemPrompt', before: { characters: 3 }, after: { characters: 10 } },
+        ],
+      })
+    );
+  });
+
+  it('writes no entry when nothing changed', async () => {
+    update.mockResolvedValueOnce({ id: 'org1', userId: 'owner1', name: 'Acme', systemPrompt: 'old' } as never);
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    Object.assign(req, { body: { name: 'Acme' } });
+    await mockRefs.putHandler!(req, res);
+
+    expect(credits.recordAdminAction).not.toHaveBeenCalled();
+  });
+});

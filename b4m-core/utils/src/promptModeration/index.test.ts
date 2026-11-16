@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BedrockGuardrailsService, FlaggedContentError } from './index';
+import type { Logger } from '@bike4mind/observability';
+import { BedrockGuardrailsService, FlaggedContentError, OpenaiModerationsService } from './index';
 
 const mockSend = vi.hoisted(() => vi.fn());
+const mockModerationsCreate = vi.hoisted(() => vi.fn());
+
+vi.mock('openai', () => ({
+  default: vi.fn(function (this: { moderations: { create: typeof mockModerationsCreate } }) {
+    this.moderations = { create: mockModerationsCreate };
+  }),
+}));
 
 vi.mock('@aws-sdk/client-bedrock-runtime', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -122,5 +130,35 @@ describe('BedrockGuardrailsService', () => {
       source: 'INPUT',
       content: [{ text: { text: 'test prompt' } }],
     });
+  });
+});
+
+describe('OpenaiModerationsService', () => {
+  const logger = mockLogger as unknown as Logger;
+
+  it('checks the prompt against omni-moderation-latest', async () => {
+    mockModerationsCreate.mockResolvedValue({ results: [{ flagged: false, categories: {} }] });
+
+    await new OpenaiModerationsService('key', logger).checkPrompt('test prompt');
+
+    expect(mockModerationsCreate).toHaveBeenCalledOnce();
+    expect(mockModerationsCreate).toHaveBeenCalledWith({ model: 'omni-moderation-latest', input: 'test prompt' });
+  });
+
+  it('does not throw when the prompt is not flagged', async () => {
+    mockModerationsCreate.mockResolvedValue({ results: [{ flagged: false, categories: { violence: false } }] });
+
+    await expect(new OpenaiModerationsService('key', logger).checkPrompt('hello')).resolves.toBeUndefined();
+  });
+
+  it('throws FlaggedContentError with only the categories that were flagged', async () => {
+    mockModerationsCreate.mockResolvedValue({
+      results: [{ flagged: true, categories: { violence: true, hate: false, 'illicit/violent': true } }],
+    });
+
+    const err = await new OpenaiModerationsService('key', logger).checkPrompt('bad content').catch(e => e);
+
+    expect(err).toBeInstanceOf(FlaggedContentError);
+    expect((err as FlaggedContentError).categories).toEqual(['violence', 'illicit/violent']);
   });
 });

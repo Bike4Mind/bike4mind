@@ -91,7 +91,10 @@ function makeReq(body: unknown, queryId = 'org-123', isAdmin = false) {
 }
 
 describe('PUT /api/organizations/[id] -- Zod validation', () => {
-  beforeEach(() => update.mockClear());
+  beforeEach(() => {
+    update.mockClear();
+    credit.findById.mockClear();
+  });
 
   it('accepts a real client payload (name + description)', async () => {
     const { req, res } = makeReq({ name: 'Acme Corp', description: 'We build things' });

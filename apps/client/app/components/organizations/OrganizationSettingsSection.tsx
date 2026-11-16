@@ -6,6 +6,7 @@ import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 import TransferOwnershipModal, { TransferCandidate } from './TransferOwnershipModal';
+import OrganizationExportSection from './OrganizationExportSection';
 import OrgFormSaveBar from './OrgFormSaveBar';
 import DeleteOrganizationDialog from './DeleteOrganizationDialog';
 import OrganizationGeneralSection from './OrganizationGeneralSection';
@@ -142,6 +143,9 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
       </Card>
 
       {/* Danger Zone */}
+      {currentUser?.id === organization.userId && (
+        <OrganizationExportSection key={organization.id} organizationId={organization.id} />
+      )}
       {canDeleteOrg && (
         <Card variant="outlined">
           <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>

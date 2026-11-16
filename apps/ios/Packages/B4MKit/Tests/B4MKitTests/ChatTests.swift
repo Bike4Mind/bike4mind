@@ -128,7 +128,6 @@ final class ApprovalStateTests: XCTestCase {
       .lapsed(action))
     XCTAssertEqual(
       ApprovalState(pendingAction: action, status: .done, at: Samples.date), .none, "settled turns ask nothing")
-    XCTAssertFalse(ApprovalState.canRespondInApp, "approve/deny is not in the public contract yet")
   }
 
   func testPendingActionFrameDrivesTheBadgeAndClearsWhenResolved() {

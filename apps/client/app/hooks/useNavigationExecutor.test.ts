@@ -94,12 +94,12 @@ describe('useNavigationExecutor', () => {
 
   it('navigates to the admin tab before changing the store', () => {
     const { result } = renderHook(() => useNavigationExecutor());
-    result.current({ navigationType: 'tab', target: String(AdminTab.LLMDashboard) } as Parameters<
+    result.current({ navigationType: 'tab', target: String(AdminTab.Models) } as Parameters<
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
     expect(mockSetActiveTab).not.toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'models' } });
   });
 
   it('no-ops an Opti action in a build without the /opti route', async () => {

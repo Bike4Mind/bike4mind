@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { mongoose, RegistrationInvite } from '@bike4mind/database';
+import { mongoose, RegistrationInvite, registrationInviteRepository } from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -8,6 +8,18 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
 const audit = vi.hoisted(() => vi.fn());
+const transactionHook = vi.hoisted(() => ({ before: undefined as (() => Promise<void>) | undefined }));
+
+vi.mock('@bike4mind/database', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/database')>();
+  return {
+    ...actual,
+    withTransaction: async (...args: Parameters<typeof actual.withTransaction>) => {
+      await transactionHook.before?.();
+      return actual.withTransaction(...args);
+    },
+  };
+});
 
 // Real adminApi permission gate; only the transport (baseApi) is stubbed so the middleware runs in-line.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -55,6 +67,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
+  transactionHook.before = undefined;
   audit.mockResolvedValue(null);
   await RegistrationInvite.deleteMany({});
 });
@@ -123,6 +136,47 @@ describe('POST /api/reg-invites/update - reopening package-linked codes (real Mo
     expect(error).toBeNull();
     expect((await RegistrationInvite.findById(plain).lean())?.status).toBe('open');
     expect(audit.mock.calls[0][1].reason).toBeUndefined();
+  });
+
+  it('refuses a reasonless reopen when a signup redeems the code before the transaction starts', async () => {
+    const id = await seed('RACING1', { status: 'open', grantPackageId: 'pkg-1' });
+    const entered = Promise.withResolvers<void>();
+    const proceed = Promise.withResolvers<void>();
+    transactionHook.before = async () => {
+      entered.resolve();
+      await proceed.promise;
+    };
+    const request = post({ ids: [id], status: 'open' });
+    const usedAt = new Date();
+
+    try {
+      await entered.promise;
+      expect(await registrationInviteRepository.claimUnused(id, usedAt)).toBe(true);
+      proceed.resolve();
+      const { error } = await request;
+
+      expect(error).toHaveProperty('statusCode', 400);
+      const stored = await RegistrationInvite.findById(id).lean();
+      expect(stored?.status).toBe('used');
+      expect(stored?.used).toEqual(usedAt);
+      expect(audit).not.toHaveBeenCalled();
+    } finally {
+      proceed.resolve();
+      await request;
+    }
+  });
+
+  it('rolls back the reopen if its required audit write fails', async () => {
+    const usedAt = new Date();
+    const id = await seed('AUDITFAIL1', { status: 'used', used: usedAt, grantPackageId: 'pkg-1' });
+    audit.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    const { error } = await post({ ids: [id], status: 'open', reason: 'Restore for the partner' });
+
+    expect(error).toHaveProperty('message', 'audit unavailable');
+    const stored = await RegistrationInvite.findById(id).lean();
+    expect(stored?.status).toBe('used');
+    expect(stored?.used).toEqual(usedAt);
   });
 
   it('closes package codes without a reason', async () => {

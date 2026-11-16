@@ -80,6 +80,32 @@ runs on an unsigned simulator build. Needs the staging deploy to have seeded tha
 - [ ] Camera, microphone and photo-library permission prompts show the usage strings and denial is handled with a clear message.
 - [ ] Voice note records, transcribes and drops text into the composer.
 
+### Document scanner and point-and-ask
+
+Both entry points are in Capture on Chat home and the notebook list. Scans use the system VisionKit scanner and enter the
+existing destination picker/upload queue as one PDF. Point and Ask opens the camera, then the same composer with a photo
+preview and the question field focused. The last destination is preserved, including a lake; choose a notebook to ask in chat.
+No message is sent until Send is tapped. Android scanner parity is not part of this iOS implementation.
+
+Automated simulator coverage checks three-page PDF order and dimensions, PDF classification, empty/invalid scan rejection,
+PDF queue persistence and resume after relaunch, and image/question submission with an offline remembered destination.
+This does not validate physical camera capture, edge detection, cropping, legibility, keyboard presentation after the real
+camera dismisses, or the time needed to capture and ask. The scanner is disabled on unsupported devices; the simulator has
+no physical camera and is not evidence for those checks.
+
+- [ ] On a signed physical iPhone build, Capture > Scan Document: scan three pages (include portrait and landscape), adjust
+      corners/reorder/retake in the system UI, then save. The composer lists exactly one PDF; send it to a notebook and check
+      all pages arrive in order, cropped and legible. Repeat with a lake destination.
+- [ ] Cancel the scanner or camera: no composer or queued item appears. Deny camera permission, then allow it in Settings and retry.
+- [ ] From cold signed-in launch, Capture > Point and Ask > take photo: one composer shows the captured image, remembered
+      destination and focused question field with keyboard. Type and send; a notebook receives image and question together.
+      Record whether this takes under approximately ten seconds of user effort. Repeat with large Dynamic Type and VoiceOver.
+- [ ] Remember a notebook, enable airplane mode, scan and send; repeat Point and Ask with a question. Both appear queued in
+      uploads. Kill and relaunch, restore connectivity, and confirm exactly one PDF and one image/question arrive, with no
+      duplicate jobs. Confirm the destination remains selected on the next capture.
+
+Physical-device checks above were not run during the 2026-11-16 implementation; simulator build/unit results do not replace them.
+
 ## Hands-free voice conversation
 
 Voice chat is a full-screen mode opened from the composer (waveform button), the drawer (Voice chat) and any notebook. It

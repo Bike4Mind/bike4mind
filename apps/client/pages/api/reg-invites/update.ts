@@ -47,19 +47,19 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
 
     const { ids, ...updates } = parseOrBadRequest(UpdateRegisterInviteSchema, req.body);
 
-    // Same rule as a package edit that widens a grant: the admin states why.
-    const packageLinked =
-      reopens(updates.status) || updates.unlimitedUse === true || updates.expiresAt !== undefined
-        ? ((await registrationInviteRepository.find({
-            _id: { $in: ids },
-            grantPackageId: { $nin: [null, ''] },
-          })) as StoredInvite[])
-        : [];
-    const reason = packageLinked.some(stored => widensRedemption(stored, updates))
-      ? parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason)
-      : undefined;
-
     const updatedInvites = await withTransaction(async () => {
+      // Read inside the transaction so a racing redemption cannot bypass the required reason.
+      const packageLinked =
+        reopens(updates.status) || updates.unlimitedUse === true || updates.expiresAt !== undefined
+          ? ((await registrationInviteRepository.find({
+              _id: { $in: ids },
+              grantPackageId: { $nin: [null, ''] },
+            })) as StoredInvite[])
+          : [];
+      const reason = packageLinked.some(stored => widensRedemption(stored, updates))
+        ? parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason)
+        : undefined;
+
       const invites = await registrationInviteRepository.formatRegInvites(updates as Partial<IRegInviteDocument>, ids);
       if (invites.length === 0) return invites;
       await recordAdminActionFromRequest(req, {

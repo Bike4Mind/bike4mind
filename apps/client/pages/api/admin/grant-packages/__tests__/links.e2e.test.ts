@@ -57,36 +57,41 @@ const get = async (id: string, user: Record<string, unknown> = { id: 'admin-1', 
   return { res, error };
 };
 
-const seedPackage = async () =>
-  String((await GrantPackage.create({ name: 'Launch', credits: 100, createdBy: 'admin-1' }))._id);
+const seedPackage = async (id?: string) =>
+  String(
+    (await GrantPackage.create({ ...(id ? { _id: id } : {}), name: 'Launch', credits: 100, createdBy: 'admin-1' }))._id
+  );
 
 describe('GET /api/admin/grant-packages/[id]/links (real Mongo)', () => {
-  it('returns the package codes and partner rules, newest first, leaving other packages out', async () => {
-    const id = await seedPackage();
-    const other = await seedPackage();
-    const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
-    await PartnerSignupRule.create([
-      { domain: 'old.com', grantPackageId: id, createdAt: at(1) },
-      { domain: 'new.com', grantPackageId: id, enabled: false, organizationId: 'org-1', createdAt: at(2) },
-      { domain: 'elsewhere.com', grantPackageId: other },
-      { domain: 'unlinked.com', grantPackageId: null },
-    ]);
-    await RegistrationInvite.create([
-      { status: 'open', userId: 'admin-1', code: 'PKG1', grantPackageId: id },
-      { status: 'open', userId: 'admin-1', code: 'OTHER1', grantPackageId: other },
-    ]);
+  it.each(['lowercase', 'uppercase'] as const)(
+    'returns canonical package links for a %s request ID, leaving other packages out',
+    async casing => {
+      const id = await seedPackage('abcdefabcdefabcdefabcdef');
+      const other = await seedPackage();
+      const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
+      await PartnerSignupRule.create([
+        { domain: 'old.com', grantPackageId: id, createdAt: at(1) },
+        { domain: 'new.com', grantPackageId: id, enabled: false, organizationId: 'org-1', createdAt: at(2) },
+        { domain: 'elsewhere.com', grantPackageId: other },
+        { domain: 'unlinked.com', grantPackageId: null },
+      ]);
+      await RegistrationInvite.create([
+        { status: 'open', userId: 'admin-1', code: 'PKG1', grantPackageId: id },
+        { status: 'open', userId: 'admin-1', code: 'OTHER1', grantPackageId: other },
+      ]);
 
-    const { res, error } = await get(id);
+      const { res, error } = await get(casing === 'uppercase' ? id.toUpperCase() : id);
 
-    expect(error).toBeNull();
-    expect(res._getStatusCode()).toBe(200);
-    const body = res._getJSONData();
-    expect(body.partnerRules.truncated).toBe(false);
-    expect(body.partnerRules.data.map((rule: { domain: string }) => rule.domain)).toEqual(['new.com', 'old.com']);
-    expect(body.partnerRules.data[0]).toMatchObject({ enabled: false, organizationId: 'org-1', grantPackageId: id });
-    expect(body.partnerRules.data[0].id).toEqual(expect.any(String));
-    expect(body.invites.data.map((invite: { code: string }) => invite.code)).toEqual(['PKG1']);
-  });
+      expect(error).toBeNull();
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.partnerRules.truncated).toBe(false);
+      expect(body.partnerRules.data.map((rule: { domain: string }) => rule.domain)).toEqual(['new.com', 'old.com']);
+      expect(body.partnerRules.data[0]).toMatchObject({ enabled: false, organizationId: 'org-1', grantPackageId: id });
+      expect(body.partnerRules.data[0].id).toEqual(expect.any(String));
+      expect(body.invites.data.map((invite: { code: string }) => invite.code)).toEqual(['PKG1']);
+    }
+  );
 
   it('flags partner rules past the 50 cap as truncated', async () => {
     const id = await seedPackage();

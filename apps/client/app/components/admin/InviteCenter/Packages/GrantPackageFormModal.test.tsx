@@ -454,8 +454,10 @@ describe('GrantPackageFormModal partner domains', () => {
     await waitFor(() => expect(screen.queryByTestId('grant-package-domain-edit')).not.toBeInTheDocument());
   });
 
-  it('unlinks a domain from the package and shows a failed edit inline', async () => {
-    api.fetchGrantPackageLinks.mockResolvedValue(links([], [rule('solo.com', { organizationId: undefined })]));
+  it.each([0, 50])('explains and preserves a domain with %s standalone credits when unlinking', async signupCredits => {
+    api.fetchGrantPackageLinks.mockResolvedValue(
+      links([], [rule('solo.com', { organizationId: undefined, signupCredits, entitlements: [] })])
+    );
     api.updatePartnerSignupRule.mockRejectedValueOnce(new Error('Rule not found'));
     renderModal(pkg);
     fireEvent.click(await screen.findByTestId('grant-package-domain-edit-btn-solo.com'));
@@ -464,6 +466,15 @@ describe('GrantPackageFormModal partner domains', () => {
     expect(await screen.findByTestId('grant-package-domains-error')).toHaveTextContent('Rule not found');
     expect(api.updatePartnerSignupRule).toHaveBeenLastCalledWith('r-solo.com', { enabled: true, organizationId: null });
 
+    expect(screen.getByTestId('grant-package-domain-unlink-explanation')).toHaveTextContent(
+      'The rule stays in Partners with its enabled state, standalone grants and organization auto-join settings unchanged.'
+    );
+    const explanation = screen.getByTestId('grant-package-domain-unlink-explanation');
+    if (signupCredits === 0) {
+      expect(explanation).toHaveTextContent('No standalone credits or entitlements are configured for this rule.');
+    } else {
+      expect(explanation).not.toHaveTextContent('No standalone credits or entitlements');
+    }
     fireEvent.click(screen.getByTestId('grant-package-domain-unlink-btn'));
     await waitFor(() =>
       expect(api.updatePartnerSignupRule).toHaveBeenLastCalledWith('r-solo.com', { grantPackageId: null })

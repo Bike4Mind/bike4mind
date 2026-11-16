@@ -329,6 +329,14 @@ function LinkedDomains({ pkg, onError }: { pkg: IGrantPackageDocument; onError: 
           >
             Unlink from package
           </Button>
+          <FormHelperText data-testid="grant-package-domain-unlink-explanation">
+            Unlinking stops grants from this package. The rule stays in Partners with its enabled state, standalone
+            grants and organization auto-join settings unchanged. An enabled match uses its standalone grants instead of
+            the default signup grant.
+            {(editing.signupCredits ?? 0) === 0 && (editing.entitlements?.length ?? 0) === 0 && (
+              <> No standalone credits or entitlements are configured for this rule.</>
+            )}
+          </FormHelperText>
         </DomainEditor>
       )}
       {rules?.truncated && (

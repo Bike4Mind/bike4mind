@@ -22,8 +22,8 @@ const handler = adminApi({
     if (!pkg) throw new NotFoundError('Grant package not found');
 
     const [invites, partnerRules] = await Promise.all([
-      registrationInviteRepository.listByGrantPackage(id, GRANT_PACKAGE_LINKS_LIMIT),
-      partnerSignupRuleRepository.listByGrantPackage(id, GRANT_PACKAGE_LINKS_LIMIT),
+      registrationInviteRepository.listByGrantPackage(pkg.id, GRANT_PACKAGE_LINKS_LIMIT),
+      partnerSignupRuleRepository.listByGrantPackage(pkg.id, GRANT_PACKAGE_LINKS_LIMIT),
     ]);
     res.status(200).json({ invites, partnerRules });
   })
