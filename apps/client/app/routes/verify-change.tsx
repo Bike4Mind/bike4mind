@@ -1,11 +1,7 @@
 import VerifyEmailChange from '@client/app/components/VerifyEmailChange';
-import { useSearch } from '@tanstack/react-router';
+import { getEmailLinkToken } from '@client/app/utils/emailLinkToken';
 
-const VerifyEmailChangePage = () => {
-  const search = useSearch({ strict: false });
-  const { token } = search as any;
-
-  return <VerifyEmailChange token={token as string} />;
-};
+// The route's beforeLoad has already moved the link's token out of the address (utils/emailLinkToken.ts).
+const VerifyEmailChangePage = () => <VerifyEmailChange token={getEmailLinkToken('/verify-change') ?? ''} />;
 
 export default VerifyEmailChangePage;

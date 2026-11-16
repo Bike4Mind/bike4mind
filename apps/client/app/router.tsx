@@ -27,6 +27,7 @@ import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
 import { captureUnsubscribeToken } from './routes/email/unsubscribeToken';
+import { takeEmailLinkToken } from './utils/emailLinkToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -1004,35 +1005,35 @@ const accountDataExportRoute = createRoute({
 });
 
 // Verify email route (replaces /verify-email.tsx)
-const verifyEmailRoute = createRoute({
+// The link's token moves out of the address before render (utils/emailLinkToken.ts), so the page reads it
+// from there, not from the search.
+export const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-email',
+  beforeLoad: () => {
+    takeEmailLinkToken('/verify-email');
+  },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <VerifyEmailPage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Verify email change route (replaces /verify-change.tsx)
-const verifyEmailChangeRoute = createRoute({
+// The link's token moves out of the address before render (utils/emailLinkToken.ts), so the page reads it
+// from there, not from the search.
+export const verifyEmailChangeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/verify-change',
+  beforeLoad: () => {
+    takeEmailLinkToken('/verify-change');
+  },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <VerifyEmailChangePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
 });
 
 // Admin emergency route (replaces /admin-emergency.tsx)
