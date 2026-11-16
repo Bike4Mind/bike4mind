@@ -38,6 +38,7 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
   const descriptionChanged = !!role && trimmedDescription !== role.description;
   const { granted, revoked } = diffPermissions(role?.permissions ?? [], permissions);
   const permissionsChanged = !!role && (granted.length > 0 || revoked.length > 0);
+  // Edit-time guard only: a new role has no members, so a sensitive grant takes effect at role assignment, which gates separately.
   const sensitiveGranted = granted.filter(isSensitivePermission);
 
   const blocked =
