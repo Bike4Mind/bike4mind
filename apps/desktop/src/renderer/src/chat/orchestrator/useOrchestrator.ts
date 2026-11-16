@@ -4,13 +4,13 @@ import type { PrSummary } from '@shared/pullRequest';
 import { bufferUntrackedActivity, foldActivity, type AgentActivity } from './activity';
 import {
   readAmbient,
-  readFocus,
   readDockOpen,
+  readFocus,
   readSurface,
   readView,
   writeAmbient,
-  writeFocus,
   writeDockOpen,
+  writeFocus,
   writeSurface,
   writeView,
   type OrchestratorViewId,
