@@ -68,6 +68,8 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
 }));
 const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(2));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
+const refreshSeatEntitlements = vi.hoisted(() => vi.fn(async (_userId: string) => ({ committed: txState.committed })));
+vi.mock('@server/organizations/refreshSeatEntitlements', () => ({ refreshSeatEntitlements }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess, reassignMemberContent } }));
 
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
@@ -233,12 +235,25 @@ describe('DELETE /api/organizations/[id]/members/[userId] - personal-lake shares
 
   it('never notifies when the service call rejects', async () => {
     reportAndNotifyKeptPersonalLakeShares.mockClear();
+    refreshSeatEntitlements.mockClear();
     revokeAccess.mockRejectedValueOnce(new Error('boom'));
     const { req, res } = request();
 
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('boom');
 
     expect(reportAndNotifyKeptPersonalLakeShares).not.toHaveBeenCalled();
+    expect(refreshSeatEntitlements).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the removed member's seat entitlements, not the caller's, after the commit", async () => {
+    refreshSeatEntitlements.mockClear();
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(refreshSeatEntitlements).toHaveBeenCalledTimes(1);
+    expect(refreshSeatEntitlements).toHaveBeenCalledWith('member2');
+    await expect(refreshSeatEntitlements.mock.results[0].value).resolves.toEqual({ committed: true });
   });
 });
 

@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { Box, Button, Card, CircularProgress, Divider, Sheet, Stack, Typography, Alert } from '@mui/joy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
-import { useSearch } from '@tanstack/react-router';
 import { EmailCategory } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getCapturedUnsubscribeToken } from './unsubscribeToken';
 
 interface PreferencesData {
   email: string;
@@ -35,8 +35,7 @@ const CATEGORY_DESCRIPTIONS: Record<EmailCategory, string> = {
 const tokenHeader = (token: string) => ({ headers: { 'x-unsubscribe-token': token } });
 
 export default function UnsubscribePage() {
-  const search = useSearch({ strict: false }) as { token?: string };
-  const token = search.token;
+  const [token] = useState(getCapturedUnsubscribeToken);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
