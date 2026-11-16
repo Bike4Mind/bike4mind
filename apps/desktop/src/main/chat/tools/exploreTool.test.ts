@@ -223,8 +223,22 @@ describe('explore', () => {
 
     const report = await exploreTool.run({ question: 'where is answer?' }, { ...context, explore });
 
-    expect(report).toBe(longReport);
-    expect(report).not.toContain('Report delivered above.');
+    expect(report).toBe(`${longReport}\n\nReport delivered above.`);
+  });
+
+  it('keeps a short genuine final answer when earlier narration was longer', async () => {
+    const narration =
+      'Let me check the remaining test helpers and fixtures to confirm there is no other definition of the handler.';
+    const answer = "No handler for X exists. Searched grep 'X' and glob '**/*x*' under /r.";
+    expect(narration.length).toBeGreaterThan(answer.length);
+    expect(answer.length).toBeLessThan(SHORT_FINAL_REPORT_CHARS);
+    const narratedWhileSearching = { ...toolUse([{ name: 'glob_files', input: { pattern: '*' } }]), text: narration };
+    const { explore } = fakeExplore([[narratedWhileSearching], [{ type: 'content', text: answer }]]);
+
+    const report = await exploreTool.run({ question: 'where is the X handler?' }, { ...context, explore });
+
+    expect(report).toContain(answer);
+    expect(report.endsWith(answer)).toBe(true);
   });
 
   it('keeps a full final report even when earlier notes were longer', async () => {

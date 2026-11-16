@@ -103,9 +103,13 @@ export const exploreTool: ToolDefinition = {
     const readPaths = new Set<string>();
     // The longest text the explorer wrote alongside tool calls. A model sometimes writes its report
     // there and ends with a pointer back to it ("Report delivered above."), which the parent never sees.
+    // That text is usually narration, so it is put before a short final reply, never in its place:
+    // a short final reply may be the real answer ("No handler for X exists.").
     let earlierReport = '';
     const reportFrom = (final: string): string =>
-      final.length >= SHORT_FINAL_REPORT_CHARS || earlierReport.length <= final.length ? final : earlierReport;
+      final.length >= SHORT_FINAL_REPORT_CHARS || earlierReport.length <= final.length
+        ? final
+        : [earlierReport, final].filter(Boolean).join('\n\n');
     // Also on the round-limit exit, which is the slow one worth explaining.
     const finish = async (report: string): Promise<string> => {
       context.report?.detail({ ...tally.summary(), ...(spent ? { usage: spent } : {}) });
