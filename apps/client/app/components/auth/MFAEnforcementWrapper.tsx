@@ -51,11 +51,11 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Backup codes from a passkey enrolled as the factor, shown until the user continues.
   const [passkeyBackupCodes, setPasskeyBackupCodes] = useState<string[] | null>(null);
 
-  // Get MFA enforcement setting from admin settings
-  const enforceMFA = adminSettings?.enforceMFA === 'true';
+  // A team MFA policy is not in admin settings, so the server's refusal is how this tab learns of it.
+  const enrollmentEnforced = adminSettings?.enforceMFA === 'true' || enrollmentRefused;
 
   // Only call MFA status API if enforcement is enabled
-  const shouldCheckMFA = !!enforceMFA;
+  const shouldCheckMFA = enrollmentEnforced;
 
   // Start the status check while admin settings are still loading rather than after, so the two
   // round trips overlap; once settings say enforcement is off, the check is skipped.
@@ -180,7 +180,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
     // If MFA is enforced and user doesn't have it configured, force setup.
     // When enforced it applies to ALL users (no "internal" distinction).
-    if (enforceMFA && needsEnrollment) {
+    if (enrollmentEnforced && needsEnrollment) {
       // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
       // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
       // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
@@ -193,7 +193,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   }, [
     isImpersonating,
     currentUser,
-    enforceMFA,
+    enrollmentEnforced,
     needsEnrollment,
     shouldCheckMFA,
     mfaStatus,
@@ -327,7 +327,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // the server telling us this session owes enrollment, so it blocks regardless. An unanswered
   // status only blocks on a refusal: otherwise it means an optimistic pass is still confirming.
   if (
-    enforceMFA &&
+    enrollmentEnforced &&
     (!mfaQueryFailed || enrollmentRefused) &&
     needsEnrollment &&
     (mfaStatus !== undefined || enrollmentRefused)

@@ -15,7 +15,7 @@ import jwt from 'jsonwebtoken';
  *
  * Applies seven gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
  * refusal, the `mfaPending` refusal, the tokenVersion kill switch, assertAccountStateUsable, and
- * the enforceMFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
+ * the MFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
  * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
  * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
  * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate

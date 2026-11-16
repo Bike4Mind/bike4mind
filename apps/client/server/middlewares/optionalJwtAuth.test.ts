@@ -17,6 +17,9 @@ vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: mockAbility })
 // is the admin's enforceMFA toggle.
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/server-utils/auth/organizationMfa', () => ({
+  requiresOrganizationMfaEnrollment: async () => false,
+}));
 vi.mock('@bike4mind/services', () => ({
   mfaService: {
     isMfaEnforcementExempt: (u: { isPersona?: boolean }) => u.isPersona === true,

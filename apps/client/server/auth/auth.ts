@@ -87,11 +87,12 @@ function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
 }
 
 /**
- * enforceMFA for sessions minted before it applied: the sign-in gate (resolveSecondFactor) only
- * binds new sign-ins, so an existing session, and every access token its refresh chain mints,
- * is confined here to the enrollment routes until the user enrolls. 403, not 401, so the client
- * does not run its token-refresh cascade; MFAEnforcementWrapper renders the enrollment flow.
- * API keys are exempt (they are not a sign-in). A failed settings read fails closed (next(err)).
+ * enforceMFA or a team MFA policy, for sessions minted before it applied: the sign-in gate
+ * (resolveSecondFactor) only binds new sign-ins, so an existing session, and every access token
+ * its refresh chain mints, is confined here to the enrollment routes until the user enrolls.
+ * 403, not 401, so the client does not run its token-refresh cascade; MFAEnforcementWrapper
+ * renders the enrollment flow. API keys are exempt (they are not a sign-in). A failed settings
+ * or policy read fails closed (next(err)).
  */
 async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unknown) => void): Promise<void> {
   const user = req.user as (IUserDocument & { impersonatedBy?: string }) | undefined;

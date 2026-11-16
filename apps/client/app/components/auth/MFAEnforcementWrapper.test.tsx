@@ -336,6 +336,42 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
   });
 });
 
+describe('MFAEnforcementWrapper - a team MFA policy, with enforceMFA off', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    interceptorUse.mockClear();
+    get.mockResolvedValue({ data: { enabled: false, required: true } });
+    post.mockRejectedValue(new Error('setup failed'));
+    adminSettings.enforceMFA = 'false';
+  });
+
+  afterEach(() => {
+    adminSettings.enforceMFA = 'true';
+    vi.clearAllMocks();
+  });
+
+  it('leaves the app alone and skips the status check until the server refuses a call', async () => {
+    renderWrapper();
+
+    expect(await screen.findByTestId('app-content')).not.toBeNull();
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('renders the enrollment flow once the server refuses a call for enrollment', async () => {
+    renderWrapper();
+    await screen.findByTestId('app-content');
+
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    expect(get).toHaveBeenCalledWith('/api/auth/mfa/status', expect.anything());
+    await waitFor(() => expect(mfaSetupCalls()).toBeGreaterThanOrEqual(1));
+  });
+});
+
 describe('MFAEnforcementWrapper - failed setup verification', () => {
   beforeEach(() => {
     post.mockReset();
