@@ -243,7 +243,8 @@ export const createAppFileOnServerWithUpload = async (
       (err as any)?.code === 'ERR_CANCELED';
 
     if (isAborted) {
-      // App files may not have a cleanup endpoint, but still throw the error
+      // The record was created by the presign call, so drop it rather than leave a Pending row behind.
+      await api.delete('/api/app-files/delete', { data: { id: fileId } }).catch(() => undefined);
       throw new DOMException('Upload cancelled', 'AbortError'); // Always throw DOMException for consistency
     }
     throw err;

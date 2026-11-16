@@ -47,6 +47,7 @@ struct NewConversationView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) { menuButton }
+      ToolbarItem(placement: .topBarTrailing) { CaptureMenu() }
       ToolbarItem(placement: .topBarTrailing) { profileButton }
     }
     .sheet(isPresented: $isRecordingVoice) {
