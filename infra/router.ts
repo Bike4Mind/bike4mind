@@ -71,11 +71,6 @@ export const isSharedRouterConsumer = !!shouldUseSharedRouter;
 // null when the stage isn't shared-dev or no domain is configured.
 const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.dev.${process.env.SERVER_DOMAIN}` : null;
 
-// The app host on stages where the Router below issues its certificate and writes its DNS
-// records, undefined everywhere else. Must stay in sync with the `domain` branch of the Router.
-export const managedAppDomain =
-  domain && !shouldUseSharedRouter && !sharedDevDomain && !process.env.APP_CERT_ARN ? `app.${domain}` : undefined;
-
 /**
  * Route prefix for shared dev router
  * When using shared router, namespace routes by stage to prevent conflicts
