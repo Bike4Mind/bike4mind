@@ -222,9 +222,8 @@ export async function getQaFacets(product?: string): Promise<QaFacets> {
   return { products: strings(products), tenants: strings(tenants), envs: strings(envs), branches: strings(branches) };
 }
 
-export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promise<QaOverview> {
+export async function getQaOverview(f: QaFilters): Promise<QaOverview> {
   const match = runMatch(f);
-  const since = new Date(now.getTime() - f.rangeDays * DAY_MS);
 
   const latest = await QaRun.aggregate<{ run: LeanRun }>([
     { $match: match },
@@ -259,7 +258,7 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
 
   // Newest first so the cap drops the oldest runs, then back to chart order.
   const runs = (
-    await QaRun.find({ ...match, startedAt: { $gte: since } })
+    await QaRun.find({ ...match, startedAt: { $gte: f.from, $lt: f.to } })
       .sort({ startedAt: -1 })
       .limit(QA_SERIES_MAX_RUNS)
       .lean<LeanRun[]>()
@@ -297,10 +296,14 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
   return { tiles, series, flaky };
 }
 
-/** Cursor is `startedAt`; runs sharing the boundary timestamp can be skipped, which is acceptable here. */
+/**
+ * Runs in the filter's date range, newest first. Cursor is `startedAt`; runs sharing the boundary
+ * timestamp can be skipped, which is acceptable here.
+ */
 export async function listQaRuns(f: QaFilters, opts: { before?: Date; limit?: number } = {}): Promise<QaRunPage> {
   const limit = Math.min(opts.limit ?? QA_RUNS_PAGE_SIZE, QA_RUNS_PAGE_SIZE);
-  const runs = await QaRun.find({ ...runMatch(f), ...(opts.before ? { startedAt: { $lt: opts.before } } : {}) })
+  const end = opts.before && opts.before < f.to ? opts.before : f.to;
+  const runs = await QaRun.find({ ...runMatch(f), startedAt: { $gte: f.from, $lt: end } })
     .sort({ startedAt: -1 })
     .limit(limit + 1)
     .lean<LeanRun[]>();

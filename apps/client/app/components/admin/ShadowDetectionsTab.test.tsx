@@ -265,7 +265,14 @@ describe('ShadowDetectionsTab', () => {
       fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-accept-btn'));
       // Accepting remounts the dialog form, so the node found before it is detached.
       const currentDialog = await screen.findByTestId('shadow-detection-verdict-dialog');
-      fireEvent.click(within(currentDialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
+        'Accepted AI suggestion'
+      );
+      const confirm = within(currentDialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn');
+      expect(confirm).toBeInTheDocument();
+      expect(confirm).toBeEnabled();
+      fireEvent.click(confirm);
       await waitFor(() =>
         expect(m.mutateAsync).toHaveBeenCalledWith(
           expect.objectContaining({ verdict: 'confirmed_abuse', aiDecision: { assessmentId: 'assessment-1' } })
