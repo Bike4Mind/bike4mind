@@ -6,8 +6,8 @@ vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({ recordOrgani
 /**
  * GET/PUT /api/organizations/[id] are access-gated to org members already; this test
  * pins the response SCOPING: stripeCustomerId is dropped for everyone and
- * billingContact only survives for the owner/admin. In-org fields (systemPrompt,
- * userDetails) are preserved so member UIs keep working. The PUT (update) response
+ * billingContact only survives for the owner/admin. A plain member gets the member view
+ * (no systemPrompt or other settings); owners, managers and admins keep them. The PUT (update) response
  * is routed through the same serializer so a manager updating org settings never
  * gets billing identifiers echoed back.
  *
@@ -57,6 +57,8 @@ const update = vi.hoisted(() =>
     systemPrompt: 'ctx',
     billingContact: 'billing@acme.com',
     stripeCustomerId: 'cus_SECRET',
+    adminUserIds: ['manager2'],
+    users: [{ userId: 'manager2', permissions: ['read'] }],
   }))
 );
 const credits = vi.hoisted(() => ({
@@ -113,13 +115,14 @@ function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
 describe('GET /api/organizations/[id] - safe serialization', () => {
   beforeEach(() => get.mockClear());
 
-  it('drops billing identifiers for a non-owner, non-admin member but keeps in-org fields', async () => {
+  it('gives a non-owner, non-admin member the member view without billing identifiers or settings', async () => {
     const { req, res } = mocks({ id: 'member2', isAdmin: false });
     await mockRefs.getHandler!(req, res);
     const body = res._getJSONData();
     expect('stripeCustomerId' in body).toBe(false);
     expect('billingContact' in body).toBe(false);
-    expect(body.systemPrompt).toBe('ctx');
+    expect('systemPrompt' in body).toBe(false);
+    expect(body.name).toBe('Acme');
     expect(Array.isArray(body.userDetails)).toBe(true);
     expect(JSON.stringify(body)).not.toContain('cus_SECRET');
   });

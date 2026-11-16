@@ -1,5 +1,6 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
   ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
@@ -117,9 +118,12 @@ export function resolveFieldLimits(
     const excluded = [
       ...ORGANIZATION_SECRET_FIELDS,
       ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
-      // A per-query projection cannot keep one row, so non-privileged subscribers lose the credit
-      // fields on every row (the budget notice reads its own row over REST).
-      ...(isPlatformAdmin || isPrivilegedOrgSubscriber ? [] : ORGANIZATION_MEMBER_CREDIT_FIELDS),
+      // Mirrors toSafeOrganization's member view. A per-query projection cannot keep one row, so
+      // non-privileged subscribers lose the credit fields on every row (the budget notice reads its
+      // own row over REST).
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber
+        ? []
+        : [...ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS, ...ORGANIZATION_MEMBER_CREDIT_FIELDS]),
     ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }

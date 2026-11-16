@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { IOrganization } from '../types/entities/OrganizationTypes';
-import { toSafeOrganization, toSafeOrganizations } from './toSafeOrganization';
+import { ORGANIZATION_MEMBER_VISIBLE_FIELDS, toSafeOrganization, toSafeOrganizations } from './toSafeOrganization';
 
 const creditPeriod = new Date('2026-01-01');
 const fullOrg = {
@@ -11,6 +11,12 @@ const fullOrg = {
   seats: 5,
   currentCredits: 1000,
   systemPrompt: 'internal enterprise context',
+  preferredModel: 'model-x',
+  sharingPolicy: { allowPublicLinks: false },
+  allowedGroupTypes: ['team'],
+  maxCreditsPerMember: 100,
+  mfaPolicy: { required: true, graceEndsAt: null },
+  unclassifiedFutureField: 'not in the interface',
   billingContact: 'billing@acme.com',
   budgetAlerts: { enabled: true, monthlyBudgetCredits: 5000, percentThresholds: [80], lowBalanceCredits: 100 },
   stripeCustomerId: 'cus_SECRET',
@@ -89,13 +95,49 @@ describe('toSafeOrganization', () => {
     expect('stripeCustomerId' in safe).toBe(false);
   });
 
-  it('preserves in-org fields (name/systemPrompt/userDetails/seats/credits) for members', () => {
+  it('gives a plain member only the member-visible fields', () => {
     const safe = toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!;
-    expect(safe.name).toBe('Acme');
+    for (const field of Object.keys(safe)) {
+      expect(ORGANIZATION_MEMBER_VISIBLE_FIELDS).toContain(field);
+    }
+    expect(safe).toMatchObject({
+      id: 'org1',
+      name: 'Acme',
+      userId: 'owner1',
+      seats: 5,
+      currentCredits: 1000,
+      maxCreditsPerMember: 100,
+      adminUserIds: fullOrg.adminUserIds,
+      mfaPolicy: { required: true, graceEndsAt: null },
+    });
+  });
+
+  it.each(['systemPrompt', 'preferredModel', 'sharingPolicy', 'allowedGroupTypes', 'unclassifiedFutureField'])(
+    'withholds %s from a plain member and a stale manager',
+    field => {
+      expect(field in toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!).toBe(false);
+      expect(field in toSafeOrganization(fullOrg, { userId: 'former-manager', isAdmin: false })!).toBe(false);
+    }
+  );
+
+  it.each([
+    ['owner', 'owner1', false],
+    ['current manager', 'manager1', false],
+    ['platform admin', 'admin1', true],
+  ])('keeps organization settings for the %s', (_role, userId, isAdmin) => {
+    const safe = toSafeOrganization(fullOrg, { userId, isAdmin })!;
     expect(safe.systemPrompt).toBe('internal enterprise context');
-    expect(safe.seats).toBe(5);
-    expect(safe.currentCredits).toBe(1000);
-    expect(Array.isArray(safe.userDetails)).toBe(true);
+    expect(safe.preferredModel).toBe('model-x');
+    expect(safe.sharingPolicy).toEqual({ allowPublicLinks: false });
+  });
+
+  it('withholds billingContact from a current manager who is not the owner', () => {
+    expect('billingContact' in toSafeOrganization(fullOrg, { userId: 'manager1', isAdmin: false })!).toBe(false);
+  });
+
+  it('keeps _id for a plain member when the input is a plain object', () => {
+    const safe = toSafeOrganization({ ...fullOrg, _id: 'org1' } as never, { userId: 'member2' })!;
+    expect(safe._id).toBe('org1');
   });
 
   it("removes credit details from co-member rows but keeps the viewer's own row for a plain member", () => {
