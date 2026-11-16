@@ -33,6 +33,7 @@ const orgQuery = vi.hoisted(() => ({
 const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string; section?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const seats = vi.hoisted(() => ({ current: { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 } }));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: [] }),
@@ -40,7 +41,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 }),
+  useOrganizationSeats: () => seats.current,
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
@@ -324,6 +325,7 @@ describe('organization detail page - what a manager cannot do', () => {
   beforeEach(() => {
     searchParams.current = {};
     user.current = { id: 'mgr1' };
+    seats.current = { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 };
     navigateSpy.mockClear();
     orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
   });
@@ -344,6 +346,17 @@ describe('organization detail page - what a manager cannot do', () => {
     expect(screen.getByTestId('organization-billing-owner-only')).toBeTruthy();
     expect(screen.getByTestId('organization-billing-locked-credits').textContent).toBe('100');
     expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('1 of 5');
+    expect(screen.getByText('Credits and seats for this team, read-only.')).toBeTruthy();
+    expect(screen.queryByText('Subscription, seats and payment details.')).toBeNull();
+  });
+
+  it('shows only the seat count on a plan with no seat cap', () => {
+    searchParams.current = { tab: 'billing' };
+    seats.current = { currentSeats: 3, maxSeats: 0, pendingSeats: 0, availableSeats: 0 };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('3');
   });
 
   it('explains the owner-only Integrations sections', () => {

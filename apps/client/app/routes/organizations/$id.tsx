@@ -515,7 +515,9 @@ const OrganizationPage: FC = () => {
             )}
             {tabView.locked && selectedTab === OrganizationTabs.Billing && (
               <TabPanel value={OrganizationTabs.Billing}>
-                {header(OrganizationTabs.Billing)}
+                {header(OrganizationTabs.Billing, {
+                  description: t('organization.access_notice.billing_locked_description'),
+                })}
                 <LockedBillingSummary organization={organization} />
               </TabPanel>
             )}
@@ -609,7 +611,10 @@ const LockedBillingSummary: FC<{ organization: WithId<IOrganizationDocument> }> 
               {t('organization.access_notice.seats_used')}
             </Typography>
             <Typography level="h4" data-testid="organization-billing-locked-seats">
-              {t('organization.access_notice.seats_value', { current: currentSeats, max: maxSeats })}
+              {/* maxSeats 0 is a plan with no seat cap, so there is no "of" to show. */}
+              {maxSeats > 0
+                ? t('organization.access_notice.seats_value', { current: currentSeats, max: maxSeats })
+                : currentSeats}
             </Typography>
           </Stack>
         </Stack>
