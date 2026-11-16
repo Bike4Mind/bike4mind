@@ -80,6 +80,19 @@ vi.mock('@bike4mind/database', () => ({
     },
   },
 }));
+vi.mock('./accountFilePurgeLease', () => ({
+  claimAccountFilePurgeLease: async (_id: string, assertActive: () => Promise<void>) => ({
+    assertActive,
+    initialize: async () => ({ complete: true }),
+    release: async () => {},
+  }),
+}));
+vi.mock('@bike4mind/database/infra', () => ({ OrganizationAuditEventModel: {} }));
+vi.mock('../utils/organizationDataExport', () => ({
+  organizationExportPrefix: (id: string) => `exports/organization-data/${encodeURIComponent(id)}/`,
+  legacyOrganizationExportLocator: {},
+  legacyOrganizationExportKey: vi.fn(),
+}));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.openSearchEnabled }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   FabFileChunkSearchIndex: { deleteByFabFileIdOrThrow: h.indexDelete },
@@ -155,6 +168,7 @@ describe('purgeAccountFiles', () => {
       ['exports/account-data/u1/'],
       ['exports/curated-notebooks/u1/'],
       ['curated-notebooks/u1/'],
+      ['exports/organization-data/u1/'],
     ]);
     expect(h.find).toHaveBeenCalledWith(
       expect.objectContaining({ $or: [{ userId: 'u1' }, { organizationId: { $in: [] } }] })
