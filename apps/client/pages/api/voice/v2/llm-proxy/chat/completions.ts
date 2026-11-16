@@ -225,6 +225,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -241,6 +242,7 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,

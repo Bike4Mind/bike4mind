@@ -6,6 +6,7 @@ import {
   sessionRepository,
   projectRepository,
   fabFileRepository,
+  spendFreezeRepository,
   userRepository,
   questRepository,
 } from '@bike4mind/database';
@@ -18,6 +19,8 @@ import {
   redactSessionForClient,
 } from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import {
   buildVoiceInstructions,
   ForbiddenError,
@@ -68,6 +71,11 @@ function voiceUnavailableError(extra?: Record<string, unknown>) {
 
 const handler = baseApi().post(async (req, res) => {
   assertAiAccessAllowed(req.user);
+  const organizationId = req.user.organizationId ? String(req.user.organizationId) : null;
+  // Before any gate that reads settings or the provider, and whether or not credits are enforced.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
   const settings = await getSettingsMap(
@@ -446,6 +454,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
       sessionId: session.id,
       priorStartedAt: priorHoldStartedAt,
       apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      organizationId,
+      spendFreezes: spendFreezeRepository,
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).

@@ -8,13 +8,15 @@ vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
 }));
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ApiKeyScope, TooManyRequestsError } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   signToken: vi.fn(),
   createSession: vi.fn(),
   trustSettings: vi.fn(),
   tokensSince: vi.fn(),
+  findFreeze: vi.fn(),
+  reserve: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
@@ -29,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   projectRepository: {},
   sessionRepository: { countActiveVoiceSessionsByUserId: vi.fn().mockResolvedValue(0) },
   usageEventRepository: { userTokensSince: h.tokensSince },
+  spendFreezeRepository: { findActiveForSubject: h.findFreeze },
 }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession },
@@ -46,7 +49,7 @@ vi.mock('@bike4mind/voice', () => ({
   }),
 }));
 vi.mock('@bike4mind/server-utils/voice/settleVoiceHold', () => ({
-  reserveVoiceHold: vi.fn().mockResolvedValue(true),
+  reserveVoiceHold: h.reserve,
   settlePriorVoiceHold: vi.fn(),
 }));
 vi.mock('@server/voice/voiceSessionToken', () => ({ signVoiceSessionToken: h.signToken }));
@@ -54,7 +57,12 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => (
 
 import handler from '../index';
 
-const run = (apiKeyInfo?: { keyId: string; scopes: ApiKeyScope[]; ownerUntrusted?: boolean }) => {
+const run = (apiKeyInfo?: {
+  keyId: string;
+  scopes: ApiKeyScope[];
+  ownerUntrusted?: boolean;
+  billingOwnerType?: CreditHolderType;
+}) => {
   const json = vi.fn();
   const req = {
     validated: {},
@@ -75,6 +83,8 @@ describe('POST /api/v1/voice/sessions - admin role in the session token', () => 
     h.signToken.mockReturnValue('signed');
     h.createSession.mockResolvedValue({ id: 'session-1', name: 'Voice' });
     h.trustSettings.mockResolvedValue({ gateEnabled: false });
+    h.findFreeze.mockResolvedValue(null);
+    h.reserve.mockResolvedValue(true);
   });
 
   it('refuses the voice transport even when the reasoning model would be admitted', async () => {
@@ -140,5 +150,56 @@ describe('POST /api/v1/voice/sessions - untrusted API key owner quota', () => {
     expect(h.trustSettings).not.toHaveBeenCalled();
     expect(h.tokensSince).not.toHaveBeenCalled();
     expect(h.signToken).toHaveBeenCalledOnce();
+  });
+});
+
+describe('POST /api/v1/voice/sessions - spend freeze', () => {
+  const frozen = { scopeType: 'User', frozenAt: new Date('2026-01-01T00:00:00Z'), reason: 'test freeze' };
+  const key = { keyId: 'key-1', scopes: [ApiKeyScope.AI_GENERATE] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.signToken.mockReturnValue('signed');
+    h.createSession.mockResolvedValue({ id: 'session-1', name: 'Voice' });
+    h.trustSettings.mockResolvedValue({ gateEnabled: false });
+    h.findFreeze.mockResolvedValue(null);
+    h.reserve.mockResolvedValue(true);
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen before the model admission, a session or a token', async () => {
+    h.findFreeze.mockResolvedValue(frozen);
+    const refusal = await run(key).catch((e: unknown) => e);
+    expect(refusal).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'spend_frozen' } });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: 'key-1' });
+    expect(createModelAdmission).not.toHaveBeenCalled();
+    expect(h.createSession).not.toHaveBeenCalled();
+    expect(h.signToken).not.toHaveBeenCalled();
+    expect(h.reserve).not.toHaveBeenCalled();
+  });
+
+  it('does not put the freeze reason in the refusal', async () => {
+    h.findFreeze.mockResolvedValue(frozen);
+    const refusal = await run(key).catch((e: unknown) => e);
+    expect(JSON.stringify(refusal)).not.toContain('test freeze');
+  });
+
+  it('lets a freeze read error propagate', async () => {
+    h.findFreeze.mockRejectedValue(new Error('db down'));
+    await expect(run(key)).rejects.toThrow('db down');
+    expect(h.signToken).not.toHaveBeenCalled();
+  });
+
+  it('checks the key but not its creator for an org-billed key, and mints the billing owner type', async () => {
+    await run({ ...key, billingOwnerType: CreditHolderType.Organization });
+    expect(h.findFreeze).toHaveBeenCalledWith({ userId: null, organizationId: null, apiKeyId: 'key-1' });
+    expect(h.signToken.mock.calls[0][0]).toMatchObject({ apiKeyBillingOwnerType: CreditHolderType.Organization });
+    expect(h.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyBillingOwnerType: CreditHolderType.Organization, apiKeyId: 'key-1' })
+    );
+  });
+
+  it('leaves the claim off when the key carries no billing owner type', async () => {
+    await run(key);
+    expect(h.signToken.mock.calls[0][0]).not.toHaveProperty('apiKeyBillingOwnerType');
   });
 });
