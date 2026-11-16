@@ -51,6 +51,7 @@ export function MiniRoom({
       onSelect={onSelect}
       onInnkeeperSelect={() => onSelect(rootId)}
       pause={{ unfocusedAfterMs: 0, awake }}
+      answerFromBubble={false}
     />
   );
 }

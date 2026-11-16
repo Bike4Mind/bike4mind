@@ -266,13 +266,13 @@ export type WaitingSeat = { id: string; zone: TavernZone; point: SlotPoint };
  * Agents waiting in one zone share a single "needs you" bubble. Seats are closer together than
  * the bubble is wide at most stage sizes (bar seats 6% of the scene apart, the bubble 5% to 28%,
  * since its text has a pixel floor), so one bubble each would pile up. Returns the agent each
- * zone's bubble sits over, the one nearest the group's middle (leftmost on a tie), and how many
- * agents it speaks for.
+ * zone's bubble sits over, the one nearest the group's middle (leftmost on a tie), and the ids it
+ * speaks for, left to right.
  */
-export function needsYouBubbles(waiting: Iterable<WaitingSeat>): Map<string, number> {
+export function needsYouGroups(waiting: Iterable<WaitingSeat>): Map<string, string[]> {
   const byZone = new Map<TavernZone, WaitingSeat[]>();
   for (const seat of waiting) byZone.set(seat.zone, [...(byZone.get(seat.zone) ?? []), seat]);
-  const carriers = new Map<string, number>();
+  const carriers = new Map<string, string[]>();
   for (const group of byZone.values()) {
     const total = group.reduce((sum, seat) => sum + seat.point.x, 0);
     // Scaled by the group size so the middle stays exact for whole-number seats.
@@ -280,7 +280,11 @@ export function needsYouBubbles(waiting: Iterable<WaitingSeat>): Map<string, num
     const carrier = group.reduce((best, seat) =>
       offset(seat) < offset(best) || (offset(seat) === offset(best) && seat.point.x < best.point.x) ? seat : best
     );
-    carriers.set(carrier.id, group.length);
+    const ordered = [...group].sort((a, b) => a.point.x - b.point.x);
+    carriers.set(
+      carrier.id,
+      ordered.map(seat => seat.id)
+    );
   }
   return carriers;
 }
