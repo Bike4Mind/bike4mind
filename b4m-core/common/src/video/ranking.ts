@@ -17,18 +17,12 @@ export const VIDEO_MODEL_FOCUS: Record<VideoModelId, string> = {
   'flux-3-video': 'detailed scenes',
 };
 
-// House order among models that fit. Unlisted models (the test provider) follow in the caller's order.
-export const VIDEO_MODEL_PREFERENCE: readonly VideoModelId[] = [
-  'gemini-omni-1.1-flash',
-  'grok-imagine-video-1.5',
-  'flux-3-video',
-  'veo-3.1-fast-generate-preview',
-];
-
 /** The request a video model is ranked against: a create request without the model and prompt. */
 export type VideoRankingRequest = Omit<VideoGenerationRequest, 'model' | 'prompt'>;
 
 const isCatalogVideoId = (id: string): id is VideoModelId => Object.hasOwn(VIDEO_MODEL_CATALOG, id);
+
+const videoStanding = (id: string) => (isCatalogVideoId(id) ? VIDEO_MODEL_CATALOG[id] : undefined);
 
 const videoRequestSignals = (request: VideoRankingRequest): string[] => [
   ...(request.mode === 'image_to_video' ? ['your starting image'] : []),
@@ -68,7 +62,7 @@ export const rankVideoModels = <TId extends string>(
   const signals = videoRequestSignals(request);
   return rankCandidates(
     ids.map(id => ({ ...toCandidate(id, request, signals), id })),
-    VIDEO_MODEL_PREFERENCE,
+    videoStanding,
     withRetired(ids, options)
   );
 };

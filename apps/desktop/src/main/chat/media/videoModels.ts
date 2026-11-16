@@ -59,6 +59,10 @@ const inputsOf = (model: VideoModel): VideoModelCapabilities['inputs'] => {
 export function capabilitiesOf(model: VideoModel): VideoModelCapabilities {
   const local = catalogEntry(model.id);
   return {
+    // Standing only orders models; the validator never reads it, so an unknown model takes the lowest one.
+    tier: local?.tier ?? 'fast',
+    releasedAt: local?.releasedAt ?? '1970-01-01',
+    preview: local?.preview ?? false,
     provider: (local?.provider ?? model.provider) as VideoModelCapabilities['provider'],
     displayName: model.display_name,
     modes: model.modes,
