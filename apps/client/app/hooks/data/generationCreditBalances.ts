@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { CREDITS_BALANCE_KEY, fetchCreditsBalance, writeBilledBalance } from './credits';
+import { CREDITS_BALANCE_KEY, type CreditsBalance, fetchCreditsBalance, writeBilledBalance } from './credits';
 
 /**
  * Refresh every balance a generation's charge or refund moves; every Studio medium calls this at submit and at
@@ -14,12 +14,19 @@ export async function invalidateGenerationCreditBalances(queryClient: QueryClien
   ]);
 }
 
-// Always a fresh read (staleTime 0), never the cached pre-charge balance, and it throws when the pull fails: a failed
-// pull leaves the `users` push to deliver the balance. Matches syncCreditBalance in CreditBalanceSyncListener.
+// Invalidating refetches the balance wherever a query already holds it. When that refetch did not land (it failed or
+// was cancelled, so the query is still invalidated) or no query held the balance (the Studio page has none of its
+// own), read it fresh instead, so a cached pre-charge balance is never written back. A failed pull throws into the
+// catch and leaves the `users` push to deliver the balance.
 async function refreshPersonalBalance(queryClient: QueryClient): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY, refetchType: 'all' });
   try {
+    const state = queryClient.getQueryState<CreditsBalance>(CREDITS_BALANCE_KEY);
+    const refetched = state !== undefined && !state.isInvalidated && state.data !== undefined;
     writeBilledBalance(
-      await queryClient.fetchQuery({ queryKey: CREDITS_BALANCE_KEY, queryFn: fetchCreditsBalance, staleTime: 0 })
+      refetched
+        ? state.data
+        : await queryClient.fetchQuery({ queryKey: CREDITS_BALANCE_KEY, queryFn: fetchCreditsBalance, staleTime: 0 })
     );
   } catch (error) {
     console.warn('Credit balance sync failed:', error);

@@ -26,7 +26,7 @@ describe('invalidateGenerationCreditBalances', () => {
         queryClient.fetchQuery({ queryKey: organizationsKey, queryFn: fetchOrganizations }),
         queryClient.fetchQuery({ queryKey: searchKey, queryFn: searchOrganizations }),
       ]);
-      apiGet.mockResolvedValue({ data: { currentCredits: 90 } });
+      fetchPersonalBalance.mockResolvedValue({ currentCredits: 90 });
       fetchOrganizations.mockResolvedValue([{ id: 'team-1', currentCredits: 180 }]);
 
       await invalidateGenerationCreditBalances(queryClient);
