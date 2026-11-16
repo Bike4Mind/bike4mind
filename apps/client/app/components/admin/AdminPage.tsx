@@ -30,7 +30,7 @@ import CreditAnalyticsTab from './CreditAnalysis';
 import InviteCenter from './InviteCenter';
 import { ModelLogsTab } from './ModelLogsTab';
 import IdentityProvidersTab from './IdentityProvidersTab';
-import LLMDashboardTab from './LLMDashboardTab';
+import ModelsShell from './Models/ModelsShell';
 import RapidReplyTab from './RapidReplyTab';
 import VoiceSettingsTab from './VoiceSettingsTab';
 import DocumentationTab from './DocumentationTab';
@@ -61,9 +61,8 @@ const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: f
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 
-// The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
-// their pages lands; each leaves this list in the change that drops its own outer padding, and no new
-// tab joins it (DESIGN_GUIDE section 3, "Page frame").
+// The shell gives every tab panel the page frame. A panel carrying this attribute pads itself instead:
+// every tab has left that list, and no new tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
@@ -81,7 +80,6 @@ const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false 
 const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
-const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const AnalyticsTab = dynamic(() => import('./Analytics'), { ssr: false });
 const SecurityDashboard = dynamic(() => import('./SecurityDashboard'), { ssr: false });
@@ -264,9 +262,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.ModelMetrics}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.ModelLifecycle}>
-            {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
-          </TabPanel>
           <TabPanel value={AdminTab.ContextInspector}>
             {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
           </TabPanel>
@@ -293,9 +288,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AgentExecutions}>
             {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.LLMDashboard}>
-            {activeTab === AdminTab.LLMDashboard && <LLMDashboardTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Models}>{activeTab === AdminTab.Models && <ModelsShell />}</TabPanel>
           <TabPanel value={AdminTab.RapidReply}>{activeTab === AdminTab.RapidReply && <RapidReplyTab />}</TabPanel>
           <TabPanel value={AdminTab.VoiceSettings}>
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}

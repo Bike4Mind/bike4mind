@@ -140,6 +140,21 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
   'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  // strict: written inside the delete transaction, so the delete never lands without its entry.
+  'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.slack.connected': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.secret_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deliveries_replayed': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.github_connection.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.key_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.pat_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -379,6 +394,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin agreeing with an abuse assessment on a user queue; records the suggestion decision only.
+  'security.ai_assessment.accepted': { category: 'access', severity: 'info', write: 'strict' },
   // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
   'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
   'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },

@@ -249,6 +249,32 @@ describe('OverviewTab Access card admin access', () => {
     renderCard({ adminRoleIds: [SUPPORT_ROLE, BILLING_ROLE] });
 
     await waitFor(() => expect(screen.getByTestId('user-profile-fact-admin-roles')).toHaveTextContent('2 roles'));
+    expect(await screen.findByText('Role permissions unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-fact-admin-permissions')).not.toHaveTextContent('None');
+  });
+
+  it('keeps known direct permissions visible without claiming the failed role permissions are complete', async () => {
+    serveRoles(new Error('role list failed'));
+    renderCard({ adminPermissions: ['support:read'], adminRoleIds: [SUPPORT_ROLE] });
+    expect(await screen.findByText('Role permissions unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-admin-permission-support-read')).toHaveTextContent('granted directly');
+  });
+
+  it('does not claim no permissions while a held role is still loading', () => {
+    mocks.get.mockImplementation((url: string) =>
+      url.includes('admin-roles')
+        ? new Promise<never>(() => {})
+        : Promise.resolve({ data: { entries: [], nextCursor: null, notes: [], items: [] } })
+    );
+    renderCard({ adminRoleIds: [SUPPORT_ROLE] });
+    expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('Loading role permissions');
+    expect(screen.getByTestId('user-profile-fact-admin-permissions')).not.toHaveTextContent('None');
+  });
+
+  it('can report no permissions when the account holds no roles even if the role list fails', async () => {
+    serveRoles(new Error('role list failed'));
+    renderCard({ adminPermissions: [], adminRoleIds: [] });
+    expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('None');
   });
 
   it('shows All (Super Admin) and no Edit for a Super Admin, with no Admin roles row', () => {

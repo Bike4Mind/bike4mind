@@ -33,7 +33,22 @@ vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOr
 
 const mockSendToQueue = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
-vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' }, whatsNewGenerationQueue: { url: 'https://queue' } } }));
+// Like sst's real Resource proxy, an unlinked key throws: the web Lambda links the What's New queue
+// only through the sourceQueueUrls Linkable (infra/web.ts), never directly.
+vi.mock('sst', () => {
+  const linked: Record<string, unknown> = {
+    App: { stage: 'dev' },
+    sourceQueueUrls: { whatsNewGenerationQueue: 'https://queue' },
+  };
+  return {
+    Resource: new Proxy(linked, {
+      get: (target, key) => {
+        if (typeof key === 'string' && !(key in target)) throw new Error(`"${key}" is not linked`);
+        return target[key as string];
+      },
+    }),
+  };
+});
 const mockAudit = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),

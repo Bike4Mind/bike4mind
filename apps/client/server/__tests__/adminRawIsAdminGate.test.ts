@@ -155,7 +155,6 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['skills/market/[id]/report.ts', "isAdmin only makes an admin's report count toward auto-hide; any user may report"],
   ['skills/market/bundles/[id].ts', 'bundle owner or admin edits/deletes via helper'],
   ['skills/market/bundles/index.ts', 'isAdmin forwarded as actor flag to bundle list/create helpers'],
-  ['skills/market/by-token/[token].ts', 'isAdmin only forwarded as actor flag when opening a listing by share token'],
   ['skills/market/by-token/index.ts', 'isAdmin only forwarded as actor flag when opening a listing by share token'],
   ['skills/market/me.ts', 'isAdmin reported as data (isReviewer/isAdmin flags) in a self-info response for the UI'],
   ['skills/market/suggest-tags.ts', 'isAdmin only lifts the per-minute rate limit to Infinity; tool open to all users'],

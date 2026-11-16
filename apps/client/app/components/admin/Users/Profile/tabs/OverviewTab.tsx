@@ -154,8 +154,10 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const { currentUser } = useUser();
   const roles = useAdminRoleList();
   const roleIds = sortAdminRoleIds(user.adminRoleIds ?? []);
-  const heldRoles = (roles.data ?? []).filter(role => roleIds.includes(role.id.toLowerCase()));
-  const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, roles.data ?? []);
+  const roleListAvailable = roles.data !== undefined && !roles.isError;
+  const knownRoles = roleListAvailable ? roles.data : [];
+  const heldRoles = knownRoles.filter(role => roleIds.includes(role.id.toLowerCase()));
+  const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, knownRoles);
   // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
   const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
 
@@ -177,7 +179,7 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
           <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
             {roles.isLoading
               ? '...'
-              : !roles.data
+              : !roleListAvailable
                 ? // No role list to name them from (a read error); the count is still known.
                   `${roleIds.length} ${roleIds.length === 1 ? 'role' : 'roles'}`
                 : heldRoles.length === 0
@@ -188,18 +190,27 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
       )}
       <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
-          {user.isAdmin
-            ? 'All (Super Admin)'
-            : effective.length === 0
-              ? 'None'
-              : effective.map(entry => (
-                  <StatusChip
-                    key={entry.id}
-                    tone="neutral"
-                    label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
-                    data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
-                  />
-                ))}
+          {user.isAdmin ? (
+            'All (Super Admin)'
+          ) : (
+            <>
+              {effective.map(entry => (
+                <StatusChip
+                  key={entry.id}
+                  tone="neutral"
+                  label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                  data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                />
+              ))}
+              {roleIds.length > 0 && !roleListAvailable
+                ? roles.isLoading
+                  ? 'Loading role permissions...'
+                  : 'Role permissions unavailable'
+                : effective.length === 0
+                  ? 'None'
+                  : null}
+            </>
+          )}
           {canEditPermissions && (
             <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">
               Edit

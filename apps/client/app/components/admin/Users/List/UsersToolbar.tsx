@@ -115,10 +115,17 @@ export function UsersToolbar({
     if (roles.length === 0 && !params.adminRole) return SINGLE_FILTERS;
     const options = roles.map(role => ({ value: role.id, label: role.name }));
     if (params.adminRole && !options.some(option => option.value === params.adminRole)) {
-      options.push({ value: params.adminRole, label: adminRoles.isLoading ? '...' : 'Deleted role' });
+      options.push({
+        value: params.adminRole,
+        label: adminRoles.isLoading
+          ? '...'
+          : adminRoles.isError || !adminRoles.data
+            ? 'Role unavailable'
+            : 'Deleted role',
+      });
     }
     return [...SINGLE_FILTERS, { key: 'adminRole', label: 'Admin role', options }];
-  }, [adminRoles.data, adminRoles.isLoading, params.adminRole]);
+  }, [adminRoles.data, adminRoles.isLoading, adminRoles.isError, params.adminRole]);
 
   const organizationOptions = useMemo<FilterChipOption[]>(
     () => [

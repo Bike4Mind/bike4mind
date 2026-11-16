@@ -7800,6 +7800,72 @@ describe('ChatCompletionProcess', () => {
         expect(state.balance).toBe(BALANCE - used);
       });
 
+      it.each([
+        ['image_generation', 'absent'],
+        ['image_generation', 'present'],
+        ['image_generation', 'cleared'],
+        ['edit_image', 'absent'],
+        ['edit_image', 'present'],
+        ['edit_image', 'cleared'],
+      ])('settles %s reservations exactly once when tool telemetry is %s', async (toolName, telemetry) => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const toolCharge = 200;
+        const textCharge = 60;
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          const billing = service as unknown as {
+            toolCreditsMap: Map<string, number[]>;
+            toolCreditModels: Set<string>;
+          };
+          billing.toolCreditsMap.set(toolName, [120, 80]);
+          billing.toolCreditModels.add('image-model');
+          await cb(['Images delivered'], {
+            inputTokens: 10,
+            outputTokens: 50,
+            ...(telemetry === 'absent'
+              ? {}
+              : {
+                  toolsUsed: [
+                    { name: toolName, arguments: '{}' },
+                    { name: toolName, arguments: '{}' },
+                  ],
+                }),
+          });
+          if (telemetry === 'cleared') {
+            await cb(['Images delivered.'], { inputTokens: 10, outputTokens: 50 });
+          }
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockedUsdToCreditsStochastic.mockReturnValue(textCharge);
+        mockQuest.sessionId = 'session1';
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        const hold = -incrementCredits.mock.calls[0][1];
+        expect(incrementCredits).toHaveBeenCalledTimes(2);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - textCharge - toolCharge);
+        expect(state.balance).toBe(BALANCE - textCharge - toolCharge);
+        expect(mockQuest.creditsUsed).toBe(textCharge + toolCharge);
+        const breakdown = (mockQuest.promptMeta?.functionCalls ?? []).reduce(
+          (sum, call) => sum + (call.creditsUsed ?? 0),
+          0
+        );
+        expect(breakdown).toBe(toolCharge);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledTimes(2);
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'tool_usage',
+          expect.objectContaining({
+            credits: -toolCharge,
+            model: 'image-model',
+            questId: mockQuest.id,
+            description: `Tool usage: ${toolName}`,
+          })
+        );
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'text_generation_usage',
+          expect.objectContaining({ credits: -textCharge })
+        );
+      });
+
       // The thrown-abort settlement (settleReservation) floors text the same way; tools are never floored.
       it("charges a stopped turn's tool credits in full past the balance", async () => {
         const { state, incrementCredits } = fakeBalance(BALANCE);

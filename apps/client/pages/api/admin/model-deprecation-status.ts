@@ -27,7 +27,9 @@ import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
  *
  * GET  -> the horizon (expiring), the catalog's EXPIRED view, the operator
  *         queue of unresolved discovery suggestions, and the stale-reference
- *         report over the hardcoded model-id surfaces.
+ *         report over the hardcoded model-id surfaces. `?view=queue` answers
+ *         only the queue and the rates that price it, read from the database
+ *         alone: no provider is asked.
  * POST -> settle one queue item: 'dismiss' records the verdict, 'accept'
  *         appends an operator lifecycle row and then records it. An accept
  *         whose successor fails the auto-remap constraints answers 409 with the
@@ -75,6 +77,22 @@ function queueBackendResolver(
   };
 }
 
+/**
+ * One queue item. backend and missCount feed the accept reason's evidence line: which vendor page
+ * confirms the change, and how long an absence-raised model has been missing.
+ */
+function queueItem(
+  state: Awaited<ReturnType<typeof modelDiscoveryStateRepository.pendingSuggestions>>[number],
+  backend: string | undefined
+) {
+  return {
+    modelId: state.modelId,
+    suggestion: state.suggestion,
+    ...(backend ? { backend } : {}),
+    ...(state.suggestion?.source === 'absence' ? { missCount: state.missCount } : {}),
+  };
+}
+
 const ResolveBody = z.object({
   modelId: z.string().min(1),
   action: z.enum(['accept', 'dismiss']),
@@ -95,6 +113,18 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
+    if (req.query.view === 'queue') {
+      const [pending, priceRows] = await Promise.all([
+        modelDiscoveryStateRepository.pendingSuggestions(),
+        modelPriceRepository.rowsInForce(),
+      ]);
+      return res.json({
+        // No backend: resolving it reads the catalog, and the client takes it from the admin model list.
+        queue: pending.map(state => queueItem(state, undefined)),
+        perMTokRates: perMTokRatesInForce(priceRows),
+      });
+    }
+
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
     // Read here rather than through the process memo: the tab reloads this the moment a run it watched finishes.
     const catalogRevision = (await readModelListRevision()) ?? undefined;
@@ -134,17 +164,7 @@ const handler = adminApi({
         .filter(([, lifecycle]) => lifecycle.status === 'active' && lifecycle.deprecationDate !== undefined)
         .map(([modelId, lifecycle]) => ({ modelId, deprecationDate: lifecycle.deprecationDate }))
         .sort((left, right) => (left.deprecationDate ?? '').localeCompare(right.deprecationDate ?? '')),
-      // backend and missCount feed the accept note's evidence line: which vendor page
-      // confirms the change, and how long an absence-raised model has been missing.
-      queue: pending.map(state => {
-        const backend = backendOf(state.modelId);
-        return {
-          modelId: state.modelId,
-          suggestion: state.suggestion,
-          ...(backend ? { backend } : {}),
-          ...(state.suggestion?.source === 'absence' ? { missCount: state.missCount } : {}),
-        };
-      }),
+      queue: pending.map(state => queueItem(state, backendOf(state.modelId))),
       // The shared watchdog report uses deployment credentials and catalog lifecycle,
       // so hidden pins remain classifiable even when they have no successor.
       staleReferences: staleReport.references,

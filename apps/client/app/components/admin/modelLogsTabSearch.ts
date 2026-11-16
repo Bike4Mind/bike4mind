@@ -1,5 +1,5 @@
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
-import { oneOf, parseCalendarDate, parsePage, toNumber } from './adminSearchValues';
+import { parseCalendarDate, parsePage, toNumber } from './adminSearchValues';
 import { ADMIN_PAGE_SIZES } from './shared/adminPagination';
 import { DEFAULT_PRESET_DAYS, getPresetRange } from './EventMetrics/UserActivity/dateRange';
 
@@ -36,8 +36,9 @@ export const MODEL_LOGS_MODEL_OPTIONS = [
   { value: 'claude-3-opus', label: 'Claude 3 Opus' },
   { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet' },
 ] as const;
-export type ModelLogsModel = (typeof MODEL_LOGS_MODEL_OPTIONS)[number]['value'];
-const MODEL_VALUES = MODEL_LOGS_MODEL_OPTIONS.map(option => option.value);
+/** Any model id: the detail page of a model links here with its own id, which is rarely one of the options. */
+export type ModelLogsModel = string;
+const MODEL_ID_MAX_LENGTH = 200;
 
 export type ModelLogsSearch = {
   [MODEL_LOGS_PAGE_PARAM]?: number;
@@ -71,6 +72,13 @@ export const defaultModelLogsView = (): ModelLogsView => ({
   model: undefined,
 });
 
+// Trimmed and bounded; empty or the legacy "all" sentinel means every model.
+const parseModelId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const id = value.trim();
+  return id.length > 0 && id !== 'all' && id.length <= MODEL_ID_MAX_LENGTH ? id : undefined;
+};
+
 const parseModelLogsPage = (value: unknown): number | undefined => {
   const page = parsePage(value);
   return page !== undefined && page <= MODEL_LOGS_MAX_PAGE ? page : undefined;
@@ -89,7 +97,7 @@ export const MODEL_LOGS_SEARCH_PARSERS: {
   [MODEL_LOGS_LIMIT_PARAM]: parseLimit,
   [MODEL_LOGS_FROM_PARAM]: parseCalendarDate,
   [MODEL_LOGS_TO_PARAM]: parseCalendarDate,
-  [MODEL_LOGS_MODEL_PARAM]: oneOf(MODEL_VALUES),
+  [MODEL_LOGS_MODEL_PARAM]: parseModelId,
 };
 
 /**

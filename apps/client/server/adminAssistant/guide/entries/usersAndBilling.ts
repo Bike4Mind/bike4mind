@@ -159,7 +159,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     id: 'credit-analytics-overview',
     title: 'Credit Analytics',
     summary:
-      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Model Pricing, Margins, Org Usage, API Usage, Ledger and Adjustments.',
+      'Credit Analytics groups the credit tools in tabs: Economy, User Credits, Margins, Org Usage, API Usage, Ledger and Adjustments. Model prices are in the Prices section of the Models page.',
     views: ['admin.credit_analytics'],
     settings: [],
     howTo: [
@@ -173,15 +173,15 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
   },
   {
     id: 'model-pricing-catalog',
-    title: 'Model Pricing catalog',
+    title: 'Model prices',
     summary:
-      'The Model Pricing tab holds the versioned provider cost per model (token rates shown per 1M). These are provider costs in USD, not what users are charged.',
-    views: ['admin.credit_analytics'],
+      'The Prices section of the Models page holds the versioned provider cost per model (token rates shown per 1M). These are provider costs in USD, not what users are charged.',
+    views: ['admin.llm_dashboard'],
     settings: [],
     howTo: [
-      'Use "Filter by model id" to find a model; each row shows input, output and audio rates, the date effective and the source.',
-      'Click Reprice on a row to add a new price taking effect now, with a note saying where it came from.',
-      'Click History to see every past price for the model; click "Revert to seed pricing" to return an operator-priced row to the automatic rates.',
+      'Open Models, then Prices. Use the filter box to find a model id; each row shows input, output and audio rates, the date effective and the source.',
+      'Click Reprice on a row to add a new price taking effect now, with a note saying where it came from. Add price adds the first price for a model that has none.',
+      'Click History to see every past price for the model; Revert returns a row set by an admin or by discovery to the built-in rates.',
     ],
     keywords: ['model prices', 'reprice', 'token rates', 'provider cost', 'price history', 'seed pricing'],
   },
@@ -395,7 +395,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'Sections: "Signup and starter credits", "Referral rewards for inviters", "Credits and pricing", "Preference arena" and "Team plan".',
       'Each field shows its current value; change fields, then save with the page save bar.',
       'For a referral reward, an amount of 0 turns that reward off.',
-      '"Related settings" links to the model pricing catalog and to the tier rate limits in Admin Settings, which are edited there.',
+      '"Related settings" links to model prices in Models > Prices and to the tier rate limits in Admin Settings, which are edited there.',
     ],
     keywords: [
       'pricing',

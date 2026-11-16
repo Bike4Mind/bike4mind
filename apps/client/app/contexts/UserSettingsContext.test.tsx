@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserSettingsProvider, useUserSettings } from './UserSettingsContext';
@@ -58,6 +58,18 @@ const { mockHandleRevision, mockStopWatching, mockWatchArrivals } = vi.hoisted((
 vi.mock('@client/app/hooks/data/modelListRevision', () => ({
   handleModelListRevisionSetting: mockHandleRevision,
   watchModelListArrivals: mockWatchArrivals,
+}));
+const { mockHandleAccessRevision, mockStopWatchingAccess, mockWatchAccessArrivals } = vi.hoisted(() => {
+  const mockStopWatchingAccess = vi.fn();
+  return {
+    mockHandleAccessRevision: vi.fn(),
+    mockStopWatchingAccess,
+    mockWatchAccessArrivals: vi.fn(() => mockStopWatchingAccess),
+  };
+});
+vi.mock('@client/app/hooks/data/modelAccessRevision', () => ({
+  handleModelAccessRevisionSetting: mockHandleAccessRevision,
+  watchModelAccessArrivals: mockWatchAccessArrivals,
 }));
 
 const { useUser } = await import('@client/app/contexts/UserContext');
@@ -689,6 +701,28 @@ describe('UserSettingsContext - model-list revision wiring', () => {
     act(() => adminSettingsCallback()('delete', { settingName: 'modelListRevision', settingValue: 'rev-2' }));
 
     expect(mockHandleRevision).not.toHaveBeenCalled();
+    expect(mockHandleAccessRevision).not.toHaveBeenCalled();
+  });
+
+  it('hands every pushed adminsettings write to the model access revision handler', () => {
+    const client = new QueryClient();
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+
+    act(() => adminSettingsCallback()('update', { settingName: 'modelAccessRevision', settingValue: 'acc-2' }));
+
+    expect(mockHandleAccessRevision).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ settingName: 'modelAccessRevision', settingValue: 'acc-2' })
+    );
+  });
+
+  it('watches the access entries landing for as long as the provider is mounted', () => {
+    const client = new QueryClient();
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    expect(mockWatchAccessArrivals).toHaveBeenCalledWith(client);
+
+    unmount();
+    expect(mockStopWatchingAccess).toHaveBeenCalledTimes(1);
   });
 
   it('watches the model list landing for as long as the provider is mounted', () => {
@@ -702,9 +736,15 @@ describe('UserSettingsContext - model-list revision wiring', () => {
 });
 
 describe('UserSettingsContext - model access revision wiring', () => {
-  it('refreshes the actual picker query for a non-admin subscription write', () => {
+  it('refreshes the actual picker query for a non-admin subscription write', async () => {
     resetStores();
     vi.mocked(useSubscribeCollection).mockClear();
+    const actual = await vi.importActual<typeof import('@client/app/hooks/data/modelAccessRevision')>(
+      '@client/app/hooks/data/modelAccessRevision'
+    );
+    mockHandleAccessRevision.mockImplementationOnce((queryClient: QueryClient, setting: Record<string, unknown>) =>
+      actual.handleModelAccessRevisionSetting(queryClient, setting, () => 0)
+    );
     const client = new QueryClient();
     const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
     client.setQueryData(['llm-model-configurations'], { configurations: [], revision: 'access-1' });
@@ -712,9 +752,11 @@ describe('UserSettingsContext - model access revision wiring', () => {
     const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
     const callback = call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
     act(() => callback('update', { settingName: 'modelAccessRevision', settingValue: 'access-2' }));
-    expect(invalidate).toHaveBeenCalledWith(
-      { queryKey: ['llm-model-configurations'], refetchType: 'all' },
-      { throwOnError: true }
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith(
+        { queryKey: ['llm-model-configurations'], refetchType: 'all' },
+        { throwOnError: true }
+      )
     );
     unmount();
   });
