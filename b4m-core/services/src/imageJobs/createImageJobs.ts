@@ -156,7 +156,11 @@ export async function createImageJobs(
 
   const { enforceCredits } = await deps.getSettings();
   const requiredCredits = usdToCredits(estimateImageJobUsd(request));
-  const holds = await holdBatch(missingIndexes.length, { enforceCredits, user: input.user, requiredCredits }, deps);
+  const holds = await holdBatch(
+    missingIndexes.length,
+    { enforceCredits, user: input.user, requiredCredits, apiKeyId: input.apiKeyId },
+    deps
+  );
   if (!holds.ok) return holds;
 
   const groupId = replayed[0]?.payload.groupId ?? new Types.ObjectId().toHexString();
@@ -174,7 +178,12 @@ export async function createImageJobs(
   return { ok: true, groupId: jobs[0]?.payload.groupId ?? groupId, jobs, created: true };
 }
 
-type HoldParams = { enforceCredits: boolean; user: CreateImageJobsInput['user']; requiredCredits: number };
+type HoldParams = {
+  enforceCredits: boolean;
+  user: CreateImageJobsInput['user'];
+  requiredCredits: number;
+  apiKeyId?: string;
+};
 
 async function holdBatch(
   count: number,

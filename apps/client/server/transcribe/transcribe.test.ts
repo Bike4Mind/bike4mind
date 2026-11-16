@@ -64,6 +64,7 @@ vi.mock('@server/utils/transcriptionCost', async orig => ({
   holdTranscriptionCredits: mockHoldCredits,
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   userRepository: {},
   organizationRepository: {},
   adminSettingsRepository: {},

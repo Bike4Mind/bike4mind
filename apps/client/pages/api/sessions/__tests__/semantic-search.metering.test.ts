@@ -66,6 +66,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
   creditTransactionRepository: {},
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   organizationRepository: { findById: m.findOrg },
   userRepository: {},
   sessionRepository: {

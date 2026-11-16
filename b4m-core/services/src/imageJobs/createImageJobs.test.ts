@@ -52,6 +52,7 @@ const capUser = { id: 'u1', createdAt: new Date('2026-10-12T00:00:00Z'), isAdmin
 const testCredits = {
   users: { findById: vi.fn(async () => capUser) },
   newAccountSpendCap: {},
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
 } as unknown as CreditHoldAdapters;
 
 const openAiProvider: ImageProvider = {

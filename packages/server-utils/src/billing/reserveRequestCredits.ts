@@ -3,6 +3,7 @@ import {
   creditTransactionRepository,
   organizationRepository,
   pendingCreditHoldRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
   withTransaction,
@@ -17,6 +18,7 @@ import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
 import { attributeToRequestApiKey } from './attributeToRequestApiKey';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+import { spendFreezeSubjectForRequest } from './spendFreezeSubject';
 import { assertAiAccessAllowed } from '../auth/assertAiAccessAllowed';
 import { checkFreeTierDailySpendCap } from './freeTierDailyCapGate';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
@@ -67,6 +69,7 @@ export const holdAdapters = {
   creditTransactions: creditTransactionRepository,
   deductCredits: creditService.deductCreditsWithOrgSupport,
   newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+  spendFreezes: spendFreezeRepository,
   onInsufficientCredits: recordInsufficientCredits,
 };
 
@@ -120,6 +123,12 @@ export async function reserveRequestCredits({
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 
+  // Also before the enforceCredits short-circuit, and ahead of the free-tier cap so a frozen subject is
+  // never told to wait for UTC midnight.
+  await creditService.assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
+
   // Daily cap check for free-tier accounts (no-op when enforceCredits is off).
   await checkFreeTierDailySpendCap({
     user: req.user,
@@ -144,6 +153,8 @@ export async function reserveRequestCredits({
           requiredCredits,
           featureLabel,
           logger: req.logger,
+          apiKeyId: req.apiKeyInfo?.keyId,
+          spendFreezeChecked: true,
           // Re-checked against the roster holdCredits just fetched - no extra query.
           assertBillable: (billingUser, billingOrg) =>
             assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),

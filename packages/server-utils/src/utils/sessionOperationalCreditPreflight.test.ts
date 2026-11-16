@@ -1,25 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockCreditsEnforced, mockGetOperationsModel } =
-  vi.hoisted(() => ({
-    mockFindUserById: vi.fn(),
-    mockFindOrgById: vi.fn(),
-    mockBillingEnabled: vi.fn(
-      async (
-        _db: unknown,
-        _logger: unknown,
-        _holder: { activePlans: { hasActivePlan(id: string): Promise<boolean> } }
-      ) => false
-    ),
-    mockCreditsEnforced: vi.fn(async () => true),
-    mockGetOperationsModel: vi.fn(),
-  }));
+const {
+  mockFindUserById,
+  mockFindOrgById,
+  mockBillingEnabled,
+  mockCreditsEnforced,
+  mockGetOperationsModel,
+  mockFindFreeze,
+} = vi.hoisted(() => ({
+  mockFindFreeze: vi.fn(async (): Promise<unknown> => null),
+  mockFindUserById: vi.fn(),
+  mockFindOrgById: vi.fn(),
+  mockBillingEnabled: vi.fn(
+    async (_db: unknown, _logger: unknown, _holder: { activePlans: { hasActivePlan(id: string): Promise<boolean> } }) =>
+      false
+  ),
+  mockCreditsEnforced: vi.fn(async () => true),
+  mockGetOperationsModel: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   organizationRepository: { findById: mockFindOrgById },
   usageEventRepository: {},
+  spendFreezeRepository: { findActiveForSubject: mockFindFreeze },
   userRepository: { findById: mockFindUserById },
 }));
 // The pair semantics of the two toggles are this helper's own contract, covered by
@@ -47,7 +52,13 @@ import {
   assertSessionOperationalCredits,
   filterSessionIdsByOperationalCredits,
 } from './sessionOperationalCreditPreflight';
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, getQuestErrorCode, TooManyRequestsError } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  getQuestErrorCode,
+  isSpendFrozenError,
+  TooManyRequestsError,
+  type ISpendFreeze,
+} from '@bike4mind/common';
 
 const USER_ID = 'user-1';
 const ORG_ID = 'org-1';
@@ -281,6 +292,53 @@ describe('checkSessionOperationalCredits', () => {
     mockDailyCap.mockRejectedValueOnce(failure);
 
     await expect(preflight({ logger: { warn: vi.fn(), error: vi.fn() } as never })).rejects.toBe(failure);
+  });
+
+  describe('spend freeze', () => {
+    const freeze = { scopeType: 'User', frozenAt: new Date('2026-11-16T00:00:00Z') } as ISpendFreeze;
+
+    it('refuses a frozen payer before the free-tier cap and the balance check', async () => {
+      billingOn();
+      mockFindFreeze.mockResolvedValueOnce(freeze);
+
+      const verdict = await preflight();
+
+      expect(verdict).toMatchObject({ allowed: false });
+      expect(isSpendFrozenError(verdict.allowed ? undefined : verdict.frozenError)).toBe(true);
+      expect(mockFindFreeze).toHaveBeenCalledWith({ userId: USER_ID, organizationId: undefined });
+      expect(mockDailyCap).not.toHaveBeenCalled();
+    });
+
+    it('checks the org the payer bills', async () => {
+      billingOn();
+      mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000, organizationId: ORG_ID });
+      mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 1000, userDetails: [] });
+      await preflight();
+      expect(mockFindFreeze).toHaveBeenCalledWith({ userId: USER_ID, organizationId: ORG_ID });
+    });
+
+    it('throws the 403 from the asserting entry point rather than an insufficient-credits 422', async () => {
+      billingOn();
+      mockFindFreeze.mockResolvedValueOnce(freeze);
+      const error = await assertSessionOperationalCredits({
+        userId: USER_ID,
+        operationCount: 1,
+        operation: 'session tagging',
+      }).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect((error as { statusCode?: number }).statusCode).toBe(403);
+    });
+
+    it('propagates a freeze read failure rather than allowing the spend', async () => {
+      billingOn();
+      mockFindFreeze.mockRejectedValueOnce(new Error('mongo down'));
+      await expect(preflight()).rejects.toThrow('mongo down');
+    });
+
+    it('does not read the freeze when operational billing does not apply', async () => {
+      await preflight();
+      expect(mockFindFreeze).not.toHaveBeenCalled();
+    });
   });
 
   it('skips the daily cap check when operational billing does not apply', async () => {

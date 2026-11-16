@@ -1,5 +1,7 @@
 import {
   insufficientCreditsError,
+  isSpendFrozenError,
+  type ForbiddenError,
   type ISessionDocument,
   type ModelInfo,
   type TooManyRequestsError,
@@ -7,6 +9,7 @@ import {
 import {
   adminSettingsRepository,
   organizationRepository,
+  spendFreezeRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -54,10 +57,12 @@ export interface SessionOperationalCreditPreflightArgs {
 
 /**
  * Discriminated so a caller that must not fail its primary action can branch on the reason. `dailyCapError`
- * is set when the free-tier daily cap refused, so the throwing entry point keeps its 429 and Retry-After.
+ * is set when the free-tier daily cap refused, so the throwing entry point keeps its 429 and Retry-After;
+ * `frozenError` likewise carries the 403 `spend_frozen` of a frozen payer or organization.
  */
 export type SessionOperationalCreditVerdict =
-  { allowed: true } | { allowed: false; reason: string; dailyCapError?: TooManyRequestsError };
+  | { allowed: true }
+  | { allowed: false; reason: string; dailyCapError?: TooManyRequestsError; frozenError?: ForbiddenError };
 
 type BillingUser = NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>;
 type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
@@ -274,6 +279,19 @@ export async function checkSessionOperationalCredits({
     return gateDisabled(err);
   }
 
+  // Ahead of the free-tier cap, as at the reservation gates. A read failure propagates: unlike the billing
+  // reads above, a freeze that cannot be read must not default to allowing the spend.
+  try {
+    await creditService.assertSpendNotFrozen(
+      { userId: billingUser.id, organizationId: billingOrg?.id },
+      { db: { spendFreezes: spendFreezeRepository } }
+    );
+  } catch (err) {
+    if (isSpendFrozenError(err))
+      return { allowed: false, reason: (err as ForbiddenError).message, frozenError: err as ForbiddenError };
+    throw err;
+  }
+
   // These publishers sit behind no chat turn, so the free-tier daily caps (credit and system cost)
   // are checked here too. The gate fails open on its own read errors.
   try {
@@ -318,11 +336,11 @@ export async function checkSessionOperationalCredits({
 /**
  * `checkSessionOperationalCredits` for the entry points whose whole purpose is the operational
  * spend, where a refusal is the answer to the request. Throws a 422 tagged
- * `insufficient_credits` - a billing state, not a bug - or the free-tier daily cap's 429.
+ * `insufficient_credits` - a billing state, not a bug - the free-tier daily cap's 429, or a freeze's 403.
  */
 export async function assertSessionOperationalCredits(args: SessionOperationalCreditPreflightArgs): Promise<void> {
   const verdict = await checkSessionOperationalCredits(args);
-  if (!verdict.allowed) throw verdict.dailyCapError ?? insufficientCreditsError(verdict.reason);
+  if (!verdict.allowed) throw verdict.dailyCapError ?? verdict.frozenError ?? insufficientCreditsError(verdict.reason);
 }
 
 /**

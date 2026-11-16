@@ -68,6 +68,7 @@ const makeWallet = (balance: number, userFields: Record<string, unknown> = {}) =
     users,
     organizations: { findById: vi.fn(async () => null) },
     creditTransactions: {},
+    spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
     deductCredits: vi.fn(async ({ credits }: { credits: number }) => {
       state.ledger.push(credits);
     }),

@@ -664,6 +664,7 @@ export class ImageEditService {
           requiredCredits,
           featureLabel: IMAGE_EDIT_FEATURE_LABEL,
           logger,
+          apiKeyId,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;

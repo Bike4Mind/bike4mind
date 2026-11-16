@@ -13,10 +13,17 @@ export type ImageCreditHolds = {
   /**
    * Atomically move `requiredCredits` out of the payer's balance BEFORE the provider is called.
    * Checks the org member cap before the atomic balance move; the cap check is not atomic.
-   * Throws a 422 `insufficient_credits` when the balance or the org member cap cannot cover it.
+   * Throws a 422 `insufficient_credits` when the balance or the org member cap cannot cover it, and a 403
+   * `spend_frozen` when the payer, its organization or the key is frozen.
    */
   hold(
-    params: HoldContext & { userId: string; organizationId: string | null; requiredCredits: number }
+    params: HoldContext & {
+      userId: string;
+      organizationId: string | null;
+      requiredCredits: number;
+      /** The UserApiKey the queued job was created with, if any; its freeze is checked too. */
+      apiKeyId?: string;
+    }
   ): Promise<PersistedCreditHold>;
   /** Return the whole hold: the run failed or stopped before producing a billable image. */
   release(hold: PersistedCreditHold, context: HoldContext): Promise<void>;

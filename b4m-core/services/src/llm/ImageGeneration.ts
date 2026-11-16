@@ -1031,6 +1031,7 @@ export class ImageGenerationService {
           requiredCredits,
           featureLabel: IMAGE_GENERATION_FEATURE_LABEL,
           logger,
+          apiKeyId,
         });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
