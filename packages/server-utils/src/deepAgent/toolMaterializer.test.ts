@@ -66,6 +66,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, getAvailableModels: vi.fn().mockResolvedValue([]) };
 });
+vi.mock('../generationJobs/audioJobWiring', () => ({ buildAudioToolJobs: () => ({}) }));
 vi.mock('./resolveBackend', () => ({
   buildSystemApiKeyTable: vi.fn().mockResolvedValue({}),
 }));

@@ -1369,7 +1369,8 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // The audio_generation tool (deepAgent/toolMaterializer.ts) enqueues its generation job from here.
+    link: [...allSecrets, generationJobQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

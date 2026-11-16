@@ -1,6 +1,5 @@
-import { ModelInfo, SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import { ModelInfo } from '@bike4mind/common';
 import { estimateImageCredits } from '../imageCost';
-import { AudioCostInput, estimateAudioCredits } from '../audioCost';
 import { toImageCostInput, type ImageToolCostInput } from './tools/imageToolBilling';
 
 /**
@@ -18,9 +17,9 @@ import { toImageCostInput, type ImageToolCostInput } from './tools/imageToolBill
  * estimators themselves throw on an unsupported model / non-finite cost, so the caller wraps
  * this and logs rather than letting a cost-estimate edge crash the agent run.
  *
- * Timing mirrors the classic host: image and audio both settle from the `onToolFinish`
- * payload so only a delivered image or clip is billed. video_generation and music_generation are
- * not here: their jobs hold and settle credits themselves.
+ * Timing mirrors the classic host: images settle from the `onToolFinish` payload so only a
+ * delivered image is billed. video_generation, music_generation and audio_generation are not
+ * here: their jobs hold and settle credits themselves.
  */
 export function estimateGeneratedMediaUsd(toolName: string, data: unknown, models: ModelInfo[]): number {
   switch (toolName) {
@@ -31,26 +30,6 @@ export function estimateGeneratedMediaUsd(toolName: string, data: unknown, model
       const modelInfo = models.find(m => m.id === d.model);
       if (!modelInfo) return 0;
       return estimateImageCredits(modelInfo, d.n || 1, toImageCostInput(toolName, d)).usdCost;
-    }
-    case 'audio_generation': {
-      const d = data as {
-        kind?: string;
-        provider?: string;
-        model?: string;
-        characters?: number;
-        durationSeconds?: number;
-      };
-      if (!d?.provider) return 0;
-      const input: AudioCostInput =
-        d.kind === 'sound_effect'
-          ? { kind: 'sound_effect', provider: d.provider as SoundGenerationVendor, durationSeconds: d.durationSeconds }
-          : {
-              kind: 'speech',
-              provider: d.provider as VoiceGenerationVendor,
-              model: d.model,
-              characters: d.characters ?? 0,
-            };
-      return estimateAudioCredits(input).usdCost;
     }
     default:
       return 0;

@@ -50,8 +50,7 @@ export type ElevenLabsCapacityArgs = {
 /**
  * Slots synchronous ElevenLabs music/sound calls on the shared server key, so the account's
  * concurrency cap is shared across users instead of surfacing as a provider 429. A personal key is
- * the user's own account and is not counted. Callers: /api/ai/music, /api/ai/sound-effects and the
- * audio_generation tool. Not slotted: the async music generation jobs (which retry 429 per job) and
+ * the user's own account and is not counted. Callers: /api/ai/music and /api/ai/sound-effects. Not slotted: the async music generation jobs (which retry 429 per job) and
  * text-to-speech, so these pools bound only the calls routed here.
  */
 export async function runElevenLabsWithCapacity<T>(

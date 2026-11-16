@@ -1,4 +1,4 @@
-import type { IGenerationJobDocument, PushNotificationEvent } from '@bike4mind/common';
+import type { IGenerationJobDocument, IGenerationJobDocumentOf, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import {
   type ConnectionLookup,
@@ -21,19 +21,23 @@ export type GenerationJobPushDeps = {
   publish: Publish;
 };
 
-type PushedKind = Exclude<IGenerationJobDocument['kind'], 'image'>;
+type PushedKind = 'video' | 'music';
 
 const JOB_TITLES: Record<PushedKind, string> = {
   video: 'Video ready',
   music: 'Song ready',
 };
 
+const isPushedJob = (job: IGenerationJobDocument): job is IGenerationJobDocumentOf<PushedKind> =>
+  Object.hasOwn(JOB_TITLES, job.kind);
+
 /**
  * For a video or music job the engine just finished. Pushed regardless of websocket presence: these run
  * for minutes, long enough that the requester has usually moved on. Failed and cancelled jobs are not
  * pushed (there is no failure category), and neither is a job with a Slack delivery, which already
  * reports back in its own thread. Image jobs are not pushed per job: a "make N" batch is pushed once,
- * from the group completion decision (imageGroupPushSubscriber in server-utils generationJobs).
+ * from the group completion decision (imageGroupPushSubscriber in server-utils generationJobs). Speech and
+ * sound-effect jobs are not pushed: they finish in seconds, while the requester is still waiting on them.
  */
 export async function publishGenerationJobReadyPush(
   jobId: string,
@@ -43,7 +47,7 @@ export async function publishGenerationJobReadyPush(
   if (!isPushDeliveryConfigured()) return;
   try {
     const job = await deps.findJob(jobId);
-    if (!job || job.state !== 'succeeded' || job.delivery || job.kind === 'image') return;
+    if (!job || job.state !== 'succeeded' || job.delivery || !isPushedJob(job)) return;
 
     const sessionId = job.kind === 'music' ? job.payload.sessionId : undefined;
     await deps.publish({

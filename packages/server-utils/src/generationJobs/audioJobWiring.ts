@@ -1,5 +1,10 @@
 import { apiKeyService } from '@bike4mind/auth';
-import { ApiKeyType, type SoundGenerationVendor, type VoiceGenerationVendor } from '@bike4mind/common';
+import {
+  ApiKeyType,
+  type AudioJobOutput,
+  type SoundGenerationVendor,
+  type VoiceGenerationVendor,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -13,12 +18,16 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { voiceService } from '@bike4mind/services';
 import {
+  createSoundEffectJob,
+  createSpeechJob,
   type AudioJobDeps,
   type CreateSoundEffectJobDeps,
   type CreateSpeechJobDeps,
   type SoundEffectJobDeps,
   type SpeechJobDeps,
 } from '@bike4mind/services/audioJobs';
+import { runJobInline } from '@bike4mind/services/generationJobs';
+import type { AudioToolJobs } from '@bike4mind/services/llm/tools';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   createSoundEffectProvider,
@@ -29,6 +38,7 @@ import {
 import { assertMediaModelAdmission, isMediaModelAdmitted } from '../billing/assertMediaModelAdmission';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
+import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import {
   checkStorageFor,
   enqueueGenerationJob,
@@ -215,4 +225,29 @@ export const getCreateSoundEffectJobDeps = (): CreateSoundEffectJobDeps => ({
   assertModelAdmission: assertMediaModelAdmission,
   engine: getGenerationJobEngine(),
   checkStorageFor,
+});
+
+/**
+ * Steps a just-created speech or sound-effect job in this process and waits for it to end (see runJobInline), for a
+ * caller that answers synchronously. Null when it did not end in time; it then finishes, and bills, in the background.
+ */
+export const runAudioJobInline = (jobId: string, timeoutMs: number) =>
+  runJobInline(
+    jobId,
+    { timeoutMs },
+    { engine: getGenerationJobEngine(), repository: generationJobRepository, now: () => new Date() }
+  );
+
+/** The stored clip's bytes, from the Files or the generated bucket as the job recorded. */
+export const readAudioJobOutput = (output: AudioJobOutput): Promise<Buffer> =>
+  output.location === 'files'
+    ? getFilesStorage().download(output.s3Key)
+    : getGeneratedImageStorage().download(output.s3Key);
+
+/** The audio_generation tool's job functions (ChatCompletionProcess `audioToolJobs`, agent tool config). */
+export const buildAudioToolJobs = (): AudioToolJobs => ({
+  createSpeechJob: input => createSpeechJob(input, getCreateSpeechJobDeps()),
+  createSoundEffectJob: input => createSoundEffectJob(input, getCreateSoundEffectJobDeps()),
+  runInline: runAudioJobInline,
+  readOutput: readAudioJobOutput,
 });

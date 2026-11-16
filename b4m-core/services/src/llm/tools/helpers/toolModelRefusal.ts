@@ -26,6 +26,16 @@ const SETTINGS_MODEL_NOTE =
   'again will be refused the same way. Do not retry it this turn: tell the user, who can upgrade their plan or ' +
   'pick a free-tier model in their settings.';
 
+/** paidPlanRefusalOrRethrow for a tool whose model is not a tool argument (see SETTINGS_MODEL_NOTE). */
+export function settingsModelRefusalOrRethrow(
+  context: Pick<ToolContext, 'logger'>,
+  error: unknown,
+  modelId: string,
+  toolName: string
+): string {
+  return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + SETTINGS_MODEL_NOTE;
+}
+
 /**
  * Asserts a tool's model is admitted; null when it is, the refusal text per paidPlanRefusalOrRethrow when not.
  * For tools whose model is not a tool argument (see SETTINGS_MODEL_NOTE).
@@ -40,6 +50,6 @@ export async function toolModelRefusal(
     await admission.assert(modelId);
     return null;
   } catch (error) {
-    return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + SETTINGS_MODEL_NOTE;
+    return settingsModelRefusalOrRethrow(context, error, modelId, toolName);
   }
 }

@@ -688,40 +688,20 @@ describe('foldGeneratedMediaUsd', () => {
     cacheWriteTokens: 0,
   });
 
-  it('folds audio_generation speech cost into pending on finish (matches the estimator)', () => {
+  it.each(['start', 'finish'] as const)('does NOT fold audio_generation on %s - its generation job bills it', phase => {
     const pending = zeroPending();
-    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 4096, paths: ['a.mp3'] };
-    const expected = estimateGeneratedMediaUsd('audio_generation', data, []);
+    const estimateUsd = vi.fn().mockReturnValue(0.04);
 
     foldGeneratedMediaUsd({
-      phase: 'finish',
+      phase,
       toolName: 'audio_generation',
-      data,
+      data: { kind: 'speech' },
       models: [],
       pending,
-      estimateUsd: estimateGeneratedMediaUsd,
+      estimateUsd,
     });
 
-    expect(expected).toBeGreaterThan(0);
-    expect(pending.costUsd).toBe(expected);
-    // Media cost folds in as USD only; token counts stay untouched.
-    expect(pending.inputTokens).toBe(0);
-    expect(pending.outputTokens).toBe(0);
-  });
-
-  it('does NOT fold audio_generation on start - audio settles at finish', () => {
-    const pending = zeroPending();
-    const data = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3, paths: ['a.mp3'] };
-
-    foldGeneratedMediaUsd({
-      phase: 'start',
-      toolName: 'audio_generation',
-      data,
-      models: [],
-      pending,
-      estimateUsd: estimateGeneratedMediaUsd,
-    });
-
+    expect(estimateUsd).not.toHaveBeenCalled();
     expect(pending.costUsd).toBe(0);
   });
 
@@ -775,12 +755,12 @@ describe('foldGeneratedMediaUsd', () => {
 
   it('skips the fold when the estimate is <= 0', () => {
     const pending = zeroPending();
-    // Speech payload missing `characters` prices at 0.
-    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', paths: ['a.mp3'] };
+    // An image payload without a model prices at 0.
+    const data = { n: 1, paths: ['img.png'] };
 
     foldGeneratedMediaUsd({
       phase: 'finish',
-      toolName: 'audio_generation',
+      toolName: 'image_generation',
       data,
       models: [],
       pending,
@@ -801,7 +781,7 @@ describe('foldGeneratedMediaUsd', () => {
     expect(() =>
       foldGeneratedMediaUsd({
         phase: 'finish',
-        toolName: 'audio_generation',
+        toolName: 'image_generation',
         data: {},
         models: [],
         pending,

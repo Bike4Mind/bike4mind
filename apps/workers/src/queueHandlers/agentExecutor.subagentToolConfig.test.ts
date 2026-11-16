@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import type { MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type { AudioToolJobs, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 
 describe('buildSubagentToolConfig', () => {
@@ -48,9 +48,24 @@ describe('buildSubagentToolConfig', () => {
     expect(result.image_generation).toBeUndefined();
   });
 
-  it('omits audio_generation when audioConfig is undefined so the tool uses its built-in defaults', () => {
+  it('omits audio_generation when neither audioConfig nor the audio jobs are provided', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig: undefined });
     expect(result.audio_generation).toBeUndefined();
+  });
+
+  it('merges the audio jobs into audio_generation, with or without saved audio settings', () => {
+    const audioJobs: AudioToolJobs = {
+      createSpeechJob: vi.fn(),
+      createSoundEffectJob: vi.fn(),
+      runInline: vi.fn(),
+      readOutput: vi.fn(),
+    };
+    const audioConfig = { ttsProvider: 'elevenlabs', voice: 'Rachel' } as const;
+    expect(buildSubagentToolConfig({ audioConfig, audioJobs }).audio_generation).toEqual({
+      ...audioConfig,
+      jobs: audioJobs,
+    });
+    expect(buildSubagentToolConfig({ audioJobs }).audio_generation).toEqual({ jobs: audioJobs });
   });
 
   it('threads videoConfig into video_generation', () => {

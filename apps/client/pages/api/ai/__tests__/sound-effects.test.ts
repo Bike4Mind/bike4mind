@@ -1,977 +1,362 @@
-import { ForbiddenError } from '@bike4mind/utils';
-import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: vi.fn(async () => ({
-    assert: vi.fn(async (_modelId: string) => {}),
-    admits: vi.fn(async (_modelId: string) => true),
-  })),
-}));
-
-import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
-import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
+import { CreditHolderType, isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const {
-  getEffectiveApiKey,
-  deductCredits,
-  estimateSoundCredits,
-  generate,
-  getSettingsValue,
-  getSettingsMap,
-  findById,
-  orgFindById,
-  orgFindAccessibleById,
-  userIncrement,
-  orgIncrement,
-  recordUsage,
-  saveGeneratedAssetToFiles,
-  pendingHolds,
-  settlementDraw,
-} = vi.hoisted(() => ({
-  getEffectiveApiKey: vi.fn(),
-  deductCredits: vi.fn(),
-  estimateSoundCredits: vi.fn(),
-  generate: vi.fn(),
-  getSettingsValue: vi.fn(),
-  getSettingsMap: vi.fn(),
-  findById: vi.fn(),
-  orgFindById: vi.fn(),
-  orgFindAccessibleById: vi.fn(),
-  userIncrement: vi.fn(),
-  orgIncrement: vi.fn(),
-  recordUsage: vi.fn(),
-  saveGeneratedAssetToFiles: vi.fn(),
-  pendingHolds: new Map<string, { settledCredits?: number }>(),
-  settlementDraw: vi.fn(),
+const { mocks } = vi.hoisted(() => ({
+  mocks: {
+    createSoundEffectJob: vi.fn(),
+    runAudioJobInline: vi.fn(),
+    readAudioJobOutput: vi.fn(),
+    fabFileFindById: vi.fn(),
+    upload: vi.fn(),
+    getSignedUrl: vi.fn(),
+    orgFindById: vi.fn(),
+    orgFindAccessibleById: vi.fn(),
+  },
 }));
 
-// The real stochastic rounding, with its draw pinned so the settled amount is assertable.
-vi.mock('@bike4mind/common', async importActual => {
-  const actual = await importActual<typeof import('@bike4mind/common')>();
-  return {
-    ...actual,
-    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
-  };
-});
-
-// Contract-adapter mock: stands in for the nextRouteForContract prelude, running
-// the contract's own request schema into `req.validated` (so body validation stays
-// under test), then routes by req.method. A thrown ZodError maps to 422 (mirroring
-// the real errorHandler), any other thrown error to its statusCode or 500.
+// Contract-adapter mock: runs the contract's own request schema into `req.validated` (so body validation stays
+// under test), then the handler. A thrown ZodError maps to 422 (mirroring the real errorHandler), any other thrown
+// error to its statusCode or 500, with its additionalInfo spread into the body.
 vi.mock('@server/middlewares/defineNextRoute', () => ({
-  nextRouteForContract: (contract: { request: { parse: (body: unknown) => unknown } }) => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      async (req: unknown, res: unknown) => {
-        try {
-          const route = h[(req as { method?: string }).method ?? 'GET'];
-          if (!route) return;
-          (req as { validated?: unknown }).validated = contract.request.parse((req as { body?: unknown }).body);
-          return await route(req, res);
-        } catch (err) {
-          const status = isZodError(err)
-            ? 422
-            : typeof (err as { statusCode?: number })?.statusCode === 'number'
-              ? (err as { statusCode: number }).statusCode
-              : 500;
-          (res as { status: (n: number) => { json: (b: unknown) => void } })
-            .status(status)
-            .json({ error: (err as Error)?.message });
-        }
-      },
-      {
-        use: () => chain,
-        post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
+  nextRouteForContract: (contract: { request: { parse: (body: unknown) => unknown } }) => ({
+    post: (fn: (req: unknown, res: unknown) => unknown) => async (req: unknown, res: unknown) => {
+      try {
+        (req as { validated?: unknown }).validated = contract.request.parse((req as { body?: unknown }).body);
+        return await fn(req, res);
+      } catch (err) {
+        const statusCode = (err as { statusCode?: number })?.statusCode;
+        const status = isZodError(err) ? 422 : typeof statusCode === 'number' ? statusCode : 500;
+        (res as { status: (n: number) => { json: (b: unknown) => void } })
+          .status(status)
+          .json({ error: (err as Error)?.message, ...(err as { additionalInfo?: object }).additionalInfo });
       }
-    );
-    return chain;
-  },
+    },
+  }),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  BadRequestError: class BadRequestError extends Error {
-    statusCode = 400;
-  },
-  ForbiddenError: class ForbiddenError extends Error {
-    statusCode = 403;
-    constructor(
-      message?: string,
-      public additionalInfo?: Record<string, unknown>
-    ) {
-      super(message);
-    }
-  },
-  NotFoundError: class NotFoundError extends Error {
-    statusCode = 404;
-  },
+const createSoundEffectJobDeps = { sentinel: 'createSoundEffectJobDeps' };
+vi.mock('@bike4mind/services/audioJobs', () => ({
+  createSoundEffectJob: (...a: unknown[]) => mocks.createSoundEffectJob(...a),
+}));
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  getCreateSoundEffectJobDeps: () => createSoundEffectJobDeps,
+  runAudioJobInline: (...a: unknown[]) => mocks.runAudioJobInline(...a),
+  readAudioJobOutput: (...a: unknown[]) => mocks.readAudioJobOutput(...a),
 }));
 vi.mock('@bike4mind/database', () => ({
-  apiKeyRepository: {},
-  cacheRepository: { sentinel: 'cacheRepository' },
-  adminSettingsRepository: { sentinel: 'adminSettingsRepository' },
-  creditTransactionRepository: {},
+  fabFileRepository: { findById: (...a: unknown[]) => mocks.fabFileFindById(...a) },
   organizationRepository: {
-    findById: (...a: unknown[]) => orgFindById(...a),
-    incrementCredits: (...a: unknown[]) => orgIncrement(...a),
-    // resolveActiveOrg's membership gate for a JWT caller's org id (home or explicitly selected).
-    shareable: { findAccessibleById: (...a: unknown[]) => orgFindAccessibleById(...a) },
-  },
-  pendingCreditHoldRepository: {
-    record: async (hold: object) => {
-      pendingHolds.set('hold-1', { ...hold });
-      return { ...hold, id: 'hold-1' };
-    },
-    claim: async (id: string) => {
-      const hold = pendingHolds.get(id);
-      if (!hold || hold.settledCredits !== undefined) return null;
-      pendingHolds.delete(id);
-      return { ...hold, id };
-    },
-    markSettled: async (id: string, settledCredits: number) => {
-      const hold = pendingHolds.get(id);
-      if (!hold || hold.settledCredits !== undefined) return false;
-      pendingHolds.set(id, { ...hold, settledCredits });
-      return true;
-    },
-    findSettlement: async (id: string) => pendingHolds.get(id)?.settledCredits ?? null,
-  },
-  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => {
-    const snapshot = new Map(pendingHolds);
-    try {
-      return await fn();
-    } catch (error) {
-      pendingHolds.clear();
-      for (const [id, hold] of snapshot) pendingHolds.set(id, hold);
-      throw error;
-    }
-  },
-  usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
-  userRepository: {
-    findById: (...a: unknown[]) => findById(...a),
-    incrementCredits: (...a: unknown[]) => userIncrement(...a),
-  },
-  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
-  newAccountSpendCapAdapters: {
-    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
-    personalSpendSince: async () => [],
+    findById: (...a: unknown[]) => mocks.orgFindById(...a),
+    shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
   },
 }));
-// Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
-// the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is
-// stubbed. A hand-written stand-in for either would drift from the shared implementation.
-const { runElevenLabsWithCapacity, generatorFactory } = vi.hoisted(() => ({
-  runElevenLabsWithCapacity: vi.fn(),
-  generatorFactory: vi.fn(),
-}));
+// Real membership predicate and busy error: the billing resolver and the 429 mapping use them.
 vi.mock('@bike4mind/services', async () => {
-  const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
-    '@bike4mind/services/creditService'
-  );
   const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember },
-    apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
-    creditService: {
-      ...creditService,
-      deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
-    },
-    estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
     ProviderBusyError: services.ProviderBusyError,
-    runElevenLabsWithCapacity: (...a: unknown[]) => runElevenLabsWithCapacity(...a),
   };
 });
-// The real module underneath: @bike4mind/services (imported for real above) reads its constants.
-vi.mock('@bike4mind/utils', async importActual => ({
-  ...(await importActual<typeof import('@bike4mind/utils')>()),
-  aiSoundService: (...a: unknown[]) => generatorFactory(...a),
-  getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
-  getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
-}));
-vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
-  saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
-}));
-
-const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getFilesStorage: () => ({ upload, getSignedUrl }),
+  getFilesStorage: () => ({
+    upload: (...a: unknown[]) => mocks.upload(...a),
+    getSignedUrl: (...a: unknown[]) => mocks.getSignedUrl(...a),
+  }),
 }));
 
-import { ProviderBusyError } from '@bike4mind/services';
+import { AUDIO_JOB_INLINE_TIMEOUT_MS } from '@server/generations/syncAudioJob';
 import handler from '../sound-effects';
 
-type Handler = (req: unknown, res: unknown) => Promise<void>;
+const AUDIO = Buffer.from('boom');
 
 const run = (
   body: unknown,
-  apiKeyInfo?: unknown,
-  userOrganizationId?: string,
-  headers: Record<string, string> = {},
-  user: Record<string, unknown> = {}
+  apiKeyInfo?: Record<string, unknown>,
+  user: Record<string, unknown> = { id: 'u1', organizationId: null }
 ) => {
-  const { req, res } = createMocks({ method: 'POST', body, headers });
-  Object.assign(req, {
-    user: { id: 'u1', organizationId: userOrganizationId ?? null, ...user },
-    apiKeyInfo,
-    logger: { error: vi.fn(), warn: vi.fn() },
-  });
-  return { res, promise: (handler as Handler)(req, res) };
+  const { req, res } = createMocks({ method: 'POST', body });
+  const logger = { error: vi.fn(), warn: vi.fn() };
+  Object.assign(req, { user, logger, ...(apiKeyInfo && { apiKeyInfo }) });
+  return { res, logger, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
+const generatedOutput = { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 4 };
+const soundJob = (overrides: Record<string, unknown> = {}, payload: Record<string, unknown> = {}) => ({
+  id: 'job-1',
+  kind: 'sound_effect',
+  state: 'succeeded',
+  payload: {
+    request: { text: 'door creak', provider: 'elevenlabs' },
+    providerId: 'elevenlabs',
+    saveToFiles: true,
+    output: { location: 'files', s3Key: 'k/sfx-1.mp3', fileId: 'fab-1', contentType: 'audio/mpeg', bytes: 4 },
+    ...payload,
+  },
+  ...overrides,
+});
+
+const created = { ok: true, job: { id: 'job-1' }, created: true };
+const refusal = (status: number, code: string, message: string, extra: Record<string, unknown> = {}) => ({
+  ok: false,
+  status,
+  code,
+  message,
+  ...extra,
+});
+const createInput = (call = 0) => mocks.createSoundEffectJob.mock.calls[call][0];
+
 beforeEach(() => {
-  pendingHolds.clear();
-  [
-    getEffectiveApiKey,
-    deductCredits,
-    estimateSoundCredits,
-    generate,
-    getSettingsValue,
-    getSettingsMap,
-    findById,
-    orgFindById,
-    orgFindAccessibleById,
-    userIncrement,
-    orgIncrement,
-    recordUsage,
-    saveGeneratedAssetToFiles,
-    settlementDraw,
-  ].forEach(m => m.mockReset());
-  settlementDraw.mockReturnValue(0.5);
-  recordUsage.mockResolvedValue(undefined);
-  // Default: persistence is a no-op that reports "not saved", so tests not
-  // exercising the save path see no persisted-file headers.
-  saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'error' });
-  upload.mockReset().mockResolvedValue(undefined);
-  getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
-  getEffectiveApiKey.mockResolvedValue('eleven-key');
-  // Pass-through capacity gate: the gate's own behaviour is covered in @bike4mind/services.
-  runElevenLabsWithCapacity
-    .mockReset()
-    .mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
-      attempt({ timeoutMs: 45_000 })
-    );
-  getSettingsMap.mockResolvedValue({});
-  generatorFactory.mockReset().mockImplementation(() => ({ generate: (...a: unknown[]) => generate(...a) }));
-  generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
-  findById.mockResolvedValue({ id: 'u1', currentCredits: 100 });
-  // Default reservation results (post-decrement balance, non-negative == funded).
-  userIncrement.mockResolvedValue({ currentCredits: 88 });
-  orgIncrement.mockResolvedValue({ currentCredits: 980 });
-  // A member of any org they name; tests that need the refusal override this with null.
-  orgFindAccessibleById.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
+  Object.values(mocks).forEach(m => m.mockReset());
+  mocks.createSoundEffectJob.mockResolvedValue(created);
+  mocks.runAudioJobInline.mockResolvedValue(soundJob());
+  mocks.readAudioJobOutput.mockResolvedValue(AUDIO);
+  mocks.fabFileFindById.mockResolvedValue({ id: 'fab-1', fileName: 'sfx-1.mp3', fileUrl: 'https://s3/get' });
+  mocks.upload.mockResolvedValue(undefined);
+  mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
+  mocks.orgFindById.mockImplementation(async (id: string) => ({ id, users: [{ userId: 'u1' }] }));
+  mocks.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) => ({ id }));
 });
 
 describe('POST /api/ai/sound-effects', () => {
-  it('refuses an unlisted model before holding credits or calling the provider', async () => {
-    const refusal = new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
-    const assertAdmission = vi.fn(async (_modelId: string) => {
-      throw refusal;
-    });
-    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
-    const { promise, res } = run({ text: 'a sound' });
-    await promise;
-    expect(res._getStatusCode()).toBe(403);
-    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
-    expect(assertAdmission).toHaveBeenCalledWith('eleven_text_to_sound_v2');
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { promise } = run({ text: 'explosion', durationSeconds: 3 });
+  it('creates a sound-effect job with the request, then returns the binary clip with the save headers', async () => {
+    const { res, promise } = run({ text: 'door creak', durationSeconds: 3, promptInfluence: 0 });
     await promise;
 
-    expect(getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
-  });
-
-  it('reserves then settles the user charge on a successful generation (enforceCredits on)', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getData().toString()).toBe('boom');
-    // Reserved up front (single call: funded, no rollback), then settled.
-    expect(userIncrement).toHaveBeenCalledTimes(1);
-    expect(userIncrement).toHaveBeenCalledWith('u1', -12);
-    expect(deductCredits).toHaveBeenCalledTimes(1);
-    const [params, , options] = deductCredits.mock.calls[0];
-    // No API key -> personal billing: user pool, no organization.
-    expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, organization: null, source: 'api' });
-    expect(params.user).toMatchObject({ id: 'u1' });
-    // Balance already moved at reservation -> settlement only writes the ledger row.
-    expect(options).toMatchObject({ skipBalanceUpdate: true });
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        feature: 'sound_effects',
-        source: 'api',
-        ownerId: 'u1',
-        ownerType: CreditHolderType.User,
-        creditsCharged: 12,
-        costUsd: 0.006,
-        units: 3,
-        status: 'ok',
-      })
+    expect(mocks.createSoundEffectJob).toHaveBeenCalledWith(
+      {
+        user: { id: 'u1', organizationId: null, adminRoleWithheld: false },
+        request: expect.objectContaining({
+          provider: 'elevenlabs',
+          text: 'door creak',
+          durationSeconds: 3,
+          promptInfluence: 0,
+        }),
+        source: 'studio',
+        apiKeyId: undefined,
+        saveToFiles: true,
+      },
+      createSoundEffectJobDeps
     );
+    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', AUDIO_JOB_INLINE_TIMEOUT_MS);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toEqual(AUDIO);
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
+    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBe('fab-1');
+    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('sfx-1.mp3');
+    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://s3/get');
+  });
+
+  it('returns base64 JSON with the audio and save fields for encoding: base64', async () => {
+    const { res, promise } = run({ text: 'door creak', encoding: 'base64' });
+    await promise;
+    expect(res._getJSONData()).toMatchObject({
+      delivery: 'inline',
+      audio: AUDIO.toString('base64'),
+      contentType: 'audio/mpeg',
+      saved: true,
+      fabFileId: 'fab-1',
+    });
+  });
+
+  it('marks an API-key call as source api and passes its key id', async () => {
+    const { promise } = run({ text: 'door creak' }, { keyId: 'key-1', scopes: ['ai:generate'] });
+    await promise;
+    expect(createInput()).toMatchObject({ source: 'api', apiKeyId: 'key-1', user: { adminRoleWithheld: true } });
+  });
+
+  it('skips persistence for a throwaway preview', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(soundJob({}, { saveToFiles: false, output: generatedOutput }));
+    const { res, promise } = run({ text: 'door creak', preview: true });
+    await promise;
+    expect(createInput().saveToFiles).toBe(false);
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
+  });
+
+  it('reports not-saved when the Files write fell back to the generated bucket', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(soundJob({}, { output: generatedOutput }));
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('false');
+    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBeUndefined();
+  });
+
+  it('retries without the saved copy when the Files quota is full, and reports the save as skipped', async () => {
+    mocks.createSoundEffectJob
+      .mockResolvedValueOnce(
+        refusal(400, 'storage_quota_exceeded', 'full', { storage: { errorCode: 'file_too_large' } })
+      )
+      .mockResolvedValueOnce(created);
+    mocks.runAudioJobInline.mockResolvedValue(soundJob({}, { saveToFiles: false, output: generatedOutput }));
+    const { res, promise } = run({ text: 'door creak', encoding: 'base64' });
+    await promise;
+    expect(createInput(0).saveToFiles).toBe(true);
+    expect(createInput(1).saveToFiles).toBe(false);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'file_too_large' });
+  });
+
+  it('rejects an invalid body (422) without creating a job', async () => {
+    const { res, promise } = run({ text: '' });
+    await promise;
+    expect(res._getStatusCode()).toBe(422);
+    expect(mocks.createSoundEffectJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects a 451-character prompt (422) and accepts a 450-character one', async () => {
+    const tooLong = run({ text: 'x'.repeat(451) });
+    await tooLong.promise;
+    expect(tooLong.res._getStatusCode()).toBe(422);
+    expect(mocks.createSoundEffectJob).not.toHaveBeenCalled();
+
+    const atLimit = run({ text: 'x'.repeat(450) });
+    await atLimit.promise;
+    expect(atLimit.res._getStatusCode()).toBe(200);
+  });
+
+  it('maps an invalid_request refusal (an unsupported format) to 422', async () => {
+    mocks.createSoundEffectJob.mockResolvedValue(refusal(422, 'invalid_request', "does not support 'alaw_8000'"));
+    const { res, promise } = run({ text: 'door creak', format: 'alaw_8000' });
+    await promise;
+    expect(res._getStatusCode()).toBe(422);
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('returns a classified 422 and never runs a job when credits are exhausted', async () => {
+    mocks.createSoundEffectJob.mockResolvedValue(refusal(402, 'insufficient_credits', 'broke'));
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ error: 'broke', errorCode: 'insufficient_credits' });
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 (not 401) when no provider key resolves', async () => {
+    mocks.createSoundEffectJob.mockResolvedValue(refusal(422, 'model_unavailable', 'No elevenlabs API key configured'));
+    const { res, promise } = run({ text: 'door creak' });
+    await promise;
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData()).toEqual({ error: 'No elevenlabs API key configured' });
   });
 
   it.each([
-    [0.25, 151, [['u1', -151]]],
+    ['blocked', { state: 'blocked', error: { code: 'content_blocked', message: 'x' } }],
     [
-      0.75,
-      150,
-      [
-        ['u1', -151],
-        ['u1', 1],
-      ],
-    ],
-  ])(
-    'settles a cost of N + 0.5 credits as N or N+1 and refunds the round-up difference (draw %s -> %s)',
-    async (draw, charged, balanceMoves) => {
-      getSettingsValue.mockReturnValue(true);
-      settlementDraw.mockReturnValue(draw);
-      estimateSoundCredits.mockReturnValue({
-        requiredCredits: 151,
-        usdCost: 150.5 / CREDITS_PER_USD_COST,
-        billedSeconds: 3,
-      });
-
-      const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
-      await promise;
-
-      expect(res._getStatusCode()).toBe(200);
-      // Held on the round-up, then only the drawn amount is kept.
-      expect(userIncrement.mock.calls).toEqual(balanceMoves);
-      expect(deductCredits.mock.calls[0][0]).toMatchObject({ credits: charged });
-      expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: charged }));
-    }
-  );
-
-  it('settles a tiny cost at 0: whole hold refunded, no ledger row, usage event still recorded', async () => {
-    getSettingsValue.mockReturnValue(true);
-    settlementDraw.mockReturnValue(0.5);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 1, usdCost: 0.00001, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(userIncrement.mock.calls).toEqual([
-      ['u1', -1],
-      ['u1', 1],
-    ]);
-    expect(deductCredits).not.toHaveBeenCalled();
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', status: 'ok', creditsCharged: 0, costUsd: 0.00001 })
-    );
-  });
-
-  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 }, undefined, undefined, {
-      'user-agent': 'b4m-cli/0.9.3',
-    });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
-    expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 12 }));
-  });
-
-  it('does NOT reserve or charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {
-    getSettingsValue.mockReturnValue(false);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(deductCredits).not.toHaveBeenCalled();
-    // Analytics is decoupled from billing: the event still fires with the true
-    // provider COGS and zero credits charged.
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', creditsCharged: 0, costUsd: 0.006, status: 'ok' })
-    );
-  });
-
-  it('records billed (not requested) duration as units when duration is omitted', async () => {
-    getSettingsValue.mockReturnValue(true);
-    // No durationSeconds requested: the estimator bills the vendor auto-duration
-    // default, and units must follow the billed value - not the request's undefined.
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 73, usdCost: 0.0364, billedSeconds: 200 / 11 });
-
-    const { res, promise } = run({ text: 'ambient hum' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'sound_effects', units: 200 / 11 }));
-  });
-
-  it('rejects (422) and rolls back the reservation before generating when the balance is short', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025, billedSeconds: 12 });
-    // Reserve overdraws (had 10, cost 50 -> -40): route must roll back and reject.
-    userIncrement.mockResolvedValue({ currentCredits: -40 });
-
-    const { res, promise } = run({ text: 'thunder' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(422);
-    // Reserve (-50) then immediate rollback (+50); nothing generated or settled.
-    expect(userIncrement).toHaveBeenCalledTimes(2);
-    expect(userIncrement).toHaveBeenNthCalledWith(1, 'u1', -50);
-    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 50);
-    expect(generate).not.toHaveBeenCalled();
-    expect(deductCredits).not.toHaveBeenCalled();
-    expect(recordUsage).not.toHaveBeenCalled();
-  });
-
-  it('returns 503 (not 401) when no provider key resolves (no reservation)', async () => {
-    getEffectiveApiKey.mockResolvedValue(null);
-
-    const { res, promise } = run({ text: 'rain' });
-    await promise;
-
-    // A missing provider key is a capability gap, not an auth failure - a 401 would
-    // wrongly tell an API-key caller to re-authenticate.
-    expect(res._getStatusCode()).toBe(503);
-    expect(res._getJSONData()).toMatchObject({ error: 'No elevenlabs API key configured' });
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-    expect(deductCredits).not.toHaveBeenCalled();
-  });
-
-  it('forwards the persisted-file id, name, and signed URL as response headers', async () => {
-    getSettingsValue.mockReturnValue(false);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-    saveGeneratedAssetToFiles.mockResolvedValue({
-      saved: true,
-      fileId: 'fab1',
-      s3Key: 'k/audio.mp3',
-      fileName: 'sound-effect-rain.mp3',
-      fileUrl: 'https://signed.example/audio.mp3',
-    });
-
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      'failed',
       {
-        userId: expect.any(String),
-        bytes: expect.any(Buffer),
-        contentType: expect.any(String),
-        generation: {
-          generator: 'sound_effect',
-          provider: expect.any(String),
-          prompt: 'rain',
-          durationSeconds: 3,
-          promptInfluence: 0.6,
-          request: expect.objectContaining({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 }),
-        },
+        state: 'failed',
+        error: { code: 'provider_error', message: 'elevenlabs_http_400' },
+        rawProviderError: { status: 400 },
       },
-      expect.anything()
-    );
-    // The signed URL must ride the header: the CLI cannot re-resolve one via
-    // GET /api/files/:id until the async moderation scan flips the file to 'clean'.
-    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
-    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBe('fab1');
-    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('sound-effect-rain.mp3');
-    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://signed.example/audio.mp3');
-  });
-
-  it('reports not-saved and forwards no file headers when persistence fails', async () => {
-    getSettingsValue.mockReturnValue(false);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-    saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
-
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    ],
+    [
+      'credential-rejected',
+      { state: 'failed', error: { code: 'provider_error', message: 'x' }, rawProviderError: { status: 401 } },
+    ],
+    ['cancelled', { state: 'cancelled' }],
+  ])('maps a %s job to 502 with a generic body', async (_label, overrides) => {
+    mocks.runAudioJobInline.mockResolvedValue(soundJob(overrides));
+    const { res, logger, promise } = run({ text: 'door creak' });
     await promise;
-
-    // Persist failure never blocks the audio the caller was billed for.
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getData().toString()).toBe('boom');
-    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('false');
-    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBeUndefined();
-    expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
-  });
-
-  it('keeps a requested prompt influence of 0', async () => {
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-
-    const { promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0 });
-    await promise;
-
-    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
-    expect(generation.promptInfluence).toBe(0);
-  });
-
-  it('leaves prompt influence off the stored metadata when the request omitted it', async () => {
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-
-    const { promise } = run({ text: 'rain', durationSeconds: 3 });
-    await promise;
-
-    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
-    expect(generation).not.toHaveProperty('promptInfluence');
-  });
-
-  it('rejects an invalid body (422) without resolving a key', async () => {
-    const { res, promise } = run({ text: '' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(422);
-    expect(getEffectiveApiKey).not.toHaveBeenCalled();
-  });
-
-  it('rejects a 451-character prompt (422) before resolving a key or calling the provider', async () => {
-    const { res, promise } = run({ text: 'x'.repeat(451), durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(422);
-    expect(getEffectiveApiKey).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('accepts a 450-character prompt and forwards it to the provider', async () => {
-    getSettingsValue.mockReturnValue(false);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'x'.repeat(450), durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(generate).toHaveBeenCalledWith('x'.repeat(450), expect.anything());
-  });
-
-  it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3, format });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(422);
-    expect(res._getJSONData().error).toContain(`'${format}'`);
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('still answers 502 when refunding the failed generation also fails', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    generate.mockRejectedValue(new Error('provider down'));
-    userIncrement.mockResolvedValueOnce({ currentCredits: 850 }).mockRejectedValueOnce(new Error('db down'));
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
-    await promise;
-
     expect(res._getStatusCode()).toBe(502);
-    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+    expect(res._getJSONData()).toEqual({ error: 'Sound generation failed' });
+    expect(logger.error).toHaveBeenCalled();
   });
 
-  it('maps an upstream provider failure to 502 and refunds the reservation', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    generate.mockRejectedValue(new Error('ElevenLabs sound generation failed: 429'));
-
-    const { res, promise } = run({ text: 'thunder' });
+  it('maps a job that used up its retries against a rate-limiting provider to 429 with Retry-After', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      soundJob({ state: 'failed', error: { code: 'provider_error', message: 'elevenlabs_rate_limited' } })
+    );
+    const { res, promise } = run({ text: 'door creak' });
     await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ retryAfter: expect.any(Number) });
+  });
 
+  it('answers 502 and logs the job id when the job does not finish in time', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    const { res, logger, promise } = run({ text: 'door creak' });
+    await promise;
     expect(res._getStatusCode()).toBe(502);
-    // Reserved (-12), then refunded (+12) because generation failed; never settled.
-    expect(userIncrement).toHaveBeenCalledTimes(2);
-    expect(userIncrement).toHaveBeenNthCalledWith(1, 'u1', -12);
-    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
-    expect(deductCredits).not.toHaveBeenCalled();
-    // A failed generation still logs an analytics event, as an error with no cost.
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', status: 'error', creditsCharged: 0, costUsd: 0 })
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('background'),
+      expect.objectContaining({ jobId: 'job-1' })
     );
   });
 
-  it('runs the generation through the shared ElevenLabs capacity gate', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    const { res, promise } = run({ text: 'thunder' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(runElevenLabsWithCapacity).toHaveBeenCalledWith(
-      expect.objectContaining({ operation: 'sound', apiKey: 'eleven-key' }),
-      expect.any(Function)
-    );
-    const [capacityArgs] = runElevenLabsWithCapacity.mock.calls[0] as [
-      { db: { adminSettings: unknown; caches: unknown } },
-    ];
-    expect(capacityArgs.db.adminSettings).toBe(adminSettingsRepository);
-    expect(capacityArgs.db.caches).toBe(cacheRepository);
-  });
-
-  it('forwards the capacity-granted timeout into the sound generator factory', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    runElevenLabsWithCapacity.mockImplementation((_args: unknown, attempt: (call: { timeoutMs: number }) => unknown) =>
-      attempt({ timeoutMs: 12_345 })
-    );
-
-    const { res, promise } = run({ text: 'thunder' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(generatorFactory).toHaveBeenCalledWith('elevenlabs', 'eleven-key', expect.anything(), { timeoutMs: 12_345 });
-  });
-
-  it('maps a provider at capacity to 429, refunds, and records no usage when no call was made', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    runElevenLabsWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'slots_exhausted', 5));
-
-    const { res, promise } = run({ text: 'thunder' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(429);
-    expect(generate).not.toHaveBeenCalled();
-    expect(userIncrement).toHaveBeenNthCalledWith(1, 'u1', -12);
-    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
-    expect(deductCredits).not.toHaveBeenCalled();
-    expect(recordUsage).not.toHaveBeenCalled();
-  });
-
-  it('records an error usage event when the provider kept answering 429', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    runElevenLabsWithCapacity.mockRejectedValue(new ProviderBusyError('elevenlabs', 'upstream_rate_limited', 2));
-
-    const { res, promise } = run({ text: 'thunder' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(429);
-    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', status: 'error', creditsCharged: 0, costUsd: 0 })
-    );
-  });
-
-  it('returns the audio and keeps the hold refundable when the settlement ledger write fails', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-    // A failed settlement must preserve the provider output and leave its hold refundable.
-    deductCredits.mockRejectedValue(new Error('mongo down'));
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getData().toString()).toBe('boom');
-    // The transaction rolled back: the sweep can refund the unresolved reservation.
-    expect(userIncrement).toHaveBeenCalledTimes(1);
-    expect(pendingHolds.has('hold-1')).toBe(true);
-    expect(pendingHolds.get('hold-1')).not.toHaveProperty('settledCredits');
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', status: 'ok', creditsCharged: 0 })
-    );
-  });
-
-  const orgKey = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' };
-
-  it('reserves and settles against the org pool for an org-billed API key (user stays the actor)', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 20, usdCost: 0.01, billedSeconds: 5 });
-    // Personal pool is empty on purpose: an org-billed key must draw from the org.
-    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 1000, userDetails: [], users: [{ userId: 'u1' }] });
-
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 5 }, orgKey);
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    // Reserved against the org, not the user.
-    expect(orgIncrement).toHaveBeenCalledWith('org1', -20);
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(deductCredits).toHaveBeenCalledTimes(1);
-    const [params] = deductCredits.mock.calls[0];
-    expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 20 });
-    expect(params.organization).toMatchObject({ id: 'org1' });
-    expect(params.user).toMatchObject({ id: 'u1' });
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ownerId: 'org1',
-        ownerType: CreditHolderType.Organization,
-        userId: 'u1',
-        creditsCharged: 20,
-      })
-    );
-  });
-
-  it('bills the org seat of a browser/JWT member (organizationId from the user)', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-    orgFindById.mockResolvedValue({ id: 'orgSeat', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });
-
-    // No API key: JWT session whose user belongs to an org.
-    const { res, promise } = run({ text: 'chime' }, undefined, 'orgSeat');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgFindById).toHaveBeenCalledWith('orgSeat');
-    expect(orgIncrement).toHaveBeenCalledWith('orgSeat', -15);
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'orgSeat', ownerType: CreditHolderType.Organization, userId: 'u1' })
-    );
-  });
-
-  it('rejects (422) and rolls back before generating when the org pool is short (personal balance ignored)', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025, billedSeconds: 12 });
-    findById.mockResolvedValue({ id: 'u1', currentCredits: 100000 });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10, userDetails: [], users: [{ userId: 'u1' }] });
-    orgIncrement.mockResolvedValue({ currentCredits: -40 });
-
-    const { res, promise } = run({ text: 'thunder' }, orgKey);
-    await promise;
-
-    expect(res._getStatusCode()).toBe(422);
-    expect(orgIncrement).toHaveBeenNthCalledWith(1, 'org1', -50);
-    expect(orgIncrement).toHaveBeenNthCalledWith(2, 'org1', 50);
-    expect(generate).not.toHaveBeenCalled();
-    expect(deductCredits).not.toHaveBeenCalled();
-  });
-
-  it('rejects (422) before reserving when the org per-member cap is reached', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
-    // Pool is flush, but the member's usage + this request exceeds maxCreditsPerMember (20 + 30 > 40).
-    orgFindById.mockResolvedValue({
-      id: 'org1',
-      currentCredits: 10000,
-      maxCreditsPerMember: 40,
-      userDetails: [{ id: 'u1', usedCredits: 20, periodStart: new Date() }],
-      users: [{ userId: 'u1' }],
+  describe('billing account', () => {
+    it('bills the home org seat of a browser/JWT member when the field is omitted', async () => {
+      const { promise } = run({ text: 'door creak' }, undefined, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
+      expect(createInput().user.organizationId).toBe('homeOrg');
     });
 
-    const { res, promise } = run({ text: 'boom' }, orgKey);
-    await promise;
+    it('bills the personal balance when the switcher is on Personal', async () => {
+      const { promise } = run({ text: 'door creak', organization_id: null }, undefined, {
+        id: 'u1',
+        organizationId: 'homeOrg',
+      });
+      await promise;
+      expect(createInput().user.organizationId).toBeNull();
+    });
 
-    expect(res._getStatusCode()).toBe(422);
-    // Cap is enforced before touching the pool.
-    expect(orgIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-    expect(deductCredits).not.toHaveBeenCalled();
-  });
+    it('refuses (403) an organization the caller does not belong to, before creating a job', async () => {
+      mocks.orgFindAccessibleById.mockResolvedValue(null);
+      const { res, promise } = run({ text: 'door creak', organization_id: 'otherOrg' });
+      await promise;
+      expect(res._getStatusCode()).toBe(403);
+      expect(mocks.createSoundEffectJob).not.toHaveBeenCalled();
+    });
 
-  // An org-billed key's target is stamped at mint time and never revisited, so a key whose holder
-  // has since left the org used to keep drawing on that org's pool. The refusal must land BEFORE
-  // the pool is touched.
-  it('refuses an org-billed API key whose holder is no longer on the org roster', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
-    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
+    it('bills an org-billed API key to its own organization', async () => {
+      const { promise } = run(
+        { text: 'door creak' },
+        {
+          billingOwnerType: CreditHolderType.Organization,
+          organizationId: 'keyOrg',
+          scopes: [],
+        }
+      );
+      await promise;
+      expect(createInput().user.organizationId).toBe('keyOrg');
+    });
 
-    const { res, promise } = run({ text: 'boom' }, orgKey);
-    await promise;
-
-    expect(res._getStatusCode()).toBe(400);
-    expect(JSON.stringify(res._getJSONData())).toContain('Re-mint');
-    expect(orgIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  // A platform admin is authorized to mint an org-billed key for a customer org but is never on
-  // that org's roster, so a roster-only gate would break the key on its first call.
-  it('admits a platform admin holding an org-billed key for an org they are not on', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
-    findById.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
-
-    const { res, promise } = run({ text: 'boom' }, orgKey, undefined, {}, { isAdmin: true });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgIncrement).toHaveBeenCalled();
-  });
-
-  // The other side of that gate, deliberately: a browser/JWT caller did not ask for org billing,
-  // so a stale own-org pointer degrades as before rather than locking them out of the route.
-  it('does not apply the roster check to a browser/JWT caller billing their own org seat', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
-    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
-    orgFindById.mockResolvedValue({ id: 'orgSeat', currentCredits: 10000, userDetails: [], users: [] });
-
-    const { res, promise } = run({ text: 'boom' }, undefined, 'orgSeat');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgIncrement).toHaveBeenCalled();
-  });
-
-  it('bills the organization the switcher selected for a browser/JWT caller', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-    orgFindById.mockResolvedValue({ id: 'teamOrg', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });
-
-    // The home seat is a different org on purpose: the body's target must win.
-    const { res, promise } = run({ text: 'chime', organization_id: 'teamOrg' }, undefined, 'homeOrg');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'teamOrg');
-    expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -15);
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization })
-    );
-  });
-
-  it('bills the personal balance for a browser/JWT caller whose switcher is on Personal', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-
-    // Explicit null = personal, even for a user who has an org seat.
-    const { res, promise } = run({ text: 'chime', organization_id: null }, undefined, 'homeOrg');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgFindAccessibleById).not.toHaveBeenCalled();
-    expect(orgIncrement).not.toHaveBeenCalled();
-    expect(userIncrement).toHaveBeenCalledWith('u1', -15);
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
-    );
-  });
-
-  it('refuses (403) an organization the browser caller does not belong to, before money moves', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-    orgFindAccessibleById.mockResolvedValue(null);
-
-    const { res, promise } = run({ text: 'chime', organization_id: 'otherOrg' });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(403);
-    expect(orgIncrement).not.toHaveBeenCalled();
-    expect(userIncrement).not.toHaveBeenCalled();
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('refuses (403) a user-billed API key that names an organization', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-
-    const { res, promise } = run(
-      { text: 'chime', organization_id: 'teamOrg' },
-      { billingOwnerType: CreditHolderType.User }
-    );
-    await promise;
-
-    expect(res._getStatusCode()).toBe(403);
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it('bills the user pool for a user-billed API key (billingOwnerType User), ignoring the org seat', async () => {
-    getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
-
-    // User-billed key even though the user has an org seat: bill the user.
-    const { res, promise } = run({ text: 'rain' }, { billingOwnerType: CreditHolderType.User }, 'orgSeat');
-    await promise;
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(orgFindById).not.toHaveBeenCalled();
-    expect(orgIncrement).not.toHaveBeenCalled();
-    expect(userIncrement).toHaveBeenCalledWith('u1', -12);
-    const [params] = deductCredits.mock.calls[0];
-    expect(params.organization).toBeNull();
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
-    );
+    it('bills the user for a user-billed API key, ignoring the org seat', async () => {
+      const { promise } = run(
+        { text: 'door creak' },
+        { billingOwnerType: CreditHolderType.User, scopes: [] },
+        {
+          id: 'u1',
+          organizationId: 'homeOrg',
+        }
+      );
+      await promise;
+      expect(createInput().user.organizationId).toBeNull();
+    });
   });
 
   describe('generated-audio delivery', () => {
-    const savedCopy = {
-      saved: true,
-      fileId: 'fab1',
-      s3Key: 'k/audio.mp3',
-      fileName: 'audio-1.mp3',
-      fileUrl: 'https://signed.example/audio.mp3',
-    };
-    const oversized = () => Buffer.alloc(4 * 1024 * 1024 + 1);
+    const oversizedAudio = Buffer.alloc(4 * 1024 * 1024 + 1);
 
     beforeEach(() => {
-      getSettingsValue.mockReturnValue(false);
-      estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-    });
-
-    it('returns base64 JSON with the audio and save fields for encoding: base64', async () => {
-      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
-      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
-      await promise;
-      expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toEqual({
-        delivery: 'inline',
-        audio: Buffer.from('boom').toString('base64'),
-        contentType: 'audio/mpeg',
-        saved: true,
-        fabFileId: savedCopy.fileId,
-        fileName: savedCopy.fileName,
-        fileUrl: savedCopy.fileUrl,
-      });
-    });
-
-    it('skips persistence for a throwaway preview', async () => {
-      const { res, promise } = run({ text: 'thunder', preview: true });
-      await promise;
-      expect(res._getStatusCode()).toBe(200);
-      expect(saveGeneratedAssetToFiles).not.toHaveBeenCalled();
-      expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
-    });
-
-    it('reports saveSkippedReason in the base64 body when the save was skipped', async () => {
-      saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
-      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
-      await promise;
-      expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+      mocks.readAudioJobOutput.mockResolvedValue(oversizedAudio);
     });
 
     it('serves an oversized base64 result by the saved copy URL without offloading', async () => {
-      const audio = oversized();
-      generate.mockResolvedValue({ audio, contentType: 'audio/mpeg' });
-      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
-      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
+      const { res, promise } = run({ text: 'door creak', encoding: 'base64' });
       await promise;
-      expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toMatchObject({
-        delivery: 'url',
-        url: savedCopy.fileUrl,
-        bytes: audio.length,
-        saved: true,
-      });
-      expect(upload).not.toHaveBeenCalled();
+      expect(res._getJSONData()).toMatchObject({ delivery: 'url', url: 'https://s3/get' });
+      expect(mocks.upload).not.toHaveBeenCalled();
     });
 
     it('redirects an unsaved oversized binary result with a 303 to an offloaded URL', async () => {
-      generate.mockResolvedValue({ audio: oversized(), contentType: 'audio/mpeg' });
-      const { res, promise } = run({ text: 'thunder', preview: true });
+      mocks.runAudioJobInline.mockResolvedValue(soundJob({}, { saveToFiles: false, output: generatedOutput }));
+      const { res, promise } = run({ text: 'door creak', preview: true });
       await promise;
       expect(res._getStatusCode()).toBe(303);
       expect(res._getRedirectUrl()).toBe('https://s3/offload');
-      expect(upload).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -287,10 +287,13 @@ describe('charging models -> aggregate ledger model', () => {
       null,
       AVAILABLE_MODELS
     );
-    builder.settleAudioCredits(
+    builder.settleImageCredits(
+      'image_generation',
       q,
-      { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000, paths: ['a.mp3'] },
-      true
+      { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024', paths: [] },
+      true,
+      null,
+      AVAILABLE_MODELS
     );
 
     expect(toolCreditModels.size).toBe(2);

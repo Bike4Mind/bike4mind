@@ -29,7 +29,8 @@ type KindCache = {
 };
 
 // Image jobs have no per-job cache: Studio's gallery list is the only one (handleImageUpdate).
-type CachedKind = Exclude<GenerationJobKind, 'image'>;
+// Speech and sound effects have no job gallery yet, so their frames only refresh the credit balance.
+type CachedKind = Extract<GenerationJobKind, 'video' | 'music'>;
 
 const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {

@@ -180,6 +180,7 @@ import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
+import { withAudioToolJobs } from './tools/implementation/audioGeneration';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -1292,6 +1293,7 @@ export class ChatCompletionProcess {
   private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
+  private audioToolJobs: IChatCompletionServiceOptions['audioToolJobs'];
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
@@ -1369,6 +1371,7 @@ export class ChatCompletionProcess {
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
+    this.audioToolJobs = options.audioToolJobs;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.logger = options.logger;
     this.user = options.user;
@@ -3859,7 +3862,7 @@ export class ChatCompletionProcess {
           edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageConfig,
           edit_image: imageConfig,
-          audio_generation: audioConfig,
+          audio_generation: withAudioToolJobs(audioConfig, this.audioToolJobs),
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
           music_generation: musicToolConfig ?? undefined,

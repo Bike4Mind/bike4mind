@@ -234,6 +234,7 @@ import {
 import { capAgentRoundOutput, capsRoundOutput, outOfCreditsOutcome } from './agentExecutor.roundOutputCap';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
@@ -1891,11 +1892,7 @@ async function runExecution(
           executionId,
           childExecutionId,
           error:
-            accountDenial !== null
-              ? 'account_blocked'
-              : isTimeout
-                ? 'Subagent timed out'
-                : 'Subagent execution failed',
+            accountDenial !== null ? 'account_blocked' : isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
           isTimeout: timedOut,
           partialAnswer: timedOut ? partialResult?.finalAnswer : undefined,
         });
@@ -2095,8 +2092,6 @@ async function runExecution(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
-        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
-        caches: cacheRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2212,11 +2207,11 @@ async function runExecution(
       },
       onToolStart: async (toolName, data) => {
         // Agent mode bills LLM tokens per-iteration; a generative tool's provider media
-        // cost (image/music/audio USD) is NOT LLM spend, so classic chat's per-tool
+        // cost (image USD) is NOT LLM spend, so classic chat's per-tool
         // toolCreditsMap drain never runs here. Fold the media USD into the same
         // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
         // `billIteration` charges it on the existing agent rail - otherwise agent-mode
-        // generation is free. Image and audio settle at finish (see onToolFinish), so a failed
+        // generation is free. Images settle at finish (see onToolFinish), so a failed
         // call is never billed. The phase->tool routing + `usd > 0` guard live in the billing
         // module so they are covered by agentExecutor.billing.test.ts.
         // processSubagentDispatch folds the same way but settles once per run.
@@ -2234,8 +2229,8 @@ async function runExecution(
         });
       },
       onToolFinish: async (toolName, data) => {
-        // Settle image/audio media cost on delivery (see onToolStart for the rail rationale):
-        // the tools' failure paths return before onFinish, so an undelivered image or clip is
+        // Settle image media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered image is
         // never billed. Charged into the current iteration's pendingToolUsage.
         foldGeneratedMediaUsd({
           phase: 'finish',
@@ -2353,6 +2348,7 @@ async function runExecution(
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      audioJobs: buildAudioToolJobs(),
       videoConfig: await buildAgentVideoToolConfig(
         {
           userId: execution.userId,
@@ -4574,8 +4570,6 @@ async function processSubagentDispatch(
           findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository),
         },
         quests: questRepository,
-        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
-        caches: cacheRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
