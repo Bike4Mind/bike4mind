@@ -12,11 +12,16 @@ persisted non-system, non-synthetic accounts, including admin-created accounts.
 It does not count login attempts, retries, or email verification as new accounts.
 `NewAccountApiKeys` counts persisted keys created at an account age in `[0, 24 hours)`.
 It includes all mint channels and excludes rotations that update an existing key.
+`NegativeBalances` is a point-in-time snapshot, not a window count: the number of
+non-system, non-synthetic, non-deleted accounts whose `currentCredits` is below zero
+when the census runs. Banned and suspended accounts are included. It is a count only,
+with no account identifiers, and has no alarm.
 Deleted accounts/keys and synthetic flags changed before a scan can affect the census;
 this is not an immutable audit stream.
 
 Metrics use `<app>/<stage>/AccountCreation`, carry no account dimensions, and are
-timestamped at the start of the counted hour. Alarms use `Maximum`, not `Sum`, so
+timestamped at the start of the counted hour, except `NegativeBalances`, which is
+timestamped at the end of it (the hour boundary the snapshot was taken after). Alarms use `Maximum`, not `Sum`, so
 redelivery of the same scheduled window does not add counts. An empty hour publishes
 zeros. Query or publication failures throw for retry and eventually dead-letter.
 A separate missing-census alarm distinguishes silence from a clean scan. Rate alarms
