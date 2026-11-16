@@ -134,7 +134,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/members/[userId]/manager.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
-  ['organizations/[id]/retention.ts', ORG_MANAGER_REASON],
+  [
+    'organizations/[id]/retention.ts',
+    'org member reads the policy, owner or manager writes it; verifyOrgAccess lets an admin through',
+  ],
   [
     'organizations/[id]/storage-usage.ts',
     'owner, manager or appointed admin reads storage; verifyOrgAdminRead lets an admin through',
