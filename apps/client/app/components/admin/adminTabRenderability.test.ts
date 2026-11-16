@@ -23,9 +23,13 @@ describe('canRenderAdminTab', () => {
     }
   });
 
+  it('rejects model lifecycle, which has no panel of its own', () => {
+    expect(canRenderAdminTab(AdminTab.ModelLifecycle, { user: admin })).toBe(false);
+  });
+
   it('accepts a tab that has a panel', () => {
     expect(canRenderAdminTab(AdminTab.Users, { user: admin })).toBe(true);
-    expect(canRenderAdminTab(AdminTab.LLMDashboard, { user: admin })).toBe(true);
+    expect(canRenderAdminTab(AdminTab.Models, { user: admin })).toBe(true);
   });
 
   it("hides a tab the user's admin permissions do not open", () => {

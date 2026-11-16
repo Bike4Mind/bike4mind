@@ -8,6 +8,7 @@ import SwiftUI
 struct MessageBubble: View {
   let message: TranscriptMessage
   @Environment(\.openWebPage) private var openWebPage
+  @Environment(\.approvalActions) private var approvalActions
   @Environment(AuthController.self) private var auth
 
   private var isUser: Bool { message.role == .user }
@@ -24,8 +25,28 @@ struct MessageBubble: View {
     }
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel(message.accessibilityLabel())
-    .accessibilityActions { codeCopyActions(blocks) }
+    .accessibilityLabel(message.accessibilityLabel(approval: approvalState))
+    .accessibilityActions {
+      codeCopyActions(blocks)
+      approvalAccessibilityActions
+    }
+  }
+
+  private var approvalState: ApprovalCardState {
+    guard let action = message.pendingAction else { return .open }
+    return approvalActions?.state(action, message.questID) ?? .open
+  }
+
+  /// The card's buttons are hidden from VoiceOver with the rest of the bubble's children, so approve and deny
+  /// are offered as named actions on the message while the request is open.
+  @ViewBuilder
+  private var approvalAccessibilityActions: some View {
+    if let action = message.pendingAction, let approvalActions, approvalState.offersDecision,
+      !action.hasLapsed(at: .now)
+    {
+      Button("Approve") { approvalActions.respond(action, message.questID, .approve) }
+      Button("Deny") { approvalActions.respond(action, message.questID, .deny) }
+    }
   }
 
   /// The message is one VoiceOver element (children ignored), which hides each code block's copy button,
@@ -86,7 +107,10 @@ struct MessageBubble: View {
         }
       }
       if let action = message.pendingAction {
-        PendingActionCard(action: action, openWeb: { openWebPage(auth.environment.baseURL) })
+        PendingActionCard(
+          action: action, state: approvalActions?.state(action, message.questID) ?? .open,
+          canAnswer: approvalActions != nil,
+          respond: { decision in approvalActions?.respond(action, message.questID, decision) })
       }
     }
     .padding(outline == nil ? 0 : Tokens.Spacing.m)
@@ -310,11 +334,14 @@ struct StatusBadge: View {
   }
 }
 
-/// Shows which tool is waiting and with what. Read-only: answering an approval is not part of the public
-/// API contract yet (see `ApprovalState.canRespondInApp`), so the card points to the web.
+/// Shows which tool is waiting and with what, and answers it. The server decides whether the request is
+/// still current, so a late, replaced or already-answered request comes back as a message here, never as a
+/// silent no-op.
 private struct PendingActionCard: View {
   let action: PendingAction
-  let openWeb: () -> Void
+  let state: ApprovalCardState
+  let canAnswer: Bool
+  let respond: (PendingActionDecision) -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
@@ -323,15 +350,14 @@ private struct PendingActionCard: View {
       TimelineView(.periodic(from: .now, by: 30)) { context in
         let hasLapsed = action.hasLapsed(at: context.date)
         VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-          Text(hasLapsed ? "This request expired." : "Approve or deny this on Bike4Mind for the web.")
-            .font(Tokens.Typography.meta)
-            .foregroundStyle(Tokens.Palette.secondaryText)
-          if !hasLapsed {
-            Button("Review on the web", action: openWeb)
-              .font(Tokens.Typography.meta.weight(.semibold))
-              .buttonStyle(.borderless)
-              .accessibilityIdentifier("message-review-on-web-btn")
+          HStack(spacing: Tokens.Spacing.s) {
+            Text(TranscriptMessage.status(of: action, now: context.date, state: state))
+              .font(Tokens.Typography.meta)
+              .foregroundStyle(statusTint)
+              .accessibilityIdentifier("message-approval-status")
+            if state.isSubmitting { ProgressView() }
           }
+          if canAnswer, state.offersDecision, !hasLapsed { buttons }
         }
       }
       ForEach(action.parameters.sorted(by: { $0.key < $1.key }), id: \.key) { name, value in
@@ -346,6 +372,42 @@ private struct PendingActionCard: View {
     .background(Tokens.Palette.background.opacity(0.6))
     .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
     .accessibilityIdentifier("message-pending-action")
+  }
+
+  private var statusTint: Color {
+    if case .failed = state { return Tokens.Palette.destructive }
+    return Tokens.Palette.secondaryText
+  }
+
+  private var buttons: some View {
+    HStack(spacing: Tokens.Spacing.s) {
+      Button("Approve") { respond(.approve) }
+        .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("message-approve-btn")
+      Button("Deny", role: .destructive) { respond(.deny) }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("message-deny-btn")
+    }
+    .font(Tokens.Typography.meta.weight(.semibold))
+    .frame(minHeight: 44)
+  }
+}
+
+/// What the transcript needs to answer an approval card: the card's state and the call. Supplied by the
+/// screen that owns the conversation; absent where answering is not wired (the card is then informational).
+struct ApprovalActions {
+  let state: @MainActor (PendingAction, String) -> ApprovalCardState
+  let respond: @MainActor (PendingAction, String, PendingActionDecision) -> Void
+}
+
+private struct ApprovalActionsKey: EnvironmentKey {
+  static let defaultValue: ApprovalActions? = nil
+}
+
+extension EnvironmentValues {
+  var approvalActions: ApprovalActions? {
+    get { self[ApprovalActionsKey.self] }
+    set { self[ApprovalActionsKey.self] = newValue }
   }
 }
 

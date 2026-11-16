@@ -13,7 +13,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
-import { getClientConfigContract } from './clientConfig.contract';
+import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { mintPersonaContract, deletePersonaContract } from './personas.contract';
@@ -165,6 +165,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateSoundEffectContract,
   getMeContract,
   getClientConfigContract,
+  getPublicClientConfigContract,
   approvePendingActionContract,
   denyPendingActionContract,
   registerPushTokenContract,

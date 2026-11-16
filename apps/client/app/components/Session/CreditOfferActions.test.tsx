@@ -29,11 +29,12 @@ vi.mock('./SessionCreditsButtons', () => ({
 const { trackUpsell } = vi.hoisted(() => ({ trackUpsell: vi.fn() }));
 vi.mock('@client/app/utils/funnelEvents', () => ({ trackUpsell }));
 
-const { accountRef, orgRef, subscriptionsRef, pendingRef } = vi.hoisted(() => ({
+const { accountRef, orgRef, subscriptionsRef, pendingRef, seatPlanRef } = vi.hoisted(() => ({
   accountRef: { current: null as null | { id: string; personal: boolean } },
   orgRef: { current: undefined as undefined | { name: string; billingContact?: string } },
   subscriptionsRef: { current: [] as Array<{ status: string }> },
   pendingRef: { current: false },
+  seatPlanRef: { current: null as null | { organizationName: string } },
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>
@@ -46,6 +47,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => ({ data: orgRef.current }),
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSeatPlan: () => ({ data: seatPlanRef.current, isLoading: false }),
   useGetSubscriptions: () => ({
     data: pendingRef.current ? undefined : subscriptionsRef.current,
     isPending: pendingRef.current,
@@ -67,6 +69,7 @@ beforeEach(() => {
   orgRef.current = undefined;
   subscriptionsRef.current = [];
   pendingRef.current = false;
+  seatPlanRef.current = null;
   trackUpsell.mockClear();
 });
 
@@ -149,6 +152,14 @@ describe('CreditOfferActions', () => {
     renderActions('out');
     expect(screen.queryByTestId('session-subscribe-btn')).toBeNull();
     expect(screen.getByTestId('session-credits-btn')).toHaveAttribute('data-secondary', 'false');
+  });
+
+  it('offers a Team seat holder only a credit pack, never Pro', () => {
+    seatPlanRef.current = { organizationName: 'Acme' };
+    renderActions('out');
+    expect(screen.queryByTestId('session-subscribe-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-credits-btn')).toBeInTheDocument();
+    expect(trackUpsell).toHaveBeenCalledWith('impression', expect.objectContaining({ plan: 'credit_pack' }));
   });
 
   it('still pitches the plan when the only subscription has ended', () => {
