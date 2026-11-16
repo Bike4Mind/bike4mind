@@ -91,11 +91,11 @@ describe('ImageStudioForm', () => {
     });
   });
 
-  it('makes edit-only and not-yet-wired models unpickable, with the reason on the card', () => {
+  it('makes an edit-only model unpickable with the reason on the card, and leaves a listed FLUX model pickable', () => {
     renderForm();
     expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-radio`)).toBeDisabled();
     expect(modelOption(`${ImageModels.FLUX_KONTEXT_PRO}-reason`)).not.toBeEmptyDOMElement();
-    expect(modelOption(`${ImageModels.FLUX_PRO_ULTRA}-reason`)).toHaveTextContent('Temporarily unavailable');
+    expect(modelOption(`${ImageModels.FLUX_PRO_ULTRA}-radio`)).toBeEnabled();
   });
 
   it('sends a chosen quality, and greys the models that cannot honour them', () => {

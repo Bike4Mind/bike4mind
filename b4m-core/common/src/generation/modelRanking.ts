@@ -18,6 +18,17 @@ export const MODEL_UNAVAILABLE_CODE = 'model_unavailable';
 // How many models the picker shows before "Show all models".
 export const RANKED_SHORTLIST_SIZE = 5;
 
+// A model's quality class within its provider's line-up, best first. Not a price band: credits stay on every card.
+export const MODEL_TIERS = ['flagship', 'standard', 'fast'] as const;
+export type ModelTier = (typeof MODEL_TIERS)[number];
+
+/**
+ * Where a model stands among its peers, declared on every catalog entry (image, video and music) and read only by
+ * rankCandidates. `releasedAt` is the provider's general-availability date (YYYY-MM-DD); `preview` marks a model its
+ * provider labels preview, which never ranks above a generally available one.
+ */
+export type ModelStanding = { tier: ModelTier; releasedAt: string; preview: boolean };
+
 export type RankedModel<TId extends string = string> = {
   id: TId;
   status: ModelFitStatus;
@@ -45,6 +56,17 @@ export type RankingCandidate<TId extends string> = {
 
 const STATUS_ORDER: Record<ModelFitStatus, number> = { fits: 0, mismatch: 1, unavailable: 2 };
 
+// An id the bundled catalog does not know (a newer server) has no standing and ranks after every known model.
+const compareStanding = (a: ModelStanding | undefined, b: ModelStanding | undefined): number => {
+  if (!a || !b) return (a ? 0 : 1) - (b ? 0 : 1);
+  return (
+    Number(a.preview) - Number(b.preview) ||
+    MODEL_TIERS.indexOf(a.tier) - MODEL_TIERS.indexOf(b.tier) ||
+    // ISO dates compare as strings; newest first.
+    b.releasedAt.localeCompare(a.releasedAt)
+  );
+};
+
 const toRanked = <TId extends string>(
   candidate: RankingCandidate<TId>,
   unavailableReason: string | undefined
@@ -64,33 +86,29 @@ const toRanked = <TId extends string>(
 };
 
 /**
- * Orders candidates: models that fit first, then the ones that do not take a value (pickable, with the reason), then
- * the ones that cannot run. Within a group, `preference` order (house picks for quality per credit), then the
- * caller's order, so the result never depends on sort stability or object key order.
+ * Orders candidates, one rule for every medium: models that fit first, then the ones that do not take a value
+ * (pickable, with the reason), then the ones that cannot run. Within a group: generally available before preview,
+ * then by tier (flagship first), then newest release first, then the caller's order, so the result never depends on
+ * sort stability or object key order.
  */
 export const rankCandidates = <TId extends string>(
   candidates: readonly RankingCandidate<TId>[],
-  preference: readonly string[],
+  standingOf: (id: string) => ModelStanding | undefined,
   options: ModelRankingOptions = {}
-): RankedModel<TId>[] => {
-  const preferenceIndex = (id: string): number => {
-    const index = preference.indexOf(id);
-    return index === -1 ? preference.length : index;
-  };
-  return candidates
+): RankedModel<TId>[] =>
+  candidates
     .map((candidate, inputIndex) => ({
       ranked: toRanked(candidate, options.unavailable?.[candidate.id]),
-      preferred: preferenceIndex(candidate.id),
+      standing: standingOf(candidate.id),
       inputIndex,
     }))
     .sort(
       (a, b) =>
         STATUS_ORDER[a.ranked.status] - STATUS_ORDER[b.ranked.status] ||
-        a.preferred - b.preferred ||
+        compareStanding(a.standing, b.standing) ||
         a.inputIndex - b.inputIndex
     )
     .map(({ ranked }) => ranked);
-};
 
 /** The "Picked for" line: the reasons joined, e.g. "product photoreal + reference". */
 export const describePickedFor = (pickedFor: readonly string[]): string => pickedFor.join(' + ');
