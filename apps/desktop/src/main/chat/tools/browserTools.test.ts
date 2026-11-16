@@ -6,6 +6,7 @@ import {
   browserClick,
   browserEvaluate,
   browserNavigate,
+  browserPress,
   browserScreenshot,
   browserScroll,
   browserSnapshot,
@@ -180,35 +181,26 @@ describe('browser tools', () => {
     });
   });
 
-  /**
-   * The url bar means the user can sign in to anything in this cookie jar, so a script on a real
-   * site is asked about in EVERY mode, and under a key of its own: "always allow clicking here"
-   * must never also mean "and run whatever JavaScript you like here".
-   */
-  it('gates a script harder than a click, and in every mode', async () => {
+  /** Anonymous and consented-origin scripts follow the mode, independently of click allowances. */
+  it('gates a script on a real site like a click: only "Ask for approval" asks', async () => {
     const local = contextFor(fakePage('http://localhost:3080/app'));
     expect(await browserEvaluate.needsApproval!({ expression: '1' }, local.context)).toBe(false);
 
     const remote = contextFor(fakePage('https://app.example.com/inbox'));
     expect(await browserEvaluate.needsApproval!({ expression: '1' }, remote.context)).toBe(true);
-    expect(await browserEvaluate.approval!({ expression: '1' }, remote.context)).toMatchObject({
-      key: 'browser-script:https://app.example.com',
-      askInAuto: true,
-      askInFull: true,
-    });
+    const plain = await browserEvaluate.approval!({ expression: '1' }, remote.context);
+    expect(plain).toMatchObject({ key: 'browser-script:https://app.example.com' });
+    expect(plain.askInAuto).toBeUndefined();
+    expect(plain.askInFull).toBeUndefined();
 
     const imported = contextFor(fakePage('https://app.example.com/inbox'), ['app.example.com']);
-    expect(await browserEvaluate.approval!({ expression: '1' }, imported.context)).toMatchObject({
-      key: 'browser-script-as-you:https://app.example.com',
-      askInFull: true,
-    });
+    imported.context.isStanding = key => key === 'browser-open-as-you:https://app.example.com';
+    const signedIn = await browserEvaluate.approval!({ expression: '1' }, imported.context);
+    expect(signedIn.askInAuto).toBeUndefined();
+    expect(signedIn.askInFull).toBeUndefined();
   });
 
-  /**
-   * A site the USER imported their own Chrome cookies for. Reaching it is reaching it as them,
-   * which is not the decision 'auto' or 'full' was a judgement about - so every tool that
-   * touches it asks, in every mode, under a key of its own. See cookies/CookieImporter.
-   */
+  /** Opening a site the USER imported their own Chrome cookies for is the one browser card every mode keeps. */
   describe('a site carrying the user imported cookies', () => {
     it('asks before opening it, in every mode', async () => {
       const { context } = contextFor(fakePage(), ['shop.example.com']);
@@ -221,29 +213,24 @@ describe('browser tools', () => {
       });
     });
 
-    it('asks before acting on it, apart from the same action taken anonymously', async () => {
+    it('does not ask again to act on, read or script an origin with standing consent', async () => {
       const { context } = contextFor(fakePage('https://shop.example.com/checkout'), ['shop.example.com']);
-      expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(true);
-      expect(await browserClick.approval!({ ref: '1' }, context)).toMatchObject({
-        detail: 'Click on https://shop.example.com (element 1), signed in as you',
-        key: 'browser-act-as-you:https://shop.example.com',
-        askInAuto: true,
-        askInFull: true,
-      });
+      context.isStanding = key => key === 'browser-open-as-you:https://shop.example.com';
+      for (const prompt of [
+        await browserClick.approval!({ ref: '1' }, context),
+        await browserEvaluate.approval!({ expression: '1' }, context),
+      ]) {
+        expect(prompt.askInAuto).toBeUndefined();
+        expect(prompt.askInFull).toBeUndefined();
+        expect(prompt.detail).not.toMatch(/signed/i);
+      }
+      expect(await browserSnapshot.needsApproval!({}, context)).toBe(false);
     });
 
-    it('asks even on a local dev server, where an action is otherwise free', async () => {
+    it('leaves a local dev server free to open and act on, even with imported cookies for it', async () => {
       const { context } = contextFor(fakePage('http://localhost:3080/app'), ['localhost']);
-      expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(true);
-      expect(await browserNavigate.needsApproval!({ url: 'localhost:3080' }, context)).toBe(true);
-    });
-
-    it('leaves every other site exactly as it was', async () => {
-      const { context } = contextFor(fakePage('http://localhost:3080/app'), ['shop.example.com']);
       expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(false);
-      expect(await browserNavigate.approval!({ url: 'example.com/cart' }, context)).toMatchObject({
-        key: 'browser-open:https://example.com',
-      });
+      expect(await browserNavigate.needsApproval!({ url: 'localhost:3000/admin' }, context)).toBe(false);
     });
   });
 
@@ -538,202 +525,152 @@ describe('browser tabs', () => {
   });
 });
 
-/**
- * Consent to reach a signed-in site is checked on where the page IS when it is read, so a page the
- * agent got to without naming it - a script, a redirect, a link, history, a tab - is not read unasked.
- */
-describe('reading a page that carries the user imported cookies', () => {
-  const MAIL = 'https://mail.example.com';
-  const INBOX = `${MAIL}/inbox?token=abc`;
+describe('consent before disclosing an arrived imported-cookie origin', () => {
+  const privateUrl = 'https://mail.example.com/inbox?token=private-token';
+  const consentKey = 'browser-open-as-you:https://mail.example.com';
 
-  /** A page whose snapshot reads whatever it is on, with the inbox's text once it is there. */
-  function pageThatReads(start: string) {
-    const page = fakePage(start);
-    vi.mocked(page.snapshot).mockImplementation(async () => ({
-      url: page.url,
-      title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
-      text: page.url.startsWith(MAIL) ? 'From: bank - your code is 123456' : '[1] button "Add"',
-      truncated: false,
-      model: {
-        url: page.url,
-        title: page.url.startsWith(MAIL) ? 'Inbox (3) - jude' : 'Home',
-        capturedAt: '2026-10-24T12:00:00.000Z',
-        blocks: [],
-        actions: [],
-        claims: [],
-        truncated: false,
-      },
-    }));
-    return page;
-  }
+  it.each(['navigate', 'click', 'back'] as const)(
+    'withholds a private arrival through %s before snapshotting',
+    async action => {
+      const page = fakePage('http://localhost:3000');
+      const { context } = contextFor(page, ['mail.example.com']);
+      page.events.push('private-token in an event');
+      const arrive = async () => {
+        page.url = privateUrl;
+      };
+      vi.mocked(page.navigate).mockImplementationOnce(async () => {
+        await arrive();
+        return { url: privateUrl, title: 'Private mailbox', status: 200 };
+      });
+      vi.mocked(page.click).mockImplementationOnce(async () => {
+        await arrive();
+        return 'Open mail';
+      });
+      vi.mocked(page.back).mockImplementationOnce(arrive);
 
-  function signedIn(page: BrowserPage, extra: Partial<ToolContext> = {}) {
-    const built = contextFor(page, ['mail.example.com']);
-    return { ...built, context: { ...built.context, ...extra } };
-  }
+      const result =
+        action === 'navigate'
+          ? await browserNavigate.run({ url: 'http://localhost:3000' }, context)
+          : action === 'click'
+            ? await browserClick.run({ ref: '1' }, context)
+            : await browserBack.run({}, context);
 
-  it('withholds the inbox a localhost script navigated to, and asks before the next snapshot reads it', async () => {
-    const page = pageThatReads('http://localhost:3000/');
-    const { context } = signedIn(page);
-    vi.mocked(page.evaluate).mockImplementation(async () => {
-      page.url = INBOX;
-      page.events.push(`GET ${MAIL}/api/threads -> HTTP 200`);
-      return undefined;
+      expect(result).toContain('https://mail.example.com');
+      expect(result).not.toMatch(/private-token|Private mailbox|Typed page model/);
+      expect(page.snapshot).not.toHaveBeenCalled();
+      expect(page.events).toEqual([]);
+      const prompt = await browserSnapshot.approval!({}, context);
+      expect(prompt).toMatchObject({ key: consentKey, askInAuto: true, askInFull: true });
+    }
+  );
+
+  it('hides an unconsented tab title/path and gates selection and evaluation', async () => {
+    const page = fakePage(privateUrl);
+    const { context, labels } = contextFor(page, ['mail.example.com']);
+    expect(await browserTabs.run({ action: 'list' }, context)).not.toMatch(/private-token|Home/);
+    expect(await browserTabs.needsApproval!({ action: 'select', id: 1 }, context)).toBe(true);
+    expect(await browserTabs.approval!({ action: 'select', id: 1 }, context)).toMatchObject({
+      key: consentKey,
+      askInFull: true,
     });
-
-    expect(await browserEvaluate.needsApproval!({ expression: 'location.href=1' }, context)).toBe(false);
-    const evaluated = await browserEvaluate.run({ expression: 'location.href=1' }, context);
-    expect(evaluated).toContain(`The page is now on ${MAIL}`);
-    expect(evaluated).not.toContain('/api/threads');
-
-    expect(await browserSnapshot.needsApproval!({}, context)).toBe(true);
-    expect(await browserSnapshot.approval!({}, context)).toMatchObject({
-      key: `browser-open-as-you:${MAIL}`,
+    expect(await browserTabs.run({ action: 'select', id: 1 }, context)).not.toContain('private-token');
+    expect(labels.join(' ')).not.toContain('Home');
+    expect(await browserEvaluate.approval!({ expression: 'document.cookie' }, context)).toMatchObject({
+      key: consentKey,
       askInAuto: true,
       askInFull: true,
     });
-    const unasked = await browserSnapshot.run({}, context);
-    expect(unasked).not.toContain('123456');
-    expect(unasked).not.toContain('Inbox (3)');
+    expect(await browserEvaluate.run({ expression: 'document.cookie' }, context)).not.toContain('private-token');
+    expect(page.evaluate).not.toHaveBeenCalled();
   });
 
-  it('returns the inbox once the user allowed reading it, for this call or standing', async () => {
-    const page = pageThatReads(INBOX);
-    const once = signedIn(page, { approvedKey: `browser-open-as-you:${MAIL}` }).context;
-    expect(await browserSnapshot.run({}, once)).toContain('123456');
-
-    const standing = signedIn(page, { isStanding: key => key === `browser-open-as-you:${MAIL}` }).context;
-    expect(await browserSnapshot.run({}, standing)).toContain('123456');
-  });
-
-  it('does not read the signed-in page on a plain script approval for its origin', async () => {
-    const page = pageThatReads(INBOX);
-    const once = signedIn(page, { approvedKey: `browser-script:${MAIL}` }).context;
-    expect(await browserSnapshot.run({}, once)).not.toContain('123456');
-    const standing = signedIn(page, { isStanding: key => key === `browser-script:${MAIL}` }).context;
-    expect(await browserSnapshot.run({}, standing)).not.toContain('123456');
-
-    const asYou = signedIn(page, { isStanding: key => key === `browser-script-as-you:${MAIL}` }).context;
-    expect(await browserSnapshot.run({}, asYou)).toContain('123456');
-  });
-
-  it('withholds a page a localhost url redirected to, naming only its origin', async () => {
-    const page = pageThatReads('');
-    vi.mocked(page.navigate).mockImplementation(async () => {
-      page.url = INBOX;
-      return { url: INBOX, title: 'Inbox', status: 200 };
+  it('withholds a script result if navigation completes on an unconsented origin before execution', async () => {
+    const page = fakePage('http://localhost:3000');
+    const { context } = contextFor(page, ['mail.example.com']);
+    vi.mocked(page.evaluate).mockImplementationOnce(async () => {
+      page.url = privateUrl;
+      return { session: 'private-token' };
     });
-    const { context } = signedIn(page);
 
-    expect(await browserNavigate.needsApproval!({ url: 'localhost:3000/go' }, context)).toBe(false);
-    const result = await browserNavigate.run({ url: 'localhost:3000/go' }, context);
-    expect(result).toContain(`Loaded ${MAIL} (HTTP 200).`);
-    expect(result).not.toContain('token=abc');
-    expect(result).not.toContain('123456');
+    const result = await browserEvaluate.run({ expression: 'document.cookie' }, context);
 
-    // An approval for the url that was typed is not one for wherever it ends up.
-    const elsewhere = signedIn(page, { approvedKey: 'browser-open:https://shop.example.com' }).context;
-    expect(await browserNavigate.run({ url: 'shop.example.com' }, elsewhere)).not.toContain('123456');
+    expect(result).toContain('https://mail.example.com');
+    expect(result).not.toMatch(/private-token|session/);
   });
 
-  it('withholds a page reached by a link click on localhost, and by going back', async () => {
-    const page = pageThatReads('http://localhost:3000/');
-    const { context } = signedIn(page);
-    vi.mocked(page.click).mockImplementation(async () => {
-      page.url = INBOX;
-      return 'link "Mail"';
-    });
-    expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(false);
-    expect(await browserClick.run({ ref: '1' }, context)).not.toContain('123456');
+  it.each(['click', 'scroll'] as const)('withholds page-derived %s labels after a private arrival', async action => {
+    const page = fakePage('http://localhost:3000');
+    const { context, labels } = contextFor(page, ['mail.example.com']);
+    const privateResult = async () => {
+      page.url = privateUrl;
+      return 'private-token';
+    };
+    vi.mocked(page.click).mockImplementationOnce(privateResult);
+    vi.mocked(page.scroll).mockImplementationOnce(privateResult);
 
-    page.url = 'http://localhost:3000/';
-    vi.mocked(page.back).mockImplementation(async () => {
-      page.url = INBOX;
-    });
-    const back = await browserBack.run({}, context);
-    expect(back).toContain('Went back.');
-    expect(back).not.toContain('123456');
+    const result =
+      action === 'click'
+        ? await browserClick.run({ ref: '1' }, context)
+        : await browserScroll.run({ ref: '1' }, context);
+
+    expect(result).not.toContain('private-token');
+    expect(labels.join(' ')).not.toContain('private-token');
+    expect(page.snapshot).not.toHaveBeenCalled();
   });
 
-  it('asks before switching to a signed-in tab, and keeps its title out of the tab list', async () => {
-    const { context } = signedIn(pageThatReads('http://localhost:3000/'));
-    const mail = (await context.browser!.newTab()) as ReturnType<typeof fakePage>;
-    mail.url = INBOX;
+  it('refuses key dispatch to an unconsented origin reached after approval', async () => {
+    const page = fakePage(privateUrl);
+    const { context } = contextFor(page, ['mail.example.com']);
+    context.approvedKey = 'browser-act:http://localhost:3000';
 
-    expect(await browserTabs.needsApproval!({ action: 'select', id: 2 }, context)).toBe(true);
-    expect(await browserTabs.approval!({ action: 'select', id: 2 }, context)).toMatchObject({
-      key: `browser-open-as-you:${MAIL}`,
-    });
-    expect(await browserTabs.needsApproval!({ action: 'select', id: 1 }, context)).toBe(false);
-
-    const listed = await browserTabs.run({ action: 'list' }, context);
-    expect(listed).toContain(
-      `- tab 2 (active): (signed in as the user; select it to read it, which asks them) - ${MAIL}`
-    );
-    expect(listed).not.toContain('token=abc');
+    expect(await browserPress.run({ key: 'Enter' }, context)).not.toContain('private-token');
+    expect(page.press).not.toHaveBeenCalled();
   });
 
-  it('takes no screenshot of a signed-in page without consent', async () => {
-    const page = pageThatReads(INBOX);
-    const { context, images, media } = signedIn(page);
-    expect(await browserScreenshot.needsApproval!({}, context)).toBe(true);
+  it('withholds if the page changes origin during the snapshot', async () => {
+    const page = fakePage('http://localhost:3000');
+    const { context } = contextFor(page, ['mail.example.com']);
+    const snapshot = await page.snapshot(100);
+    vi.mocked(page.snapshot).mockClear();
+    vi.mocked(page.snapshot).mockImplementationOnce(async () => {
+      page.url = privateUrl;
+      return { ...snapshot, url: privateUrl, title: 'Private mailbox', text: 'private-token' };
+    });
+    expect(await browserSnapshot.run({}, context)).not.toMatch(/private-token|Private mailbox/);
+  });
+
+  it.each([false, true])('withholds framed screenshots (frame arrives during capture: %s)', async duringCapture => {
+    const page = fakePage('http://localhost:3000');
+    const { context, images, media } = contextFor(page, ['mail.example.com']);
+    vi.mocked(page.frameUrls).mockReturnValue(duringCapture ? [page.url] : [page.url, privateUrl]);
+    vi.mocked(page.screenshot).mockImplementationOnce(async () => {
+      vi.mocked(page.frameUrls).mockReturnValue([page.url, privateUrl]);
+      return Buffer.from('private-token');
+    });
     const result = await browserScreenshot.run({}, context);
-    expect(result).toContain('Took no screenshot.');
+    expect(result).toContain('https://mail.example.com');
+    expect(result).not.toContain('private-token');
     expect(images).toEqual([]);
     expect(media).toEqual([]);
-
-    const allowed = signedIn(page, { approvedKey: `browser-open-as-you:${MAIL}` });
-    await browserScreenshot.run({}, allowed.context);
-    expect(allowed.images).toHaveLength(1);
+    expect(page.screenshot).toHaveBeenCalledTimes(duringCapture ? 1 : 0);
   });
 
-  /** capturePage paints every frame, so a local page can frame the signed-in site the snapshot cannot see into. */
-  describe('a page that frames a signed-in site', () => {
-    const LOCAL = 'http://localhost:3000/';
-
-    function framing(subframe: string) {
-      const page = pageThatReads(LOCAL);
-      vi.mocked(page.frameUrls).mockReturnValue([LOCAL, subframe]);
-      return page;
+  it('permits only the explicitly approved origin, and keeps a one-call approval distinct from always', async () => {
+    const page = fakePage(privateUrl);
+    const { context } = contextFor(page, ['mail.example.com']);
+    context.approvedKey = consentKey;
+    expect(await browserSnapshot.run({}, context)).toContain('Typed page model');
+    context.approvedKey = undefined;
+    expect(await browserSnapshot.needsApproval!({}, context)).toBe(true);
+    context.isStanding = key => key === consentKey;
+    expect(await browserSnapshot.needsApproval!({}, context)).toBe(false);
+    for (const tool of [browserClick, browserEvaluate]) {
+      const prompt = await tool.approval!({ ref: '1', expression: '1' }, context);
+      expect(prompt.askInAuto).toBeUndefined();
+      expect(prompt.askInFull).toBeUndefined();
     }
-
-    it('takes no screenshot of it without consent, naming only the framed origin', async () => {
-      const page = framing(INBOX);
-      const { context, images, media } = signedIn(page);
-      expect(await browserScreenshot.needsApproval!({}, context)).toBe(false);
-      const result = await browserScreenshot.run({}, context);
-      expect(result).toContain('Took no screenshot.');
-      expect(result).toContain(`The page embeds ${MAIL},`);
-      expect(result).toContain(`browser_navigate on ${MAIL}`);
-      expect(result).not.toContain('token=abc');
-      expect(result).not.toContain('123456');
-      expect(images).toEqual([]);
-      expect(media).toEqual([]);
-    });
-
-    it('takes no screenshot when the frame reaches the signed-in site during the capture', async () => {
-      const page = pageThatReads(LOCAL);
-      vi.mocked(page.screenshot).mockImplementation(async () => {
-        vi.mocked(page.frameUrls).mockReturnValue([LOCAL, INBOX]);
-        return Buffer.from('png');
-      });
-      const { context, images } = signedIn(page);
-      expect(await browserScreenshot.run({}, context)).toContain(`The page embeds ${MAIL},`);
-      expect(images).toEqual([]);
-    });
-
-    it('takes it once the user allowed that site standing', async () => {
-      const page = framing(INBOX);
-      const { context, images } = signedIn(page, { isStanding: key => key === `browser-open-as-you:${MAIL}` });
-      expect(await browserScreenshot.run({}, context)).toContain(`Captured a screenshot of ${LOCAL}`);
-      expect(images).toHaveLength(1);
-    });
-
-    it('takes it when the framed site is not one the user is signed in to', async () => {
-      const page = framing('https://www.youtube.com/embed/abc');
-      const { context, images } = signedIn(page);
-      expect(await browserScreenshot.run({}, context)).toContain(`Captured a screenshot of ${LOCAL}`);
-      expect(images).toHaveLength(1);
-    });
+    expect(await browserSnapshot.run({}, context)).toContain('Typed page model');
+    page.url = 'https://mail.example.com:444/inbox';
+    expect(await browserSnapshot.run({}, context)).not.toContain('Typed page model');
   });
 });

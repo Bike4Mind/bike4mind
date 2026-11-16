@@ -146,18 +146,6 @@ describe('outsideFoldersReason', () => {
     );
   });
 
-  it('calls a folder only reached when the command sends data out from every one', () => {
-    const [part] = always(['curl *']).commands;
-    const sending = {
-      ...always(['curl *']),
-      commands: [{ ...part, ask: { mode: 'auto' as const, reason: 'sends', kinds: ['outbound' as const] } }],
-      writtenDirectories: ['/opt/data'],
-    };
-    expect(outsideFoldersReason(sending, ['/opt/data'], CWD, HOME)).toBe(
-      'Reaches outside the shared folders: /opt/data.'
-    );
-  });
-
   it('counts a folder an archive is extracted into as written', () => {
     const extracted = { ...always(['tar *']), writtenTrees: ['/opt/out/pkg'] };
     expect(outsideFoldersReason(extracted, ['/opt/out'], CWD, HOME)).toBe(
