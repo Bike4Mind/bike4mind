@@ -13,6 +13,7 @@ import {
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
+import { browserPresignConfig, storageClientConfig } from './s3Endpoints';
 import {
   assertTranscriptionCredits,
   holdTranscriptionCredits,
@@ -44,7 +45,11 @@ export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
 // infra/web.ts sets the hosted web Lambda timeout to 60s. Leave time to refund and clean up after cancelling the provider.
 const TRANSCRIPTION_REQUEST_TIMEOUT_MS = 45_000;
 
-const s3Client = new S3Client();
+const s3Client = new S3Client(storageClientConfig(process.env));
+const presignConfig = browserPresignConfig(process.env);
+const presignS3Client = presignConfig
+  ? new S3Client({ ...presignConfig, credentials: s3Client.config.credentials })
+  : s3Client;
 const bucketName = Resource.appFilesBucket.name;
 
 // The transcription credit helpers throw BadRequestError only for a caller who cannot pay (or does not exist).
@@ -78,7 +83,7 @@ export async function createTranscribeUpload({
 
   const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 
-  const { url, fields } = await createPresignedPost(s3Client, {
+  const { url, fields } = await createPresignedPost(presignS3Client, {
     Bucket: bucketName,
     Key: fileKey,
     Conditions: [
