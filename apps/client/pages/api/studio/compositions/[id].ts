@@ -22,6 +22,7 @@ import { studioCompositionAdapters } from '@server/studio/studioCompositionAdapt
 import { respond } from '@server/utils/respond';
 
 const ItemResponseSchema = z.object({ composition: StudioCompositionResponseSchema });
+const IdQuerySchema = z.object({ id: StudioCompositionIdSchema });
 const NOT_FOUND = { error: 'not_found', message: 'Composition not found' };
 
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -30,12 +31,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     perUserRateLimit('GET /api/studio/compositions/[id]'),
     asyncHandler(async (req, res) => {
-      const id = StudioCompositionIdSchema.safeParse(req.query.id);
-      if (!id.success) return res.status(404).json(NOT_FOUND);
+      const query = IdQuerySchema.safeParse(req.query);
+      if (!query.success) return res.status(404).json(NOT_FOUND);
       const composition = await studioCompositionService.getComposition(
         req.user.id,
         studioCompositionAdapters,
-        id.data
+        query.data.id
       );
       return respond(res, ItemResponseSchema, { composition });
     })
@@ -43,14 +44,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .patch(
     perUserRateLimit('PATCH /api/studio/compositions/[id]'),
     asyncHandler(async (req, res) => {
-      const id = StudioCompositionIdSchema.safeParse(req.query.id);
-      if (!id.success) return res.status(404).json(NOT_FOUND);
+      const query = IdQuerySchema.safeParse(req.query);
+      if (!query.success) return res.status(404).json(NOT_FOUND);
       const body = StudioCompositionUpdateInputSchema.safeParse(req.body);
       if (!body.success) return res.status(400).json({ error: 'invalid_request', issues: body.error.issues });
       const composition = await studioCompositionService.updateComposition(
         req.user.id,
         studioCompositionAdapters,
-        id.data,
+        query.data.id,
         body.data
       );
       return respond(res, ItemResponseSchema, { composition });
@@ -59,9 +60,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .delete(
     perUserRateLimit('DELETE /api/studio/compositions/[id]'),
     asyncHandler(async (req, res) => {
-      const id = StudioCompositionIdSchema.safeParse(req.query.id);
-      if (!id.success) return res.status(404).json(NOT_FOUND);
-      await studioCompositionService.deleteComposition(req.user.id, studioCompositionAdapters, id.data);
+      const query = IdQuerySchema.safeParse(req.query);
+      if (!query.success) return res.status(404).json(NOT_FOUND);
+      await studioCompositionService.deleteComposition(req.user.id, studioCompositionAdapters, query.data.id);
       return res.status(204).end();
     })
   );
