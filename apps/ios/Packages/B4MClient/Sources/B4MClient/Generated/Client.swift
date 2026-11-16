@@ -42,6 +42,7 @@ import HTTPTypes
 /// - `agents:read`
 /// - `agents:write`
 /// - `me:read`
+/// - `personas:mint`
 /// - `marketing-reports:read`
 /// - `marketing-reports:write`
 /// - `hearth:read`
@@ -57,6 +58,7 @@ import HTTPTypes
 /// - `bob:read`
 /// - `bob:run`
 /// - `slack:post`
+/// - `api-keys:manage`
 ///
 /// Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).
 ///

@@ -80,6 +80,24 @@ export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 export const RESEARCH_CONFIG_NAME_MAX_CHARS = 120;
 export const RESEARCH_CONFIG_QUERY_MAX_CHARS = 500;
 
+export const RESEARCH_SOURCES = ['search', 'feed'] as const;
+export type ResearchSource = (typeof RESEARCH_SOURCES)[number];
+
+export const RESEARCH_FEED_URL_MAX_CHARS = 2048;
+export const RESEARCH_FEED_MAX_BYTES = 10 * 1024 * 1024;
+/** Parse cap: items past this in a feed are never read. */
+export const RESEARCH_FEED_MAX_ITEMS = 500;
+/** Keys a feed cursor remembers. Matches the parse cap, so a full feed always fits. */
+export const RESEARCH_FEED_SEEN_KEYS_MAX = 500;
+/** Once keys are trimmed, a dated item this much older than the cursor's newest date is treated as seen. */
+export const RESEARCH_FEED_DATE_GRACE_DAYS = 7;
+/** How far past `now` a feed item's date may sit before it is clamped back to it. */
+export const RESEARCH_FEED_FUTURE_SKEW_MS = 10 * 60 * 1000;
+/** Transient failures (judge or fetch) after which a feed item is given up on. */
+export const RESEARCH_FEED_MAX_RETRIES = 3;
+/** Longest plain-text snippet taken from a feed item's description. */
+export const RESEARCH_FEED_SNIPPET_MAX_CHARS = 600;
+
 /**
  * The relevance judge used when a config names no model, or names one this deployment no longer
  * offers. Lives here rather than in the service so the config form can name it.
@@ -214,6 +232,10 @@ export const RESEARCH_PRESETS: Record<ResearchPresetId, ResearchPreset> = {
  * field is a lever, and every lever is read in `executeResearchRun`.
  */
 export interface ResearchRunLevers {
+  /** Where candidates come from. A feed config keeps its `query` as the topic items are judged against. */
+  source: ResearchSource;
+  /** The RSS or Atom feed to read when `source` is `feed`; null for a search config. */
+  feedUrl: string | null;
   /** The question the run answers. Sent to the search provider and to the relevance judge. */
   query: string;
   /**
@@ -226,9 +248,9 @@ export interface ResearchRunLevers {
   /** How many proposals this run may create before it stops. */
   maxProposals: number;
   /**
-   * Only consider pages the search provider dates within this many days. Passed to the provider
-   * (SerpAPI `tbs=qdr:`, SearXNG `time_range`), not applied after the fact - a client-side filter
-   * would need a publication date the hit does not carry. Absent = no recency constraint.
+   * Only consider pages dated within this many days. A search run passes it to the provider
+   * (SerpAPI `tbs=qdr:`, SearXNG `time_range`); a feed run applies it after the fact to items that
+   * carry a date, and undated items pass. Absent = no recency constraint.
    */
   recencyDays?: number;
   /**
@@ -270,14 +292,52 @@ export interface ResearchRunLevers {
  */
 export type LegacyResearchRunLevers = Omit<
   ResearchRunLevers,
-  'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits'
+  | 'trustedDomains'
+  | 'reviewDomains'
+  | 'unlistedSources'
+  | 'allowedDomains'
+  | 'autoAdmitTrusted'
+  | 'maxAutoAdmits'
+  | 'source'
+  | 'feedUrl'
 > &
   Partial<
     Pick<
       ResearchRunLevers,
-      'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains' | 'autoAdmitTrusted' | 'maxAutoAdmits'
+      | 'trustedDomains'
+      | 'reviewDomains'
+      | 'unlistedSources'
+      | 'allowedDomains'
+      | 'autoAdmitTrusted'
+      | 'maxAutoAdmits'
+      | 'source'
+      | 'feedUrl'
     >
   >;
+
+/**
+ * Per-config memory of which feed items earlier runs dealt with. Run output written back after a
+ * run settles, never a lever and never edited through the API.
+ */
+export interface ResearchFeedCursor {
+  /** `researchFeedFingerprint` of the levers the cursor was written under; a mismatch re-checks the newest items. */
+  fingerprint: string;
+  /** `researchFeedUrlKey` of the feed address. Absent on older cursors, which then start fresh on a mismatch. */
+  feedUrlKey?: string;
+  /** Floor for the date backstop. Never passes an item that still needs a run. */
+  newestPublishedAt: Date | null;
+  /** Canonical source keys already dealt with, in processing order (oldest first). */
+  seenKeys: string[];
+  /** Items that failed transiently, with how many runs have tried them. */
+  retries: { key: string; attempts: number }[];
+}
+
+/** What a config response exposes of its cursor: no keys, no retries. */
+export interface ResearchFeedStatus {
+  newestPublishedAt: Date | null;
+  /** The stored cursor was written under the config's current levers. */
+  current: boolean;
+}
 
 // -- Schedule ----------------------------------------------------------------------------------
 //
@@ -349,9 +409,16 @@ export interface IDataLakeResearchConfig extends ResearchRunLevers {
   lastUpdatedByUserId?: string | null;
   /** When a run last STARTED from this config. The list's "when did I last use this" column. */
   lastRunAt?: Date | null;
+  /** Server-written memory of a feed config's runs. Null or absent until a feed run completes. */
+  feedCursor?: ResearchFeedCursor | null;
 }
 
 export type IDataLakeResearchConfigDocument = IDataLakeResearchConfig & IMongoDocument;
+
+/** A config as the research config routes return it: the cursor is replaced by its status. */
+export type IDataLakeResearchConfigResponse = Omit<IDataLakeResearchConfigDocument, 'feedCursor'> & {
+  feedStatus?: ResearchFeedStatus | null;
+};
 
 /**
  * What the run loop counted. Every candidate lands in exactly one of the outcome buckets.
@@ -436,6 +503,11 @@ export interface IDataLakeResearchRun {
   spentMicroUsd: number;
   totals: ResearchRunTotals;
   /**
+   * Feed runs only: eligible items the run left for later. Not a totals bucket, since a waiting
+   * item is not an outcome. Null or absent for search runs and older rows.
+   */
+  feedBacklog?: number | null;
+  /**
    * The judge model the run actually resolved, which is not always `levers.model`: that lever is
    * absent on "Default" and falls back when the configured model is gone. Recorded so spend and
    * quality trace to a model, and so changing the default does not rewrite history. Absent on a run
@@ -484,6 +556,7 @@ export interface SettleResearchRunInput {
   stopReason?: ResearchRunStopReason;
   spentMicroUsd: number;
   totals: ResearchRunTotals;
+  feedBacklog?: number;
   judgeModel?: string;
   error?: string;
 }
@@ -504,6 +577,11 @@ export interface IDataLakeResearchConfigRepository extends IBaseRepository<IData
   ): Promise<IDataLakeResearchConfigDocument | null>;
   /** Stamp the start of a run. Separate from updateConfig so it needs no actor and no levers. */
   recordRunStarted(id: string, at: Date): Promise<void>;
+  /**
+   * Write a feed run's cursor back. The filter carries `feedUrl` so a cursor from a run of a feed the
+   * config has since left is dropped. Returns whether a config matched.
+   */
+  recordFeedCursor(id: string, feedUrl: string, cursor: ResearchFeedCursor): Promise<boolean>;
   /**
    * Atomically claim up to `limit` configs whose `nextRunAt <= now`, pushing each one's `nextRunAt`
    * out to `leaseUntil` so an overlapping scheduler tick cannot claim it again. Returns the configs

@@ -3,6 +3,7 @@ import { BadRequestError, CreditHolderType, getMemberCreditPeriodStart, getQuest
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapters } from './creditHold';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 vi.mock('./deductCreditsWithOrgSupport', () => ({ deductCreditsWithOrgSupport: vi.fn(async () => undefined) }));
 import { deductCreditsWithOrgSupport } from './deductCreditsWithOrgSupport';
@@ -101,6 +102,8 @@ describe('holdCredits', () => {
   });
 
   it('refuses a hold beyond the member cap before moving either balance', async () => {
+    const observer = vi.fn();
+    setOrgEventObserver(observer);
     const { adapters, state } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.organizations.findById).mockResolvedValueOnce({
       id: 'o1',
@@ -119,6 +122,13 @@ describe('holdCredits', () => {
     expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
     expect(adapters.organizations.incrementCredits).not.toHaveBeenCalled();
     expect(state).toEqual({ user: 100, org: 100 });
+    expect(observer).toHaveBeenCalledWith({
+      type: 'member_cap_check',
+      organizationId: 'o1',
+      userId: 'u1',
+      refused: true,
+    });
+    setOrgEventObserver(null);
   });
 
   it('logs a failed overdraw rollback and still answers insufficient credits', async () => {

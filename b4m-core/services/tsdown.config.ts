@@ -53,6 +53,7 @@ export default defineConfig({
     'src/llm/tools/implementation/websearch/index.ts',
     'src/mfaService/utils.ts',
     'src/organizationService/create.ts',
+    'src/organizationService/orgEventObserver.ts',
     'src/organizationService/revokeAccess.ts',
     'src/organizationService/update.ts',
     'src/sreAgentService/index.ts',

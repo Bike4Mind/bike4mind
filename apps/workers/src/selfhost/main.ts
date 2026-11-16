@@ -75,6 +75,9 @@ import {
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /**
  * Self-host background worker entrypoint.

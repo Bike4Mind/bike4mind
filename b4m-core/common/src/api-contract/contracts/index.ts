@@ -29,6 +29,7 @@ import {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
@@ -176,6 +177,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
   listEmbeddingModelsContract,

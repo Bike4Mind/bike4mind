@@ -108,6 +108,9 @@ const handler = baseApi({ auth: false })
         if (!authorizedUser) {
           throw new BadRequestError('Authorization approved but user no longer exists');
         }
+        if (authorizedUser.isSystem) {
+          return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid device code' });
+        }
 
         // Re-checked here for approvals made before the switch was flipped.
         if (!(await isApiKeyAccessAllowed(authorizedUser, undefined, req))) {

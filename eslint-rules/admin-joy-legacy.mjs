@@ -24,7 +24,6 @@ const componentsByFile = {
   'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
   'ModelMetrics/components/SpendTab.tsx': ['Table'],
   'OrganizationProfile.tsx': ['Card'],
-  'PartnerSignupRulesTab.tsx': ['Modal', 'Table'],
   'PrReport/PrReportDialog.tsx': ['Modal'],
   'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
