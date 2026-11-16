@@ -3,9 +3,17 @@ import { MUSIC_MODEL_IDS } from './catalog';
 import { rankMusicModels } from './ranking';
 
 describe('rankMusicModels', () => {
-  it('opens on the first preferred model with its focus', () => {
-    const [top] = rankMusicModels(MUSIC_MODEL_IDS, {});
-    expect(top).toEqual({ id: 'lyria-3.5', status: 'fits', pickedFor: ['full songs with vocals'], whyNot: null });
+  it('opens on the newest flagship with its focus, previews and the test model last', () => {
+    const ranked = rankMusicModels(MUSIC_MODEL_IDS, {});
+    expect(ranked.map(model => model.id)).toEqual([
+      'music_v2_5',
+      'lyria-3.5',
+      'music_v2',
+      'music_v1',
+      'test-music',
+      'lyria-3-clip-preview',
+    ]);
+    expect(ranked[0]).toEqual({ id: 'music_v2_5', status: 'fits', pickedFor: ['exact-length songs'], whyNot: null });
   });
 
   it('sinks a model that cannot make the requested length, with the validator code', () => {

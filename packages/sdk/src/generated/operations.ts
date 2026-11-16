@@ -265,6 +265,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects/{id}',
   },
+  getPublicClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config/public',
+  },
   getQuest: {
     method: 'GET',
     path: '/api/v1/quests/{id}',
@@ -332,6 +336,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listImageModels: {
+    method: 'GET',
+    path: '/api/v1/image-models',
   },
   listModels: {
     method: 'GET',

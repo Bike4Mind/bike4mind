@@ -3,6 +3,7 @@ import { artifactRepository, artifactContentRepository, artifactVersionRepositor
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { z } from 'zod';
 
 const UpdateArtifactSchema = z.object({
@@ -60,21 +61,25 @@ const handler = baseApi()
       const includeVersions = includeVersionsParam === 'true';
       const version = versionParam ? parseInt(versionParam, 10) : undefined;
 
-      let result = await artifactService.get(
-        userId,
-        {
-          id: artifactId,
-          includeContent: includeContent !== false, // Default to true for backward compatibility
-          includeVersions,
-          version,
-        } as any, // Temporary type assertion to bypass strict typing
-        {
-          db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
-          },
-        }
+      // A denied read is a 404 like a missing artifact: a 401 here would sign the SPA out (the
+      // client treats 401 as an expired session) when a user opens someone else's /artifacts/$id.
+      let result = await hideArtifactDenial(
+        artifactService.get(
+          userId,
+          {
+            id: artifactId,
+            includeContent: includeContent !== false, // Default to true for backward compatibility
+            includeVersions,
+            version,
+          } as any, // Temporary type assertion to bypass strict typing
+          {
+            db: {
+              artifacts: artifactRepository as any,
+              artifactContents: artifactContentRepository as any,
+              artifactVersions: artifactVersionRepository as any,
+            },
+          }
+        )
       );
 
       // If not found by exact ID, try finding by prefix (for legacy artifact IDs without timestamp)

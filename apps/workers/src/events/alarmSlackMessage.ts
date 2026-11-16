@@ -480,6 +480,36 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
     action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
   },
+  'spend-reconciliation-drift': {
+    title: 'Provider billing and our credit costs disagree',
+    level: 'page',
+    category: 'cost',
+    unit: 'drifting provider-months',
+    meaning:
+      "The nightly reconciliation found a provider's billed spend for last month differing from our internal cost estimate by more than the error band. Either we under-bill usage the provider charges for, or our model rates are wrong.",
+    action:
+      'Open the reconciliation banner on the credit analytics page for the provider and the size of the gap, then compare the provider console usage by model against our model rates.',
+    links: ['spend-monitor'],
+  },
+  'spend-reconciliation-nothing-reconciled': {
+    title: 'The nightly spend reconciliation checked nothing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'empty runs',
+    meaning:
+      'Every provider was skipped or failed in the nightly reconciliation, so credits were not compared against provider billing and a drift would go unnoticed.',
+    action:
+      'Check the reconciliation Lambda log. A missing or rotated provider admin key shows as skipped; a provider API error shows as failed.',
+  },
+  'spend-reconciliation-errors': {
+    title: 'The nightly spend reconciliation is failing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'failed runs',
+    meaning:
+      'The nightly job that compares provider billing with our credit costs failed before it could report, so the drift and nothing-reconciled alarms are blind until it recovers.',
+    action: 'Check the reconciliation Lambda log for the error. A database or provider API outage is the usual cause.',
+  },
   'image-moderation-incident-unalerted': {
     title: 'A moderation incident has no reviewer alert',
     level: 'page',

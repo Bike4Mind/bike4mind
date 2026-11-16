@@ -656,7 +656,7 @@ export type ModelName = z.infer<typeof supportedModels>;
 export type ModelPriceSource = UsagePriceSource;
 
 /** Why a listed model is shown to a caller but not selectable by them. */
-export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' };
+export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' | 'org_policy' };
 
 export type ModelInfo = {
   id: ModelName;

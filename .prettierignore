@@ -34,3 +34,6 @@ eslint-suppressions.json
 # A ~270-row inventory table: prettier pads every column to its widest cell, so adding one long row
 # would reflow the whole table. The guard test parses cells trimmed, so alignment is cosmetic.
 packages/database/src/models/UNVALIDATED_UPDATE_PATHS.md
+
+# Generated route inventory: preserve the generator layout without table-wide formatting churn.
+docs/api-route-inventory.md

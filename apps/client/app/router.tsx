@@ -26,6 +26,7 @@ import { billingLandingHref, parseBillingView } from '@client/app/utils/billingD
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
+import { captureUnsubscribeToken } from './routes/email/unsubscribeToken';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -45,6 +46,7 @@ import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
+import { parseModelDetailSearch } from './components/admin/Models/modelDetailSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
@@ -100,7 +102,8 @@ const AccountDataExportPage = lazy(() => import('./routes/account-data-export/$j
 const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
-const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+const ArtifactsPage = lazy(() => import('./routes/artifacts/index'));
+const ArtifactPage = lazy(() => import('./routes/artifacts/$id'));
 const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -109,6 +112,8 @@ const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscriptions/$subscriptionId'));
+const AdminModelDetailPage = lazy(() => import('./routes/admin/models/$'));
+const AdminModelDiscoveryRunPage = lazy(() => import('./routes/admin/models/runs/$runId'));
 const AdminSubscriptionByStripeIdPage = lazy(
   () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
 );
@@ -1133,15 +1138,34 @@ const subscribeRoute = createRoute({
   }),
 });
 
-// Artifacts demo route (replaces /artifacts-demo.tsx)
+// The signed-in user's artifacts library, and one artifact by id.
+const artifactsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactsPage />
+    </Suspense>
+  ),
+});
+
+const artifactRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/artifacts/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <ArtifactPage />
+    </Suspense>
+  ),
+});
+
+// The old demo gallery's URL, kept so bookmarks land on the library.
 const artifactsDemoRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/artifacts-demo',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <ArtifactsDemoPage />
-    </Suspense>
-  ),
+  beforeLoad: () => {
+    throw redirect({ to: '/artifacts', replace: true });
+  },
 });
 
 // Composer status-line states with mock data, for design work (routes/composer-lab.tsx).
@@ -1330,6 +1354,22 @@ export const adminSubscriptionByStripeIdRoute = createRoute({
   component: AdminSubscriptionByStripeIdPage,
 });
 
+// Admin model detail. A splat, so model ids keep their `/`, `:` and spaces in the path (local-image/<checkpoint>,
+// Bedrock `...:0`); the Models tab's list rows open it.
+export const adminModelDetailRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/$',
+  component: AdminModelDetailPage,
+  validateSearch: parseModelDetailSearch,
+});
+
+// One model discovery run. The static `runs` segment outranks the detail splat in TanStack's ranking.
+export const adminModelDiscoveryRunRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/runs/$runId',
+  component: AdminModelDiscoveryRunPage,
+});
+
 // Email unsubscribe route - public page for managing email preferences
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1339,11 +1379,7 @@ const emailUnsubscribeRoute = createRoute({
       <EmailUnsubscribePage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { token?: string } => {
-    return {
-      token: optionalStringParam(search, 'token'),
-    };
-  },
+  beforeLoad: () => captureUnsubscribeToken(),
 });
 
 // Desktop app download page - no layout, public, so it can be linked from anywhere.
@@ -1462,6 +1498,8 @@ const routeTree = rootRoute.addChildren([
     reportPublicRoute,
     organizationsRoute,
     organizationDetailRoute,
+    artifactsRoute,
+    artifactRoute,
     artifactsDemoRoute,
     composerLabRoute,
     dataLakesRoute,
@@ -1494,6 +1532,8 @@ const routeTree = rootRoute.addChildren([
     adminUserProfileRoute,
     adminSubscriptionDetailRoute,
     adminSubscriptionByStripeIdRoute,
+    adminModelDetailRoute,
+    adminModelDiscoveryRunRoute,
   ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,

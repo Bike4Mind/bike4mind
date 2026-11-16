@@ -6,6 +6,7 @@ import {
   UnprocessableEntityError,
   isFullAdmin,
   MODEL_ACCESS_BULK_MAX_IDS,
+  MODEL_ACCESS_UNDO_EXPIRED_CODE,
   type ModelAccessBulkChange,
   type ModelAccessBulkDryRun,
   type ModelAccessBulkItem,
@@ -382,7 +383,9 @@ export async function undoModelAccessBatch(
   }
   if (payload.actor !== actorOf(req)) throw new ForbiddenError('Only the admin who made this change can undo it');
   if (typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
-    throw new ConflictError('This undo has expired. Change the models back from the list.');
+    throw new ConflictError('This undo has expired. Change the models back from the list.', {
+      code: MODEL_ACCESS_UNDO_EXPIRED_CODE,
+    });
   }
   const entries = await readAccessEntries();
   const batchId = randomUUID();
