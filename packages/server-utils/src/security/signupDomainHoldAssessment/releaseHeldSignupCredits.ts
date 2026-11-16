@@ -2,7 +2,7 @@ import { type IUser, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '../../auth/pendingFreeCredits';
 
 const PAGE_SIZE = 100;
 
