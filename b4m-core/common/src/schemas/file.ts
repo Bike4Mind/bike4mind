@@ -36,9 +36,9 @@ export const isAllowedImageMimeType = (mimeType: string): boolean =>
   ALLOWED_IMAGE_MIME_TYPES.includes(bareMimeType(mimeType));
 
 export const FileGeneratePresignedUrlRequestInput = z.object({
-  fileName: z.string(),
+  fileName: z.string().min(1).max(255),
   mimeType: z.string(),
-  fileSize: z.number(),
+  fileSize: z.number().int().positive(),
   /** The path to the file */
   path: z.string().optional(),
   /** SHA-256 content hash for deduplication */
