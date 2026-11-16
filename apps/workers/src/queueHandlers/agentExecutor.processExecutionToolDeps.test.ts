@@ -116,6 +116,7 @@ vi.mock('./agentExecutor.audioToolConfig', async () => {
         createSoundEffectJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
         runInline: vi.fn(),
         readOutput: vi.fn(),
+        cancel: vi.fn(),
       }),
       resolveSpeechLimit: vi.fn().mockResolvedValue(3),
       resolveSoundEffectLimit: vi.fn().mockResolvedValue(4),

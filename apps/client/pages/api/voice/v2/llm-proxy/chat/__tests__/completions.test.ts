@@ -72,6 +72,11 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 
+const mockAudioToolJobs = { createSpeechJob: vi.fn() };
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  buildAudioToolJobs: () => mockAudioToolJobs,
+}));
+
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
@@ -381,6 +386,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - video generation', () 
     expect((mockProcess.mock.calls[0][0] as VideoBody).body.tools).toEqual(
       expect.arrayContaining(['web_search', 'search_knowledge_base', 'video_generation'])
     );
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - audio generation', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  // sharedToolBuilder hides audio_generation from a host that wires no job functions.
+  it('hands ChatCompletionProcess the audio job functions', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(processState.options).toMatchObject({ audioToolJobs: mockAudioToolJobs });
   });
 });
 

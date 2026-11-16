@@ -1,4 +1,5 @@
 import type {
+  CompletionSource,
   GeneratedAssetMetadata,
   GenerationJobSource,
   IGenerationJobDocumentOf,
@@ -83,11 +84,13 @@ export type SoundEffectJobDeps = AudioJobDeps & {
    * free up in time. `timeoutMs` is what is left of that budget. Absent: the call runs unslotted, once.
    */
   runWithCapacity?<T>(apiKey: string, attempt: (call: { timeoutMs: number }) => Promise<T>): Promise<T>;
+  /** `status: 'error'` is a provider call that generated nothing billable (zero credits and cost). */
   recordUsage(event: {
     job: SoundEffectJob;
     billedSeconds: number;
     creditsCharged: number;
     costUsd: number;
+    status: 'ok' | 'error';
   }): Promise<void>;
 };
 
@@ -129,6 +132,11 @@ export type CreateAudioJobInput = {
   saveToFiles?: boolean;
   sessionId?: string;
   questId?: string;
+};
+
+export type CreateSoundEffectJobInput = CreateAudioJobInput & {
+  /** As SoundEffectJobPayload.usageSource; absent leaves the ledger row and usage event unstamped. */
+  usageSource?: CompletionSource;
 };
 
 export type CreateSpeechJobInput = CreateAudioJobInput & {

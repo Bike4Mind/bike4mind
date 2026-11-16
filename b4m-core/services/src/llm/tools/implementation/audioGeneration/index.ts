@@ -20,6 +20,7 @@ import type {
   CreateSpeechJobInput,
   CreateSpeechJobResult,
 } from '../../../../audioJobs/types';
+import type { CancelRequestOutcome } from '../../../../generationJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { inlineMinStepMs } from '../../../../audioJobs/shared';
 import { settingsModelRefusalOrRethrow } from '../../helpers/toolModelRefusal';
@@ -45,6 +46,8 @@ export type AudioToolJobs = {
   /** The job once terminal, or null when it is still running at the timeout (the worker then finishes it). */
   runInline(jobId: string, options: { timeoutMs: number; minStepMs: number }): Promise<IGenerationJobDocument | null>;
   readOutput(output: AudioJobOutput): Promise<Buffer>;
+  /** Requests cancellation of a job the tool started (engine.requestCancel); `requested` releases its credit hold. */
+  cancel(jobId: string): Promise<CancelRequestOutcome['status']>;
 };
 
 /** The user's saved audio settings (the `audioConfig` a chat request carries) plus the host's job functions. */
@@ -60,7 +63,9 @@ const isAudioToolJobs = (value: unknown): value is AudioToolJobs =>
   'runInline' in value &&
   typeof value.runInline === 'function' &&
   'readOutput' in value &&
-  typeof value.readOutput === 'function';
+  typeof value.readOutput === 'function' &&
+  'cancel' in value &&
+  typeof value.cancel === 'function';
 
 /** Whether a tool config carries the host's job functions; the tool is not offered without them. */
 export const hasAudioToolJobs = (config: unknown): boolean =>
@@ -79,6 +84,12 @@ const SFX_PROVIDER = 'elevenlabs';
 const UNAVAILABLE_MESSAGE = 'Error: Audio generation is currently unavailable. Please try again later.';
 
 const BUSY_MESSAGE = 'Error: The audio provider is busy right now. Please try again shortly.';
+
+// The text is the user's own words (speech) or their description (sound effect), so a rephrase written to get past
+// the provider's policy would no longer be what they asked for: the model relays the refusal instead.
+const contentBlockedMessage = (label: string, provider: string) =>
+  `Error: ${label} generation failed (content_blocked): the ${provider} provider refused this text under its ` +
+  'content policy. This is not a temporary error: do not retry or rephrase it, tell the user it was refused.';
 
 // Defensive shape check for the model-supplied tool arguments. `kind` stays a loose string
 // (the toolFn treats anything that is not 'sound_effect' as speech); this only guards the
@@ -269,11 +280,11 @@ async function generate(
       jobId: created.job.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return stillGenerating(label, created.job.id, created.job.payload.saveToFiles);
+    return unfinished(context, jobs, label, created.job.id, created.job.payload.saveToFiles);
   }
   if (!job) {
     context.logger.warn('[audio_generation] job still running at the inline timeout', { jobId: created.job.id });
-    return stillGenerating(label, created.job.id, created.job.payload.saveToFiles);
+    return unfinished(context, jobs, label, created.job.id, created.job.payload.saveToFiles);
   }
   const output = jobOutput(job);
   if (job.state !== 'succeeded' || !output) {
@@ -285,6 +296,7 @@ async function generate(
     if (job.state === 'failed' && job.error?.providerStatus === 429) return BUSY_MESSAGE;
     // Generic message, not the job's provider error: provider strings can echo key hints or upstream URLs.
     const resolvedProvider = job.kind === 'speech' ? (job.payload.producedBy?.provider ?? provider) : provider;
+    if (job.state === 'blocked') return contentBlockedMessage(label, resolvedProvider);
     return kind === 'speech'
       ? `Error: TTS request rejected by the ${resolvedProvider} provider.`
       : `Error: sound-effect request rejected by the ${resolvedProvider} provider.`;
@@ -307,15 +319,40 @@ async function generate(
 }
 
 /**
- * Not an error: the job carries on in the worker and bills only if the clip is made. There is no audio job card in
- * chat yet, so the text is the user's only pointer to where the clip lands.
+ * The job did not end inside the inline wait. Saved to Files, it carries on in the worker and lands there; there is no
+ * audio job card in chat yet, so the text is the user's only pointer to it. Not saved to Files (a full Files quota),
+ * nothing would ever show the clip, so the job is cancelled to return its hold rather than billed for a lost clip.
  */
-const stillGenerating = (label: string, jobId: string, savesToFiles: boolean) =>
-  `The ${label} is still being generated (job ${jobId}).` +
-  (savesToFiles
-    ? " It will appear in the user's Files when it is ready; tell the user to look for it there."
-    : ' It will not be shown in this chat.') +
-  ' Do not call audio_generation again for it.';
+async function unfinished(
+  context: ToolContext,
+  jobs: AudioToolJobs,
+  label: string,
+  jobId: string,
+  savesToFiles: boolean
+): Promise<string> {
+  if (savesToFiles) {
+    return (
+      `The ${label} is still being generated (job ${jobId}). It will appear in the user's Files when it is ready; ` +
+      'tell the user to look for it there. Do not call audio_generation again for it.'
+    );
+  }
+  try {
+    const status = await jobs.cancel(jobId);
+    // Refused once the provider call has started (or the clip is storing): that clip is made but cannot be shown.
+    if (status !== 'requested') {
+      context.logger.warn('[audio_generation] could not cancel an unshowable job', { jobId, status });
+    }
+  } catch (error) {
+    context.logger.error('[audio_generation] cancel of an unshowable job failed', {
+      jobId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return (
+    `Error: the ${label} could not be finished in time, and the user's Files are full so it could not be saved ` +
+    'there either. Tell the user; they can free up Files space and ask again.'
+  );
+}
 
 const jobOutput = (job: IGenerationJobDocument): AudioJobOutput | undefined =>
   job.kind === 'speech' || job.kind === 'sound_effect' ? job.payload.output : undefined;

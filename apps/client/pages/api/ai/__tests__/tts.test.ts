@@ -6,6 +6,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     createSpeechJob: vi.fn(),
     runAudioJobInline: vi.fn(),
+    requestAudioJobCancel: vi.fn(),
     readAudioJobOutput: vi.fn(),
     fabFileFindById: vi.fn(),
     upload: vi.fn(),
@@ -39,11 +40,12 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 const createSpeechJobDeps = { sentinel: 'createSpeechJobDeps' };
 vi.mock('@bike4mind/services/audioJobs', () => ({
   createSpeechJob: (...a: unknown[]) => mocks.createSpeechJob(...a),
-  inlineMinStepMs: (kind: string) => (kind === 'speech' ? 40_000 : 45_000),
+  inlineMinStepMs: (kind: string) => (kind === 'speech' ? 40_000 : 39_000),
 }));
 vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
   getCreateSpeechJobDeps: () => createSpeechJobDeps,
   runAudioJobInline: (...a: unknown[]) => mocks.runAudioJobInline(...a),
+  requestAudioJobCancel: (...a: unknown[]) => mocks.requestAudioJobCancel(...a),
   readAudioJobOutput: (...a: unknown[]) => mocks.readAudioJobOutput(...a),
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -73,7 +75,6 @@ vi.mock('@server/generations/routeDeps', () => ({
   mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
 }));
 
-import { AUDIO_JOB_INLINE_TIMEOUT_MS } from '@server/generations/syncAudioJob';
 import handler from '../tts';
 
 const AUDIO = Buffer.from([1, 2, 3]);
@@ -144,8 +145,9 @@ describe('POST /api/ai/tts', () => {
       createSpeechJobDeps
     );
     expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', {
-      timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+      timeoutMs: expect.any(Number),
       minStepMs: 40_000,
+      stepReserveMs: 11_000,
     });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData()).toEqual(AUDIO);
@@ -404,6 +406,86 @@ describe('POST /api/ai/tts', () => {
       expect.stringContaining('background'),
       expect.objectContaining({ jobId: 'job-1' })
     );
+  });
+
+  it('waits only for what the request has left since it arrived, keeping time to deliver', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'hi' } });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      receivedAt: new Date(Date.now() - 10_000),
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    const { timeoutMs } = mocks.runAudioJobInline.mock.calls[0][1];
+    // 58s from arrival, less 3s to read the clip back and answer, less the 10s already gone.
+    expect(timeoutMs).toBeGreaterThan(44_000);
+    expect(timeoutMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it('delivers a job that ended just after the inline wait gave up on it, instead of answering 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(speechJob());
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toEqual(AUDIO);
+    expect(mocks.requestAudioJobCancel).not.toHaveBeenCalled();
+  });
+
+  it('maps a job that failed just after the inline wait gave up on it as a failure, not 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(
+      speechJob({ state: 'failed', error: { code: 'orphaned_submit', message: 'timeout' } })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+  });
+
+  describe('a clip that outlasts the request and is not saved to Files', () => {
+    const unsaved = () => speechJob({ state: 'pending' }, { saveToFiles: false, output: undefined });
+
+    beforeEach(() => {
+      mocks.runAudioJobInline.mockResolvedValue(null);
+      mocks.generationJobFindById.mockResolvedValue(unsaved());
+    });
+
+    it.each(['requested', 'not_cancellable'] as const)(
+      'cancels the job (%s) and answers 504 rather than a 202 nothing could follow up',
+      async status => {
+        mocks.requestAudioJobCancel.mockResolvedValue({ status, job: unsaved() });
+        const { res, logger, promise } = run({ ...{ text: 'hi' }, preview: true });
+        await promise;
+        expect(mocks.requestAudioJobCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-1' }));
+        expect(res._getStatusCode()).toBe(504);
+        expect(res._getJSONData()).toEqual({
+          error: 'Speech generation took too long',
+          provider: 'openai',
+          errorCode: 'request_timeout',
+        });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('not saved to Files'),
+          expect.objectContaining({ jobId: 'job-1', cancel: status })
+        );
+      }
+    );
+
+    it('delivers the clip when the cancel finds the job already ended', async () => {
+      mocks.requestAudioJobCancel.mockResolvedValue({
+        status: 'unchanged',
+        job: speechJob(
+          {},
+          {
+            saveToFiles: false,
+            output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 },
+          }
+        ),
+      });
+      const { res, promise } = run({ ...{ text: 'hi' }, preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getData()).toEqual(AUDIO);
+    });
   });
 
   it('answers 502 when the job vanished during the inline wait', async () => {

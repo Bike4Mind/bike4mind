@@ -51,6 +51,7 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
           type: 'sound_effects_usage',
           sessionId: job.payload.sessionId ?? job.questId ?? job.id,
           model: job.payload.providerId,
+          ...(job.payload.usageSource && { source: job.payload.usageSource }),
         },
         featureLabel: FEATURE_LABEL,
       },
@@ -58,9 +59,19 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
     );
     if (usd === null) return;
     try {
-      await deps.recordUsage({ job, billedSeconds, creditsCharged: charged, costUsd: usd });
+      await deps.recordUsage({ job, billedSeconds, creditsCharged: charged, costUsd: usd, status: 'ok' });
     } catch (error) {
       deps.logger.error('sound_effect_job_record_usage_failed', { jobId: job.id, creditsCharged: charged, error });
+    }
+  };
+
+  // A provider call that reached the provider but produced nothing billable: one zero-cost row, as for a success.
+  const recordFailedCall = async (job: SoundEffectJob) => {
+    try {
+      const { billedSeconds } = estimate(job);
+      await deps.recordUsage({ job, billedSeconds, creditsCharged: 0, costUsd: 0, status: 'error' });
+    } catch (error) {
+      deps.logger.warn('sound_effect_job_record_usage_failed', { jobId: job.id, error });
     }
   };
 
@@ -72,10 +83,15 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
     vendor: SoundGenerationVendor,
     apiKey: string,
     ctx: ProviderContext,
-    generate: GenerateAttempt
+    generate: GenerateAttempt,
+    onAttempt: () => void
   ): Promise<ProviderTerminalResult> => {
-    if (!deps.runWithCapacity) return generate(ctx);
+    if (!deps.runWithCapacity) {
+      onAttempt();
+      return generate(ctx);
+    }
     return deps.runWithCapacity(apiKey, async ({ timeoutMs }) => {
+      onAttempt();
       const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]);
       const result = await generate({ ...ctx, signal });
       if (result.status === 'failed' && result.retryable) {
@@ -118,15 +134,32 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
           {},
           attemptCtx
         );
+      const call = { attempted: false };
       let result: ProviderTerminalResult;
       try {
-        result = await runInCapacity(providerId, apiKey, ctx, generate);
+        result = await runInCapacity(providerId, apiKey, ctx, generate, () => {
+          call.attempted = true;
+        });
       } catch (error) {
+        if (error instanceof ProviderBusyError) {
+          deps.logger.warn('sound effect job gave up: provider at capacity', { jobId: job.id, reason: error.reason });
+          // Only a 429'd attempt reached the provider; one that never got a slot made no call to record.
+          if (error.reason === 'upstream_rate_limited') await recordFailedCall(job);
+          return rateLimitedStep(error.message, error.retryAfterSeconds);
+        }
+        // A throw before any attempt (the capacity settings read) reached nothing, so resubmitting is safe.
+        if (!call.attempted) {
+          deps.logger.warn('sound effect job failed before reaching the provider; retrying', {
+            jobId: job.id,
+            message: messageOf(error),
+          });
+          return { next: 'retry', reason: messageOf(error) };
+        }
         // Any other throw is an unknown outcome, which the engine fails as orphaned_submit.
-        if (!(error instanceof ProviderBusyError)) throw error;
-        deps.logger.warn('sound effect job gave up: provider at capacity', { jobId: job.id, reason: error.reason });
-        return rateLimitedStep(error.message, error.retryAfterSeconds);
+        await recordFailedCall(job);
+        throw error;
       }
+      if (result.status !== 'succeeded') await recordFailedCall(job);
       switch (result.status) {
         case 'succeeded': {
           const fetched = await fetchAudio(() => provider.fetchOutput(result.output, ctx), result.output);

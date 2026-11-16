@@ -59,6 +59,7 @@ describe('buildSubagentToolConfig', () => {
       createSoundEffectJob: vi.fn(),
       runInline: vi.fn(),
       readOutput: vi.fn(),
+      cancel: vi.fn(),
     };
     const audioConfig = { ttsProvider: 'elevenlabs', voice: 'Rachel' } as const;
     expect(buildSubagentToolConfig({ audioConfig, audioJobs }).audio_generation).toEqual({

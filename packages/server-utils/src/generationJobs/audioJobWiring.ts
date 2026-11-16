@@ -2,6 +2,7 @@ import { apiKeyService } from '@bike4mind/auth';
 import {
   ApiKeyType,
   type AudioJobOutput,
+  type IGenerationJobDocument,
   type SoundGenerationVendor,
   type VoiceGenerationVendor,
 } from '@bike4mind/common';
@@ -27,7 +28,7 @@ import {
   type SoundEffectJobDeps,
   type SpeechJobDeps,
 } from '@bike4mind/services/audioJobs';
-import { runJobInline } from '@bike4mind/services/generationJobs';
+import { runJobInline, type CancelRequestOutcome, type RunJobInlineOptions } from '@bike4mind/services/generationJobs';
 import type { AudioToolJobs } from '@bike4mind/services/llm/tools';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
@@ -140,6 +141,7 @@ const recordSoundEffectUsage: SoundEffectJobDeps['recordUsage'] = async ({
   billedSeconds,
   creditsCharged,
   costUsd,
+  status,
 }) => {
   try {
     await usageEventRepository.record({
@@ -158,7 +160,8 @@ const recordSoundEffectUsage: SoundEffectJobDeps['recordUsage'] = async ({
       units: billedSeconds,
       costUsd,
       creditsCharged,
-      status: 'ok',
+      status,
+      ...(job.payload.usageSource && { source: job.payload.usageSource }),
       latencyMs: latencyMs(job.createdAt),
     });
   } catch (error) {
@@ -266,12 +269,24 @@ export const getCreateSoundEffectJobDeps = (): CreateSoundEffectJobDeps => ({
  * Steps a just-created speech or sound-effect job in this process and waits for it to end (see runJobInline), for a
  * caller that answers synchronously. Null when it did not end in time; the worker then finishes, and bills, it.
  */
-export const runAudioJobInline = (jobId: string, options: { timeoutMs: number; minStepMs: number }) =>
+export const runAudioJobInline = (jobId: string, options: RunJobInlineOptions) =>
   runJobInline(jobId, options, {
     engine: getGenerationJobEngine(),
     repository: generationJobRepository,
     now: () => new Date(),
   });
+
+/**
+ * Requests cancellation of an audio job (engine.requestCancel). A sync job is cancellable only before its provider
+ * call starts; once started it is `not_cancellable` and runs to its end, billed if it produces the clip.
+ */
+export const requestAudioJobCancel = (job: IGenerationJobDocument): Promise<CancelRequestOutcome> =>
+  getGenerationJobEngine().requestCancel(job);
+
+const cancelAudioJobById = async (jobId: string): Promise<CancelRequestOutcome['status']> => {
+  const job = await generationJobRepository.findById(jobId);
+  return job ? (await requestAudioJobCancel(job)).status : 'unchanged';
+};
 
 /** The stored clip's bytes, from the Files or the generated bucket as the job recorded. */
 export const readAudioJobOutput = (output: AudioJobOutput): Promise<Buffer> =>
@@ -285,4 +300,5 @@ export const buildAudioToolJobs = (): AudioToolJobs => ({
   createSoundEffectJob: input => createSoundEffectJob(input, getCreateSoundEffectJobDeps()),
   runInline: runAudioJobInline,
   readOutput: readAudioJobOutput,
+  cancel: cancelAudioJobById,
 });

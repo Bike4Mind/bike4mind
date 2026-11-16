@@ -1,4 +1,9 @@
-import type { GeneratedAssetLineageEntry, GeneratedAssetMetadata, IGenerationJobDocument } from '@bike4mind/common';
+import type {
+  GeneratedAssetLineageEntry,
+  GeneratedAssetMetadata,
+  GeneratedAssetSaveSkippedReason,
+  IGenerationJobDocument,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
@@ -13,7 +18,12 @@ export type OutputModerationVerdict = { blocked: false } | { blocked: true; reas
 export type StoredOutputLocation =
   { location: 'files'; s3Key: string; fileId: string } | { location: 'generated'; s3Key: string };
 
-export type StoredOutput = { stored: true; location: StoredOutputLocation };
+/** `filesSkipReason`: why Files did not keep it, when it landed in the generated bucket instead. */
+export type StoredOutput = {
+  stored: true;
+  location: StoredOutputLocation;
+  filesSkipReason?: GeneratedAssetSaveSkippedReason;
+};
 export type StoreOutputResult = StoredOutput | { stored: false; reason: string };
 
 export type StoreOutputDeps = {
@@ -88,14 +98,14 @@ export async function storeGeneratedOutput(
   }
 
   const saved = await saveToFiles(params, deps);
-  if (saved) return { stored: true, location: saved };
+  if ('location' in saved) return { stored: true, location: saved };
 
   // An aborted step signal would reject the fallback too, losing an output the provider already billed.
   const fallbackSignal = signal.aborted ? AbortSignal.timeout(FALLBACK_SAVE_BUDGET_MS) : signal;
   const key = `${params.bucketFolder}/${job.ownerId}/${job.id}.${params.extension}`;
   try {
     const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
-    return { stored: true, location: { location: 'generated', s3Key } };
+    return { stored: true, location: { location: 'generated', s3Key }, filesSkipReason: saved.skipped };
   } catch (error) {
     // Generated and billed but cannot be kept: the caller's step fails (sync) or retries (async) on this throw.
     deps.logger.error(`${noun}_job_output_unsaved`, { jobId: job.id, bytes: bytes.byteLength, error });
@@ -103,11 +113,11 @@ export async function storeGeneratedOutput(
   }
 }
 
-/** The Files location, or undefined when the output should go to the bucket instead. */
+/** The Files location, or why the output should go to the bucket instead. */
 async function saveToFiles(
   params: StoreOutputParams,
   deps: StoreOutputDeps
-): Promise<StoredOutputLocation | undefined> {
+): Promise<StoredOutputLocation | { skipped: GeneratedAssetSaveSkippedReason }> {
   const { job, noun, bytes, contentType, generation, derivedFrom, sessionId, questId, signal } = params;
   try {
     const files = await deps.saveToFiles({
@@ -123,10 +133,10 @@ async function saveToFiles(
     });
     if (files.saved) return { location: 'files', s3Key: files.s3Key, fileId: files.fileId };
     deps.logger.warn(`${noun} saved outside Files`, { jobId: job.id, reason: files.reason });
-    return undefined;
+    return { skipped: files.reason };
   } catch (error) {
     if (params.onFilesError === 'rethrow') throw error;
     deps.logger.warn(`${noun} save to Files threw; saving outside Files`, { jobId: job.id, error });
-    return undefined;
+    return { skipped: 'error' };
   }
 }

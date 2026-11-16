@@ -39,6 +39,11 @@ const FAILURE_CANCEL_BUDGET_MS = 10_000;
 export type StepOptions = {
   /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
   remainingMs?: number;
+  /**
+   * The most the step itself (provider call and store) may take, for an inline caller that must answer by its own
+   * deadline (runJobInline). Only ever narrows the budget the lease and `remainingMs` allow.
+   */
+  stepBudgetMs?: number;
 };
 
 const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
@@ -107,7 +112,10 @@ export class GenerationJobEngine {
   async step(jobId: string, options: StepOptions = {}): Promise<StepOutcome> {
     // The step must commit before both the lease and the invocation end, whichever is first.
     const stepBudgetMs = Math.floor(
-      Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS
+      Math.min(
+        Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS,
+        options.stepBudgetMs ?? Number.POSITIVE_INFINITY
+      )
     );
     // Thrown before leasing so SQS redelivers to a fresh invocation; an already-aborted submit would orphan the job.
     if (!(stepBudgetMs > 0)) throw new Error(`generation job step has no time budget (${stepBudgetMs}ms)`);

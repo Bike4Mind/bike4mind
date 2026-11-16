@@ -259,7 +259,7 @@ describe('createSpeechJob', () => {
   });
 
   describe('storage quota', () => {
-    it('refuses a full Files quota before holding, sized for a compressed format', async () => {
+    it('refuses a Files quota with no room at all before holding', async () => {
       const { deps } = makeDeps({ checkStorageFor: vi.fn(async () => storageRefusal) });
       expect(await createSpeechJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
         ok: false,
@@ -267,23 +267,21 @@ describe('createSpeechJob', () => {
         code: 'storage_quota_exceeded',
         storage: storageRefusal,
       });
-      expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 'hello there'.length * 1_400);
       expect(holdCredits).not.toHaveBeenCalled();
       expect(deps.enqueue).not.toHaveBeenCalled();
     });
 
-    it.each([
-      ['wav', 4_000],
-      ['flac', 4_000],
-      ['pcm', 4_000],
-      ['mp3', 1_400],
-      ['opus', 1_400],
-      ['aac', 1_400],
-    ] as const)('sizes the check for the %s format at %i bytes a character', async (format, perCharacter) => {
-      const { deps } = makeDeps();
-      await createSpeechJob({ user, request: { text: 'abcd', provider: 'openai', format }, source: 'api' }, deps);
-      expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 4 * perCharacter);
-    });
+    it.each(['wav', 'mp3'] as const)(
+      'checks only for room for any clip, never a worst-case %s size: the store step checks the real one',
+      async format => {
+        const { deps } = makeDeps();
+        await createSpeechJob(
+          { user, request: { text: 'a'.repeat(4_000), provider: 'openai', format }, source: 'api' },
+          deps
+        );
+        expect(deps.checkStorageFor).toHaveBeenCalledExactlyOnceWith('u1', 1);
+      }
+    );
 
     it('skips the check for a clip kept outside Files', async () => {
       const { deps } = makeDeps({ checkStorageFor: vi.fn(async () => storageRefusal) });

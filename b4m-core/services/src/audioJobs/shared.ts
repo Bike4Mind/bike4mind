@@ -5,8 +5,8 @@ import {
   type GenerationJobError,
   type GenerationJobErrorCode,
   type IGenerationJobDocumentOf,
+  type StorageLimitErrorInfo,
 } from '@bike4mind/common';
-import { SOUND_GENERATION_TIMEOUT_MS } from '@bike4mind/utils';
 import { mp3DurationSeconds } from '@bike4mind/utils/musicProviders';
 import { ProviderOutputTooLargeError, type ProviderOutput } from '@bike4mind/utils/generationProviders';
 import { FALLBACK_SAVE_BUDGET_MS, storeGeneratedOutput } from '../generationJobs/storeOutput';
@@ -19,15 +19,18 @@ type AudioJob = IGenerationJobDocumentOf<AudioJobKind>;
 const MP3_CONTENT_TYPE = 'audio/mpeg';
 // A long synthesis on either vendor fits well inside this; there is no per-call deadline to size it from.
 const SPEECH_INLINE_MIN_STEP_MS = 40_000;
+// Under the sound generator's own 45s ceiling (SOUND_GENERATION_TIMEOUT_MS), which never fits the sync routes' step
+// window (syncAudioJob.ts). A clip still generating when the step budget runs out is cut off as that timeout would
+// cut it, and the job fails with its hold returned.
+const SOUND_EFFECT_INLINE_MIN_STEP_MS = 40_000;
 const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
+// A clip's size is only known once it is made, so the create-time check refuses only a quota with no room at all.
+const MIN_STORABLE_CLIP_BYTES = 1;
 const BUCKET_FOLDER = 'generated-audio';
 
-/**
- * The least inline wait to start a step with (runJobInline's minStepMs): one full provider call, so an inline step
- * never aborts a synthesis mid-call. A function, so suites that mock @bike4mind/utils without the constant still load.
- */
+/** The least step budget to start an inline step with (runJobInline's minStepMs): one provider call. */
 export const inlineMinStepMs = (kind: AudioJobKind): number =>
-  kind === 'speech' ? SPEECH_INLINE_MIN_STEP_MS : SOUND_GENERATION_TIMEOUT_MS;
+  kind === 'speech' ? SPEECH_INLINE_MIN_STEP_MS : SOUND_EFFECT_INLINE_MIN_STEP_MS;
 
 // Neither carries a payload, so each is a step result of any kind.
 type FailedStep = Extract<StepResult, { next: 'failed' }>;
@@ -147,7 +150,7 @@ export async function storeAudioOutput(
     return { location: 'generated', s3Key, ...measured };
   }
 
-  const { location } = await storeGeneratedOutput(
+  const { location, filesSkipReason } = await storeGeneratedOutput(
     {
       job,
       noun: job.kind,
@@ -163,7 +166,7 @@ export async function storeAudioOutput(
     },
     deps
   );
-  return { ...location, ...measured };
+  return { ...location, ...measured, ...(filesSkipReason && { filesSkipReason }) };
 }
 
 /** Speech and sound-effect jobs finish in submit, so the async steps are never reached. */
@@ -189,3 +192,13 @@ export async function dailyLimitRefusal(
   if (!refusal) return undefined;
   return { ok: false, status: 429, code: 'daily_limit_reached', ...refusal };
 }
+
+/**
+ * The quota refusal for a job that would save to Files, checked at create only for an account that is already
+ * full. Anything else is checked against the real clip at store time, where a clip that does not fit is kept in the
+ * generated bucket and reported as skipped (AudioJobOutput.filesSkipReason).
+ */
+export const fullFilesQuota = (
+  userId: string,
+  deps: Pick<CreateSpeechJobDeps, 'checkStorageFor'>
+): Promise<StorageLimitErrorInfo | undefined> => deps.checkStorageFor(userId, MIN_STORABLE_CLIP_BYTES);

@@ -8,7 +8,6 @@ import {
   VOICE_VENDOR_SUPPORTED_FORMATS,
   type StoredSpeechRequest,
   type VoiceGenerationVendor,
-  type VoiceOutputFormat,
 } from '@bike4mind/common';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import {
@@ -17,19 +16,13 @@ import {
   persistAndEnqueueJob,
   resolveJobOwner,
 } from '../generationJobs/createJob';
-import { dailyLimitRefusal } from './shared';
+import { dailyLimitRefusal, fullFilesQuota } from './shared';
 import {
   AUDIO_JOB_MAX_WALL_CLOCK_MS,
   type CreateSpeechJobDeps,
   type CreateSpeechJobInput,
   type CreateSpeechJobResult,
 } from './types';
-
-// The most a clip can take per input character, for the create-time storage check, at a slow ~12 characters a
-// second: uncompressed 24 kHz 16-bit audio (~48 KB/s), or a compressed format at up to 128 kbps (~16 KB/s).
-const UNCOMPRESSED_FORMATS: readonly VoiceOutputFormat[] = ['wav', 'pcm', 'flac'];
-const maxBytesPerCharacter = (format: VoiceOutputFormat | undefined) =>
-  format && UNCOMPRESSED_FORMATS.includes(format) ? 4_000 : 1_400;
 
 const invalid = (message: string): CreateSpeechJobResult => ({
   ok: false,
@@ -87,7 +80,7 @@ export async function createSpeechJob(
 
   const saveToFiles = input.saveToFiles ?? true;
   if (saveToFiles) {
-    const storage = await deps.checkStorageFor(input.user.id, text.length * maxBytesPerCharacter(format));
+    const storage = await fullFilesQuota(input.user.id, deps);
     if (storage) {
       return {
         ok: false,

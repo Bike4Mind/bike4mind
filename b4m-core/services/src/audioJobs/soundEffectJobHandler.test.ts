@@ -185,13 +185,15 @@ describe('sound effect job handler submit', () => {
     expect(signal.aborted).toBe(false);
   });
 
-  it('falls back to the generated bucket when Files refuses the clip', async () => {
+  it('falls back to the generated bucket when Files refuses the clip, keeping why', async () => {
     const { handler } = setup({
       saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
     });
     expect(await handler.submit(makeJob(), stepContext())).toMatchObject({
       next: 'succeeded',
-      payload: { output: { location: 'generated', s3Key: 'generated-audio/u1/job1.mp3' } },
+      payload: {
+        output: { location: 'generated', s3Key: 'generated-audio/u1/job1.mp3', filesSkipReason: 'storage_limit' },
+      },
     });
   });
 
@@ -398,13 +400,75 @@ describe('sound effect job handler capacity', () => {
     expect(elevenlabs.generate).not.toHaveBeenCalled();
   });
 
-  it('lets any other throw from the wrapper propagate as an unknown outcome', async () => {
-    const { handler } = setup({
-      runWithCapacity: async () => {
+  it('lets any other throw from an attempt propagate as an unknown outcome, recording the failed call', async () => {
+    const { handler, deps } = setup({
+      runWithCapacity: async (_apiKey, attempt) => {
+        await attempt({ timeoutMs: 45_000 });
         throw new Error('socket hang up');
       },
     });
     await expect(handler.submit(makeJob(), stepContext())).rejects.toThrow('socket hang up');
+    expect(deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', creditsCharged: 0 }));
+  });
+
+  it('retries a throw before any attempt reached the provider (the capacity settings read)', async () => {
+    const elevenlabs = providerReturning({ status: 'succeeded', output: clip() });
+    const { handler, deps } = setup({
+      providers: { elevenlabs: elevenlabs.provider },
+      runWithCapacity: async () => {
+        throw new Error('settings read timed out');
+      },
+    });
+    expect(await handler.submit(makeJob(), stepContext())).toEqual({
+      next: 'retry',
+      reason: 'settings read timed out',
+    });
+    expect(elevenlabs.generate).not.toHaveBeenCalled();
+    expect(deps.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records the 429d calls as one error usage event, but not a request that never got a slot', async () => {
+    const limited = setup({ providers: { elevenlabs: providerReturning(rateLimited).provider }, runWithCapacity });
+    await limited.handler.submit(makeJob(), stepContext());
+    expect(limited.deps.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: 'error', creditsCharged: 0, costUsd: 0 })
+    );
+
+    const noSlot = setup({
+      runWithCapacity: async () => {
+        throw new ProviderBusyError('elevenlabs', 'slots_exhausted', 5);
+      },
+    });
+    await noSlot.handler.submit(makeJob(), stepContext());
+    expect(noSlot.deps.recordUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('sound effect job handler failed-call usage', () => {
+  it.each([
+    ['a provider refusal', { status: 'failed', retryable: false, message: 'bad', raw: { status: 400 } }],
+    ['a content block', { status: 'blocked', raw: { status: 400 } }],
+  ] as const)('records %s as a zero-cost error usage event', async (_label, result) => {
+    const elevenlabs = providerReturning(result as ProviderTerminalResult);
+    const { handler, deps } = setup({ providers: { elevenlabs: elevenlabs.provider } });
+    const job = makeJob();
+    await handler.submit(job, stepContext());
+    const { billedSeconds } = estimateSoundCredits('elevenlabs', { durationSeconds: 4 });
+    expect(deps.recordUsage).toHaveBeenCalledExactlyOnceWith({
+      job,
+      billedSeconds,
+      creditsCharged: 0,
+      costUsd: 0,
+      status: 'error',
+    });
+  });
+
+  it('records nothing at submit for a success: onTerminal records it once settled', async () => {
+    const { handler, deps } = setup({
+      providers: { elevenlabs: providerReturning({ status: 'succeeded', output: clip() }).provider },
+    });
+    await handler.submit(makeJob(), stepContext());
+    expect(deps.recordUsage).not.toHaveBeenCalled();
   });
 });
 
@@ -427,7 +491,19 @@ describe('sound effect job handler onTerminal', () => {
     );
     expect(recordSettlement).toHaveBeenCalledWith('job1', credits);
     expect(releaseCreditHold).not.toHaveBeenCalled();
-    expect(deps.recordUsage).toHaveBeenCalledWith({ job, billedSeconds, creditsCharged: credits, costUsd: usdCost });
+    expect(deps.recordUsage).toHaveBeenCalledWith({
+      job,
+      billedSeconds,
+      creditsCharged: credits,
+      costUsd: usdCost,
+      status: 'ok',
+    });
+  });
+
+  it('stamps the request usage source on the ledger entry', async () => {
+    const { handler } = setup();
+    await handler.onTerminal(makeJob({ usageSource: 'cli' }, { state: 'succeeded', creditHold: hold }));
+    expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ source: 'cli' });
   });
 
   it('keys the ledger entry on the notebook, else the quest, else the job', async () => {

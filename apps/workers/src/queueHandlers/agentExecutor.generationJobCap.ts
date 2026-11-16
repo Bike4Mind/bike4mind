@@ -1,12 +1,14 @@
 /**
  * The per-run cap shared by the agent-mode generation tools (agentExecutor.videoToolConfig.ts,
- * agentExecutor.musicToolConfig.ts, agentExecutor.audioToolConfig.ts). One run can fan out across in-process subagents and many
- * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
- * tool) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
+ * agentExecutor.musicToolConfig.ts, agentExecutor.audioToolConfig.ts). One run can fan out across in-process subagents
+ * and many iterations, so each kind is capped by a setting (platform default, org override) and counted atomically on
+ * the run's Quest (QuestRepository.claimAgentGenerationSlot). A limit of 0 removes the video and music tools; the audio
+ * tool stays offered and refuses each call of a kind capped at 0.
  */
 import type { AgentGenerationSlotKind } from '@bike4mind/common';
 import { questRepository, adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
+import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
 import type { Logger } from '@bike4mind/observability';
 
 export type AgentGenerationSlots = {
@@ -36,26 +38,33 @@ const startedNewJob = (result: CreateJobResult): boolean => result.ok && result.
 
 /**
  * Wraps `createJob` so a call past the cap returns `refusal` instead of starting a job. A slot is
- * given back only when createJob RETURNED without starting a job: a refusal, or an idempotent replay
- * of a job this run already started (`created: false`). A throw keeps the slot, because createJob can
- * throw after the job is persisted (a failed enqueue whose cleanup also failed), and so can a Lambda
- * killed mid-call: both err toward one job fewer, never one too many.
+ * given back when createJob RETURNED without starting a job: a refusal, or an idempotent replay
+ * of a job this run already started (`created: false`). It is also given back when createJob threw the
+ * free-tier model refusal, which every create function asserts before persisting anything. Any other throw
+ * keeps the slot, because createJob can throw after the job is persisted (a failed enqueue whose cleanup
+ * also failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one too many.
  */
 export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
   createJob: (input: TInput) => Promise<TResult>,
   { questId, limit, slots, logger, logTag, releaseNoun, refusal }: LimitJobsPerRunOptions<TResult>
 ): (input: TInput) => Promise<TResult> {
+  const release = () =>
+    slots.release(questId).catch(error =>
+      logger.warn(`${logTag} failed to release an unused ${releaseNoun} slot; the run keeps one fewer`, {
+        questId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
   return async input => {
     if (!(await slots.claim(questId, limit))) return refusal;
-    const result = await createJob(input);
-    if (!startedNewJob(result)) {
-      await slots.release(questId).catch(error =>
-        logger.warn(`${logTag} failed to release an unused ${releaseNoun} slot; the run keeps one fewer`, {
-          questId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+    let result: TResult;
+    try {
+      result = await createJob(input);
+    } catch (error) {
+      if (isModelRequiresSubscriptionError(error)) await release();
+      throw error;
     }
+    if (!startedNewJob(result)) await release();
     return result;
   };
 }

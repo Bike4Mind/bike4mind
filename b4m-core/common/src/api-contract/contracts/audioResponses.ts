@@ -84,7 +84,8 @@ export function generatedAudioResponses(options: {
 
 /**
  * The 202 a generated-audio endpoint answers when the clip outlasts the request. `noun` names the clip, `schema` is
- * the endpoint's job resource. Speech and sound effects only: music has its own job API.
+ * the endpoint's job resource. Speech and sound effects only: music has its own job API. Answered only for a clip
+ * that is being saved to the file browser, the one place it can be picked up later (see unretrievableAudioResponse).
  */
 export function outlastedAudioResponse(options: {
   noun: string;
@@ -94,11 +95,26 @@ export function outlastedAudioResponse(options: {
   return {
     description:
       `The ${options.noun} took longer than this request can wait (about 55 seconds), so no audio is returned. ` +
-      'Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to ' +
-      'the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This ' +
-      'job cannot be polled through the API yet; look for the saved file instead of retrying, which would ' +
-      'generate (and bill) a second clip.',
+      'Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the ' +
+      'file browser if your storage quota still has room for it. Credits are settled only if it succeeds and ' +
+      'returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of ' +
+      'retrying, which would generate (and bill) a second clip.',
     schema: options.schema,
     example: options.example,
+  };
+}
+
+/**
+ * The 504 a speech or sound-effect endpoint answers when the clip outlasts the request and would not be saved to
+ * the file browser (a `preview` call, or a storage quota with no room), so nothing could ever retrieve it.
+ */
+export function unretrievableAudioResponse(options: { noun: string; schema: z.ZodTypeAny }): ResponseSpec {
+  return {
+    description:
+      `The ${options.noun} took longer than this request can wait, and it would not be saved to the file ` +
+      'browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. ' +
+      'Tagged `errorCode: "request_timeout"`. The generation is cancelled and its credits returned, unless the ' +
+      'provider had already started it: that one finishes and is billed. Retrying generates a new clip.',
+    schema: options.schema,
   };
 }

@@ -3674,7 +3674,8 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -3708,7 +3709,8 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -3816,7 +3818,8 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -3881,7 +3884,8 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -3915,7 +3919,8 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -3949,7 +3954,43 @@
             "enum": [
               "insufficient_credits",
               "provider_not_configured",
-              "provider_rejected"
+              "provider_rejected",
+              "request_timeout"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse504": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected",
+              "request_timeout"
             ]
           }
         },
@@ -28543,7 +28584,7 @@
             }
           },
           "202": {
-            "description": "The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
+            "description": "The speech took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29147,6 +29188,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/synthesizeSpeechResponse502"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The speech took longer than this request can wait, and it would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. Tagged `errorCode: \"request_timeout\"`. The generation is cancelled and its credits returned, unless the provider had already started it: that one finishes and is billed. Retrying generates a new clip.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse504"
                 }
               }
             },
@@ -30166,7 +30261,7 @@
             }
           },
           "202": {
-            "description": "The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. Unless `preview` was set, the audio is saved to the file browser when it finishes. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
+            "description": "The sound effect took longer than this request can wait (about 55 seconds), so no audio is returned. Generation carries on: the body is the job as it stands. When it finishes, the audio is saved to the file browser if your storage quota still has room for it. Credits are settled only if it succeeds and returned otherwise. This job cannot be polled through the API yet; look for the saved file instead of retrying, which would generate (and bill) a second clip.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30778,6 +30873,60 @@
           },
           "503": {
             "description": "No provider API key is configured for this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The sound effect took longer than this request can wait, and it would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved. Tagged `errorCode: \"request_timeout\"`. The generation is cancelled and its credits returned, unless the provider had already started it: that one finishes and is billed. Retrying generates a new clip.",
             "content": {
               "application/json": {
                 "schema": {

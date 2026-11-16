@@ -229,6 +229,8 @@ const ALLOWLIST: Record<string, string> = {
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
+  'packages/server-utils/src/generationJobs/audioJobWiring.ts':
+    'audio-only - readAudioJobOutput reads back the clip a speech or sound-effect job just stored (audio/* only, never an image) so the sync audio route can deliver it to the user who requested it; isImageServeable is inapplicable',
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts':
     'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 

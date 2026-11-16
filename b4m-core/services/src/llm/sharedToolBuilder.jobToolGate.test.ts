@@ -88,7 +88,13 @@ describe.each(JOB_TOOLS)('buildSharedTools: $tool gate', ({ tool, validConfig })
 });
 
 describe('buildSharedTools: audio_generation gate', () => {
-  const jobs = { createSpeechJob: vi.fn(), createSoundEffectJob: vi.fn(), runInline: vi.fn(), readOutput: vi.fn() };
+  const jobs = {
+    createSpeechJob: vi.fn(),
+    createSoundEffectJob: vi.fn(),
+    runInline: vi.fn(),
+    readOutput: vi.fn(),
+    cancel: vi.fn(),
+  };
   const offered = (options: Parameters<typeof buildSharedTools>[2]) =>
     (buildSharedTools(deps, callbacks, { enabledTools: ['audio_generation'], ...options }) ?? []).map(
       built => built.toolSchema.name

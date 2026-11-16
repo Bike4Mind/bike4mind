@@ -1,6 +1,6 @@
 import {
   generateSoundEffectContract,
-  isGenerationJobOfKind,
+  REQUEST_TIMEOUT_ERROR_CODE,
   shouldPersistGeneratedAudio,
   UnauthorizedError,
   UnprocessableEntityError,
@@ -8,26 +8,22 @@ import {
 } from '@bike4mind/common';
 import { ProviderBusyError } from '@bike4mind/services';
 import { createSoundEffectJob, inlineMinStepMs } from '@bike4mind/services/audioJobs';
-import {
-  getCreateSoundEffectJobDeps,
-  readAudioJobOutput,
-  runAudioJobInline,
-} from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { getCreateSoundEffectJobDeps, readAudioJobOutput } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
-  AUDIO_JOB_INLINE_TIMEOUT_MS,
+  awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
-  findOutlastingAudioJob,
   isRateLimitedFailure,
   retryAfterSecondsOf,
   savedCopyOf,
 } from '@server/generations/syncAudioJob';
 import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { SOUND_EFFECT_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
@@ -38,6 +34,7 @@ const GENERATION_FAILED = { error: 'Sound generation failed' };
 // keeps the saved copy. Bills the organization's shared pool for org-billed API keys and for org-seat members;
 // otherwise the user. Scope-gated (AI_GENERATE) so an under-scoped API key can't drive paid provider generation.
 // A clip that outlasts the request is answered 202 with the sound-effect job resource; it lands in Files when done.
+// One not being saved to Files could never be picked up, so its job is cancelled and the request answered 504.
 //
 // Auth mode, required scopes, and request validation all come from generateSoundEffectContract (the same source of
 // truth that drives the OpenAPI spec); `req.validated` is the parsed, typed body.
@@ -66,6 +63,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
           source,
           apiKeyId: req.apiKeyInfo?.keyId,
           saveToFiles,
+          usageSource: resolveRequestUsageSource(req),
         },
         getCreateSoundEffectJobDeps()
       ),
@@ -88,24 +86,33 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     }
   }
 
-  const job = await runAudioJobInline(result.job.id, {
-    timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+  const waited = await awaitInlineAudioJob(result.job.id, 'sound_effect', {
+    receivedAt: req.receivedAt,
     minStepMs: inlineMinStepMs('sound_effect'),
   });
-  if (!job || !isGenerationJobOfKind(job, 'sound_effect')) {
-    const outlasting = await findOutlastingAudioJob(result.job.id, 'sound_effect');
-    if (!outlasting) {
+  switch (waited.status) {
+    case 'gone':
       req.logger.error('Sound-effects job vanished during the inline wait', { jobId: result.job.id, provider });
       return res.status(502).json(GENERATION_FAILED);
-    }
-    req.logger.warn('Sound-effects job did not finish in time; it continues in the background', {
-      jobId: outlasting.id,
-      provider,
-    });
-    return res
-      .status(202)
-      .json(await toPublicGenerationJob(outlasting, mapperDeps, SOUND_EFFECT_GENERATION_PROJECTION));
+    case 'outlasting':
+      req.logger.warn('Sound-effects job did not finish in time; it continues in the background', {
+        jobId: waited.job.id,
+        provider,
+      });
+      return res
+        .status(202)
+        .json(await toPublicGenerationJob(waited.job, mapperDeps, SOUND_EFFECT_GENERATION_PROJECTION));
+    case 'unretrievable':
+      req.logger.warn('Sound-effects job did not finish in time and is not saved to Files; cancel requested', {
+        jobId: waited.job.id,
+        cancel: waited.cancel,
+        provider,
+      });
+      return res.status(504).json({ error: 'Sound generation took too long', errorCode: REQUEST_TIMEOUT_ERROR_CODE });
+    case 'ended':
+      break;
   }
+  const { job } = waited;
 
   if (job.state !== 'succeeded') {
     if (isRateLimitedFailure(job)) {

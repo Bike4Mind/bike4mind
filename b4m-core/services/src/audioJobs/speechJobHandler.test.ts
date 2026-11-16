@@ -473,13 +473,15 @@ describe('speech job handler submit', () => {
       );
     });
 
-    it('falls back to the generated bucket when Files refuses the clip', async () => {
+    it('falls back to the generated bucket when Files refuses the clip, keeping why', async () => {
       const { handler } = setup({
         saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
       });
       expect(await handler.submit(makeJob(), stepContext())).toMatchObject({
         next: 'succeeded',
-        payload: { output: { location: 'generated', s3Key: 'generated-audio/u1/job1.mp3' } },
+        payload: {
+          output: { location: 'generated', s3Key: 'generated-audio/u1/job1.mp3', filesSkipReason: 'storage_limit' },
+        },
       });
     });
   });

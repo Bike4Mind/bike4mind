@@ -1,3 +1,5 @@
+import type { CompletionSource } from '../analytics';
+import type { GeneratedAssetSaveSkippedReason } from '../../generatedAsset';
 import type { GenerationProviderJobHandle, ProviderOutput } from '../../generation';
 import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
@@ -165,8 +167,14 @@ export type ImageJobPayload = {
   billedBlock?: boolean;
 };
 
-/** A clip's storage fields; its duration is known only when the audio could be measured (MP3). */
-export type AudioJobOutput = Omit<VideoJobOutput, 'durationSeconds'> & { durationSeconds?: number };
+/**
+ * A clip's storage fields; its duration is known only when the audio could be measured (MP3). `filesSkipReason`:
+ * why a clip that was to be saved to Files landed in the generated bucket instead.
+ */
+export type AudioJobOutput = Omit<VideoJobOutput, 'durationSeconds'> & {
+  durationSeconds?: number;
+  filesSkipReason?: GeneratedAssetSaveSkippedReason;
+};
 
 /** The validated speech request as persisted: `provider` is the one asked for, with the default applied. */
 export type StoredSpeechRequest = {
@@ -218,6 +226,8 @@ export type SoundEffectJobPayload = {
   /** As SpeechJobPayload.saveToFiles. */
   saveToFiles: boolean;
   sessionId?: string;
+  /** The client a public API request came from (cli, desktop, api), stamped on its ledger row and usage event. */
+  usageSource?: CompletionSource;
   output?: AudioJobOutput;
 };
 

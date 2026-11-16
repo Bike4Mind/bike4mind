@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 import type { AudioToolJobs } from '@bike4mind/services/llm/tools';
 import type {
   CreateAudioJobInput,
@@ -45,6 +47,7 @@ const makeJobs = (overrides: Partial<AudioToolJobs> = {}): AudioToolJobs => ({
   createSoundEffectJob: vi.fn(async () => soundEffectCreated),
   runInline: vi.fn(),
   readOutput: vi.fn(),
+  cancel: vi.fn(),
   ...overrides,
 });
 
@@ -163,6 +166,36 @@ describe('limitAudioClipsPerRun', () => {
     expect(soundEffectSlots.release).not.toHaveBeenCalled();
   });
 
+  // Model admission runs before the job is persisted, so this refusal never started a clip.
+  it('gives the slot back and rethrows when createSpeechJob throws the free-tier model refusal', async () => {
+    const refusal = new ForbiddenError('paid plan required', { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE });
+    const jobs = limit(
+      makeJobs({
+        createSpeechJob: async () => {
+          throw refusal;
+        },
+      }),
+      1
+    );
+
+    await expect(jobs.createSpeechJob(input)).rejects.toBe(refusal);
+    expect(speechSlots.claimed).toBe(0);
+  });
+
+  it('keeps the slot on a ForbiddenError that is not the free-tier model refusal', async () => {
+    const jobs = limit(
+      makeJobs({
+        createSpeechJob: async () => {
+          throw new ForbiddenError('other');
+        },
+      }),
+      1
+    );
+
+    await expect(jobs.createSpeechJob(input)).rejects.toThrow('other');
+    expect(speechSlots.claimed).toBe(1);
+  });
+
   it('warns rather than masking the result when the release fails', async () => {
     speechSlots.release.mockRejectedValueOnce(new Error('db down'));
     const refusal: CreateSpeechJobResult = { ok: false, status: 400, code: 'invalid_request', message: 'bad' };
@@ -175,11 +208,12 @@ describe('limitAudioClipsPerRun', () => {
     );
   });
 
-  it('keeps runInline and readOutput so the tool can still finish clips', () => {
+  it('keeps runInline, readOutput and cancel so the tool can still finish or cancel clips', () => {
     const base = makeJobs();
     const jobs = limit(base);
     expect(jobs.runInline).toBe(base.runInline);
     expect(jobs.readOutput).toBe(base.readOutput);
+    expect(jobs.cancel).toBe(base.cancel);
   });
 });
 

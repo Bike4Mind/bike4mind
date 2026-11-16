@@ -33,6 +33,7 @@ function createJobs() {
       .mockResolvedValue({ ...created, job: job({ kind: 'sound_effect', state: 'pending' }) }),
     runInline: vi.fn().mockResolvedValue(job()),
     readOutput: vi.fn().mockResolvedValue(AUDIO_BYTES),
+    cancel: vi.fn<AudioToolJobs['cancel']>().mockResolvedValue('requested'),
   } satisfies AudioToolJobs;
 }
 
@@ -301,22 +302,38 @@ describe('audio_generation tool', () => {
     await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).rejects.toThrow('database down');
   });
 
-  it.each(['blocked', 'failed'])(
-    'reports a %s job with the sanitized provider message and shows nothing',
-    async state => {
-      jobs.runInline.mockResolvedValue(
-        job(
-          { state, error: { code: 'provider_error', message: 'upstream said key sk-123' } },
-          { output: undefined, producedBy: undefined }
-        )
-      );
-      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(
-        'Error: TTS request rejected by the openai provider.'
-      );
-      expect(jobs.readOutput).not.toHaveBeenCalled();
-      expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
-    }
-  );
+  it('reports a failed job with the sanitized provider message and shows nothing', async () => {
+    jobs.runInline.mockResolvedValue(
+      job(
+        { state: 'failed', error: { code: 'provider_error', message: 'upstream said key sk-123' } },
+        { output: undefined, producedBy: undefined }
+      )
+    );
+    await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(
+      'Error: TTS request rejected by the openai provider.'
+    );
+    expect(jobs.readOutput).not.toHaveBeenCalled();
+    expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['speech', 'speech'],
+    ['sound_effect', 'sound effect'],
+  ] as const)('reports a content-blocked %s as a policy refusal the model must not retry', async (kind, label) => {
+    jobs.runInline.mockResolvedValue(
+      job(
+        { kind, state: 'blocked', error: { code: 'content_blocked', message: 'elevenlabs_content_policy' } },
+        { output: undefined, producedBy: undefined }
+      )
+    );
+    const result = await run(context, { kind, text: 'hello' }, { jobs, ttsProvider: 'elevenlabs' });
+    expect(result).toBe(
+      `Error: ${label} generation failed (content_blocked): the elevenlabs provider refused this text under its ` +
+        'content policy. This is not a temporary error: do not retry or rephrase it, tell the user it was refused.'
+    );
+    expect(result).not.toMatch(/rejected by/);
+    expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+  });
 
   it('tells the model the provider is busy when the job failed on a rate limit', async () => {
     jobs.runInline.mockResolvedValue(
@@ -353,6 +370,54 @@ describe('audio_generation tool', () => {
     );
     expect(result).not.toMatch(/^Error/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    expect(jobs.cancel).not.toHaveBeenCalled();
+  });
+
+  describe('a job not saving to Files that does not finish inline', () => {
+    const UNFINISHED =
+      "Error: the speech could not be finished in time, and the user's Files are full so it could not be saved " +
+      'there either. Tell the user; they can free up Files space and ask again.';
+
+    beforeEach(() => {
+      const unsaved = job({ state: 'pending' }, { saveToFiles: false });
+      jobs.createSpeechJob.mockResolvedValue({ ok: true, created: true, job: unsaved });
+    });
+
+    it('cancels the job when the inline wait runs out, so its hold is returned', async () => {
+      jobs.runInline.mockResolvedValue(null);
+      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(UNFINISHED);
+      expect(jobs.cancel).toHaveBeenCalledWith('job-1');
+      expect(context.logger.warn).not.toHaveBeenCalledWith(
+        '[audio_generation] could not cancel an unshowable job',
+        expect.anything()
+      );
+    });
+
+    it('cancels the job when the inline run throws', async () => {
+      jobs.runInline.mockRejectedValue(new Error('database down'));
+      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(UNFINISHED);
+      expect(jobs.cancel).toHaveBeenCalledWith('job-1');
+    });
+
+    it('logs a refused cancel and still tells the model the clip was not finished', async () => {
+      jobs.runInline.mockResolvedValue(null);
+      jobs.cancel.mockResolvedValue('not_cancellable');
+      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(UNFINISHED);
+      expect(context.logger.warn).toHaveBeenCalledWith('[audio_generation] could not cancel an unshowable job', {
+        jobId: 'job-1',
+        status: 'not_cancellable',
+      });
+    });
+
+    it('logs a cancel that throws and still tells the model the clip was not finished', async () => {
+      jobs.runInline.mockResolvedValue(null);
+      jobs.cancel.mockRejectedValue(new Error('queue down'));
+      await expect(run(context, { kind: 'speech', text: 'hello' }, { jobs })).resolves.toBe(UNFINISHED);
+      expect(context.logger.error).toHaveBeenCalledWith(
+        '[audio_generation] cancel of an unshowable job failed',
+        expect.objectContaining({ jobId: 'job-1', error: 'queue down' })
+      );
+    });
   });
 
   it('reports a clip that was generated but could not be staged for inline playback', async () => {

@@ -161,7 +161,7 @@ describe('createSoundEffectJob', () => {
   });
 
   describe('storage quota', () => {
-    it('refuses a full Files quota before holding, sized for the requested duration', async () => {
+    it('refuses a Files quota with no room at all before holding', async () => {
       const { deps } = makeDeps({ checkStorageFor: vi.fn(async () => storageRefusal) });
       expect(await createSoundEffectJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
         ok: false,
@@ -169,22 +169,18 @@ describe('createSoundEffectJob', () => {
         code: 'storage_quota_exceeded',
         storage: storageRefusal,
       });
-      expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 4 * 100_000);
       expect(holdCredits).not.toHaveBeenCalled();
       expect(deps.enqueue).not.toHaveBeenCalled();
     });
 
-    it('sizes the check for the longest clip when no duration is requested', async () => {
-      const { deps } = makeDeps();
-      await createSoundEffectJob({ user, request: { text: 'x' }, source: 'api' }, deps);
-      expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 30 * 100_000);
-    });
-
-    it('rounds a fractional duration up to a whole byte', async () => {
-      const { deps } = makeDeps();
-      await createSoundEffectJob({ user, request: { text: 'x', durationSeconds: 0.5 }, source: 'api' }, deps);
-      expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 50_000);
-    });
+    it.each([{ text: 'x' }, { text: 'x', durationSeconds: 30 }])(
+      'checks only for room for any clip, never a worst-case size (%o): the store step checks the real one',
+      async request => {
+        const { deps } = makeDeps();
+        await createSoundEffectJob({ user, request, source: 'api' }, deps);
+        expect(deps.checkStorageFor).toHaveBeenCalledExactlyOnceWith('u1', 1);
+      }
+    );
 
     it('skips the check for a clip kept outside Files', async () => {
       const { deps } = makeDeps({ checkStorageFor: vi.fn(async () => storageRefusal) });

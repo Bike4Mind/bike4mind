@@ -70,6 +70,7 @@ const REPRESENTATIVE_AUDIO_CONFIG = {
     createSoundEffectJob: vi.fn(),
     runInline: vi.fn(),
     readOutput: vi.fn(),
+    cancel: vi.fn(),
   },
 };
 

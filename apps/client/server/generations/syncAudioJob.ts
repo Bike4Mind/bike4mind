@@ -1,5 +1,6 @@
 import {
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TERMINAL_GENERATION_JOB_STATES,
   TooManyRequestsError,
   isGenerationJobOfKind,
   type AudioJobOutput,
@@ -11,14 +12,75 @@ import {
 import { fabFileRepository, generationJobRepository } from '@bike4mind/database';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 import type { CreateAudioJobResult } from '@bike4mind/services/audioJobs';
+import type { CancelRequestOutcome, RunJobInlineOptions } from '@bike4mind/services/generationJobs';
+import { requestAudioJobCancel, runAudioJobInline } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 
 /**
  * Shared by the synchronous audio routes (/api/ai/tts, /api/ai/sound-effects), which create a speech or
  * sound-effect job, step it in-process with runAudioJobInline and answer with the clip.
  */
 
-// Under the 60s serving cap, leaving room to read the clip back and deliver it.
-export const AUDIO_JOB_INLINE_TIMEOUT_MS = 55_000;
+// The window, from the request's arrival (req.receivedAt), that the web Lambda (60s timeout) and CloudFront's 60s
+// origin read leave: 2s short of both, for the request and response in transit.
+const AUDIO_JOB_RESPONSE_BUDGET_MS = 58_000;
+// Kept back from the wait for reading the clip back from S3, looking up its saved file and writing the response.
+const AUDIO_JOB_READ_BACK_RESERVE_MS = 3_000;
+// Kept back from each step for what runs after its budget: the bucket fallback of a Files save the step's abort cut
+// short (FALLBACK_SAVE_BUDGET_MS, 10s), then the commit and the credit settlement. So a step ends by 44s from
+// arrival, and inlineMinStepMs (40s) starts one only while the request is at most ~4s old.
+const AUDIO_JOB_STEP_RESERVE_MS = 11_000;
+
+/** runAudioJobInline's options for a request that arrived at `receivedAt`, waiting at most for what it has left. */
+export function audioJobInlineOptions(receivedAt: Date | undefined, minStepMs: number, now = Date.now()) {
+  const arrivedAt = receivedAt?.getTime() ?? now;
+  return {
+    timeoutMs: arrivedAt + AUDIO_JOB_RESPONSE_BUDGET_MS - AUDIO_JOB_READ_BACK_RESERVE_MS - now,
+    minStepMs,
+    stepReserveMs: AUDIO_JOB_STEP_RESERVE_MS,
+  } satisfies RunJobInlineOptions;
+}
+
+type AudioJobKind = 'speech' | 'sound_effect';
+
+/**
+ * How the inline wait for an audio job ended. `ended`: terminal, to deliver or map to an error. `outlasting`: still
+ * going and saving to Files, answered 202. `unretrievable`: still going but not saving to Files, so nothing could
+ * pick the clip up later; a cancel was requested (refused once its provider call has started). `gone`: no such job.
+ */
+export type InlineAudioJobOutcome<K extends AudioJobKind> =
+  | { status: 'ended'; job: IGenerationJobDocumentOf<K> }
+  | { status: 'outlasting'; job: IGenerationJobDocumentOf<K> }
+  | { status: 'unretrievable'; job: IGenerationJobDocumentOf<K>; cancel: CancelRequestOutcome['status'] }
+  | { status: 'gone' };
+
+const isTerminal = (job: IGenerationJobDocument) => TERMINAL_GENERATION_JOB_STATES.includes(job.state);
+
+const ofKind = <K extends AudioJobKind>(
+  job: IGenerationJobDocument | null,
+  kind: K
+): IGenerationJobDocumentOf<K> | null => (job && isGenerationJobOfKind(job, kind) ? job : null);
+
+/**
+ * Steps the job inline within what the request has left, then decides what the route answers. A job the wait gave
+ * up on is read once more, since it can end in the gap after the wait's last read.
+ */
+export async function awaitInlineAudioJob<K extends AudioJobKind>(
+  jobId: string,
+  kind: K,
+  wait: { receivedAt: Date | undefined; minStepMs: number }
+): Promise<InlineAudioJobOutcome<K>> {
+  const inline = ofKind(await runAudioJobInline(jobId, audioJobInlineOptions(wait.receivedAt, wait.minStepMs)), kind);
+  const job = inline ?? ofKind(await generationJobRepository.findById(jobId), kind);
+  if (!job) return { status: 'gone' };
+  if (isTerminal(job)) return { status: 'ended', job };
+  if (job.payload.saveToFiles) return { status: 'outlasting', job };
+
+  const cancel = await requestAudioJobCancel(job);
+  // A cancel refused because the job ended in the meantime: it can still be delivered.
+  const ended = ofKind(cancel.job, kind);
+  if (cancel.status === 'unchanged' && ended && isTerminal(ended)) return { status: 'ended', job: ended };
+  return { status: 'unretrievable', job, cancel: cancel.status };
+}
 
 type SaveSkipped = Extract<SaveGeneratedAssetResult, { saved: false }>;
 
@@ -45,14 +107,17 @@ export async function createAudioJobKeepingAudioOnFullQuota<J>(
 
 /**
  * The save outcome of a succeeded job, in the shape deliverGeneratedAudio reports. Undefined when no copy was asked
- * for; a clip kept in the generated bucket despite asking means the Files write failed and fell back.
+ * for; a clip kept in the generated bucket despite asking means the Files write was refused or failed and fell back,
+ * for the reason the store step recorded.
  */
 export async function savedCopyOf(
   output: AudioJobOutput | undefined,
   saveToFiles: boolean
 ): Promise<SaveGeneratedAssetResult | undefined> {
   if (!saveToFiles) return undefined;
-  if (output?.location !== 'files' || !output.fileId) return { saved: false, reason: 'error' };
+  if (output?.location !== 'files' || !output.fileId) {
+    return { saved: false, reason: output?.filesSkipReason ?? 'error' };
+  }
   const file = await fabFileRepository.findById(output.fileId);
   if (!file) return { saved: false, reason: 'error' };
   return {
@@ -62,18 +127,6 @@ export async function savedCopyOf(
     fileName: file.fileName,
     ...(file.fileUrl && { fileUrl: file.fileUrl }),
   };
-}
-
-/**
- * The job as it stands after the inline wait gave up on it, for the 202 the routes answer with: it carries on in the
- * worker and settles only if the clip is made. Null when it is gone (or not of `kind`), which stays a 502.
- */
-export async function findOutlastingAudioJob<K extends 'speech' | 'sound_effect'>(
-  jobId: string,
-  kind: K
-): Promise<IGenerationJobDocumentOf<K> | null> {
-  const job = await generationJobRepository.findById(jobId);
-  return job && isGenerationJobOfKind(job, kind) ? job : null;
 }
 
 /** The provider's HTTP status on a failed job, when the provider answered with one (see the audio job handlers). */

@@ -5,7 +5,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   DEFAULT_TTS_PROVIDER,
-  isGenerationJobOfKind,
+  REQUEST_TIMEOUT_ERROR_CODE,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
   type GenerationJobSource,
@@ -14,18 +14,13 @@ import {
   type VoiceOutputFormat,
 } from '@bike4mind/common';
 import { createSpeechJob, inlineMinStepMs } from '@bike4mind/services/audioJobs';
-import {
-  getCreateSpeechJobDeps,
-  readAudioJobOutput,
-  runAudioJobInline,
-} from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { getCreateSpeechJobDeps, readAudioJobOutput } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import {
-  AUDIO_JOB_INLINE_TIMEOUT_MS,
+  awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
-  findOutlastingAudioJob,
   isRateLimitedFailure,
   providerStatusOf,
   retryAfterSecondsOf,
@@ -43,7 +38,8 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - generation, billing and the saved copy run as a speech job (createSpeechJob), stepped in this request; the
  *   response (encoding, oversized-audio URL, save headers) is written by the shared deliverGeneratedAudio. A clip
- *   that outlasts the request is answered 202 with the speech job resource instead (it lands in Files when done).
+ *   that outlasts the request is answered 202 with the speech job resource instead (it lands in Files when done),
+ *   or 504 when it is not being saved to Files, so nothing could pick it up later (its job is cancelled).
  * - when the chosen provider has no usable key or rejects our credentials, another configured provider stands in
  *   and the response reports the substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
@@ -118,22 +114,35 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     }
   }
 
-  const job = await runAudioJobInline(result.job.id, {
-    timeoutMs: AUDIO_JOB_INLINE_TIMEOUT_MS,
+  const waited = await awaitInlineAudioJob(result.job.id, 'speech', {
+    receivedAt: req.receivedAt,
     minStepMs: inlineMinStepMs('speech'),
   });
-  if (!job || !isGenerationJobOfKind(job, 'speech')) {
-    const outlasting = await findOutlastingAudioJob(result.job.id, 'speech');
-    if (!outlasting) {
+  switch (waited.status) {
+    case 'gone':
       req.logger.error('TTS job vanished during the inline wait', { jobId: result.job.id, provider: vendor });
       return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
-    }
-    req.logger.warn('TTS job did not finish in time; it continues in the background', {
-      jobId: outlasting.id,
-      provider: vendor,
-    });
-    return res.status(202).json(await toPublicGenerationJob(outlasting, mapperDeps, SPEECH_GENERATION_PROJECTION));
+    case 'outlasting':
+      req.logger.warn('TTS job did not finish in time; it continues in the background', {
+        jobId: waited.job.id,
+        provider: vendor,
+      });
+      return res.status(202).json(await toPublicGenerationJob(waited.job, mapperDeps, SPEECH_GENERATION_PROJECTION));
+    case 'unretrievable':
+      req.logger.warn('TTS job did not finish in time and is not saved to Files; cancel requested', {
+        jobId: waited.job.id,
+        cancel: waited.cancel,
+        provider: vendor,
+      });
+      return res.status(504).json({
+        error: 'Speech generation took too long',
+        provider: vendor,
+        errorCode: REQUEST_TIMEOUT_ERROR_CODE,
+      });
+    case 'ended':
+      break;
   }
+  const { job } = waited;
 
   switch (job.state) {
     case 'succeeded':

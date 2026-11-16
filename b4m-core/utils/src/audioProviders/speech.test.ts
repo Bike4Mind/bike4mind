@@ -155,6 +155,15 @@ describe('speech provider', () => {
     });
   });
 
+  it('does not read a policy block from a caller voice id echoed in the error message', async () => {
+    const result = await createSpeechProvider('elevenlabs').generate(
+      { ...request(), voice: 'prohibited content violates.policy' },
+      {},
+      context()
+    );
+    expect(result).toMatchObject({ status: 'failed', retryable: false, message: 'elevenlabs_speech_http_422' });
+  });
+
   it('bounds the provider text kept on a failure', async () => {
     server.use(http.post(ELEVENLABS_SPEECH, () => HttpResponse.json({ detail: 'x'.repeat(5000) }, { status: 400 })));
     const result = await createSpeechProvider('elevenlabs').generate(request(), {}, context());

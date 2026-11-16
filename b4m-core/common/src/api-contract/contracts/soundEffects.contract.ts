@@ -18,6 +18,7 @@ import {
   GENERATED_AUDIO_DESCRIPTION,
   generatedAudioResponses,
   outlastedAudioResponse,
+  unretrievableAudioResponse,
 } from './audioResponses';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { SoundEffectGenerationSchema } from '../../schemas/audioGenerations';
@@ -109,6 +110,7 @@ export const generateSoundEffectContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    504: unretrievableAudioResponse({ noun: 'sound effect', schema: ApiErrorSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

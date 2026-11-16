@@ -2,12 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AudioJobOutput, IGenerationJobDocument, StorageLimitErrorInfo } from '@bike4mind/common';
 import type { CreateAudioJobResult } from '@bike4mind/services/audioJobs';
 
-const { fabFileFindById } = vi.hoisted(() => ({ fabFileFindById: vi.fn() }));
+const { fabFileFindById, jobFindById, runAudioJobInline, requestAudioJobCancel } = vi.hoisted(() => ({
+  fabFileFindById: vi.fn(),
+  jobFindById: vi.fn(),
+  runAudioJobInline: vi.fn(),
+  requestAudioJobCancel: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: (...a: unknown[]) => fabFileFindById(...a) },
+  generationJobRepository: { findById: (...a: unknown[]) => jobFindById(...a) },
+}));
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  runAudioJobInline: (...a: unknown[]) => runAudioJobInline(...a),
+  requestAudioJobCancel: (...a: unknown[]) => requestAudioJobCancel(...a),
 }));
 
 import {
+  audioJobInlineOptions,
+  awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
   isRateLimitedFailure,
   providerStatusOf,
@@ -39,7 +51,81 @@ const filesOutput: AudioJobOutput = {
 };
 
 beforeEach(() => {
-  fabFileFindById.mockReset();
+  [fabFileFindById, jobFindById, runAudioJobInline, requestAudioJobCancel].forEach(mock => mock.mockReset());
+});
+
+describe('audioJobInlineOptions', () => {
+  const arrival = new Date('2026-11-16T00:00:00Z');
+  const at = (msAfterArrival: number) => arrival.getTime() + msAfterArrival;
+
+  it('waits until 55s after arrival, keeping 11s of it back from every step', () => {
+    expect(audioJobInlineOptions(arrival, 40_000, at(2_000))).toEqual({
+      timeoutMs: 53_000,
+      minStepMs: 40_000,
+      stepReserveMs: 11_000,
+    });
+  });
+
+  it('gives a step at most what ends 44s after arrival, so its fallback store, settlement and read-back fit 58s', () => {
+    for (const elapsed of [0, 1_000, 4_000, 10_000]) {
+      const { timeoutMs, stepReserveMs } = audioJobInlineOptions(arrival, 40_000, at(elapsed));
+      expect(elapsed + timeoutMs - stepReserveMs).toBe(44_000);
+    }
+  });
+
+  it('measures from now when the arrival is unknown', () => {
+    expect(audioJobInlineOptions(undefined, 40_000, at(0)).timeoutMs).toBe(55_000);
+  });
+});
+
+describe('awaitInlineAudioJob', () => {
+  const wait = { receivedAt: new Date(), minStepMs: 40_000 };
+  const speech = (state: IGenerationJobDocument['state'], saveToFiles = true) =>
+    ({ id: 'job-1', kind: 'speech', state, payload: { saveToFiles } }) as IGenerationJobDocument;
+
+  it('returns a job that ended inline without reading it again', async () => {
+    runAudioJobInline.mockResolvedValue(speech('succeeded'));
+    expect(await awaitInlineAudioJob('job-1', 'speech', wait)).toMatchObject({ status: 'ended' });
+    expect(jobFindById).not.toHaveBeenCalled();
+  });
+
+  it.each(['succeeded', 'failed', 'blocked'] as const)(
+    'treats a job found %s on the re-read after the wait as ended',
+    async state => {
+      runAudioJobInline.mockResolvedValue(null);
+      jobFindById.mockResolvedValue(speech(state));
+      expect(await awaitInlineAudioJob('job-1', 'speech', wait)).toMatchObject({
+        status: 'ended',
+        job: { state },
+      });
+    }
+  );
+
+  it('reports a still-running job that saves to Files as outlasting, without cancelling it', async () => {
+    runAudioJobInline.mockResolvedValue(null);
+    jobFindById.mockResolvedValue(speech('running'));
+    expect(await awaitInlineAudioJob('job-1', 'speech', wait)).toMatchObject({ status: 'outlasting' });
+    expect(requestAudioJobCancel).not.toHaveBeenCalled();
+  });
+
+  it.each(['requested', 'not_cancellable'] as const)(
+    'cancels a still-running job that does not save to Files (%s)',
+    async status => {
+      runAudioJobInline.mockResolvedValue(null);
+      jobFindById.mockResolvedValue(speech('pending', false));
+      requestAudioJobCancel.mockResolvedValue({ status, job: speech('pending', false) });
+      expect(await awaitInlineAudioJob('job-1', 'speech', wait)).toMatchObject({
+        status: 'unretrievable',
+        cancel: status,
+      });
+    }
+  );
+
+  it('reports gone for a missing job or one of another kind', async () => {
+    runAudioJobInline.mockResolvedValue(null);
+    jobFindById.mockResolvedValue({ ...speech('running'), kind: 'music' });
+    expect(await awaitInlineAudioJob('job-1', 'speech', wait)).toEqual({ status: 'gone' });
+  });
 });
 
 describe('createAudioJobKeepingAudioOnFullQuota', () => {
@@ -100,6 +186,20 @@ describe('savedCopyOf', () => {
     expect(await savedCopyOf(generated, true)).toEqual({ saved: false, reason: 'error' });
     expect(fabFileFindById).not.toHaveBeenCalled();
   });
+
+  it.each(['storage_limit', 'file_too_large'] as const)(
+    'reports the quota refusal (%s) the store step recorded when Files would not keep the clip',
+    async reason => {
+      const generated: AudioJobOutput = {
+        location: 'generated',
+        s3Key: 'generated-audio/u1/job-1.mp3',
+        contentType: 'audio/mpeg',
+        bytes: 3,
+        filesSkipReason: reason,
+      };
+      expect(await savedCopyOf(generated, true)).toEqual({ saved: false, reason });
+    }
+  );
 
   it('reports a failed save when the saved file is gone', async () => {
     fabFileFindById.mockResolvedValue(null);

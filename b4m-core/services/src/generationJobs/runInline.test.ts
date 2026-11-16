@@ -19,13 +19,18 @@ const jobInState = (state: IGenerationJobDocument['state']): IGenerationJobDocum
 });
 
 // A fake clock the injected sleep advances, so a timeout needs no real waiting.
-const setup = (states: Array<IGenerationJobDocument['state'] | null>) => {
+type Read = IGenerationJobDocument['state'] | Partial<IGenerationJobDocument> | null;
+
+const setup = (reads: Read[]) => {
   let clock = 0;
-  const queue = [...states];
+  const queue = [...reads];
   const step = vi.fn<RunJobInlineDeps['engine']['step']>(async () => 'ran' as never);
   const findById = vi.fn(async () => {
-    const state = queue.length > 1 ? queue.shift() : queue[0];
-    return state ? jobInState(state) : null;
+    const read = queue.length > 1 ? queue.shift() : queue[0];
+    if (!read) return null;
+    return typeof read === 'string'
+      ? jobInState(read)
+      : ({ ...jobInState('pending'), ...read } as IGenerationJobDocument);
   });
   const sleep = vi.fn(async (ms: number) => {
     clock += ms;
@@ -36,7 +41,7 @@ const setup = (states: Array<IGenerationJobDocument['state'] | null>) => {
     now: () => new Date(clock),
     sleep,
   };
-  return { deps, step, findById, sleep };
+  return { deps, step, findById, sleep, clock: () => clock };
 };
 
 describe('runJobInline', () => {
@@ -101,12 +106,62 @@ describe('runJobInline', () => {
     expect(step).toHaveBeenCalledTimes(2);
   });
 
-  it('gives each step the time left plus the commit margin', async () => {
+  it('gives each step the time left of the wait', async () => {
     const { deps, step } = setup(['pending', 'pending', 'succeeded']);
     await runJobInline('job1', { timeoutMs: 10_000, minStepMs: 0, pollIntervalMs: 1_000 }, deps);
-    expect(step).toHaveBeenNthCalledWith(1, 'job1', { remainingMs: 10_000 + 30_000 });
-    expect(step).toHaveBeenNthCalledWith(2, 'job1', { remainingMs: 9_000 + 30_000 });
-    expect(step).toHaveBeenNthCalledWith(3, 'job1', { remainingMs: 8_000 + 30_000 });
+    expect(step.mock.calls).toEqual([
+      ['job1', { stepBudgetMs: 10_000 }],
+      ['job1', { stepBudgetMs: 9_000 }],
+      ['job1', { stepBudgetMs: 8_000 }],
+    ]);
+  });
+
+  it('keeps stepReserveMs of the wait back from every step budget', async () => {
+    const { deps, step } = setup(['pending', 'pending', 'succeeded']);
+    await runJobInline('job1', { timeoutMs: 50_000, minStepMs: 0, stepReserveMs: 11_000, pollIntervalMs: 1_000 }, deps);
+    const budgets = step.mock.calls.map(([, options]) => options?.stepBudgetMs);
+    expect(budgets).toEqual([39_000, 38_000, 37_000]);
+    // Every step ends at least stepReserveMs before the wait does, at whatever point in the wait it starts.
+    step.mock.calls.forEach(([, options], index) => {
+      const startedAt = index * 1_000;
+      expect(startedAt + (options?.stepBudgetMs ?? Infinity)).toBeLessThanOrEqual(50_000 - 11_000);
+    });
+  });
+
+  it('does not start a step whose budget after the reserve is under minStepMs', async () => {
+    const { deps, step } = setup(['pending', 'succeeded']);
+    await runJobInline('job1', { timeoutMs: 50_000, minStepMs: 40_000, stepReserveMs: 11_000 }, deps);
+    expect(step).not.toHaveBeenCalled();
+  });
+
+  it('only reads the job while another worker holds its lease, stepping once the lease ends', async () => {
+    const { deps, step, findById } = setup([
+      { state: 'running', leaseUntil: new Date(2_000) },
+      { state: 'running', leaseUntil: new Date(2_000) },
+      { state: 'running', leaseUntil: new Date(2_000) },
+      { state: 'running', leaseUntil: new Date(2_000) },
+      'succeeded',
+    ]);
+    const job = await runJobInline('job1', { timeoutMs: 10_000, minStepMs: 0, pollIntervalMs: 500 }, deps);
+    expect(job).toMatchObject({ state: 'succeeded' });
+    expect(findById).toHaveBeenCalledTimes(5);
+    // The first step (t=0) found the lease held; the next is only at t=2000, when it has expired.
+    expect(step.mock.calls).toEqual([
+      ['job1', { stepBudgetMs: 10_000 }],
+      ['job1', { stepBudgetMs: 8_000 }],
+    ]);
+  });
+
+  it('waits out a retry backoff before stepping again', async () => {
+    const { deps, step } = setup([
+      { state: 'pending', nextPollAt: new Date(1_500) },
+      { state: 'pending', nextPollAt: new Date(1_500) },
+      { state: 'pending', nextPollAt: new Date(1_500) },
+      'succeeded',
+    ]);
+    await runJobInline('job1', { timeoutMs: 10_000, minStepMs: 0, pollIntervalMs: 500 }, deps);
+    // Steps at t=0 (which scheduled the retry) and at t=1500, when it is due; not at 500 or 1000.
+    expect(step.mock.calls.map(([, options]) => options?.stepBudgetMs)).toEqual([10_000, 8_500]);
   });
 
   it('only polls once the time left is under minStepMs, leaving the step to the worker', async () => {

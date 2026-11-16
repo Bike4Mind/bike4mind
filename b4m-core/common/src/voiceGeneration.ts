@@ -150,10 +150,12 @@ export const TTS_ERROR_CODES = [
   'insufficient_credits',
   'provider_not_configured',
   'provider_rejected',
+  // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
+  'request_timeout',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**
- * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429 and 502; the 413
+ * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429, 502 and 504; the 413
  * has a shape of its own (`ttsResponseTooLargeSchema`). `errorCode` is present only
  * on the conditions that carry a classifier; an ordinary validation 422 has none.
  *

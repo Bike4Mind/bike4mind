@@ -1,7 +1,12 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses, outlastedAudioResponse } from './audioResponses';
+import {
+  GENERATED_AUDIO_DESCRIPTION,
+  generatedAudioResponses,
+  outlastedAudioResponse,
+  unretrievableAudioResponse,
+} from './audioResponses';
 import { SpeechGenerationSchema } from '../../schemas/audioGenerations';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
@@ -115,6 +120,7 @@ export const synthesizeSpeechContract = defineEndpoint({
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
     502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
+    504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

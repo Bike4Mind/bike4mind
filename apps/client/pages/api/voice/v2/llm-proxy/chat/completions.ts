@@ -40,6 +40,7 @@ import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/a
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
@@ -148,6 +149,8 @@ async function runFullPipeline(
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // As chat.ts: audio_generation runs its job inline in this turn, so it stays in-process.
+    audioToolJobs: buildAudioToolJobs(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,

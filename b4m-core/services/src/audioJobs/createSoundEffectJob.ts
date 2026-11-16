@@ -12,13 +12,13 @@ import {
   persistAndEnqueueJob,
   resolveJobOwner,
 } from '../generationJobs/createJob';
-import { dailyLimitRefusal } from './shared';
+import { dailyLimitRefusal, fullFilesQuota } from './shared';
 import { estimateSoundCredits } from '../soundCost';
 import {
   AUDIO_JOB_MAX_WALL_CLOCK_MS,
   type CreateSoundEffectJobDeps,
+  type CreateSoundEffectJobInput,
   type CreateSoundEffectJobResult,
-  type CreateAudioJobInput,
 } from './types';
 
 // Each vendor's output-format check, run before the hold: an unmapped codec would be generated and billed, then
@@ -27,17 +27,12 @@ const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => 
   elevenlabs: isSupportedElevenLabsFormat,
 };
 
-// For the create-time storage check: the longest clip (an omitted duration lets the provider choose, up to its
-// maximum) at the most a second of PCM can take.
-const MAX_SOUND_EFFECT_SECONDS = 30;
-const MAX_SOUND_EFFECT_BYTES_PER_SECOND = 100_000;
-
 /**
  * Validates a sound-effect request, holds its duration-driven cost and persists + enqueues a pending job. Expected
  * refusals are returned as values; a failure to persist or enqueue throws after returning the hold.
  */
 export async function createSoundEffectJob(
-  input: CreateAudioJobInput,
+  input: CreateSoundEffectJobInput,
   deps: CreateSoundEffectJobDeps
 ): Promise<CreateSoundEffectJobResult> {
   const parsed = soundEffectJobRequestSchema.safeParse(input.request);
@@ -73,8 +68,7 @@ export async function createSoundEffectJob(
 
   const saveToFiles = input.saveToFiles ?? true;
   if (saveToFiles) {
-    const seconds = request.durationSeconds ?? MAX_SOUND_EFFECT_SECONDS;
-    const storage = await deps.checkStorageFor(input.user.id, Math.ceil(seconds * MAX_SOUND_EFFECT_BYTES_PER_SECOND));
+    const storage = await fullFilesQuota(input.user.id, deps);
     if (storage) {
       return {
         ok: false,
@@ -114,6 +108,7 @@ export async function createSoundEffectJob(
         providerId: provider,
         saveToFiles,
         ...(input.sessionId !== undefined && { sessionId: input.sessionId }),
+        ...(input.usageSource && { usageSource: input.usageSource }),
       },
       pollCount: 0,
       attempts: 0,

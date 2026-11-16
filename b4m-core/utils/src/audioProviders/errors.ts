@@ -3,7 +3,9 @@ import type { ProviderOutput, ProviderTerminalResult } from '../generationProvid
 const MAX_SNIPPET_CHARS = 200;
 const POLICY_PATTERN = /content[_ -]?policy|moderation|policy[_ -]?violation|violates|bad_prompt|prohibited/i;
 
-type ErrorFacts = { status: number | undefined; text: string };
+// `providerText` is what the provider said (error code and bodies); `text` adds our own message, which can echo
+// caller input (e.g. an invalid ElevenLabs voice id), so only `providerText` decides a policy block.
+type ErrorFacts = { status: number | undefined; text: string; providerText: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
@@ -20,17 +22,13 @@ const bodyToText = (body: unknown): string => {
 // Services throw OpenAI SDK errors (`status`, `code`, `error`), axios errors (`response.status`, `response.data`)
 // or ElevenLabsSoundGenerator errors (`status`, `detail`); read all three shapes defensively.
 const factsOf = (error: unknown): ErrorFacts => {
-  if (!isRecord(error)) return { status: undefined, text: '' };
+  if (!isRecord(error)) return { status: undefined, text: '', providerText: '' };
   const response = isRecord(error.response) ? error.response : undefined;
   const status = asNumber(error.status) ?? asNumber(response?.status);
-  const text = [
-    typeof error.code === 'string' ? error.code : '',
-    typeof error.message === 'string' ? error.message : '',
-    bodyToText(error.error),
-    bodyToText(error.detail),
-    bodyToText(response?.data),
-  ].join(' ');
-  return { status, text };
+  const code = typeof error.code === 'string' ? error.code : '';
+  const message = typeof error.message === 'string' ? error.message : '';
+  const bodies = [bodyToText(error.error), bodyToText(error.detail), bodyToText(response?.data)];
+  return { status, text: [code, message, ...bodies].join(' '), providerText: [code, ...bodies].join(' ') };
 };
 
 /**
@@ -39,14 +37,14 @@ const factsOf = (error: unknown): ErrorFacts => {
  * which the job handler must not retry. `raw.status` carries the HTTP status.
  */
 export const toAudioProviderResult = (error: unknown, vendor: string): ProviderTerminalResult => {
-  const { status, text } = factsOf(error);
+  const { status, text, providerText } = factsOf(error);
   if (status === undefined || status < 400 || status >= 500) throw error;
   const raw = { status, snippet: text.trim().slice(0, MAX_SNIPPET_CHARS) };
   if (status === 429) return { status: 'failed', retryable: true, message: `${vendor}_rate_limited`, raw };
   if (status === 401 || status === 403) {
     return { status: 'failed', retryable: false, message: `${vendor}_credential_rejected`, raw: { status } };
   }
-  if ((status === 400 || status === 422) && POLICY_PATTERN.test(text)) {
+  if ((status === 400 || status === 422) && POLICY_PATTERN.test(providerText)) {
     return { status: 'blocked', reason: `${vendor}_content_policy`, raw };
   }
   return { status: 'failed', retryable: false, message: `${vendor}_http_${status}`, raw };
