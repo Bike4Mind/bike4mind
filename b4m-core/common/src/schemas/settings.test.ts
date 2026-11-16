@@ -1536,6 +1536,10 @@ describe('spend monitor settings', () => {
     spendMonitorPaidAccountMinAgeDays: 7,
     spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
     spendMonitorTrustedAccountCeilingCredits: 40_000,
+    spendMonitorMarginEnabled: true,
+    spendMonitorMarginMinRatio: 1,
+    spendMonitorMarginWindowHours: 24,
+    spendMonitorMarginCostFloorUsd: 5,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
@@ -1554,9 +1558,18 @@ describe('spend monitor settings', () => {
     'spendMonitorPaidAccountCeilingCredits',
     'spendMonitorTrustedAccountSpikeFloorCredits',
     'spendMonitorTrustedAccountCeilingCredits',
+    'spendMonitorMarginWindowHours',
+    'spendMonitorMarginCostFloorUsd',
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
+  it('accepts a fractional margin ratio and bounds the margin window', () => {
+    expect(settingsMap.spendMonitorMarginMinRatio.schema.parse(1.15)).toBe(1.15);
+    expect(settingsMap.spendMonitorMarginMinRatio.schema.safeParse(0).success).toBe(false);
+    expect(settingsMap.spendMonitorMarginWindowHours.schema.safeParse(169).success).toBe(false);
+    expect(settingsMap.spendMonitorMarginWindowHours.schema.safeParse(1.5).success).toBe(false);
   });
 
   it('allows a zero paid-account minimum age and rejects negative or fractional days', () => {

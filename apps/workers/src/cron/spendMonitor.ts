@@ -12,6 +12,7 @@ import { defaultPaidScopeDeps } from './spendMonitor/paidScopes';
 import { defaultTopAccountContextDeps } from './spendMonitor/topAccountContext';
 import { bucketsToRoll } from './spendMonitor/buckets';
 import { evaluateSpend } from './spendMonitor/evaluate';
+import { isMarginCheckSlot, runMarginCheck, type MarginThresholds } from './spendMonitor/marginCheck';
 import { defaultResolveScopeDeps } from './spendMonitor/resolveScope';
 import type { SpendThresholds } from './spendMonitor/rules';
 import { createSpendPost } from './spendMonitor/slackPost';
@@ -32,16 +33,21 @@ type ThresholdKey =
   | 'spendMonitorPaidAccountCeilingCredits'
   | 'spendMonitorPaidAccountMinAgeDays'
   | 'spendMonitorTrustedAccountSpikeFloorCredits'
-  | 'spendMonitorTrustedAccountCeilingCredits';
+  | 'spendMonitorTrustedAccountCeilingCredits'
+  | 'spendMonitorMarginMinRatio'
+  | 'spendMonitorMarginWindowHours'
+  | 'spendMonitorMarginCostFloorUsd';
+
+function readNumber(key: ThresholdKey, settings: SettingsMap): number {
+  const value = getSettingsValue(key, settings);
+  if (value === undefined) throw new Error(`Setting ${key} resolved to no value`);
+  return value;
+}
 
 function readThresholds(settings: SettingsMap): SpendThresholds {
   const riskScoring = getSettingsValue('signupRiskScoring', settings);
   if (riskScoring === undefined) throw new Error('Setting signupRiskScoring resolved to no value');
-  const read = (key: ThresholdKey): number => {
-    const value = getSettingsValue(key, settings);
-    if (value === undefined) throw new Error(`Setting ${key} resolved to no value`);
-    return value;
-  };
+  const read = (key: ThresholdKey): number => readNumber(key, settings);
   return {
     platformSpikeRatio: read('spendMonitorPlatformSpikeRatio'),
     platformCriticalRatio: read('spendMonitorPlatformCriticalRatio'),
@@ -56,6 +62,14 @@ function readThresholds(settings: SettingsMap): SpendThresholds {
     paidAccountCeilingCredits: read('spendMonitorPaidAccountCeilingCredits'),
     trustedAccountSpikeFloorCredits: read('spendMonitorTrustedAccountSpikeFloorCredits'),
     trustedAccountCeilingCredits: read('spendMonitorTrustedAccountCeilingCredits'),
+  };
+}
+
+function readMarginThresholds(settings: SettingsMap): MarginThresholds {
+  return {
+    minRatio: readNumber('spendMonitorMarginMinRatio', settings),
+    windowHours: readNumber('spendMonitorMarginWindowHours', settings),
+    costFloorUsd: readNumber('spendMonitorMarginCostFloorUsd', settings),
   };
 }
 
@@ -96,6 +110,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
 
   const slackEnabled = getSettingsValue('spendMonitorSlackEnabled', settings) ?? false;
   const webhookUrl = resolveAlarmWebhookUrl(Resource, 'cost');
+  const post = createSpendPost(slackEnabled, message => postAlarmToSlack(webhookUrl, message), logger);
   const { breaches, posted } = await evaluateSpend(
     now,
     {
@@ -105,7 +120,7 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       paidScopeDeps: defaultPaidScopeDeps(),
       accountContextDeps: defaultAccountContextDeps(),
       topAccountContextDeps: defaultTopAccountContextDeps(),
-      post: createSpendPost(slackEnabled, message => postAlarmToSlack(webhookUrl, message), logger),
+      post,
       messageContext: {
         creditUsd: MIN_PRICE_PER_CREDIT_USD,
         stage: Resource.App.stage,
@@ -118,5 +133,18 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
     readTrust(settings)
   );
   logger.log('spend-monitor-evaluated', { breaches, posted });
+
+  if (isMarginCheckSlot(now) && getSettingsValue('spendMonitorMarginEnabled', settings)) {
+    const margin = await runMarginCheck(
+      {
+        rollups: spendRollupRepository,
+        post,
+        messageContext: { creditUsd: MIN_PRICE_PER_CREDIT_USD, stage: Resource.App.stage },
+        logger,
+      },
+      readMarginThresholds(settings)
+    );
+    logger.log('spend-monitor-margin-evaluated', margin);
+  }
   return { status: 'ok', rolled: buckets.length };
 }
