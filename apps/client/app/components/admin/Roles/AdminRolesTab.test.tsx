@@ -161,7 +161,7 @@ describe('AdminRolesTab edit', () => {
     await waitFor(() =>
       expect(patchMock).toHaveBeenCalledWith(`/api/admin/admin-roles/${SUPPORT_ID}`, {
         permissions: ['support:read', 'credits:adjust'],
-        reason: 'Joined the support rotation',
+        reason: 'Role scope updated for new duties',
       })
     );
   });

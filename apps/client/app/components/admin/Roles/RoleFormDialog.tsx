@@ -272,7 +272,7 @@ export function RoleFormDialog({ mode, role, onClose }: RoleFormDialogProps) {
           onClose={closeReview}
           title="Change role permissions"
           description={`This changes access for ${pluralUsers(role.memberCount)}.`}
-          reasonPresets={ADMIN_REASON_PRESETS.permissionsChange}
+          reasonPresets={ADMIN_REASON_PRESETS.rolePermissionsChange}
           confirmLabel="Save permissions"
           blockedReason={
             sensitiveGranted.length > 0 && !acknowledged ? 'Confirm the sensitive permissions to continue.' : null

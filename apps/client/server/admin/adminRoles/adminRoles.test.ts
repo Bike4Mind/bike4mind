@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConflictError, ForbiddenError, NotFoundError, type AdminRole } from '@bike4mind/common';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';
 import type { AdminRolesDeps } from './adminRoles';
 import { createAdminRole, deleteAdminRole, getAdminRole, listAdminRoles, updateAdminRole } from './adminRoles';
 
@@ -150,9 +151,19 @@ describe('updateAdminRole', () => {
   it('refuses a permission change that carries no reason, before any step-up or write', async () => {
     await expect(
       updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'] }, deps)
-    ).rejects.toThrow('A reason is required to change role permissions');
+    ).rejects.toThrow(ADMIN_ACTION_REASON_MISSING_MESSAGE);
     await expect(updateAdminRole(ADMIN, ROLE_ID, { permissions: ['credits:adjust'] }, deps)).rejects.toThrow(
-      'A reason is required'
+      ADMIN_ACTION_REASON_MISSING_MESSAGE
+    );
+    expect(deps.requireStepUp).not.toHaveBeenCalled();
+    expect(deps.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a revoke-only change that carries no reason', async () => {
+    deps.roles.findById.mockResolvedValue(role({ permissions: ['support:read', 'credits:adjust'] }));
+
+    await expect(updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read'] }, deps)).rejects.toThrow(
+      ADMIN_ACTION_REASON_MISSING_MESSAGE
     );
     expect(deps.requireStepUp).not.toHaveBeenCalled();
     expect(deps.roles.update).not.toHaveBeenCalled();
@@ -168,6 +179,14 @@ describe('updateAdminRole', () => {
 
     expect(deps.roles.update).toHaveBeenCalledWith(ROLE_ID, { permissions: ['support:read', 'credits:adjust'] });
     expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ reason: REASON }));
+  });
+
+  it('carries a reason supplied with a rename-only edit onto the audit, and omits it otherwise', async () => {
+    await updateAdminRole(ADMIN, ROLE_ID, { name: 'Support desk', reason: REASON }, deps);
+    expect(deps.audit).toHaveBeenLastCalledWith(expect.objectContaining({ reason: REASON }));
+
+    await updateAdminRole(ADMIN, ROLE_ID, { name: 'Support desk' }, deps);
+    expect(deps.audit.mock.calls.at(-1)?.[0].reason).toBeUndefined();
   });
 
   it('writes no audit entry for a no-op edit', async () => {
