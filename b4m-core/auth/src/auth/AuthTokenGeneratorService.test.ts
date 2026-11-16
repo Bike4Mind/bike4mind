@@ -51,6 +51,17 @@ describe('AuthTokenGeneratorService', () => {
     expect(result).toBeNull();
   });
 
+  it('never falls back to a placeholder previous secret', () => {
+    const placeholder = 'my-secret-placeholder-value';
+    const forged = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'access' }, placeholder, { algorithm: 'HS256' });
+    const forgedRefresh = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'refresh' }, placeholder, {
+      algorithm: 'HS256',
+    });
+    const svc = makeService();
+    expect(() => svc.verifyToken(forged, placeholder)).toThrow();
+    expect(svc.verifyRefreshToken(forgedRefresh, placeholder)).toBeNull();
+  });
+
   describe('mfaPending tokens are rejected on the refresh path (MFA bypass regression)', () => {
     // In production accessTokenSecret === refreshTokenSecret (both Config.JWT_SECRET),
     // so a token signed for the access path also verifies on the refresh path. The

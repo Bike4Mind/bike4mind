@@ -1,4 +1,5 @@
 import jwt, { JwtPayload } from 'jsonwebtoken';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 
 /**
  * Pure enforcement check for the server-side JWT kill switch.
@@ -94,7 +95,7 @@ export class AuthTokenGeneratorService {
     try {
       return jwt.verify(token, this.options.accessTokenSecret, { algorithms: ['HS256'] }) as JwtPayload;
     } catch (error) {
-      if (previousSecret) {
+      if (previousSecret && !isUnconfiguredSecret(previousSecret)) {
         try {
           return jwt.verify(token, previousSecret, { algorithms: ['HS256'] }) as JwtPayload;
         } catch {
@@ -124,7 +125,7 @@ export class AuthTokenGeneratorService {
     try {
       return decode(this.options.refreshTokenSecret);
     } catch (error) {
-      if (previousSecret) {
+      if (previousSecret && !isUnconfiguredSecret(previousSecret)) {
         try {
           return decode(previousSecret);
         } catch {

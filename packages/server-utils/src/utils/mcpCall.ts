@@ -1,4 +1,4 @@
-import { ExpectedToolError } from '@bike4mind/common';
+import { ExpectedToolError, isUnconfiguredSecret } from '@bike4mind/common';
 import { MCPClient, McpServerConfigError } from '@bike4mind/mcp';
 import { Resource } from 'sst';
 import { resolveMcpTenantKey } from './mcpTenantKey';
@@ -93,11 +93,13 @@ export const handler = async (params: any) => {
         const ingestUrl = `${baseUrl}/api/admin/rate-limits/ingest`;
         const ingestToken = Resource.RATE_LIMIT_INGEST_TOKEN?.value || process.env.RATE_LIMIT_INGEST_TOKEN;
         try {
+          // The ingest route refuses every request without a configured token; go straight to the fallback.
+          if (isUnconfiguredSecret(ingestToken)) throw new Error('RATE_LIMIT_INGEST_TOKEN is not configured');
           const resp = await fetch(ingestUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              ...(ingestToken && { 'x-rate-limit-ingest-token': ingestToken }),
+              'x-rate-limit-ingest-token': ingestToken as string,
             },
             body: JSON.stringify({ events: rateLimitEvents, tenantKey: resolveMcpTenantKey(userId) }),
           });
