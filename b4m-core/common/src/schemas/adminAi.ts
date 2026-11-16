@@ -97,3 +97,29 @@ export const adminAiSuggestionItemSchema = z.object({
   updatedAt: z.date(),
 });
 export type AdminAiSuggestionItem = z.infer<typeof adminAiSuggestionItemSchema>;
+
+/**
+ * The admin queues that offer an abuse assessment as a suggestion. Each records its own suggestion
+ * rows (feature + entityType), so agreement is measured per queue. Server side:
+ * apps/client/server/admin/ai/assessmentSuggestion.ts.
+ */
+export const ASSESSMENT_SUGGESTION_SURFACES = ['shadowDetection', 'signupRiskReview', 'heldSignupGrant'] as const;
+export type AssessmentSuggestionSurface = (typeof ASSESSMENT_SUGGESTION_SURFACES)[number];
+
+/**
+ * Carried by an admin action taken from an assessment suggestion: the assessment the admin saw and,
+ * on an override, why the model was wrong. The server decides accepted vs overridden itself.
+ */
+export const assessmentAiDecisionSchema = z.object({
+  assessmentId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid assessment id'),
+  overrideReason: z.string().trim().min(1).max(ADMIN_AI_MAX_OVERRIDE_REASON_CHARS).optional(),
+});
+export type AssessmentAiDecision = z.infer<typeof assessmentAiDecisionSchema>;
+
+/** Accepting an abuse assessment on a user queue: records agreement, changes nothing on the account. */
+export const assessmentSuggestionAcceptSchema = z.object({
+  surface: z.enum(['signupRiskReview', 'heldSignupGrant']),
+  userId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid user id'),
+  assessmentId: z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid assessment id'),
+});
+export type AssessmentSuggestionAccept = z.infer<typeof assessmentSuggestionAcceptSchema>;
