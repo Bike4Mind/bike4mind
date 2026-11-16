@@ -81,7 +81,7 @@ describe('LiveOps approval', () => {
     expect(stored.key).not.toBe(mocks.persist.mock.calls[0][0].key);
     expect(stored.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(stored.result.issue).toEqual(issue);
-    expect(JSON.stringify(blocks)).not.toContain('<!here>');
+    expect(blocks[0]).toMatchObject({ type: 'section', text: { type: 'plain_text' } });
     const actions = blocks[1];
     expect(actions.type).toBe('actions');
     if (actions.type === 'actions') {
@@ -89,6 +89,27 @@ describe('LiveOps approval', () => {
     }
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+  it('keeps maximum proposal previews within Slack limits without interpreting mentions', async () => {
+    const blocks = await createLiveopsProposalBlocks(config, {
+      ...issue,
+      title: '&'.repeat(500),
+      body: '&'.repeat(10000),
+    });
+    const section = blocks[0];
+    if (section.type !== 'section') throw new Error('Expected preview');
+    expect(section.text?.type).toBe('plain_text');
+    expect(section.text?.text.length).toBeLessThanOrEqual(3000);
+  });
+  it.each(['', undefined, 'OTHER'])('denies legacy approver list %s', async approverIds => {
+    await createLiveopsProposalBlocks(config, issue);
+    const stored = mocks.persist.mock.calls[1][0];
+    row = stored;
+    id = stored.key.split(':').at(-1);
+    mocks.legacyConfig.mockResolvedValue({ settingValue: { ...config, modelId: 'test', approverIds } });
+    await click();
+    expect(mocks.consume).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
   it.each(['', undefined, 'OTHER'])('denies approver list %s without consuming', async approverIds => {
     mocks.config.mockResolvedValue({ ...config, approverIds });
@@ -148,6 +169,9 @@ describe('LiveOps approval', () => {
     await click();
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.ephemeral).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Could not confirm') })
+    );
   });
   it('uses the legacy config allowlist and GitHub tracker', async () => {
     await createLiveopsProposalBlocks(config, issue);

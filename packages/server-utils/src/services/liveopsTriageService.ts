@@ -1776,12 +1776,16 @@ export class LiveopsTriageService {
       ? `CRITICAL: ${p0Issues.length} P0 issues - LiveOps Triage Summary`
       : `LiveOps Triage Summary: ${createdIssues.length} new issues`;
 
-    const allBlocks = [...blocks, ...proposalBlocks];
-    for (let offset = 0; offset < allBlocks.length; offset += 48) {
+    const pages: SlackBlock[][] = [blocks];
+    for (let offset = 0; offset < proposalBlocks.length; offset += 2) {
+      if (pages[pages.length - 1].length + 2 > 50) pages.push([]);
+      pages[pages.length - 1].push(...proposalBlocks.slice(offset, offset + 2));
+    }
+    for (const page of pages) {
       await this.slackClient.sendMessage({
         channel: channelId,
         text: fallbackText,
-        blocks: allBlocks.slice(offset, offset + 48),
+        blocks: page,
       });
     }
 

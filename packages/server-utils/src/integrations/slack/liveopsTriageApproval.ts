@@ -67,8 +67,8 @@ export async function createLiveopsProposalBlocks(
     {
       type: 'section',
       text: {
-        type: 'mrkdwn',
-        text: `*Proposed issue (${issue.priority}):* ${escapeSlackText(issue.title.slice(0, 500))}\n${escapeSlackText(issue.body.slice(0, 1000))}`,
+        type: 'plain_text',
+        text: `Proposed issue (${issue.priority}): ${issue.title.slice(0, 500)}\n${issue.body.slice(0, 1000)}`,
       },
     },
     {
@@ -152,6 +152,7 @@ export async function handleLiveopsApprovalAction(
   }
   if (actionId === 'liveops_reject_issue') return reply('LiveOps proposal rejected.');
 
+  const acknowledgement = await reply('LiveOps proposal approved. Processing issue creation.');
   const deferred = (async () => {
     try {
       const tracker = storedConfig
@@ -166,7 +167,8 @@ export async function handleLiveopsApprovalAction(
       });
     } catch (error) {
       logger.error('Failed to process approved LiveOps proposal', { error, proposalId });
+      await reply('Could not confirm issue creation or notification. Check the tracker before proposing again.');
     }
   })();
-  return { ...(await reply('LiveOps proposal approved. Processing issue creation.')), deferred };
+  return { ...acknowledgement, deferred };
 }
