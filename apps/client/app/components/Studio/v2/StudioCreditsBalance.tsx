@@ -42,7 +42,7 @@ const StudioCreditsBalance = () => {
         type="button"
         aria-label={`${isEmpty ? 'No credits left' : formatCreditBalance(credits)}. See plans and top up`}
         onClick={() => {
-          logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
+          logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED, metadata: { source: 'studio_header' } });
           setIsOpen(true);
         }}
         data-testid="studio-credits-balance"

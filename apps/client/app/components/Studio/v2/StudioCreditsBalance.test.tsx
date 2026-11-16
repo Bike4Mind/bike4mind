@@ -47,6 +47,7 @@ describe('StudioCreditsBalance', () => {
     fireEvent.click(screen.getByTestId('studio-credits-balance'));
     expect(screen.getByTestId('billing-modal-stub')).toHaveAttribute('data-entry', 'studio_header');
     expect(h.logEvent).toHaveBeenCalledTimes(1);
+    expect(h.logEvent).toHaveBeenCalledWith(expect.objectContaining({ metadata: { source: 'studio_header' } }));
   });
 
   it('turns warm below the low-credits threshold', () => {
