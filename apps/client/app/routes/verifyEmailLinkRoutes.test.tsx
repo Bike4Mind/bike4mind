@@ -36,7 +36,7 @@ const openLink = async (href: string) => {
 // Each test loads router.tsx afresh (its module-load code is what is under test); the first load is slow.
 const LOAD_TIMEOUT_MS = 30_000;
 
-describe('email verification links', () => {
+describe('email links that carry a token', () => {
   // The address the browser shows at the moment each request leaves (its Referer).
   let addressAtRequest: { what: string; href: string }[];
   let verifyPost: ReturnType<typeof vi.fn>;
