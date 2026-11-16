@@ -121,17 +121,11 @@ import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
 import { useCreationTools } from './useCreationTools';
-import { BoardView } from './orchestrator/BoardView';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
-import type {
-  AgentActions,
-  InnkeeperDesk,
-  OrchestratorViewProps,
-  StageAmbient,
-} from './orchestrator/OrchestratorStage';
+import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import {
   readAmbientHintSeen,
@@ -141,8 +135,8 @@ import {
   writeSurface,
   type OrchestratorViewId,
 } from './orchestrator/orchestratorPrefs';
-import { TableView } from './orchestrator/TableView';
-import { TavernView } from './orchestrator/tavern/TavernView';
+import { renderOrchestratorView } from './orchestrator/viewRegistry';
+import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
@@ -231,17 +225,6 @@ const ORCHESTRATOR_INTRO_MS = 1500;
  * staged in the tavern, so that view is forced for the whole first entry without touching the pref.
  */
 type IntroPhase = 'off' | 'playing' | 'shown';
-
-function renderOrchestratorView(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode {
-  switch (view) {
-    case 'tavern':
-      return <TavernView {...props} />;
-    case 'board':
-      return <BoardView {...props} />;
-    case 'table':
-      return <TableView {...props} />;
-  }
-}
 
 /** Key of the Add folder alert for a failure before any chat existed. */
 const NO_CHAT = '';
@@ -823,7 +806,8 @@ export function ChatShell({
       orchestratorPrefs.ambient &&
       orchestrating &&
       activeId !== null &&
-      orchestratorView === 'tavern' &&
+      ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
+      !orchestratorPrefs.focus &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
@@ -853,6 +837,10 @@ export function ChatShell({
       onToggle: orchestratorPrefs.setAmbient,
     }),
     [ambient.settled, wakeAmbient, orchestratorPrefs.ambient, orchestratorPrefs.setAmbient]
+  );
+  const stageFocus = useMemo(
+    () => ({ on: orchestratorPrefs.focus, onToggle: orchestratorPrefs.setFocus }),
+    [orchestratorPrefs.focus, orchestratorPrefs.setFocus]
   );
 
   const parentReply = useMemo(() => {
@@ -1691,6 +1679,7 @@ export function ChatShell({
                   onExampleQuest={pickExampleQuest}
                   desk={innkeeperDesk}
                   ambient={stageAmbient}
+                  focus={stageFocus}
                   dockControl={
                     <Tooltip
                       size="sm"
