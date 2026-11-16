@@ -83,7 +83,7 @@ interface CreditOfferActionsProps {
 
 /** Which remediation the account gets; see CreditOfferActions for how it is decided. */
 export type CreditOfferKind =
-  { kind: 'org'; organizationId: string } | { kind: 'subscriber' } | { kind: 'unsubscribed' };
+  { kind: 'org'; organizationId: string } | { kind: 'pending' } | { kind: 'subscriber' } | { kind: 'unsubscribed' };
 
 /**
  * The actions for one kind of account, with no data of its own beyond the org lookup inside Ask
@@ -102,7 +102,7 @@ export function CreditOfferActionsView({
     return <AskAdminButton organizationId={account.organizationId} secondary={moment === 'low'} />;
   }
 
-  if (account.kind === 'subscriber') {
+  if (account.kind === 'subscriber' || account.kind === 'pending') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <SessionCreditsButton label="Top up" secondary={moment === 'low'} onClick={trackClick(CREDIT_PACK)} />
@@ -133,23 +133,25 @@ export function CreditOfferActions({ moment, surface }: CreditOfferActionsProps 
   const hasPlan =
     (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status)) || !!seatPlan.data;
 
+  // Credits remain available while the lookups settle; a plan offer must wait until eligibility is known.
+  const accountResolved = isOrgAccount || (!subscriptions.isPending && !seatPlan.isLoading);
   const account: CreditOfferKind = isOrgAccount
     ? { kind: 'org', organizationId: selectedAccount.id }
-    : hasPlan
-      ? { kind: 'subscriber' }
-      : { kind: 'unsubscribed' };
-  // Wait for the subscription lookup, or a subscriber would first be counted as seeing the Pro offer.
-  const accountResolved = isOrgAccount || (!subscriptions.isPending && !seatPlan.isLoading);
+    : !accountResolved
+      ? { kind: 'pending' }
+      : hasPlan
+        ? { kind: 'subscriber' }
+        : { kind: 'unsubscribed' };
 
   useEffect(() => {
     // Ask your admin sells nothing, so an org member's prompt is not an upsell impression.
-    if (!accountResolved || account.kind === 'org') return;
+    if (account.kind === 'pending' || account.kind === 'org') return;
     trackUpsell('impression', {
       surface,
       trigger: CREDIT_OFFER_TRIGGERS[moment],
       plan: account.kind === 'unsubscribed' ? PRO_PLAN : CREDIT_PACK,
     });
-  }, [accountResolved, account.kind, surface, moment]);
+  }, [account.kind, surface, moment]);
 
   return <CreditOfferActionsView moment={moment} surface={surface} account={account} />;
 }

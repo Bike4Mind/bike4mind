@@ -14,7 +14,7 @@ const row = (ownerType: SubscriptionOwnerType, ownerId: string, priceId: string)
 describe('resolveSeatPlan', () => {
   beforeEach(() => {
     findById.mockReset();
-    findById.mockImplementation(async (id: string) => (id === 'org-gone' ? null : { id, name: `Org ${id}` }));
+    findById.mockImplementation(async (id: string) => (id === 'org-0-gone' ? null : { id, name: `Org ${id}` }));
   });
 
   it('returns null with no subscriptions', async () => {
@@ -49,10 +49,23 @@ describe('resolveSeatPlan', () => {
 
   it('falls through to the next org when one is gone', async () => {
     const active = [
-      row(SubscriptionOwnerType.Organization, 'org-gone', TEAM_PLAN.priceId),
+      row(SubscriptionOwnerType.Organization, 'org-0-gone', TEAM_PLAN.priceId),
       row(SubscriptionOwnerType.Organization, 'org-2', TEAM_PLAN.priceId),
     ];
 
     await expect(resolveSeatPlan(active)).resolves.toMatchObject({ organizationId: 'org-2' });
+    expect(findById).toHaveBeenNthCalledWith(1, 'org-0-gone');
+    expect(findById).toHaveBeenNthCalledWith(2, 'org-2');
+  });
+
+  it('chooses the same qualifying org regardless of repository order without changing the input', async () => {
+    const active = Object.freeze([
+      row(SubscriptionOwnerType.Organization, 'org-z', TEAM_PLAN.priceId),
+      row(SubscriptionOwnerType.Organization, 'org-a', TEAM_PLAN.priceId),
+    ]);
+
+    await expect(resolveSeatPlan(active)).resolves.toMatchObject({ organizationId: 'org-a' });
+    await expect(resolveSeatPlan([...active].reverse())).resolves.toMatchObject({ organizationId: 'org-a' });
+    expect(active.map(subscription => subscription.ownerId)).toEqual(['org-z', 'org-a']);
   });
 });

@@ -11,8 +11,11 @@ export interface SeatPlan {
 
 /** The paid plan a user holds through an organization, from their resolved active subscriptions. */
 export async function resolveSeatPlan(active: readonly ActiveSubscription[]): Promise<SeatPlan | null> {
-  for (const subscription of active) {
-    if (subscription.ownerType !== SubscriptionOwnerType.Organization) continue;
+  // A holder can belong to multiple paid organizations; Mongo's return order must not choose the displayed name.
+  const organizationSubscriptions = active
+    .filter(subscription => subscription.ownerType === SubscriptionOwnerType.Organization)
+    .sort((left, right) => left.ownerId.localeCompare(right.ownerId) || left.priceId.localeCompare(right.priceId));
+  for (const subscription of organizationSubscriptions) {
     const plan = getEntitlingPlanByPriceId(subscription.priceId);
     if (!plan) continue;
     const organization = await organizationRepository.findById(subscription.ownerId);
