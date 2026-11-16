@@ -4,26 +4,36 @@
  * never sends to a server, so no access log, edge log or Referer header sees it. Links sent before the
  * fragment form keep working: they carry it as `?token=`, read when the fragment has none.
  *
- * The route's beforeLoad calls takeEmailLinkToken, which moves the token out of the address into this
- * module before the page renders, so the URL no longer holds it when the page's verify request (or any
- * later request) fires. The page reads it back with getEmailLinkToken. Same approach as the OAuth
- * callback (utils/authParams.ts) and the persona redeem code (routes/personas/personaRedeemCode.ts).
+ * captureEmailLinkToken MUST run at module load in router.tsx, before the visit beacon and before
+ * createRouter: it moves the token out of the address into this module, so no request the page sends
+ * (whose Referer is the full page URL, query included) carries it, and the router never builds a
+ * location that holds it and could write it back. The page reads it with getEmailLinkToken. Same idea
+ * as the OAuth callback (utils/authParams.ts) and the persona redeem code (routes/personas/personaRedeemCode.ts).
  */
-const takenTokens = new Map<string, string>();
+export const VERIFY_EMAIL_PATH = '/verify-email';
+export const VERIFY_EMAIL_CHANGE_PATH = '/verify-change';
+export type EmailLinkPath = typeof VERIFY_EMAIL_PATH | typeof VERIFY_EMAIL_CHANGE_PATH;
+
+const EMAIL_LINK_PATHS: readonly string[] = [VERIFY_EMAIL_PATH, VERIFY_EMAIL_CHANGE_PATH];
+
+let taken: { path: string; token: string } | undefined;
 
 /**
- * Take the token from the current address (fragment first, then query), drop it from both, keep every
- * other param, and remember it under `routePath`. A re-run with nothing left in the address returns the
- * token already taken for that route.
+ * When this page load landed on an email link page, take its token from the address (fragment first,
+ * then query), drop it from both while keeping every other param, and keep it for the page.
  */
-export function takeEmailLinkToken(routePath: string): string | undefined {
+export function captureEmailLinkToken(): void {
+  if (typeof window === 'undefined') return;
   const { pathname, search, hash } = window.location;
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  if (!EMAIL_LINK_PATHS.includes(path)) return;
+
   const fragment = new URLSearchParams(hash.slice(1));
   const query = new URLSearchParams(search);
-  if (!fragment.has('token') && !query.has('token')) return takenTokens.get(routePath);
+  if (!fragment.has('token') && !query.has('token')) return;
 
   const token = fragment.get('token') || query.get('token');
-  if (token) takenTokens.set(routePath, token);
+  if (token) taken = { path, token };
 
   fragment.delete('token');
   query.delete('token');
@@ -34,10 +44,9 @@ export function takeEmailLinkToken(routePath: string): string | undefined {
     '',
     `${pathname}${nextSearch ? `?${nextSearch}` : ''}${nextHash ? `#${nextHash}` : ''}`
   );
-  return takenTokens.get(routePath);
 }
 
-/** The token takeEmailLinkToken moved out of the address for `routePath`, if any. */
-export function getEmailLinkToken(routePath: string): string | undefined {
-  return takenTokens.get(routePath);
+/** The token captureEmailLinkToken took from this page load's address, if it landed on `path`. */
+export function getEmailLinkToken(path: EmailLinkPath): string | undefined {
+  return taken?.path === path ? taken.token : undefined;
 }

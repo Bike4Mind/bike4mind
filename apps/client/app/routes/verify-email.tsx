@@ -1,7 +1,7 @@
 import VerifyEmail from '@client/app/components/VerifyEmail';
-import { getEmailLinkToken } from '@client/app/utils/emailLinkToken';
+import { getEmailLinkToken, VERIFY_EMAIL_PATH } from '@client/app/utils/emailLinkToken';
 
-// The route's beforeLoad has already moved the link's token out of the address (utils/emailLinkToken.ts).
-const VerifyEmailPage = () => <VerifyEmail token={getEmailLinkToken('/verify-email') ?? ''} />;
+// router.tsx has already moved the link's token out of the address (utils/emailLinkToken.ts).
+const VerifyEmailPage = () => <VerifyEmail token={getEmailLinkToken(VERIFY_EMAIL_PATH) ?? ''} />;
 
 export default VerifyEmailPage;

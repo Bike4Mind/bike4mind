@@ -3,42 +3,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  RouterProvider,
-} from '@tanstack/react-router';
+import { RouterProvider } from '@tanstack/react-router';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { api } from '@client/app/contexts/ApiContext';
 
-// Same isolation as router.test.tsx: router.tsx starts the page beacon on import, and the consent guard
-// bootstraps a session over the network.
-vi.mock('../utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
+// router.tsx's page beacon reports each resolve; the visit beacon (left real) is the request that
+// goes out while router.tsx loads.
 vi.mock('../utils/pageBeacon', () => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
 vi.mock('../hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('next/image', () => ({ default: () => null }));
 
-const { verifyEmailRoute, verifyEmailChangeRoute } = await import('../router');
-
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-/** Mounts the app's real route (its beforeLoad and page) at the address an email link opens. */
-const openLink = (route: typeof verifyEmailRoute | typeof verifyEmailChangeRoute, href: string) => {
+/**
+ * A full page load of an email link: set the address, then load the app's real router.tsx (whose
+ * module-load code runs against that address) and render it on its own browser history.
+ */
+const openLink = async (href: string) => {
   window.history.replaceState(null, '', href);
-  const root = createRootRoute({ component: () => <Outlet /> });
-  const probe = createRoute({
-    getParentRoute: () => root,
-    path: route.options.path,
-    beforeLoad: route.options.beforeLoad,
-    component: route.options.component,
-  });
-  const router = createRouter({
-    routeTree: root.addChildren([probe]),
-    history: createMemoryHistory({ initialEntries: [href] }),
-  });
+  vi.resetModules();
+  const { router } = await import('../router');
+  const { api } = await import('@client/app/contexts/ApiContext');
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <CssVarsProvider theme={appTheme}>
@@ -46,54 +30,77 @@ const openLink = (route: typeof verifyEmailRoute | typeof verifyEmailChangeRoute
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  return { router, api };
 };
 
+// Each test loads router.tsx afresh (its module-load code is what is under test); the first load is slow.
+const LOAD_TIMEOUT_MS = 30_000;
+
 describe('email verification links', () => {
-  // The address the browser shows at the moment each verify request leaves.
-  let addressAtRequest: string[];
+  // The address the browser shows at the moment each request leaves (its Referer).
+  let addressAtRequest: { what: string; href: string }[];
+  let verifyPost: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     addressAtRequest = [];
-    vi.spyOn(api, 'post').mockImplementation(async () => {
-      addressAtRequest.push(window.location.href);
-      return { data: {} };
+    verifyPost = vi.fn(async () => ({ data: {} }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      addressAtRequest.push({ what: `fetch ${String(input)}`, href: window.location.href });
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(function () {
+      addressAtRequest.push({ what: 'xhr', href: window.location.href });
+    });
+    vi.doMock('@client/app/contexts/ApiContext', async importOriginal => {
+      const actual = await importOriginal<typeof import('@client/app/contexts/ApiContext')>();
+      const post = (url: string, body: unknown) => {
+        addressAtRequest.push({ what: `post ${url}`, href: window.location.href });
+        return verifyPost(url, body);
+      };
+      return { ...actual, api: Object.assign(Object.create(actual.api), { post }) };
     });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.doUnmock('@client/app/contexts/ApiContext');
     window.history.replaceState(null, '', '/');
   });
 
-  it.each([
-    ['/verify-email', verifyEmailRoute, '/api/email/verify'],
-    ['/verify-change', verifyEmailChangeRoute, '/api/email/verify-change'],
-  ] as const)(
-    '%s verifies a #token= link with the token already gone from the address',
-    async (path, route, endpoint) => {
-      const token = `frag-${path.slice(1)}`;
-      openLink(route, `${path}#token=${token}`);
+  const cases = [
+    ['/verify-email', '/api/email/verify'],
+    ['/verify-change', '/api/email/verify-change'],
+  ] as const;
 
-      await waitFor(() => expect(api.post).toHaveBeenCalledWith(endpoint, { token }));
-      expect(addressAtRequest).toHaveLength(1);
-      expect(addressAtRequest[0]).not.toContain(token);
-      expect(addressAtRequest[0]).not.toContain('token=');
-    }
+  it.each(cases)(
+    '%s verifies a #token= link; no request and no later address carries it',
+    async (path, endpoint) => {
+      const token = `frag-${path.slice(1)}`;
+      const { router } = await openLink(`${path}#token=${token}`);
+
+      await waitFor(() => expect(verifyPost).toHaveBeenCalledWith(endpoint, { token }));
+      await router.load();
+      expect(addressAtRequest.some(r => r.what.startsWith('fetch'))).toBe(true);
+      expect(addressAtRequest.filter(r => r.href.includes('token'))).toEqual([]);
+      expect(window.location.href).not.toContain('token');
+      expect(router.state.location.href).not.toContain('token');
+    },
+    LOAD_TIMEOUT_MS
   );
 
-  it.each([
-    ['/verify-email', verifyEmailRoute, '/api/email/verify'],
-    ['/verify-change', verifyEmailChangeRoute, '/api/email/verify-change'],
-  ] as const)(
-    '%s still verifies an older ?token= link, stripping it before the request',
-    async (path, route, endpoint) => {
+  it.each(cases)(
+    '%s still verifies an older ?token= link, taking it off the address before the first request',
+    async (path, endpoint) => {
       const token = `query-${path.slice(1)}`;
-      openLink(route, `${path}?token=${token}`);
+      const { router } = await openLink(`${path}?token=${token}&n=42`);
 
-      await waitFor(() => expect(api.post).toHaveBeenCalledWith(endpoint, { token }));
-      expect(addressAtRequest).toHaveLength(1);
-      expect(addressAtRequest[0]).not.toContain(token);
-      expect(addressAtRequest[0]).not.toContain('token=');
-    }
+      await waitFor(() => expect(verifyPost).toHaveBeenCalledWith(endpoint, { token }));
+      await router.load();
+      expect(addressAtRequest.some(r => r.what.startsWith('fetch'))).toBe(true);
+      expect(addressAtRequest.filter(r => r.href.includes('token'))).toEqual([]);
+      expect(window.location.href).not.toContain('token');
+      expect(router.state.location.href).not.toContain('token');
+    },
+    LOAD_TIMEOUT_MS
   );
 });
