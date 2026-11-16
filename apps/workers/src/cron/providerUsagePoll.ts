@@ -19,8 +19,8 @@ import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { spendReconciliationService } from '@bike4mind/services';
-import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
+import { resolveProviderAdminKey } from './providerAdminKey';
 
 type ProviderHourlyUsage = spendReconciliationService.ProviderHourlyUsage;
 type UsageReportProvider = spendReconciliationService.UsageReportProvider;
@@ -36,20 +36,17 @@ const contextToLogs = (context: Context) => ({
 
 interface ProviderConfig {
   provider: UsageReportProvider;
-  getKey: () => string | undefined;
   fetch: (key: string, start: Date, end: Date) => Promise<ProviderHourlyUsage[]>;
 }
 
 const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'anthropic',
-    getKey: () => Config.ANTHROPIC_ADMIN_API_KEY,
     fetch: (key, start, end) =>
       spendReconciliationService.fetchAnthropicHourlyUsage(key, start.toISOString(), end.toISOString()),
   },
   {
     provider: 'openai',
-    getKey: () => Config.OPENAI_ADMIN_API_KEY,
     fetch: (key, start, end) =>
       spendReconciliationService.fetchOpenAIHourlyUsage(key, start.getTime() / 1000, end.getTime() / 1000),
   },
@@ -72,8 +69,15 @@ export async function handler(_event: unknown, context: Context) {
   let published = 0;
   let skipped = 0;
 
-  for (const { provider, getKey, fetch } of PROVIDERS) {
-    const key = getKey();
+  for (const { provider, fetch } of PROVIDERS) {
+    let key: string | undefined;
+    try {
+      key = await resolveProviderAdminKey(provider);
+    } catch (err) {
+      failed.push(provider);
+      logger.error(`[ProviderUsagePoll] ${provider} ${window} admin key lookup failed`, err);
+      continue;
+    }
     if (!key || key === 'not-configured') {
       logger.warn(`[ProviderUsagePoll] ${provider}: admin key not configured, skipping`);
       // Read by the per-provider skipped alarm in infra/providerSpend.ts.
