@@ -10,7 +10,7 @@ import {
   sortAdminPermissions,
   sortAdminRoleIds,
 } from '@bike4mind/common';
-import { User, adminRoleRepository, withTransaction } from '@bike4mind/database';
+import { AdminRoleModel, User, adminRoleRepository, withTransaction } from '@bike4mind/database';
 import { Types } from 'mongoose';
 import { requireStepUp } from '@server/auth/stepUp';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -103,6 +103,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       }
 
       await requireStepUp(req);
+      const removedRoleIds = storedRoleIds.filter(id => !nextRoleIds.includes(id));
+      // A real write fences the snapshot against concurrent role edits. Snapshot reads alone do not
+      // conflict with those edits; retry must reread the permissions before recording the removal.
+      for (const roleId of removedRoleIds) {
+        await AdminRoleModel.updateOne(
+          { _id: new Types.ObjectId(roleId) },
+          { $inc: { __v: 1 } },
+          { runValidators: true, timestamps: false }
+        );
+      }
       const update = await User.updateOne(
         {
           _id: userId,

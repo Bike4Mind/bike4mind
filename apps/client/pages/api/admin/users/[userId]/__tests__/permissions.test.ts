@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deny: vi.fn(),
   stepUp: vi.fn(),
   findRoles: vi.fn(),
+  fenceRole: vi.fn(),
   csrfGuard: ((_req: unknown, _res: unknown, next: () => void) => next()) as Guard,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,6 +41,7 @@ vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mocks.stepUp }));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: mocks.findById, updateOne: mocks.update },
   adminRoleRepository: { findByIds: mocks.findRoles },
+  AdminRoleModel: { updateOne: mocks.fenceRole },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
   AdminUserNoteModel: {},
   AdminUserNoteRevisionModel: {},
@@ -81,6 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   target({ isAdmin: false, adminPermissions: [] });
   mocks.update.mockResolvedValue({ matchedCount: 1 });
+  mocks.fenceRole.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
   mocks.audit.mockResolvedValue({});
   mocks.stepUp.mockResolvedValue(undefined);
   mocks.findRoles.mockImplementation(async (ids: string[]) =>
