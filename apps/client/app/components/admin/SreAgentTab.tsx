@@ -52,6 +52,7 @@ import {
   SreRepoConfigSchema,
   SRE_SECRET_PLACEHOLDER,
   SRE_METRICS_WINDOWS,
+  SreSourceType,
   getConfiguredRepoSlugs,
   type ModelInfo,
   type SreAgentConfig,
@@ -231,6 +232,39 @@ function RepoGateEditor<
         </Stack>
       )}
     </Box>
+  );
+}
+
+const AUTO_DISPATCH_SOURCE_LABELS: Record<SreSourceType, string> = {
+  [SreSourceType.CLOUDWATCH]: 'CloudWatch errors',
+  [SreSourceType.GITHUB_ISSUE]: 'GitHub issues',
+};
+
+/** Sources whose fixes may dispatch without Slack approval; any other source always asks. */
+export function AutoDispatchSourcesField({
+  sources,
+  onChange,
+}: {
+  sources: SreSourceType[];
+  onChange: (sources: SreSourceType[]) => void;
+}) {
+  return (
+    <FormControl sx={{ pb: 1.5 }}>
+      <FormLabel>Auto-dispatch without approval</FormLabel>
+      <Stack direction="row" spacing={2}>
+        {Object.values(SreSourceType).map(source => (
+          <Checkbox
+            key={source}
+            size="sm"
+            label={AUTO_DISPATCH_SOURCE_LABELS[source]}
+            checked={sources.includes(source)}
+            onChange={e => onChange(e.target.checked ? [...sources, source] : sources.filter(s => s !== source))}
+            data-testid={`sre-auto-dispatch-source-${source}`}
+          />
+        ))}
+      </Stack>
+      <FormHelperText>Fixes from unchecked sources always wait for Slack approval.</FormHelperText>
+    </FormControl>
   );
 }
 
@@ -744,6 +778,18 @@ function RepoConfigCard({
             label="Diagnostician to Surgeon"
             gate={repo.gates.diagnosticianToSurgeon}
             onChange={g => onChange({ ...repo, gates: { ...repo.gates, diagnosticianToSurgeon: g } })}
+          />
+          <AutoDispatchSourcesField
+            sources={repo.gates.diagnosticianToSurgeon.autoDispatchSources ?? []}
+            onChange={autoDispatchSources =>
+              onChange({
+                ...repo,
+                gates: {
+                  ...repo.gates,
+                  diagnosticianToSurgeon: { ...repo.gates.diagnosticianToSurgeon, autoDispatchSources },
+                },
+              })
+            }
           />
         </CollapsibleSection>
 
