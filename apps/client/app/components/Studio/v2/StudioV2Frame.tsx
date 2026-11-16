@@ -3,6 +3,7 @@ import { styled } from '@mui/system';
 import StudioSegmentedControl, { type StudioSegmentOption } from '../design/StudioSegmentedControl';
 import StudioThemeScope from '../design/StudioThemeScope';
 import { studioColor, studioRadius } from '../design/studioTokens';
+import type { StudioMedium } from '../studioModality';
 import { useStudioFeature } from '../useStudioFeature';
 import StudioCreditsBalance from './StudioCreditsBalance';
 
@@ -80,13 +81,15 @@ const Main = styled('div')({
 type StudioV2FrameProps = {
   area: StudioArea;
   testId: string;
+  /** Create's current medium, so the Create link keeps the user on it. */
+  medium?: StudioMedium;
   /** A side rail between the header and the content: Create's medium rail. */
   rail?: ReactNode;
   children: ReactNode;
 };
 
 /** The Studio stage every v2 area sits on: the header (title, area switcher, balance), an optional rail, then the area. */
-const StudioV2Frame = ({ area, testId, rail, children }: StudioV2FrameProps) => {
+const StudioV2Frame = ({ area, testId, medium, rail, children }: StudioV2FrameProps) => {
   const isImageOpen = useStudioFeature('image');
   const isProductionsOpen = useStudioFeature('productions');
 
@@ -95,7 +98,7 @@ const StudioV2Frame = ({ area, testId, rail, children }: StudioV2FrameProps) => 
       value: 'create',
       label: 'Create',
       testId: 'studio-area-create',
-      link: { to: '/studio/$modality', params: { modality: isImageOpen ? 'image' : 'video' } },
+      link: { to: '/studio/$modality', params: { modality: medium ?? (isImageOpen ? 'image' : 'video') } },
     },
     ...(isProductionsOpen
       ? [

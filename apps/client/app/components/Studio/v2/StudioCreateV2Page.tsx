@@ -20,7 +20,7 @@ const StudioCreateV2Page = ({ medium }: { medium: StudioMedium }) => {
   useDocumentTitle(`${railLabel} Studio`);
 
   return (
-    <StudioV2Frame area="create" testId={`${testId}-page`} rail={<StudioMediumRail medium={medium} />}>
+    <StudioV2Frame area="create" medium={medium} testId={`${testId}-page`} rail={<StudioMediumRail medium={medium} />}>
       <Workspace testId={testId} />
       <SectionTitle data-testid="studio-gallery-title">{galleryTitle}</SectionTitle>
       <Gallery />

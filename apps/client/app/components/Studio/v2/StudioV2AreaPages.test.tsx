@@ -25,6 +25,7 @@ vi.mock('@client/app/components/Files/StudioLibrary', () => ({
 
 import StudioLibraryPage from './StudioLibraryPage';
 import StudioProductionsPage from './StudioProductionsPage';
+import StudioV2Frame from './StudioV2Frame';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -52,6 +53,20 @@ describe('Studio Productions', () => {
     h.studioFeatures = { createV2: true, productions: true };
     render(<StudioProductionsPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/video');
+  });
+});
+
+describe('Studio frame', () => {
+  it('keeps the Create link on the current medium while in Create', () => {
+    h.studioFeatures = { createV2: true, image: true };
+    render(
+      <StudioV2Frame area="create" medium="music" testId="studio-frame">
+        <div />
+      </StudioV2Frame>,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('href', '/studio/music');
+    expect(screen.getByTestId('studio-area-create')).toHaveAttribute('aria-current', 'page');
   });
 });
 
