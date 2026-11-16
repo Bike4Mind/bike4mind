@@ -13,11 +13,17 @@ export type AttributedTouch = { key: string; source: string; medium: string; cam
 
 const fold = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '');
 
-/** The cohort key for a touch's parts, folded the same way a stored touch is; absent parts are ACQUISITION_NONE. */
+// Escaped so a '|' inside a stored part cannot make two different touches share a key.
+const keyPart = (part: string) => part.replace(/[\\|]/g, '\\$&');
+
+/**
+ * The cohort key for a touch's parts, folded the same way a stored touch is; absent parts are ACQUISITION_NONE,
+ * so a part stored as the literal '(none)' shares the absent part's cohort.
+ */
 export function acquisitionKeyOf(parts: { source: string; medium?: string; campaign?: string }): string {
-  return [fold(parts.source), fold(parts.medium) || ACQUISITION_NONE, fold(parts.campaign) || ACQUISITION_NONE].join(
-    '|'
-  );
+  return [fold(parts.source), fold(parts.medium) || ACQUISITION_NONE, fold(parts.campaign) || ACQUISITION_NONE]
+    .map(keyPart)
+    .join('|');
 }
 
 /**

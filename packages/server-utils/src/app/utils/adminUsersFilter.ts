@@ -19,11 +19,11 @@ export const YES_NO_FILTERS = ['yes', 'no'] as const;
 /** The real-signup verdict the analytics charts split on: real (stored and filtered as `legit`) or suspected. */
 export const USER_VERDICT_FILTERS = ['suspected', 'legit'] as const;
 /** Activation funnel steps in order; a filter on one selects users who reached it and not the next. */
+export const USER_FUNNEL_STEP_FILTERS = ['signedUp', 'firstAction', 'cameBack', 'paid'] as const;
+export type UserFunnelStep = (typeof USER_FUNNEL_STEP_FILTERS)[number];
 export const USER_ACQUISITION_TOUCH_FILTERS = ['first', 'last'] as const;
 export const USER_ACQUISITION_WINDOW_FILTERS = ['7', '30', '90'] as const;
 const acquisitionPart = z.string().trim().min(1).max(200);
-export const USER_FUNNEL_STEP_FILTERS = ['signedUp', 'firstAction', 'cameBack', 'paid'] as const;
-export type UserFunnelStep = (typeof USER_FUNNEL_STEP_FILTERS)[number];
 
 export const ADMIN_USERS_SORT_FIELDS = ['createdAt', 'name', 'currentCredits', 'lastActiveAt'] as const;
 export type AdminUsersSortField = (typeof ADMIN_USERS_SORT_FIELDS)[number];

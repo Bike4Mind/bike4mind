@@ -1,6 +1,7 @@
 import { COHORT_WINDOW_MAX_DAYS } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
-import { COHORT_MAX_TIME_MS } from '@bike4mind/server-utils/analytics/activationFunnel';
+import { COHORT_MAX_TIME_MS, withinBudget } from '@bike4mind/server-utils/analytics/activationFunnel';
 import {
+  ACQUISITION_BUDGET_MS,
   attributedSignups,
   conversionOutcomes,
   type AttributedSignup,
@@ -17,11 +18,7 @@ import {
   type AcquisitionQuery,
   type AcquisitionRow,
 } from '@client/app/utils/acquisitionConversion';
-import { withinBudget } from './activationFunnelSummary';
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
-
-// ms. The whole request, kept well inside the 60s API Lambda so a slow read fails with a handled 504.
-const ACQUISITION_BUDGET_MS = 40_000;
 
 const emptyMetrics = (): AcquisitionMetrics => ({
   signups: 0,

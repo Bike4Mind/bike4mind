@@ -139,7 +139,9 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
   if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
   if (filter.aiVerdict) conditions.push(resolvedIdsCondition(context, 'aiAbuseUserIds', 'aiVerdict'));
   if (filter.acqSource || filter.acqUnattributed) {
-    conditions.push(resolvedIdsCondition(context, 'acquisitionUserIds', 'acqSource'));
+    conditions.push(
+      resolvedIdsCondition(context, 'acquisitionUserIds', filter.acqSource ? 'acqSource' : 'acqUnattributed')
+    );
   }
   return conditions.length > 0 ? { $and: conditions } : {};
 }

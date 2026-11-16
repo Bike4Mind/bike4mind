@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { GatewayTimeoutError } from '@bike4mind/common';
 import { CreditTransaction, User } from '@bike4mind/database';
+import { acquisitionCohortUserIds } from '@bike4mind/server-utils/analytics/acquisitionConversion';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { classifyFunnelCohort } from '@bike4mind/server-utils/analytics/activationFunnel';
@@ -288,6 +290,22 @@ describe('getAcquisitionConversion', () => {
           );
         }
       }
+    }
+  });
+
+  it('fails a drill-down that outlives its budget with a 504', async () => {
+    await seedSignup({ firstTouch: { source: 'ads' } });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const ids = acquisitionCohortUserIds(
+        { start: new Date('2026-06-01T00:00:00Z'), end: new Date('2026-06-15T00:00:00Z') },
+        { touch: 'first', key: 'ads|(none)|(none)', converted: true, windowDays: 30 },
+        { now: NOW, expiresAt: Date.now() + 5_000 }
+      );
+      vi.advanceTimersByTime(5_000);
+      await expect(ids).rejects.toBeInstanceOf(GatewayTimeoutError);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

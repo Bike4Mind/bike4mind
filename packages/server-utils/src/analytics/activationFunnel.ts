@@ -40,6 +40,18 @@ export const ACTIVATION_MIN_AGE_MS = ACTIVATION_WINDOW_DAYS * DAY_MS;
 export const FUNNEL_COHORT_MAX = 20_000;
 /** ms. Per-query time limit for every cohort read, shared by the funnel counts and the Users drill-down. */
 export const COHORT_MAX_TIME_MS = 10_000;
+
+/** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
+export async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new GatewayTimeoutError('The funnel took too long.')),
+      Math.max(0, expiresAt - Date.now())
+    );
+  });
+  return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+}
 /** Stripe statuses under which no payment has been collected yet. */
 export const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
 
@@ -180,9 +192,10 @@ const TOO_MANY_SIGNUPS = () =>
   );
 
 /**
- * The active-eligible users (counted, not banned or AI-held, like the rollup) whose createdAt matches
- * `createdAt`, with USER_FLAG_FIELDS plus `extraFields` selected. More than FUNNEL_COHORT_MAX matches is
- * refused with a 422 rather than truncated. Shared by the activation funnel and the acquisition cohorts.
+ * Signups matching the `createdAt` range that count toward analytics (not banned or AI-held, like the rollup),
+ * with `extraFields` read alongside the flags that decide it. The read is capped, so a range holding more than
+ * FUNNEL_COHORT_MAX signups is refused with a 422 rather than truncated. Shared by the activation funnel and the
+ * acquisition cohorts.
  */
 export async function findEligibleSignups<T extends object = object>(
   createdAt: Record<string, Date>,
@@ -199,10 +212,9 @@ export async function findEligibleSignups<T extends object = object>(
 }
 
 /**
- * Every active-eligible user created in [start, end), old
- * enough to judge at `now`, with the furthest step they reached. `withTooNew` also returns the ids of the
- * active-eligible users in the window who are not old enough yet; they are read separately so they never count
- * toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
+ * Every active-eligible user created in [start, end), old enough to judge at `now`, with the furthest step
+ * they reached. `withTooNew` also returns the ids of the active-eligible users in the window who are not old
+ * enough yet; they are read separately so they never count toward the FUNNEL_COHORT_MAX of the judged window. A window holding more than FUNNEL_COHORT_MAX judgeable
  * signups is refused. `needsPayments: false` skips the payment lookups, so `paid` members read as `cameBack`.
  * Past `expiresAt` (epoch ms) it stops with a 504.
  */

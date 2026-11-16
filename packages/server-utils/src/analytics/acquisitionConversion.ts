@@ -5,7 +5,7 @@ import {
   type AttributedTouch,
   type StoredAcquisition,
 } from '../app/utils/acquisitionTouch';
-import { findEligibleSignups } from './activationFunnel';
+import { COHORT_MAX_TIME_MS, findEligibleSignups, withinBudget } from './activationFunnel';
 import {
   classifyFirstPaid,
   loadPaymentLedger,
@@ -22,6 +22,9 @@ import { loadCountingContext } from './signupCohort';
  * recordSignupAcquisition in apps/client/server/analytics/funnel.ts). The admin Analytics acquisition section
  * and its Users drill-down both resolve through attributedSignups, so their counts agree.
  */
+
+/** ms. One acquisition request, summary or Users drill-down, kept well inside the 60s API Lambda. */
+export const ACQUISITION_BUDGET_MS = 40_000;
 
 export type AttributedSignup = { id: string; signupAt: Date; touch: AttributedTouch | null };
 
@@ -161,9 +164,24 @@ export async function conversionOutcomes(
 /**
  * The ids behind one acquisition row (the Users list's acq* filter): the same attributedSignups cohort the
  * section groups, narrowed to `key` (ACQUISITION_UNATTRIBUTED_KEY for no touch), and with `converted` to the
- * mature members who paid inside `windowDays`, which is the row's `converted` count.
+ * mature members who paid inside `windowDays`, which is the row's `converted` count. Past `expiresAt` (epoch ms)
+ * it rejects with a 504.
  */
 export async function acquisitionCohortUserIds(
+  window: { start: Date; end: Date },
+  {
+    touch,
+    key,
+    converted,
+    windowDays,
+  }: { touch: AcquisitionTouchKind; key: string; converted: boolean; windowDays: number },
+  { now, expiresAt }: { now: Date; expiresAt: number }
+): Promise<string[]> {
+  const maxTimeMS = () => Math.max(1, Math.min(COHORT_MAX_TIME_MS, expiresAt - Date.now()));
+  return withinBudget(cohortUserIds(window, { touch, key, converted, windowDays }, { now, maxTimeMS }), expiresAt);
+}
+
+async function cohortUserIds(
   window: { start: Date; end: Date },
   {
     touch,

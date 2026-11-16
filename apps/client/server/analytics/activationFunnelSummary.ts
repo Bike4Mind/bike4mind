@@ -5,11 +5,11 @@ import {
 } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type { ActivationFunnel, ActivationFunnelStep } from '@client/app/utils/activationFunnel';
 import type { AnalyticsOverviewQuery } from '@client/app/utils/analyticsOverview';
-import { GatewayTimeoutError } from '@bike4mind/common';
 import {
   classifyFunnelCohort,
   COHORT_MAX_TIME_MS,
   paidWindowOpen,
+  withinBudget,
   type FunnelMember,
 } from '@bike4mind/server-utils/analytics/activationFunnel';
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
@@ -55,18 +55,6 @@ async function judgedMembers(
   const legit = new Set(legitIds);
   const members = cohort.members.filter(member => legit.has(member.id));
   return { members, tooNew: cohort.tooNewIds.filter(id => legit.has(id)).length, createdFrom, createdTo };
-}
-
-/** Rejects with a handled 504 once `expiresAt` (epoch ms) passes; the queries' own time limits stop the reads. */
-export async function withinBudget<T>(work: Promise<T>, expiresAt: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new GatewayTimeoutError('The funnel took too long.')),
-      Math.max(0, expiresAt - Date.now())
-    );
-  });
-  return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
 }
 
 /**

@@ -20,7 +20,7 @@ import type {
 import { withSafeOrganization } from '../../utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '../../users/signupAnomaly';
 import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '../../analytics/activationFunnel';
-import { acquisitionCohortUserIds } from '../../analytics/acquisitionConversion';
+import { ACQUISITION_BUDGET_MS, acquisitionCohortUserIds } from '../../analytics/acquisitionConversion';
 import { ACQUISITION_UNATTRIBUTED_KEY, acquisitionKeyOf } from '../../app/utils/acquisitionTouch';
 import { signupVerdictUserIds } from '../../analytics/realSignup';
 import { listAiAbuseAdvisories } from '../aiAdvisory/aiAbuseAdvisories';
@@ -36,7 +36,7 @@ export const ACTIVE_USERS_MAX = 50_000;
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
 
 /** The created window `verdict` and `funnelStep` classify; the filter schema requires both ends with them. */
-function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep' | 'acqSource') {
+function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep' | 'acqSource' | 'acqUnattributed') {
   if (!filter.createdFrom || !filter.createdTo) throw new Error(`${key} needs createdFrom and createdTo`);
   return { start: new Date(filter.createdFrom), end: new Date(filter.createdTo) };
 }
@@ -102,14 +102,14 @@ export async function adminUsersPipeline(
       : undefined,
     acquisitionCohort
       ? acquisitionCohortUserIds(
-          cohortWindow(filter, 'acqSource'),
+          cohortWindow(filter, filter.acqUnattributed ? 'acqUnattributed' : 'acqSource'),
           {
             touch: filter.acqTouch ?? 'first',
             key: acquisitionCohort,
             converted: filter.acqConverted === 'true',
             windowDays: Number(filter.acqWindow ?? '30'),
           },
-          { now, maxTimeMS: () => LIST_MAX_TIME_MS }
+          { now, expiresAt: Date.now() + ACQUISITION_BUDGET_MS }
         )
       : undefined,
   ]);
