@@ -41,7 +41,8 @@ const Figure: FC<{ label: string; value: string; detail: ReactNode; testId: stri
     <Typography level="body-sm" textColor="text.tertiary">
       {label}
     </Typography>
-    <Typography level="h2" fontWeight="md" sx={{ my: 0.5 }}>
+    {/* Two figures share a card; at 320px each column is ~90px, too narrow for "100.0%" at h2 size. */}
+    <Typography level="h2" fontWeight="md" sx={{ my: 0.5, fontSize: { xs: 'xl2', sm: 'xl3' } }}>
       {value}
     </Typography>
     <Typography level="body-sm" textColor="text.tertiary" sx={{ '& b': { color: 'text.primary' } }}>
