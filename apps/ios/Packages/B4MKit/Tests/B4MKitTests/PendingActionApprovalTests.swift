@@ -63,7 +63,8 @@ final class PendingActionClientTests: XCTestCase {
     let reason = #"Repository "owner/repo" is not enabled. Available: other/repo"#
     let body = json(#"{"error":"Repository \"owner/repo\" is not enabled. Available: other/repo"}"#)
     await assertFailure(client(FakeTransport { _ in (400, body) }), .refused(reason))
-    await assertFailure(client(FakeTransport { _ in (400, json("{}")) }), .refused(PendingActionFailure.unavailable.message))
+    let fallback = PendingActionFailure.unavailable.message
+    await assertFailure(client(FakeTransport { _ in (400, json("{}")) }), .refused(fallback))
     XCTAssertFalse(PendingActionFailure.refused(reason).isRetryable)
     XCTAssertEqual(PendingActionFailure.refused(reason).message, reason)
   }

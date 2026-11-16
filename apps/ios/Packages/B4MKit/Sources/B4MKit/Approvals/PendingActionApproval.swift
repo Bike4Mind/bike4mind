@@ -91,8 +91,9 @@ public protocol PendingActionAPI: Sendable {
 
 /// Hand-written client for `POST /api/v1/pending-actions/{questId}/approve|deny` (JWT only). The body is
 /// `{pendingActionTs}`; 200 is `{success, message, url?}`; 409 carries `errorCode` `action_replaced`,
-/// `action_expired` or `action_already_resolved`; other 4xx refusals carry an `{error}` text; a missing, malformed or foreign quest is 404. Nothing in a
-/// push authorizes the call: the server checks the session owner against the access token every time.
+/// `action_expired` or `action_already_resolved`; other 4xx refusals carry an `{error}` text; a missing,
+/// malformed or foreign quest is 404. Nothing in a push authorizes the call: the server checks the session
+/// owner against the access token every time.
 public struct PendingActionClient: PendingActionAPI {
   private let requester: AuthorizedRequester
 
