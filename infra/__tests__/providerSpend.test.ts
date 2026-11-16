@@ -22,7 +22,10 @@ vi.mock('../cron', () => ({
   get providerUsagePollCron() {
     return resources.cron;
   },
+  spendReconciliationCron: undefined,
 }));
+// Keeps the admin key store out of these tests; infra/__tests__/providerAdminKeyAccess.test.ts covers it.
+vi.mock('../constants', () => ({ runsScheduledJobs: false }));
 vi.mock('../dlqAlarms', () => ({
   get dlqAlarmTopic() {
     return resources.topic;

@@ -14,6 +14,7 @@
  * Counting mirrors the "Parse test results" jq in .github/workflows/e2e-run.yml;
  * keep the two in sync while that step exists.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,19 @@ const MB = 1024 * 1024;
 export const UPLOAD_LIMITS = { screenshot: 5 * MB, video: 50 * MB, trace: 50 * MB, report: 20 * MB };
 export const ERROR_MAX_CHARS = 4000;
 export const MAX_TESTS = 2000;
+// Mirror the latency identity/display limits in b4m-core/common/src/schemas/qa.ts.
+const MODEL_ID_MAX = 200;
+const METRIC_LABEL_MAX = 200;
+const GATE_FIELD_MAX = 1000;
+const validModelId = model => typeof model === 'string' && model.length > 0 && model.length <= MODEL_ID_MAX;
+
+// Preserve the full identity in the suffix when a readable prefix needs shortening.
+function boundedIdentity(value, maxLength) {
+  if (value.length <= maxLength) return value;
+  const suffix = `::${createHash('sha256').update(value).digest('hex')}`;
+  return `${value.slice(0, maxLength - suffix.length)}${suffix}`;
+}
+
 /** Mirrors CREDITS_THRESHOLD in apps/client/e2e/helpers/slack.ts. */
 export const CREDITS_THRESHOLD = 60;
 
@@ -201,11 +215,11 @@ function cellLatencySec(json) {
 /** 0 means "no data" in e2e-ai-latency.yml's Aggregate step. */
 export function latencyMetric(fileName, json) {
   const latencySec = cellLatencySec(json);
-  if (latencySec === undefined || latencySec <= 0 || typeof json.model !== 'string') return null;
+  if (latencySec === undefined || latencySec <= 0 || !validModelId(json.model)) return null;
   const metric = {
     kind: 'latency',
     model: json.model,
-    label: path.basename(fileName, '-results.json'),
+    label: boundedIdentity(path.basename(fileName, '-results.json'), METRIC_LABEL_MAX),
     value: latencySec,
     unit: 's',
   };
@@ -222,7 +236,7 @@ export function latencyMetric(fileName, json) {
  * flaky". No data: no test.
  */
 export function latencyGateTest(fileName, json) {
-  if (typeof json?.model !== 'string') return null;
+  if (!validModelId(json?.model)) return null;
   const latencySec = cellLatencySec(json) ?? 0;
   const threshold = typeof json.thresholdSec === 'number' ? json.thresholdSec : undefined;
   const abandoned = (Array.isArray(json.results) ? json.results : []).filter(
@@ -239,7 +253,15 @@ export function latencyGateTest(fileName, json) {
 }
 
 function gateTest(testKey, title, status, error) {
-  const test = { testKey, title, status, durationMs: 0, retries: 0, artifacts: [], attachments: [] };
+  const test = {
+    testKey: boundedIdentity(testKey, GATE_FIELD_MAX),
+    title: title.slice(0, GATE_FIELD_MAX),
+    status,
+    durationMs: 0,
+    retries: 0,
+    artifacts: [],
+    attachments: [],
+  };
   if (error !== undefined) test.error = error;
   return test;
 }
@@ -251,13 +273,8 @@ function gateTest(testKey, title, status, error) {
  * (the prompt crashed or timed out), fails. Any other list shape is ignored.
  */
 function promptEntries(json) {
-  return Array.isArray(json)
-    ? json.filter(e => typeof e?.aiModel === 'string' && e.aiModel !== '' && typeof e.promptName === 'string')
-    : [];
+  return Array.isArray(json) ? json.filter(e => validModelId(e?.aiModel) && typeof e.promptName === 'string') : [];
 }
-
-/** Mirrors the `label` max in QaMetricSchema (b4m-core/common/src/schemas/qa.ts): one over it 422s the whole run. */
-const METRIC_LABEL_MAX = 200;
 
 function promptSeconds(value) {
   const sec = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
@@ -278,7 +295,7 @@ export function latencyMetrics(fileName, json) {
     const metric = {
       kind: 'latency',
       model: entry.aiModel,
-      label: promptLabel(fileName, entry).slice(0, METRIC_LABEL_MAX),
+      label: boundedIdentity(promptLabel(fileName, entry), METRIC_LABEL_MAX),
       value: latencySec,
       unit: 's',
     };

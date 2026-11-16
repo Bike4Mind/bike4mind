@@ -6,7 +6,7 @@ import { restoreImageForm } from './imageRestore';
 const MODELS = [
   { id: ImageModels.GPT_IMAGE_2, name: 'GPT Image 2' },
   { id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' },
-  { id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' },
+  { id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext Pro' },
 ];
 const CAT = 'a'.repeat(24);
 const DOG = 'b'.repeat(24);
@@ -69,10 +69,10 @@ describe('restoreImageForm', () => {
       `${ImageModels.GPT_IMAGE_1_5} is no longer one of your image models, so the default model is picked.`,
     ]);
 
-    const unavailable = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
+    const unavailable = restoreImageForm(restoreOf({ model: ImageModels.FLUX_KONTEXT_PRO, prompt: 'x' }), MODELS);
     expect(unavailable.value.modelId).toBeUndefined();
     expect(unavailable.notices).toEqual([
-      'FLUX Ultra cannot run in Create (Temporarily unavailable in Studio.), so the default model is picked.',
+      'FLUX Kontext Pro cannot run in Create (This model cannot generate new images), so the default model is picked.',
     ]);
 
     expect(restoreImageForm(restoreOf({ prompt: 'x' }), MODELS).notices).toEqual([
