@@ -1,10 +1,4 @@
-import {
-  IOrganizationDocument,
-  WithId,
-  canAdministerOrganization,
-  hasOrgPermission,
-  isOrgOwnerOrPlatformAdmin,
-} from '@bike4mind/common';
+import { IOrganizationDocument, WithId, hasOrgPermission, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -223,7 +217,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
-  const canManageModelPolicy = !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
+  const canManageModelPolicy =
+    !!currentUser && !!organization && hasOrgPermission(currentUser, organization, 'managePolicies');
 
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
