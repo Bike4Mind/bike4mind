@@ -3274,11 +3274,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/selfhost/notebookCurationLive.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 2
-    }
-  },
   "apps/workers/src/utils/eventContext.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
