@@ -1235,7 +1235,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'c173f5c5f2f4a79ed3d6c169bf10757ff97586a996ed409685bce280ca671ec7',
+    '4e44fa0cc623338c6b8ecdabdc02e3791addc8805e24d81ad42b05e8ed6d4d38',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
