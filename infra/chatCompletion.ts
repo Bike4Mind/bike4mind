@@ -13,7 +13,7 @@ import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, managedAppDomain, originVerifySecret, router, routePrefix } from './router';
+import { cdnUrlForLambdaEnv, domain, managedAppDomain, originVerifySecret, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
@@ -150,10 +150,19 @@ const ecsSecretGroups = $dev
     ];
 const ecsSecretParameters = ecsSecretGroups && Object.assign({}, ...ecsSecretGroups.map(g => g.ssm));
 
+// A certificate preview stages share instead of requesting one each (ACM caps yearly requests per
+// region). It must cover `chat-origin-<SERVER_DOMAIN>`. See infra/preview-shared-origin-certificate.md.
+const sharedOriginCertificateArn =
+  isPreviewStage && !$dev ? process.env.PREVIEW_CHAT_ORIGIN_CERT_ARN || undefined : undefined;
+
 // Host name the load balancer serves HTTPS on. It sits under the app host so its records land in
-// the hosted zone the stage already writes to. Stages where SST does not manage the app domain
-// (no SERVER_DOMAIN, an operator-supplied certificate, `sst dev`) have none and keep HTTP only.
-const originDomain = !$dev && managedAppDomain ? `chat-origin.${managedAppDomain}` : undefined;
+// the hosted zone the stage already writes to, or beside the stage domain when the shared
+// certificate is in use. Stages where SST does not manage the app domain (no SERVER_DOMAIN, an
+// operator-supplied certificate, `sst dev`) have none and keep HTTP only.
+function originDomainFor(appDomain: string) {
+  return sharedOriginCertificateArn ? `chat-origin-${domain}` : `chat-origin.${appDomain}`;
+}
+const originDomain = !$dev && managedAppDomain ? originDomainFor(managedAppDomain) : undefined;
 const originDns = sst.aws.dns({ override: true });
 
 // Issued here instead of by the Service: the Service resolves its `url` only once every load
@@ -179,7 +188,9 @@ function issueOriginCertificate(domainName: string) {
     { dependsOn: validationRecords }
   ).certificateArn;
 }
-const originCertificateArn = originDomain ? issueOriginCertificate(originDomain) : undefined;
+const originCertificateArn = originDomain
+  ? (sharedOriginCertificateArn ?? issueOriginCertificate(originDomain))
+  : undefined;
 
 export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
