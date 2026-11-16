@@ -62,6 +62,9 @@ A 15-minute blocking lane on every mobile PR is too much, so `mobile-e2e.yml` is
 | PR touching `apps/mobile-e2e`, the runner or the workflow itself | both | full (live flows too) |
 | push to `main`, nightly schedule, Run workflow (choose `smoke` or `full`) | both | full by default |
 
+Both lanes are currently non-blocking (`continue-on-error` on the jobs): the apps have no production build yet, so a
+red lane is a signal, not a merge gate. Drop it from the `ios` and `android` jobs once they ship.
+
 To get the full pass on a PR that only touches an app, run the workflow from the Actions tab on the PR branch.
 Locally, `MOBILE_E2E_SCOPE=smoke scripts/run-flows.sh <platform>` runs the fast pass.
 

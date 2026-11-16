@@ -7,6 +7,10 @@ name: Mobile E2E
 # The full suite (live flows against staging) runs on pushes to main, nightly, on demand (Run workflow), and on
 # PRs that change the suite or this workflow itself.
 #
+# Both lanes are non-blocking (continue-on-error) while the apps are pre-release: no production build exists yet
+# (store accounts pending), so a red lane is a signal to look at, not a merge gate. Remove continue-on-error
+# from the ios and android jobs once the apps ship.
+#
 # Staging test-user secrets (repo secrets; the lanes skip the live flows with a warning when they are unset):
 #   MOBILE_E2E_SERVER_URL      origin of the staging server the Debug builds sign in to
 #   MOBILE_E2E_EMAIL           a staging test user whose address ends in -e2e@test.com
@@ -93,6 +97,7 @@ jobs:
     name: iOS simulator
     needs: changes
     if: needs.changes.outputs.ios == 'true'
+    continue-on-error: true
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -185,6 +190,7 @@ jobs:
     name: Android emulator
     needs: changes
     if: needs.changes.outputs.android == 'true'
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
