@@ -248,6 +248,32 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
+  it('clears a stored set holding only unlisted ids, with step-up and an audit entry', async () => {
+    target({ isAdmin: false, adminPermissions: ['retired:perm'] });
+    const res = await call({ before: [], adminPermissions: [], reason: REASON });
+    expect(res._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
+    expect(mocks.stepUp).toHaveBeenCalledOnce();
+    expect(mocks.update).toHaveBeenCalledWith(
+      { _id: TARGET, adminPermissions: ['retired:perm'] },
+      { $set: { adminPermissions: [] } },
+      { runValidators: true }
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        summary: 'cleared unlisted permission ids retired:perm',
+        changes: [{ field: 'adminPermissions', before: ['retired:perm'], after: [] }],
+      })
+    );
+  });
+
+  it('still writes nothing when the only difference is a repeated listed id', async () => {
+    target({ isAdmin: false, adminPermissions: ['support:read', 'support:read'] });
+    await call({ before: ['support:read'], adminPermissions: ['support:read'], reason: REASON });
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
   it('requires recent verification before writing', async () => {
     mocks.stepUp.mockRejectedValue(Object.assign(new Error('Recent verification required'), { statusCode: 403 }));
     await expect(call({ before: [], adminPermissions: ['support:read'], reason: REASON })).rejects.toMatchObject({

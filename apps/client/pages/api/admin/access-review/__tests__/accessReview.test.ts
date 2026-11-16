@@ -344,6 +344,22 @@ describe('POST decisions', () => {
     );
   });
 
+  it('records a revoke for an admin whose stored ids were all unlisted, from the clearing audit entry', async () => {
+    target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
+    auditRows([
+      permissionsChange('audit-legacy', [{ field: 'adminPermissions', before: ['retired:perm'], after: [] }]),
+    ]);
+    currentAdmins([REVIEWER]);
+    const res = await call(decisions, 'POST', { body: { userId: OTHER, decision: 'revoked' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordDecision).toHaveBeenCalledWith(
+      QUARTER,
+      90,
+      expect.anything(),
+      expect.objectContaining({ decision: 'revoked', auditEntryId: 'audit-legacy', permissions: [] })
+    );
+  });
+
   it('records a full admin who also held direct permissions as a full admin, from both removals', async () => {
     target({ isAdmin: false, adminPermissions: [], adminRoleIds: [] });
     auditRows([

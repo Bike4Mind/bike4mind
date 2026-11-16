@@ -93,7 +93,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       if (!sameSet(before, sortAdminPermissions(stored)) || rolesStale) {
         throw new ConflictError('Admin permissions changed. Reload the profile before trying again.');
       }
-      if (sameSet(before, after) && sameSet(storedRoleIds, nextRoleIds)) {
+      // `before` matched the cleaned stored set, so any stored id outside it is no longer listed. Clearing
+      // those still writes: an account holding only unlisted ids stays an admin until they are gone.
+      const listed: readonly string[] = before;
+      const unlisted = stored.filter(id => !listed.includes(id));
+      const permissionsChanged = !sameSet(before, after) || unlisted.length > 0;
+      if (!permissionsChanged && sameSet(storedRoleIds, nextRoleIds)) {
         return { adminPermissions: before, adminRoleIds: storedRoleIds };
       }
 
@@ -128,10 +133,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       await recordAdminActionFromRequest(req, {
         action: 'user.permissions.updated',
         target: { kind: 'user', id: userId, displayName: user.name || user.username || userId },
-        summary: describeChange(changes),
+        summary: describeChange(changes) || `cleared unlisted permission ids ${unlisted.join(', ')}`,
         reason,
         changes: [
-          ...(sameSet(before, after) ? [] : [{ field: 'adminPermissions', before: [...stored], after }]),
+          ...(permissionsChanged ? [{ field: 'adminPermissions', before: [...stored], after }] : []),
           ...(sameSet(storedRoleIds, nextRoleIds)
             ? []
             : [{ field: 'adminRoleIds', before: storedRoleIds, after: nextRoleIds }]),
