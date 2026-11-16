@@ -16,6 +16,7 @@ import {
   hiddenByCounter,
   nameLabelLayout,
   needsYouGroups,
+  noteCapacity,
   pinNotes,
   placeAgents,
   poseFor,
@@ -106,6 +107,59 @@ describe('pinNotes', () => {
 
   it('gives the last place to the "+N" note once the board is over full', () => {
     expect(pinNotes([1, 2, 3, 4, 5], 3)).toEqual({ pinned: [1, 2], hidden: [3, 4, 5] });
+  });
+});
+
+describe('noteCapacity', () => {
+  // Board heights (px) as measured live in the desktop app, from a large scene down to a tiny one.
+  it.each([
+    [145, 3],
+    [109, 3],
+    [77, 2],
+    [70, 2],
+    [55, 2],
+    [39, 1],
+    [28, 1],
+  ])('fits three quests on a %ipx board as %i places', (height, places) => {
+    expect(noteCapacity(height, 3)).toBe(places);
+  });
+
+  it.each([
+    [145, 3],
+    [109, 3],
+    [77, 2],
+    [39, 1],
+  ])('puts the last place of a %ipx board to the "+N" note for six quests (%i places)', (height, places) => {
+    expect(noteCapacity(height, 6)).toBe(places);
+    const { pinned, hidden } = pinNotes([1, 2, 3, 4, 5, 6], noteCapacity(height, 6));
+    expect(pinned).toHaveLength(places - 1);
+    expect(pinned.length + hidden.length).toBe(6);
+  });
+
+  it('gives no place at all once not even the "+N" note fits, so the board is not drawn', () => {
+    expect(noteCapacity(16, 3)).toBe(0);
+    expect(noteCapacity(7, 6)).toBe(0);
+    expect(noteCapacity(0, 6)).toBe(0);
+  });
+
+  it('never exceeds the layout count and never shrinks as the board grows', () => {
+    let last = 0;
+    for (let height = 0; height <= 400; height += 1) {
+      const places = noteCapacity(height, 10);
+      expect(places).toBeLessThanOrEqual(QUEST_BOARD.notes);
+      expect(places).toBeGreaterThanOrEqual(last);
+      last = places;
+    }
+  });
+
+  it('keeps every quest reachable: pinned notes plus the hidden ones are all of them', () => {
+    for (const height of [0, 20, 40, 60, 80, 100, 150]) {
+      for (const total of [1, 2, 3, 4, 9]) {
+        const items = Array.from({ length: total }, (_, index) => index);
+        const { pinned, hidden } = pinNotes(items, noteCapacity(height, total));
+        expect([...pinned, ...hidden]).toEqual(items);
+      }
+    }
   });
 });
 

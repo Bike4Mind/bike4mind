@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
@@ -8,7 +9,7 @@ import { keyframes } from '@mui/system';
 import type { AgentView } from '../roster';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QUEST_DONE_LINGER_MS, questTitle, type QuestNote } from './quests';
-import { QUEST_BOARD, STATE_LAMP, pinNotes } from './scene';
+import { QUEST_BOARD, STATE_LAMP, noteCapacity, pinNotes } from './scene';
 
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 /** The last stretch (ms) of a finished note's linger, over which it fades before it is taken down. */
@@ -220,10 +221,27 @@ export function QuestBoard({
   selectedId: string | null;
   onSelect(id: string): void;
 }) {
-  const { pinned, hidden } = pinNotes(notes, QUEST_BOARD.notes);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [boardHeight, setBoardHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    setBoardHeight(board.clientHeight);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setBoardHeight(board.clientHeight));
+    observer.observe(board);
+    return () => observer.disconnect();
+  }, []);
+  // Unmeasured (first paint, or no layout) falls back to the layout's nominal count.
+  const capacity = boardHeight ? noteCapacity(boardHeight, notes.length) : QUEST_BOARD.notes;
+  const { pinned, hidden } = pinNotes(notes, capacity);
+  // A board too small for even the "+N" note is left undrawn rather than clipped; an empty one has
+  // nothing to fit and keeps its "No quests posted" note.
+  const tooSmall = notes.length > 0 && capacity === 0;
   const open = notes.filter(note => !note.done).length;
   return (
     <Box
+      ref={boardRef}
       data-testid="orchestrator-tavern-quest-board"
       role="group"
       aria-label={open === 1 ? 'Quest board: 1 open quest' : `Quest board: ${open} open quests`}
@@ -246,6 +264,7 @@ export function QuestBoard({
         background: PLAQUE_WOOD,
         boxShadow: PLAQUE_EDGE,
         overflow: 'hidden',
+        ...(tooSmall && { visibility: 'hidden' }),
       }}
     >
       <Box

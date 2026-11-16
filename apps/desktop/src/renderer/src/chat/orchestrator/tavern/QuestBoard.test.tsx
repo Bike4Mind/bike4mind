@@ -107,4 +107,33 @@ describe('QuestBoard', () => {
     await act(async () => last.click());
     expect(onSelect).toHaveBeenCalledWith(`a${agents.length - 1}`);
   });
+
+  describe('on a board too short for the nominal count', () => {
+    const stubBoardHeight = (height: number) =>
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(height);
+    const threeAgents = () => ['a', 'b', 'c'].map(id => agentFixture(id, 'working'));
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('pins fewer notes and folds the rest into "+N"', async () => {
+      stubBoardHeight(77);
+      await renderTavern(threeAgents());
+      expect(notes()).toHaveLength(1);
+      expect(el('orchestrator-tavern-quest-more').textContent).toContain('+2');
+    });
+
+    it('keeps only the "+N" note when no note fits', async () => {
+      stubBoardHeight(28);
+      await renderTavern(threeAgents());
+      expect(notes()).toHaveLength(0);
+      expect(el('orchestrator-tavern-quest-more').textContent).toContain('+3');
+      expect(getComputedStyle(el('orchestrator-tavern-quest-board')).visibility).not.toBe('hidden');
+    });
+
+    it('leaves the board undrawn when even the "+N" note does not fit', async () => {
+      stubBoardHeight(16);
+      await renderTavern(threeAgents());
+      expect(getComputedStyle(el('orchestrator-tavern-quest-board')).visibility).toBe('hidden');
+    });
+  });
 });
