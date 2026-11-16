@@ -66,7 +66,7 @@ describe('verifyFederatedIdToken', () => {
 
     const { jwksCache } = mockCreate.mock.calls[0][1] as { jwksCache: SimpleJwksCache };
     expect(jwksCache).toBeInstanceOf(SimpleJwksCache);
-    const fetcher = (jwksCache as unknown as { fetcher: SimpleFetcher }).fetcher;
+    const { fetcher } = jwksCache;
     expect(fetcher).toBeInstanceOf(SimpleFetcher);
     expect(fetcher.defaultRequestOptions.headers).toMatchObject({ 'User-Agent': 'Lumina5-JwksFetcher/1.0' });
   });
