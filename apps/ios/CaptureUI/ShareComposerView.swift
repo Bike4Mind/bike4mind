@@ -8,13 +8,15 @@ struct ShareComposerView: View {
   @State var model: ShareComposerModel
   let onFinish: () -> Void
   let onCancel: () -> Void
+  var asksQuestion = false
+  @FocusState private var questionFocused: Bool
   /// Guards `onFinish`: the Done button and the automatic close after "Sent" must not both complete the host.
   @State private var didFinish = false
 
   var body: some View {
     NavigationStack {
       content
-        .navigationTitle("Save to Bike4Mind")
+        .navigationTitle(asksQuestion ? "Point and Ask" : "Save to Bike4Mind")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
@@ -51,6 +53,12 @@ struct ShareComposerView: View {
     Form {
       Section("Items") {
         ForEach(Array(model.items.enumerated()), id: \.offset) { index, item in
+          if asksQuestion, case .image(let file) = item, let image = UIImage(contentsOfFile: file.fileURL.path) {
+            Image(uiImage: image)
+              .resizable().scaledToFit().frame(maxHeight: 180)
+              .accessibilityLabel("Captured photo")
+              .accessibilityIdentifier("capture-ask-preview")
+          }
           HStack {
             Image(systemName: Self.symbol(for: item)).foregroundStyle(.secondary).accessibilityHidden(true)
             VStack(alignment: .leading) {
@@ -87,9 +95,11 @@ struct ShareComposerView: View {
             .font(.footnote).foregroundStyle(.secondary)
         }
       }
-      Section("Note") {
-        TextField("Add a note (optional)", text: $model.note, axis: .vertical)
+      Section(asksQuestion ? "Question" : "Note") {
+        TextField(asksQuestion ? "Ask about this photo" : "Add a note (optional)", text: $model.note, axis: .vertical)
           .lineLimit(1...4)
+          .focused($questionFocused)
+          .onAppear { if asksQuestion { questionFocused = true } }
           .accessibilityIdentifier("share-note-field")
       }
       if case .failed(let message) = model.phase {
