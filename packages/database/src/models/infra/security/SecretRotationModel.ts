@@ -80,19 +80,6 @@ export class SecretRotationRepository
       }
     );
   }
-
-  async findActiveKeys() {
-    return this.secretRotationModel.find({ isActive: true });
-  }
-
-  async countOverdue(input: { now: Date; keyNames: readonly string[]; limit?: number }): Promise<number> {
-    return this.secretRotationModel
-      .countDocuments(
-        { isActive: true, nextRotation: { $lt: input.now }, keyName: { $in: input.keyNames } },
-        { limit: input.limit }
-      )
-      .exec();
-  }
 }
 
 SecretRotationSchema.plugin(softDeletePlugin);
