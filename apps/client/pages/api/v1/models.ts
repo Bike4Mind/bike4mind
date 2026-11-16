@@ -10,6 +10,7 @@
 import { listModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { paginateById } from '@server/utils/cursorPagination';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { getCallerModelList } from '@server/utils/callerModelList';
 import { callablePublicModels, toPublicModelWithReasoning } from '@server/utils/publicModels';
 
@@ -21,7 +22,10 @@ const handler = nextRouteForContract(listModelsContract, {
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
-  const { models } = await getCallerModelList(req.user, req.logger);
+  const { models } = await getCallerModelList(req.user, req.logger, {
+    // Same org a completion with no organization_id is admitted under.
+    organizationId: resolveRequestBillingOrgId(req),
+  });
   const page = paginateById(callablePublicModels(models), { limit, cursor, scope: CURSOR_SCOPE });
 
   // Built from the caller's own provider keys - never cacheable by a shared cache.
