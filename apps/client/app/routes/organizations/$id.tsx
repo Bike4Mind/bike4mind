@@ -1,4 +1,10 @@
-import { IOrganizationDocument, WithId, isOrgOwnerOrCurrentAdmin, isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  WithId,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+  canAdministerOrganization,
+} from '@bike4mind/common';
 import { AdminPageHeader, SegmentedControl } from '@client/app/components/admin/shared';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -14,6 +20,7 @@ import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIn
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
 import OrgCustomMcpPolicySection from '@client/app/components/organizations/OrgCustomMcpPolicySection';
+import OrgModelPolicySection from '@client/app/components/organizations/OrgModelPolicySection';
 import OrgDomainsTab from '@client/app/components/organizations/OrgDomainsTab';
 import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSection';
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
@@ -216,6 +223,8 @@ const OrganizationPage: FC = () => {
     [currentUser, organization]
   );
 
+  const canManageModelPolicy = !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
+
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
@@ -410,16 +419,16 @@ const OrganizationPage: FC = () => {
               <OrganizationOverviewSection organization={organization} />
               <OrganizationRetentionSection key={organization.id} organization={organization} />
             </TabPanel>
-            {selectedTab === OrganizationTabs.Library && (
-              <TabPanel value={OrganizationTabs.Library}>
-                {header(OrganizationTabs.Library)}
+            <TabPanel value={OrganizationTabs.Library}>
+              {header(OrganizationTabs.Library)}
+              {selectedTab === OrganizationTabs.Library && (
                 <OrganizationLibrarySection
                   key={organization.id}
                   organizationId={organization.id}
                   canManage={!!currentUser && isOrgOwnerOrCurrentAdmin(currentUser, organization)}
                 />
-              </TabPanel>
-            )}
+              )}
+            </TabPanel>
             <TabPanel value={OrganizationTabs.Members}>
               {header(OrganizationTabs.Members, {
                 count: currentSeats,
@@ -498,6 +507,11 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Settings}>
                 {header(OrganizationTabs.Settings)}
                 <OrganizationSettingsSection organization={organization} />
+                {canManageModelPolicy && (
+                  <Box sx={{ mt: 4 }}>
+                    <OrgModelPolicySection key={organization.id} organization={organization} />
+                  </Box>
+                )}
               </TabPanel>
             )}
           </Box>

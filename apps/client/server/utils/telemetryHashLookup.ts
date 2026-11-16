@@ -2,6 +2,7 @@ import { regenerateHashesForDeletion } from '@bike4mind/common';
 import { createHmac } from 'crypto';
 import { User, questRepository, organizationRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { normalizeTelemetryUserId } from './telemetryIdentity';
 
 /** Number of days of telemetry to cover when regenerating hashes for DSAR/deletion */
 const TELEMETRY_RETENTION_DAYS = 90;
@@ -18,9 +19,11 @@ export function deriveTelemetrySalts(): { salt: string; dateKey: string }[] {
       '[Telemetry] SECRET_ENCRYPTION_KEY not configured — using predictable fallback salt. Hashes are reversible.'
     );
   }
-  return Array.from({ length: TELEMETRY_RETENTION_DAYS }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
+  // The rolling cutoff intersects this UTC date too, even before its time of day has elapsed.
+  const referenceTime = new Date();
+  return Array.from({ length: TELEMETRY_RETENTION_DAYS + 1 }, (_, daysAgo) => {
+    const date = new Date(referenceTime.getTime());
+    date.setUTCDate(referenceTime.getUTCDate() - daysAgo);
     const dateKey = date.toISOString().split('T')[0];
     const salt = hasValidSecret
       ? createHmac('sha256', hmacSecret).update(dateKey).digest('hex')
@@ -48,7 +51,8 @@ export async function getUserOrgId(userId: string): Promise<string> {
  * Regenerate all possible telemetry hashes for a user across the retention window.
  * Used for DSAR export (find records) and deletion (remove records).
  */
-export async function regenerateUserTelemetryHashes(userId: string): Promise<string[]> {
+export async function regenerateUserTelemetryHashes(rawUserId: string): Promise<string[]> {
+  const userId = normalizeTelemetryUserId(rawUserId);
   const salts = deriveTelemetrySalts();
   const [currentOrgId, membershipOrgIds, historicalOrgIds] = await Promise.all([
     getUserOrgId(userId),

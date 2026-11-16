@@ -35,6 +35,7 @@ vi.mock('@client/app/components/auth/StepUpModal', () => ({ default: none }));
 vi.mock('@client/app/components/WebsocketReactQueryInvalidateListener', () => ({ default: none }));
 vi.mock('@client/app/components/GenerationUpdatesListener', () => ({ default: none }));
 vi.mock('@client/app/components/CreditBalanceSyncListener', () => ({ default: none }));
+vi.mock('@client/app/hooks/data/OrgModelCatalogSync', () => ({ OrgModelCatalogSync: none }));
 vi.mock('@client/app/components/AgentExecutionSubscriber', () => ({ default: none }));
 vi.mock('@client/app/components/stripe/StripeCheckoutSuccessHandler', () => ({ default: none }));
 vi.mock('@client/app/components/stripe/StripePaymentReturnHandler', () => ({ default: none }));
