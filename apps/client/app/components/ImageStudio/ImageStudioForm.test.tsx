@@ -31,6 +31,7 @@ vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
   },
 }));
 
+import { useStudioRestore } from '@client/app/components/Studio/restore/studioRestore';
 import ImageStudioForm from './ImageStudioForm';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -249,6 +250,54 @@ describe('ImageStudioForm', () => {
           request: expect.objectContaining({ prompt: `A lemon tart, ${slate.promptFragment}` }),
         })
       );
+    });
+  });
+
+  describe('restore from the trail', () => {
+    const SOURCE = 'c'.repeat(24);
+    const requestRestore = (request: Record<string, unknown>) =>
+      act(() =>
+        useStudioRestore.getState().requestRestore({
+          medium: 'image',
+          request,
+          lineageInputs: [],
+          fileNames: { [SOURCE]: 'source.png' },
+        })
+      );
+
+    it('fills the form from the restored take and submits it as it was made', () => {
+      const { onSubmit } = renderForm();
+      requestRestore({
+        model: ImageModels.GEMINI_3_1_FLASH_IMAGE,
+        mode: 'generate',
+        prompt: 'a heron at dawn',
+        inputs: [{ role: 'reference', fileId: SOURCE }],
+      });
+
+      expect(screen.getByTestId('image-form-prompt-input')).toHaveValue('a heron at dawn');
+      expect(useStudioRestore.getState().pending).toBeNull();
+      fireEvent.click(submitButton());
+      expect(onSubmit).toHaveBeenCalledWith({
+        count: 1,
+        request: {
+          model: ImageModels.GEMINI_3_1_FLASH_IMAGE,
+          mode: 'generate',
+          prompt: 'a heron at dawn',
+          inputs: [{ role: 'reference', fileId: SOURCE }],
+        },
+      });
+    });
+
+    it('says why a stored value did not come back, until the next model pick', () => {
+      renderForm();
+      requestRestore({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x', seed: 4 });
+
+      const changes = screen.getByTestId('image-form-changes');
+      expect(changes).toHaveTextContent('FLUX Ultra cannot run in Create');
+      expect(changes).toHaveTextContent("Create does not set the seed, so the model's defaults are used.");
+
+      pickCard(ImageModels.GEMINI_3_1_FLASH_IMAGE);
+      expect(screen.queryByTestId('image-form-changes')).not.toBeInTheDocument();
     });
   });
 });
