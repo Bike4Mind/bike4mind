@@ -27,8 +27,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 const txEvents: string[] = [];
-const { mockPolicy, mockFindById, mockFindFresh, mockRequestApproval, mockRedeem } = vi.hoisted(() => ({
+const { mockPolicy, mockFindById, mockFindFresh, mockRequestApproval, mockRedeem, mockFindRoles } = vi.hoisted(() => ({
   mockFindFresh: vi.fn(),
+  mockFindRoles: vi.fn(),
   mockPolicy: vi.fn(),
   mockFindById: vi.fn(),
   mockRequestApproval: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => mockFindById(...a),
     findByIdWithMfaSecrets: (...a: unknown[]) => mockFindFresh(...a),
   },
+  adminRoleRepository: { findByIds: (...a: unknown[]) => mockFindRoles(...a) },
   SupportAccess: { create: vi.fn().mockResolvedValue([]) },
   withTransaction: async (fn: () => Promise<unknown>) => {
     txEvents.push('tx:start');
@@ -76,7 +78,7 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   setAdminReturnCookie: (...a: unknown[]) => mockSetAdminReturnCookie(...a),
 }));
 
-import { ForbiddenError, HTTPError } from '@bike4mind/common';
+import { ForbiddenError, HTTPError, hasAdminPermission } from '@bike4mind/common';
 import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';
 import handler from '../loginAs';
@@ -221,6 +223,90 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     await expect((handler as any)(req, res)).rejects.toThrow('audit down');
     expect(mockSetRefreshCookie).not.toHaveBeenCalled();
     expect(mockSetAdminReturnCookie).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/users/:id/loginAs - target role permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+
+  const impersonate = async (target: Record<string, unknown>) => {
+    mockLoginAs.mockResolvedValueOnce({
+      id: 'target1',
+      name: 'Target',
+      isAdmin: false,
+      adminPermissions: [],
+      ...target,
+    });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+    await invoke(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    return res._getJSONData().user;
+  };
+
+  beforeEach(() => {
+    txEvents.length = 0;
+    mockPolicy.mockReset().mockResolvedValue({ enabled: false, expiryHours: 24 });
+    mockFindRoles.mockReset();
+    mockLoginAs.mockReset();
+    mockIssueSession
+      .mockReset()
+      .mockResolvedValue({ accessToken: 'tok', refreshToken: 'target-refresh', sid: 'sid-1' });
+    mockRecord.mockReset().mockResolvedValue(null);
+    mockSetRefreshCookie.mockReset();
+    mockSetAdminReturnCookie.mockReset();
+  });
+
+  it('carries a role-only permission of the impersonated target on the response user', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+
+    const user = await impersonate({ adminRoleIds: [ROLE_ID] });
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(user.roleAdminPermissions).toEqual(['support:read']);
+    expect(hasAdminPermission(user, 'support:read')).toBe(true);
+    expect(hasAdminPermission(user, 'users:delete')).toBe(false);
+  });
+
+  it('refuses the permission on the next call once the role is removed from the target', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+
+    const before = await impersonate({ adminRoleIds: [ROLE_ID] });
+    const after = await impersonate({ adminRoleIds: [] });
+
+    expect(hasAdminPermission(before, 'support:read')).toBe(true);
+    expect(after.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(after, 'support:read')).toBe(false);
+    expect(mockFindRoles).toHaveBeenCalledTimes(1);
+  });
+
+  it('grants nothing for a deleted role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+
+    const user = await impersonate({ adminRoleIds: [ROLE_ID] });
+
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(user, 'support:read')).toBe(false);
+  });
+
+  it('grants nothing for a malformed role id and never queries the roles', async () => {
+    const user = await impersonate({ adminRoleIds: ['not-an-id'] });
+
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(mockFindRoles).not.toHaveBeenCalled();
+  });
+
+  it('aborts before the session is minted or the start is audited when the role lookup fails', async () => {
+    mockFindRoles.mockRejectedValue(new Error('roles unavailable'));
+    mockLoginAs.mockResolvedValueOnce({ id: 'target1', name: 'Target', isAdmin: false, adminRoleIds: [ROLE_ID] });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+
+    await expect(invoke(req, res)).rejects.toThrow('roles unavailable');
+
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
   });
 });
 
