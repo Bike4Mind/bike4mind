@@ -50,12 +50,18 @@ public struct StudioSeed: Equatable, Sendable {
   public let prompt: String
   public let inputs: [StudioInput]
   public let params: GenerationParams
+  /// The model to select when it is still offered (Branch); nil keeps the bar's choice.
+  public let modelID: String?
 
-  public init(kind: GenerationKind, prompt: String, inputs: [StudioInput], params: GenerationParams = .init()) {
+  public init(
+    kind: GenerationKind, prompt: String, inputs: [StudioInput], params: GenerationParams = .init(),
+    modelID: String? = nil
+  ) {
     self.kind = kind
     self.prompt = prompt
     self.inputs = inputs
     self.params = params
+    self.modelID = modelID
   }
 }
 
