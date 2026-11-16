@@ -1,6 +1,7 @@
 import type { S3ClientConfig } from '@aws-sdk/client-s3';
 
-type EndpointEnv = Partial<Record<'AWS_ENDPOINT_URL_S3' | 'S3_PRESIGN_ENDPOINT', string>>;
+/** `process.env`, or a literal in tests. */
+type EndpointEnv = Record<string, string | undefined>;
 
 /**
  * A custom S3 endpoint (self-host MinIO) is addressed path-style: the default virtual-hosted
