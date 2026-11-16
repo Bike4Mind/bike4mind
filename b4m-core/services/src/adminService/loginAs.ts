@@ -4,6 +4,7 @@ import {
   assertCanActOnAdminTarget,
   hasAdminPermission,
   missingAdminPermissionMessage,
+  type ResolveAdminRoles,
 } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -25,6 +26,8 @@ type LoginAsAdapters = {
   notify: {
     send: (targetUser: IUserDocument) => Promise<void>;
   };
+  /** Resolves the admin's role permissions on the fresh record below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 };
 
 export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParameters, adapters: LoginAsAdapters) => {
@@ -43,10 +46,11 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
 
   // Get fresh admin user data (incl. select:false MFA secrets) for the MFA verification below;
   // req.user is a decoded JWT and never carries totpSecret/backupCodes.
-  const freshAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
-  if (!freshAdmin) {
+  const storedAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
+  if (!storedAdmin) {
     throw new NotFoundError('Admin user not found');
   }
+  const freshAdmin = adapters.resolveAdminRoles ? await adapters.resolveAdminRoles(storedAdmin) : storedAdmin;
 
   // Re-verify on the fresh record - JWT may be stale if privileges were revoked
   if (!hasAdminPermission(freshAdmin, 'users:impersonate')) {

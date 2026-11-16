@@ -58,6 +58,7 @@ import {
   type BrowserTabRequest,
 } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
+import { NO_SKILLS } from '@shared/skills';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { createCompletionRunMinter } from './completionRuns';
@@ -144,6 +145,7 @@ import {
   retireSessionApprovals,
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
+import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
@@ -817,6 +819,7 @@ export function registerChat(
       }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    taskDecisionsChanged: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
@@ -846,11 +849,21 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
-  ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, sessionId: string) => service.listSkills(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
+    const scope = parseSkillsScope(raw);
+    return scope ? service.listSkills(scope) : NO_SKILLS;
+  });
   // Coerced rather than trusted, like the approval mode above: this is the only door to project
   // trust, so anything that is not an explicit `true` has to land as "not trusted".
-  ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
-    service.setProjectSkillsTrusted(sessionId, trusted === true)
+  ipcMain.handle(
+    IPC_CHANNELS.chatSetProjectSkillsTrusted,
+    (_event, raw: unknown, trusted: boolean, expectedProjectDirectory: unknown) => {
+      const scope = parseSkillsScope(raw);
+      const target = skillsTrustTargetSchema.safeParse(expectedProjectDirectory);
+      return scope && target.success
+        ? service.setProjectSkillsTrusted(scope, trusted === true, target.data)
+        : NO_SKILLS;
+    }
   );
   ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
     skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
@@ -919,6 +932,8 @@ export function registerChat(
   );
   registerSessionOrchestrateIpc(ipcMain, service);
   registerOrchestrationIpc(ipcMain, service);
+  // Decisions asked before a restart badge the dock and notify even before a window asks for them.
+  void service.listTaskDecisions();
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.

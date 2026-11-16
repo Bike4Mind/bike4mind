@@ -11,6 +11,7 @@ import {
   shouldAdoptIdentifyToken,
   shouldRevokeForTokenVersion,
   applyUserPush,
+  carryRoleAdminPermissions,
 } from './UserContext';
 
 // Builds a JWT-shaped string (unsigned - decodeTokenVersion never verifies the
@@ -442,5 +443,28 @@ describe('refreshUser single-flight guard', () => {
     await refreshUser();
 
     expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('carryRoleAdminPermissions', () => {
+  const user = (fields: Partial<IUserDocument>) => ({ id: 'u1', ...fields }) as IUserDocument;
+
+  it('keeps the resolved role permissions when an update response for the same user omits them', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ name: 'New' }))?.roleAdminPermissions).toEqual(['support:read']);
+  });
+
+  it('takes a freshly resolved set, even an empty one', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ roleAdminPermissions: [] }))?.roleAdminPermissions).toEqual([]);
+  });
+
+  it('never carries permissions across to a different user', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ id: 'u2' }))?.roleAdminPermissions).toBeUndefined();
+  });
+
+  it('passes a sign-out through', () => {
+    expect(carryRoleAdminPermissions(user({ roleAdminPermissions: ['support:read'] }), null)).toBeNull();
   });
 });
