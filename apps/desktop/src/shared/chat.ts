@@ -1223,11 +1223,9 @@ export type ChatSessionMode = 'chat' | 'code';
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
  *           command that writes outside the granted folders, a read of a `.env` file, a
  *           command that writes permission settings, or the same call a third time in a row.
- *           Commands the scan cannot follow or parse also ask, including unsupported curl
- *           options and multipart forms. After external content, outbound calls and unproven
- *           shell commands also ask; explicit user rules still apply.
- *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
- *           irreversible actions and signed-in browser actions still ask. Chosen per conversation,
+ *           Commands that cannot be parsed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Unparsed commands, protected paths,
+ *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
  *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model

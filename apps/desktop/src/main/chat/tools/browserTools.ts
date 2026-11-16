@@ -58,29 +58,18 @@ async function actsOnLocalPage(context: ToolContext): Promise<boolean> {
 }
 
 /**
- * Whether the page carries cookies the USER imported from their own Chrome.
- *
- * Reaching a site as the signed-in person is not the act that 'auto' and 'full' are a decision
- * about, so everything that touches such a page is asked about in every mode and keyed apart
- * from the same action on the same origin anonymously. See cookies/CookieImporter: a tool can
- * only read this flag, never set one.
+ * Whether the page is a real site carrying cookies the USER imported from their own Chrome. Opening
+ * one asks in every mode, once per origin; nothing after that does. A local dev server never counts. A tool can only read this flag,
+ * never set one (cookies/CookieImporter).
  */
 function onUserSession(context: ToolContext, url: string): boolean {
-  return !!url && (context.browser?.usesImportedCookies(url) ?? false);
+  return !!url && !isLocalUrl(url) && (context.browser?.usesImportedCookies(url) ?? false);
 }
 
 /** Added to an approval the user has to answer themselves, whatever mode they set. */
 const AS_THE_USER = { askInAuto: true, askInFull: true } as const;
 
-function originOf(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return '';
-  }
-}
-
-/** Shared by browser_navigate, browser_snapshot, browser_screenshot and a tab switch: one "always" covers all. */
+/** Opening a signed-in site: the one card for it, shared by browser_navigate and a new tab. */
 function readAsYouApproval(url: string, verb: string): ApprovalPrompt {
   return {
     detail: `${verb} ${url} as your signed-in ${new URL(url).hostname} session`,
@@ -88,62 +77,6 @@ function readAsYouApproval(url: string, verb: string): ApprovalPrompt {
     ...AS_THE_USER,
   };
 }
-
-/**
- * Whether the model may be shown what is on `url`. A site carrying the user's imported cookies
- * needs consent for that very origin: the approval this call ran under, or a standing one.
- *
- * Checked on where the page IS when it is read, never on what was typed: a redirect, a link, a
- * script setting location.href, history and a tab the user opened all reach a page no approval
- * named. Not a navigation gate on the view, because the user browses this pane by hand too and
- * nothing there can tell their click from the agent's.
- */
-function mayRead(context: ToolContext, url: string): boolean {
-  if (!onUserSession(context, url)) return true;
-  const origin = originOf(url);
-  if (!origin) return false;
-  const consented = [
-    `browser-open-as-you:${origin}`,
-    `browser-act-as-you:${origin}`,
-    `browser-script-as-you:${origin}`,
-  ];
-  if (context.approvedKey && consented.includes(context.approvedKey)) return true;
-  return consented.some(key => context.isStanding?.(key) ?? false);
-}
-
-/** Drains the page's events too: they came from the page being withheld. */
-function withheld(page: BrowserPage, lead: string, url: string): string {
-  page.drainEvents();
-  return (
-    `${lead}\nThe page is now on ${originOf(url)}, a site the user is signed in to with cookies imported ` +
-    "from their own browser, so its content is not shown without the user's say-so. Call " +
-    'browser_snapshot to read it, which asks them.'
-  );
-}
-
-/**
- * A cross-origin frame is opaque to the snapshot but not to capturePage, and imported cookies keep
- * SameSite=None, so a page the agent wrote can frame a signed-in site and screenshot it as the user.
- */
-function unreadableFrame(context: ToolContext, page: BrowserPage): string | undefined {
-  return page.frameUrls().find(url => !mayRead(context, url));
-}
-
-function withheldFrame(page: BrowserPage, url: string): string {
-  page.drainEvents();
-  const origin = originOf(url);
-  return (
-    `Took no screenshot.\nThe page embeds ${origin}, a site the user is signed in to with cookies imported ` +
-    "from their own browser, so a screenshot showing it is not taken without the user's say-so. To ask " +
-    `them, call browser_navigate on ${origin}; if they allow it always, a page embedding it can be captured.`
-  );
-}
-
-/** Reading the open page as the signed-in user is asked about as opening it would have been. */
-const gatedRead: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
-  needsApproval: async (_input, context) => onUserSession(context, (await requireBrowser(context).page()).currentUrl()),
-  approval: async (_input, context) => readAsYouApproval((await requireBrowser(context).page()).currentUrl(), 'Read'),
-};
 
 async function actionApproval(
   verb: string,
@@ -153,20 +86,12 @@ async function actionApproval(
   const current = (await requireBrowser(context).page()).currentUrl();
   const origin = new URL(current).origin;
   const target = typeof input.ref === 'string' ? ` (element ${input.ref})` : '';
-  if (onUserSession(context, current)) {
-    return {
-      detail: `${verb} on ${origin}${target}, signed in as you`,
-      key: `browser-act-as-you:${origin}`,
-      ...AS_THE_USER,
-    };
-  }
   return { detail: `${verb} on ${origin}${target}`, key: `browser-act:${origin}` };
 }
 
-/** True for a page that is neither a local dev server nor carrying the user's own session. */
+/** True for a page that is not a local dev server; only "Ask for approval" asks. */
 async function actionNeedsApproval(context: ToolContext): Promise<boolean> {
-  if (!(await actsOnLocalPage(context))) return true;
-  return onUserSession(context, (await requireBrowser(context).page()).currentUrl());
+  return !(await actsOnLocalPage(context));
 }
 
 const gatedAction = (verb: string): Pick<ToolDefinition, 'needsApproval' | 'approval'> => ({
@@ -202,9 +127,7 @@ const gatedScript: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
     const origin = new URL(current).origin;
     return {
       detail: `Run a script on ${origin}, with that site's cookies`,
-      key: `browser-script${onUserSession(context, current) ? '-as-you' : ''}:${origin}`,
-      askInAuto: true,
-      askInFull: true,
+      key: `browser-script:${origin}`,
     };
   },
 };
@@ -226,7 +149,6 @@ async function describePage(
 ): Promise<string> {
   await page.settle(SETTLE_MS);
   const snap = inView ? await page.snapshot(maxChars, true) : await page.snapshot(maxChars);
-  if (!mayRead(context, snap.url)) return withheld(page, lead, snap.url);
   const header = `${lead}\nPage: ${snap.title || '(untitled)'} - ${snap.url}`;
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
@@ -252,7 +174,7 @@ async function loadAndDescribe(context: ToolContext, url: string, label: string,
       const loaded = await page.navigate(url);
       const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
       // A redirect's target can carry a token in its path, so only its origin is named until it may be read.
-      const where = mayRead(context, loaded.url) ? loaded.url : originOf(loaded.url);
+      const where = loaded.url;
       const lead = loaded.stillLoading
         ? `Loaded ${where}${status}, but it was still loading at the time limit, so loading was stopped ` +
           'there. Parts of the page may be missing.'
@@ -327,25 +249,12 @@ function newTabUrl(input: Record<string, unknown>): string {
   return typeof input.url === 'string' && input.url.trim() ? normalizeUrl(input.url) : '';
 }
 
-/** '' for an id that is not open, which `selectTab` then refuses. */
-function selectedTabUrl(input: Record<string, unknown>, context: ToolContext): string {
-  const id = tabId(input);
-  return (
-    requireBrowser(context)
-      .tabs()
-      .find(tab => tab.id === id)?.url ?? ''
-  );
-}
-
 const tabName = (tab: BrowserTabInfo) => tab.title || (tab.url ? hostOf(tab.url) : 'New tab');
 
-/** A signed-in tab's title and path are its content too: an inbox title carries the address and unread count. */
 function listTabs(context: ToolContext, tabs: readonly BrowserTabInfo[]): string {
   if (tabs.length === 0) return 'No tabs are open. browser_navigate or browser_tabs with action "new" opens one.';
   const lines = tabs.map(tab => {
-    const shown = mayRead(context, tab.url)
-      ? `${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`
-      : `(signed in as the user; select it to read it, which asks them) - ${originOf(tab.url)}`;
+    const shown = `${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`;
     return `- tab ${tab.id}${tab.active ? ' (active)' : ''}: ${shown}`;
   });
   return `${tabs.length} of at most ${MAX_BROWSER_TABS} tabs open:\n${lines.join('\n')}`;
@@ -375,12 +284,10 @@ export const browserTabs: ToolDefinition = {
   },
   needsApproval(input, context) {
     const action = tabAction(input);
-    if (action === 'select') return onUserSession(context, selectedTabUrl(input, context));
     if (action !== 'new' || !newTabUrl(input)) return false;
     return browserNavigate.needsApproval!({ url: newTabUrl(input) }, context);
   },
   approval(input, context) {
-    if (tabAction(input) === 'select') return readAsYouApproval(selectedTabUrl(input, context), 'Switch to');
     return browserNavigate.approval!({ url: newTabUrl(input) }, context);
   },
   async run(input, context) {
@@ -419,7 +326,6 @@ export const browserSnapshot: ToolDefinition = {
       'already return a fresh snapshot, so only call this after waiting on something slow.',
     parameters: { type: 'object', properties: {} },
   },
-  ...gatedRead,
   async run(_input, context) {
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
@@ -611,20 +517,13 @@ export const browserScreenshot: ToolDefinition = {
       properties: { caption: { type: 'string', description: 'What this screenshot shows, for the user.' } },
     },
   },
-  ...gatedRead,
   async run(input, context) {
     const browser = requireBrowser(context);
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
       await page.settle(SETTLE_MS);
-      const before = page.currentUrl();
-      const framedBefore = unreadableFrame(context, page);
       const bytes = await page.screenshot();
       const url = page.currentUrl();
-      if (!mayRead(context, before)) return withheld(page, 'Took no screenshot.', before);
-      if (!mayRead(context, url)) return withheld(page, 'Took no screenshot.', url);
-      const framed = framedBefore ?? unreadableFrame(context, page);
-      if (framed) return withheldFrame(page, framed);
       const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
       const kept = await browser.keepScreenshot(bytes, caption);
       if (kept) context.report?.media(kept);
@@ -669,10 +568,7 @@ export const browserEvaluate: ToolDefinition = {
         throw withNullHint(error);
       });
       const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
-      // The value was computed in the origin the gate judged; only what the page did after can be elsewhere.
-      const after = page.currentUrl();
-      const events = mayRead(context, after) ? eventsSection(page) : `\n\n${withheld(page, '', after).trim()}`;
-      return capOutput(`${rendered ?? String(value)}${events}`);
+      return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
     });
   },
 };

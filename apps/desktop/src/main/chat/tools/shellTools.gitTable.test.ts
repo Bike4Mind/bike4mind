@@ -342,7 +342,7 @@ describe('shell approval of common agent git commands', () => {
     expect(await cells(command, '')).toBe('aaaa');
   });
 
-  it('names an unlisted git form and asks about the whole script in every mode', async () => {
+  it('runs an unlisted git form in every mode', async () => {
     const context = {
       roots: [proj],
       workingDirectory: proj,
@@ -351,10 +351,8 @@ describe('shell approval of common agent git commands', () => {
       uncoverablePaths: roots,
     } as ToolContext;
     const prompt = await shellApproval('bash_execute', { command: 'git log -1 && git frobnicate', cwd: proj }, context);
-    expect(prompt.detail).toContain('Runs git in a form Desktop does not list as safe (git frobnicate).');
-    expect(prompt.byPart).toBeUndefined();
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(prompt.always?.commands.map(part => part.ask?.kinds ?? [])).toEqual([[], []]);
   });
 

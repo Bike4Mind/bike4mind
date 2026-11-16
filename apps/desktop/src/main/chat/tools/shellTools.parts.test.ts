@@ -54,22 +54,16 @@ describe('shellApproval per part', () => {
   const parts = (prompt: ApprovalPrompt) =>
     (prompt.always?.commands ?? []).map(({ text, coverable, ask }) => ({ text, coverable, kinds: ask?.kinds ?? [] }));
 
-  it('marks the sending part of a chain, which auto mode runs over a clean reply, leaving the other coverable', async () => {
+  it('puts no ask on a part that may send data out', async () => {
     const prompt = await approve('git status && node -e 1');
-    expect(prompt.byPart).toBe(true);
     expect(prompt.askInAuto).toBeUndefined();
-    expect(parts(prompt)).toEqual([
-      { text: 'git status', coverable: true, kinds: [] },
-      expect.objectContaining({ kinds: ['outbound'] }),
-    ]);
+    expect(parts(prompt).map(part => part.kinds)).toEqual([[], []]);
   });
 
-  it('asks about the whole script when a part has an unread operand', async () => {
+  it('does not ask about a part with an unread operand', async () => {
     const prompt = await approve('git status && rm "$TARGET"');
-    expect(prompt.byPart).toBeUndefined();
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
-    expect(prompt.unchecked).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(parts(prompt)).toEqual([
       { text: 'git status', coverable: true, kinds: [] },
       expect.objectContaining({ coverable: false, kinds: [] }),
@@ -103,9 +97,8 @@ describe('shellApproval per part', () => {
 
   it('keeps a substitution in program position opaque to the part that runs it', async () => {
     const prompt = await approve('git status && $(which node) -v');
-    expect(prompt.byPart).toBeUndefined();
-    expect(prompt.askInAuto).toBe(true);
-    expect(prompt.askInFull).toBe(true);
+    expect(prompt.askInAuto).toBeUndefined();
+    expect(prompt.askInFull).toBeUndefined();
     expect(parts(prompt)[0]).toEqual({ text: 'git status', coverable: true, kinds: [] });
     expect(parts(prompt).at(-1)).toEqual(expect.objectContaining({ coverable: false }));
   });
@@ -135,11 +128,11 @@ describe('shellApproval per part', () => {
       expect(prompt.always?.commands.every(command => !command.coverable)).toBe(true);
     });
 
-    it('a cd that CDPATH may redirect before a part it cannot read', async () => {
-      vi.stubEnv('CDPATH', undefined);
-      whole(await approve('cd src && rm "$TARGET" && git status'));
+    it('a cd that CDPATH may redirect before a part it cannot read does not ask by itself', async () => {
       vi.stubEnv('CDPATH', '/elsewhere');
-      whole(await approve('cd src && rm "$TARGET" && git status'));
+      const prompt = await approve('cd src && rm "$TARGET" && git status');
+      expect(prompt.askInAuto).toBeUndefined();
+      expect(prompt.askInFull).toBeUndefined();
     });
 
     it('a part that runs after a directory change the scan lost', async () => {

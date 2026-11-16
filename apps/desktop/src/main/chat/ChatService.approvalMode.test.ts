@@ -354,7 +354,7 @@ describe('ChatService approval modes', () => {
    * Both still stop for a protected settings write the scan sees or the command's own words name; approve for me
    * also stops for a .env read, a folder outside the project, sending data out and a third repeat.
    */
-  describe('what full access and approve for me still ask about', () => {
+  describe('what full access and approve for me still ask about, and what they run', () => {
     const git = (cwd: string, ...args: string[]): void => {
       execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
         cwd,
@@ -397,22 +397,18 @@ describe('ChatService approval modes', () => {
       ['full', 'git status --frobnicate'],
       ['auto', 'cd sub && ls ; wc -l ../notes.txt'],
       ['full', 'cd sub && ls ; wc -l ../notes.txt'],
-    ] as const)('asks in %s when compound effects remain unread: %s', async (mode, command) => {
+      ['auto', 'git merge --abort'],
+      ['auto', 'git merge --abort && git status --short && git rev-parse HEAD'],
+      ['auto', 'git status && rm -f "$OPAQUE_TARGET"'],
+      ['full', 'git status && rm -f "$OPAQUE_TARGET"'],
+    ] as const)('runs in %s without asking when the scan cannot follow it: %s', async (mode, command) => {
       const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
       await startTurn(mode);
       streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
       streams[0].write(frame('[DONE]'));
-      await awaitStatus('awaiting-approval');
-      expect(execute).not.toHaveBeenCalled();
-    });
-
-    it.each(['auto', 'full'] as const)('asks for opaque commands in %s', async mode => {
-      const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
-      await startTurn(mode);
-      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git status && rm -f "$OPAQUE_TARGET"', cwd: root }));
-      streams[0].write(frame('[DONE]'));
-      await awaitStatus('awaiting-approval');
-      expect(execute).not.toHaveBeenCalled();
+      await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
+      expect(calls('awaiting-approval')).toHaveLength(0);
+      expect(execute).toHaveBeenCalledTimes(1);
     });
 
     it.each(['auto', 'full'] as const)('asks for unparsed commands in %s', async mode => {
@@ -446,7 +442,7 @@ describe('ChatService approval modes', () => {
       ['a .env read', 'cat .env', 'usually holds secrets'],
       ['a folder outside the granted ones it may write in', 'cd /etc && make', '/etc'],
       ['a visible write to .claude/settings.json', 'cp notes.txt .claude/settings.json', 'Desktop protects'],
-      ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'cannot follow'],
+      ['a settings write it cannot follow', 'D=.claude; cp notes.txt "$D/settings.json"', 'settings file'],
       ['a script it cannot parse that names .env', 'cat .env; if then fi ((', '.env'],
     ])('asks in approve for me before %s', async (_, command, reason) => {
       await writeFile(join(root, '.env'), 'SECRET=1\n', 'utf8');
@@ -469,15 +465,6 @@ describe('ChatService approval modes', () => {
         expect(calls('done')).toHaveLength(0);
       }
     );
-
-    it('asks on the first unlisted Git command in approve for me', async () => {
-      await startTurn('auto');
-      streams[0].write(toolTurn('c1', 'bash_execute', { command: 'git status --frobnicate', cwd: root }));
-      streams[0].write(frame('[DONE]'));
-
-      const asked = await awaitStatus('awaiting-approval');
-      expect(asked.id).toBe('c1');
-    });
 
     it('retains remote-clone destination evidence after a Git reference change', async () => {
       const context = { roots: [root], workingDirectory: root, signal: new AbortController().signal };
