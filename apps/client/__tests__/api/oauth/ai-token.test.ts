@@ -395,7 +395,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     await handler(req as never, res as never);
 
     expect(res._getStatusCode()).toBe(401);
-    expect(req.logger.warn).toHaveBeenCalledWith(expect.not.stringContaining('(cause:'));
+    expect(req.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('(cause:'));
     expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('bad signature'));
   });
 
