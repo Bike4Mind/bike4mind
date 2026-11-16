@@ -55,18 +55,18 @@ const PERMISSION_CHECKED_IN_HANDLER = new Map<string, string>([
   ['admin/release-notes/[id].ts', 'assertCanAdministerReleaseNotes also admits the release-notes:write job key'],
 ]);
 
+const ORG_MANAGER_REASON = 'org owner or manager operates the org; verifyOrgAccess lets an admin through';
+
 /**
  * Routes that serve ordinary users (owner, org member, author, self) where `isAdmin` only widens
  * access as an override, shapes the response, or is data rather than the caller's gate. These are
  * not admin gates, so they need no admin permission. An `adminApi()` route lands here when the flag
  * only shapes what an already-permitted caller sees.
  */
-const ORG_MANAGER_REASON = 'org owner or manager operates the org; verifyOrgAccess lets an admin through';
-
 const OWNER_OR_ADMIN = new Map<string, string>([
+  ['admin/users/index.ts', 'support delegates list users; isAdmin only shows a full admin the org detail'],
   ['agents/[id]/embed-keys.ts', 'agent owner or org admin may manage embed keys; admin also sees all keys'],
   ['agents/[id]/missions.ts', 'agent owner may view/own missions; admin overrides the access check'],
-  ['admin/users/index.ts', 'support delegates list users; isAdmin only shows a full admin the org detail'],
   ['ai/rapid-reply.ts', 'any user; admin only widens the Opti toggle bypass (isOpti), not a gate'],
   ['briefcase/catalog.ts', 'admin sees all system prompts; users see entitled ones'],
   ['briefcase/prompts/[id].ts', 'admin read visibility only; update/delete are owner-only'],
@@ -91,7 +91,6 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['inbox/read.ts', 'receiver marks own inbox read; admin may mark any'],
   ['memory/[kind]/[id].ts', 'lake owner deletes lake memory; admin override in canShredLakeMemory'],
   ['oauth/federated-admin.ts', "reports target user's isAdmin as data to a relying party; no caller admin gate"],
-  ['otc/verify.ts', 'sign-in; reads the signing-in account isAdmin as data for the self-host first-admin bootstrap'],
   ['organizations/[id]/api-keys/[keyId]/callback-secret.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/api-keys/[keyId]/index.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/api-keys/[keyId]/revoke.ts', ORG_MANAGER_REASON],
@@ -135,6 +134,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   ['organizations/[id]/retention.ts', ORG_MANAGER_REASON],
+  ['organizations/[id]/upload-logo.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/webhooks/github.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
   [
     'organizations/[id]/webhooks/github/replay-dlq.ts',
@@ -145,11 +145,11 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'org owner manages the org; verifyOrgOwner lets an admin through',
   ],
   ['organizations/[id]/webhooks/github/test.ts', 'org owner manages the org; verifyOrgOwner lets an admin through'],
-  ['organizations/[id]/upload-logo.ts', ORG_MANAGER_REASON],
   ['organizations/stats.ts', 'members see own orgs stats; admin sees all orgs'],
   ['organizations/subscriptions/subscribe.ts', 'org owner (verifyOrgOwner) subscribes the org'],
   ['organizations/subscriptions/update-seats.ts', 'billing owner or admin may change seats'],
   ['organizations/users.ts', 'org owner/manager reports; admin may pick another org via verifyOrgAccess'],
+  ['otc/verify.ts', 'sign-in; reads the signing-in account isAdmin as data for the self-host first-admin bootstrap'],
   [
     'publish/[publicId]/restore.ts',
     'owner or admin restores a published artifact; isAdmin also forwarded as actor flag',
