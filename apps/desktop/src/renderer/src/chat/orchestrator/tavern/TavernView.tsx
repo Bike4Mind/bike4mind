@@ -1,7 +1,17 @@
 import Box from '@mui/joy/Box';
 import { useTheme } from '@mui/joy/styles';
 import { keyframes } from '@mui/system';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
@@ -18,6 +28,7 @@ import type { AgentPersona } from '@shared/agentPersona';
 import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { useAgentAnnouncements } from './announcements';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
+import { NeedsYouBubble } from './NeedsYouBubble';
 import { OverflowStack, type StackedAgent } from './OverflowStack';
 import {
   DOOR_POINT,
@@ -26,7 +37,7 @@ import {
   STATE_LAMP,
   assignCharacters,
   nameLabelLayout,
-  needsYouBubbles,
+  needsYouGroups,
   hiddenByCounter,
   placeAgents,
   poseFor,
@@ -52,6 +63,8 @@ const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
 // Above every seated sprite (zIndex is its y, at most 100) and the overflow stacks (101).
 const LIFTED_Z = 102;
+// Over the Innkeeper's reply bubble (250) and under the order slip (300), which the user opened on purpose.
+const ANSWER_BUBBLE_Z = 260;
 
 type CssVars = CSSProperties & Record<`--${string}`, string | number>;
 const HIDDEN_LABEL: NameLabel = { lane: 0, maxWidth: 0, shown: false };
@@ -333,6 +346,35 @@ function NameLabelPlate({
   );
 }
 
+/**
+ * Holds an answerable bubble over a seat. It sits outside the sprite's own button (buttons cannot
+ * nest) and above every sprite; near a wall it hangs inward so the scene's edge never clips it.
+ */
+function BubbleAnchor({ point, children }: { point: SlotPoint; children: ReactNode }) {
+  const side =
+    point.x < 25
+      ? { left: '-1.5cqw' }
+      : point.x > 75
+        ? { right: '-1.5cqw' }
+        : { left: 0, transform: 'translateX(-50%)' };
+  return (
+    <Box
+      data-ambient-quiet
+      style={{ left: `${point.x}%`, top: `${point.y}%` }}
+      sx={{
+        position: 'absolute',
+        zIndex: ANSWER_BUBBLE_Z,
+        width: 0,
+        height: SPRITE_HEIGHT,
+        transform: 'translateY(-100%)',
+        pointerEvents: 'none',
+      }}
+    >
+      <Box sx={{ position: 'absolute', bottom: '88%', width: 'max-content', ...side }}>{children}</Box>
+    </Box>
+  );
+}
+
 function Sprite({
   agent,
   point,
@@ -350,7 +392,7 @@ function Sprite({
   agent: AgentView;
   point: SlotPoint;
   label: NameLabel;
-  /** How many waiting agents this sprite's bubble speaks for (needsYouBubbles); 0 when another sprite carries it. */
+  /** How many waiting agents this sprite's bubble speaks for (needsYouGroups); 0 when another sprite carries it. */
   needsYou: number;
   persona: AgentPersona | undefined;
   character: CharacterId;
@@ -601,9 +643,12 @@ export function TavernView({
   desk,
   settled = false,
   pause,
+  answerFromBubble = true,
 }: OrchestratorViewProps & {
   /** When the scene holds still; the mini Tavern pauses as soon as it loses focus. */
   pause?: ScenePauseOptions;
+  /** The "needs you" bubbles carry the answer buttons; off where another card already answers (the mini Tavern). */
+  answerFromBubble?: boolean;
 }) {
   const mode = useTheme().palette.mode;
   const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
@@ -654,11 +699,15 @@ export function TavernView({
       ...[...stacks].map(([zone, stack]) => [`${STACK_KEY}${zone}`, stack.point] as const),
     ])
   );
-  const needsYou = needsYouBubbles(
+  const needsYouGroupsByCarrier = needsYouGroups(
     visible
       .filter(({ agent }) => agent.state === 'needs-you')
       .map(({ agent, placement }) => ({ id: agent.id, zone: placement.zone, point: placement.point }))
   );
+  const needsYou = new Map([...needsYouGroupsByCarrier].map(([id, group]) => [id, group.length]));
+  // Until everyone is seated the bubble rides inside the walking sprite; after that it stands on its own with buttons.
+  const answerBubbles = answerFromBubble && arrived ? needsYouGroupsByCarrier : new Map<string, string[]>();
+  const agentsById = new Map(agents.map(agent => [agent.id, agent]));
   // The bar's bubble sits on the line of the Innkeeper's plate at every stage size, so the plate
   // steps aside while it is up; pointing at the Innkeeper still shows it (LIFTED).
   const barCalling = visible.some(({ agent, placement }) => placement.zone === 'bar' && needsYou.has(agent.id));
@@ -676,7 +725,13 @@ export function TavernView({
   const statusBubble = innkeeperBubble(parent);
   // Only while the conversation is hidden: with the dock open the reply is already in plain sight.
   const reply =
-    desk?.reply && desk.conversationHidden && !slip && !statusBubble && desk.reply.id !== dismissedReply
+    desk?.reply &&
+    desk.conversationHidden &&
+    !slip &&
+    !statusBubble &&
+    // An answerable bubble at the bar sits where the reply would; the reply waits until it is answered.
+    !(barCalling && answerBubbles.size > 0) &&
+    desk.reply.id !== dismissedReply
       ? desk.reply
       : undefined;
   const selectInnkeeper = desk
@@ -780,7 +835,7 @@ export function TavernView({
             agent={agent}
             point={arrived ? placement.point : DOOR_POINT}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
-            needsYou={needsYou.get(agent.id) ?? 0}
+            needsYou={answerBubbles.has(agent.id) ? 0 : (needsYou.get(agent.id) ?? 0)}
             persona={personas.get(agent.id)}
             character={characters.get(agent.id) ?? 1}
             via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
@@ -791,6 +846,21 @@ export function TavernView({
             onSelect={onSelect}
           />
         ))}
+        {[...answerBubbles].map(([carrierId, group]) => {
+          const point = placements.get(carrierId)?.point;
+          const waiting = group.flatMap(id => agentsById.get(id) ?? []);
+          if (!point || waiting.length === 0) return null;
+          return (
+            <BubbleAnchor key={carrierId} point={point}>
+              <NeedsYouBubble
+                testId={`orchestrator-tavern-bubble-${carrierId}`}
+                waiting={waiting}
+                nameOf={shortName}
+                onOpen={onSelect}
+              />
+            </BubbleAnchor>
+          );
+        })}
         <Innkeeper
           point={innkeeperPoint}
           pose={celebrating ? 'cheering' : visit ? 'walking' : act.pose}

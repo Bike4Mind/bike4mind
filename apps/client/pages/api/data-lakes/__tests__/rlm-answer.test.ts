@@ -27,6 +27,7 @@ const {
   mockRecordReplSandboxUnavailable: vi.fn(),
   meter: {
     denied: new Set<string>(),
+    admissionArgs: vi.fn(),
     refund: vi.fn(),
     reserve: vi.fn(),
     settle: vi.fn(),
@@ -109,12 +110,15 @@ vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
 }));
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
 vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: async () => ({
-    admits: async (id: string) => !meter.denied.has(id),
-    assert: async (id: string) => {
-      if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
-  }),
+  createModelAdmission: async (...args: unknown[]) => {
+    meter.admissionArgs(...args);
+    return {
+      admits: async (id: string) => !meter.denied.has(id),
+      assert: async (id: string) => {
+        if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+      },
+    };
+  },
   reserveCompletionCredits: (...args: unknown[]) => meter.reserve(...args),
   resolveShadowSubstitute: (...args: unknown[]) => meter.substitute(...args),
   completionUsd: (model: { id: string }, u: { inputTokens?: number; outputTokens?: number }) =>
@@ -637,6 +641,18 @@ describe('POST /api/data-lakes/rlm-answer - completion quotas', () => {
     expect(meter.reserve).not.toHaveBeenCalled();
     expect(mockAgentRun).not.toHaveBeenCalled();
     expect(mockQuotaRelease).not.toHaveBeenCalled();
+  });
+
+  it("admits the model under the org-billed key's organization policy", async () => {
+    const { req, res } = makeReqRes({ 'x-api-key': 'test-key' });
+    const orgKeyRequest = {
+      ...req,
+      apiKeyInfo: { keyId: 'key-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
+    };
+    await (handler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(orgKeyRequest, res);
+    expect(meter.admissionArgs).toHaveBeenCalledWith(expect.anything(), expect.anything(), false, {
+      organizationId: 'org-1',
+    });
   });
 
   it('passes a JWT request to the credential-aware admission helper', async () => {
