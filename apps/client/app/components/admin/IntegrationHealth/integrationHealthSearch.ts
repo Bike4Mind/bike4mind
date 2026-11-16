@@ -9,6 +9,7 @@ import { oneOf } from '../adminSearchValues';
 export const ADMIN_INTEGRATION_HEALTH_TAB_SLUG = 'integration-health';
 
 export const INTEGRATION_HEALTH_TIME_RANGES = ['24h', '7d', '30d'] as const;
+// Mirrors INTEGRATION_HEALTH_INTEGRATIONS in @bike4mind/database (IntegrationHealthCheckModel.ts) - keep in sync.
 export const INTEGRATION_NAMES = ['slack', 'github', 'jira', 'confluence'] as const;
 
 export type TimeRange = (typeof INTEGRATION_HEALTH_TIME_RANGES)[number];
