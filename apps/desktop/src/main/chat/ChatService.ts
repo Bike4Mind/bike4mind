@@ -3890,7 +3890,8 @@ export class ChatService {
       let scopeVersion = this.scopeVersion(sessionId);
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
-      const serverConfig = api ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+      const serverConfig =
+        api && (!localTurn || this.deps.media) ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {

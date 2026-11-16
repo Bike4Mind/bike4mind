@@ -260,6 +260,7 @@ describe('ChatService generation tools', () => {
         : { cdnUrl: '/api/app-files/serve' }
     );
     const { id } = await service.createSession();
+    apiGet.mockClear();
     await service.send(id, 'hi');
     await vi.waitUntil(() => events.some(event => event.type === 'done'));
     const request = local.mock.calls.find(([request]) => request.tools?.length)?.[0];
@@ -275,6 +276,8 @@ describe('ChatService generation tools', () => {
       'loop',
       'generate_video',
     ]);
+    expect(apiGet.mock.calls).toEqual([['/api/settings/serverConfig'], ['/api/v1/video-models', { timeout: 5_000 }]]);
+    expect(apiPost).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
   });
 
@@ -310,10 +313,11 @@ describe('ChatService generation tools', () => {
         });
       else emit({ type: 'content', text: 'Read locally', stopReason: 'end_turn' });
     });
-    await build({ media: true, roots: [], local });
+    await build({ media: false, roots: [], local });
     apiPost.mockResolvedValue({ result: 'Public bicycle information' });
     const { id } = await service.createSession();
     await service.renameSession(id, 'User chosen title');
+    apiGet.mockClear();
     await service.send(id, 'private conversation text');
     await vi.waitUntil(() => events.some(event => event.type === 'done'));
     expect(apiPost).toHaveBeenCalledWith(path, input, expect.objectContaining({ signal: expect.any(AbortSignal) }));
@@ -321,6 +325,7 @@ describe('ChatService generation tools', () => {
     expect(local).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(local.mock.calls[1][0].messages)).toContain('Public bicycle information');
     expect(local.mock.calls.every(([request]) => request.model === 'local:ollama:qwen3:8b')).toBe(true);
+    expect(apiGet).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
   });
 
