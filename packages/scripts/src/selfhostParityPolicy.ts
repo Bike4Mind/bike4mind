@@ -262,7 +262,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('function:infra/database.ts:DatabaseSeeder', '653abf813d7a9c59d9a6d53bf9d9be0a6c5e36669cc53860b896b9cee574cc5a', [
     'ssm:GetParameter',
   ]),
-  gap('function:infra/dataSyncer.ts:DataSyncer', '6b34c84dc682604d934700c4c8156e0127c4779ea369a3de7a3d02649fae6b9b'),
+  gap('function:infra/dataSyncer.ts:DataSyncer', '3c215ebb7ff8e4c86aef66974ee68f921878325b54610d1c5774f18da50ef5bb'),
   gap(
     'function:infra/imageProcessor.ts:ImageProcessor',
     'c5e9f27f05e17f199f30caf0c9d784d11c16095ef237b4ebd8df1fa2a68f8b47'
@@ -798,21 +798,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:whatsNewGenerationQueueDLQ',
     'e57a7345766ccd52531a45ce89ad2c994bc132aae123cf9664c62a15dad70b47'
   ),
-  gapBecause(
-    'queue:infra/queues.ts:whatsNewHighlightsQueue',
-    '4b33ee03bb5d034852e26a4c3e9c7c78a09d5a4d76cdf807829e4fdc2fc33384',
-    'Not registered. Legacy highlights queue retained to drain hosted in-flight messages; the admin route now produces to whatsNewGenerationQueue.',
-    [
-      'bedrock:InvokeModel',
-      'bedrock:InvokeModelWithResponseStream',
-      'cloudwatch:PutMetricData',
-      'import:@aws-sdk/client-cloudwatch',
-    ]
-  ),
-  broker(
-    'queue:infra/queues.ts:whatsNewHighlightsQueueDLQ',
-    '132ea676c87ab70c72d8f1f1e6fa195c3f0ecac4af6383acd0ea59e22c4427fc'
-  ),
   broker(
     'queue:infra/revenueSnapshotDeadLetter.ts:revenueSnapshotDlq',
     'fd103df5f8b6caa0d4d0e1b4397e7324565612ed1e7ac29cc5c7facecb6fdec9'
@@ -1250,7 +1235,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '7f82c9a6daf1298781ec962e6a7ecff9022aa54eaf8c2b4d02c82cdc40d12ab7',
+    'c173f5c5f2f4a79ed3d6c169bf10757ff97586a996ed409685bce280ca671ec7',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),

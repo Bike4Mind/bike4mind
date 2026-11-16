@@ -35,6 +35,9 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 await import('../rotate-secret');
 
 const storedConfig = {
@@ -64,6 +67,7 @@ describe('POST /api/organizations/[id]/webhooks/github/rotate-secret', () => {
     h.findByOrganizationId.mockResolvedValue({ ...storedConfig });
     h.update.mockImplementation(async (partial: Record<string, unknown>) => ({ ...storedConfig, ...partial }));
     h.countByOrganization.mockResolvedValue(0);
+    h.verifyOrgPermission.mockResolvedValue({ id: 'org-1', name: 'Acme' });
   });
 
   it('writes exactly the new encrypted secret and reveals the plain one once', async () => {
@@ -76,6 +80,21 @@ describe('POST /api/organizations/[id]/webhooks/github/rotate-secret', () => {
     expect(h.update).toHaveBeenCalledWith({ id: 'cfg-1', secret: 'enc(new-plain-secret)' });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ secret: 'new-plain-secret' }));
+  });
+
+  it('records the rotation without the secret', async () => {
+    await h.handler!({ query: { id: 'org-1' }, user: { id: 'user-1' } }, makeRes());
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    const [, entry] = recordAdminActionFromRequest.mock.calls[0] as unknown as [unknown, Record<string, unknown>];
+    expect(entry).toMatchObject({
+      action: 'org.webhook.secret_rotated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: 'org-1', displayName: 'Acme' },
+      details: { webhookConfigId: 'cfg-1' },
+    });
+    expect(JSON.stringify(entry)).not.toContain('new-plain-secret');
+    expect(JSON.stringify(entry)).not.toContain('enc(');
   });
 
   it('writes nothing when the rate limit is exhausted', async () => {

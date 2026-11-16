@@ -46,7 +46,9 @@ export const createFileUploadContract = defineEndpoint({
     '(1) call this endpoint with the file name, MIME type, and size in bytes; ' +
     '(2) `PUT` the raw bytes to `upload_url` before `upload_url_expires_at` - send no ' +
     '`Authorization` header, the URL signature is the credential, and do send a `Content-Type` ' +
-    'matching `mime_type`; the URL is bound to `file_size`, so the body must be exactly that many ' +
+    'matching `mime_type` and `If-None-Match: *`, which makes the upload create-only (a URL may ' +
+    'require it, and a PUT onto an object that already landed is refused with 412); the URL is ' +
+    'bound to `file_size`, so the body must be exactly that many ' +
     'bytes or storage refuses it with 403; (3) poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` ' +
     '(usually a few seconds after the PUT), then pass `id` wherever an endpoint ' +
     'takes a file id (for example `fabFileIds` and `referenceImageFabFileIds` on ' +

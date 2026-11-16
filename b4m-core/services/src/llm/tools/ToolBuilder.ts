@@ -590,13 +590,8 @@ export class ToolBuilder {
     // today. If it is ever reused for corrections or refunds, a negative entry would be
     // silently dropped here - widen this to `credits !== 0` at the same time.
     //
-    // NOTE this set is RESERVATION-scoped while the row's amount is SETTLEMENT-scoped
-    // (ChatCompletionProcess sums quest.promptMeta.functionCalls[].creditsUsed, which
-    // settleToolCallCredits distributes from these same queues). A reservation with no
-    // surviving function call drops out of the total but keeps its model here, so the two
-    // can disagree: the row can go blank over a model it did not end up billing. That
-    // errs toward saying nothing, never toward a wrong name, which is the direction this
-    // whole rule is built to fail in.
+    // NOTE this set and the ledger row's amount both come from the reservation queues
+    // (toolCreditsMap), so a model is named only for a charge that was actually billed.
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 

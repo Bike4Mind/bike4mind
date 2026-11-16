@@ -37,6 +37,9 @@ vi.mock('sst', () => ({ Resource: {} }));
 // Only `verifyOrgPermission` is exported, so a route reverted to another org gate would fail loudly here.
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
+
 await import('../replay-dlq');
 
 describe('POST /api/organizations/[id]/webhooks/github/replay-dlq', () => {
@@ -62,5 +65,6 @@ describe('POST /api/organizations/[id]/webhooks/github/replay-dlq', () => {
     expect(h.findDeliveries).not.toHaveBeenCalled();
     expect(h.sqsSend).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

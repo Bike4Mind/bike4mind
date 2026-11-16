@@ -14,7 +14,7 @@ Merge two queues into one queue + one consumer Lambda only where **consumer prof
 |---|---|---|---|
 | Email job / batch | `emailJobQueue`, `emailBatchQueue` | Keep | Memory class, timeout, batch shape and queue visibility all differ, and the two handlers are a fan-out producer and a sender. |
 | Email ingestion / analysis | `emailIngestionQueue`, `emailAnalysisQueue` | Keep | IAM differs (`bedrock:*` plus SES vs `bedrock:InvokeModel`), timeout differs (5 vs 2 minutes), and the parser is an S3-event consumer while the analyzer takes `{ emailId }`. |
-| Release notes / highlights | `whatsNewGenerationQueue`, `whatsNewHighlightsQueue` | Merge (follow-up: https://github.com/Bike4Mind/bike4mind/issues/5662) | The two subscriptions match field for field (timeout, links, permissions, files, batch shape) and both use retry 3 with identical 14-day encrypted DLQs. |
+| Release notes / highlights | `whatsNewGenerationQueue`, `whatsNewHighlightsQueue` | Merged (https://github.com/Bike4Mind/bike4mind/issues/5662): `whatsNewGenerationQueue` and `whatsNewJob.dispatch` serve both kinds; the highlights queue is removed | The two subscriptions match field for field (timeout, links, permissions, files, batch shape) and both use retry 3 with identical 14-day encrypted DLQs. |
 
 Not covered: the Tavern and Analytics candidates and the queue-per-consumer CLAUDE.md rule from the issue's original description. The tightened acceptance dropped them.
 
@@ -62,6 +62,8 @@ Memory, runtime and retry match. Timeout, queue visibility (5 vs 3 minutes), bat
 
 ## 3. What's New
 
+**Status: merged.** `whatsNewGenerationQueue` is the only What's New queue; `whatsNewJob.dispatch` routes on `kind` (`release-notes` or `highlights`), and `whatsNewHighlightsQueue`, its DLQ and its subscription are removed. The table and checklist below record the state before the merge.
+
 Evidence: `infra/queues.ts` (release notes on the legacy `whatsNewGenerationQueue` name; highlights as `whatsNewHighlightsQueue`).
 
 | Field | `whatsNewGenerationQueue` (release notes) | `whatsNewHighlightsQueue` |
@@ -102,7 +104,7 @@ Observations (not fixed here):
 - `apps/client/pages/api/admin/whats-new-backfill.ts` still enqueues a `WhatsNewGenerationPayload` to `whatsNewGenerationQueue`. `releaseNotes.dispatch` recognizes it as legacy, logs, and drops it (`isLegacyPayload`), so the route has no effect.
 - `apps/workers/src/queueHandlers/whatsNewGeneration.ts` (the retired generator) is still in the tree and is no longer wired to a queue subscription in `infra/queues.ts`.
 - `infra/emailMarketing.ts` comments still say batches of 16 recipients; the orchestrator uses 25.
-- The highlights DLQ alarm is tagged `application: 'WhatsNewGeneration'`, while the release-notes one is `ReleaseNotes` (`infra/dlqAlarms.ts`).
+- The highlights DLQ alarm was tagged `application: 'WhatsNewGeneration'`, while the release-notes one is `ReleaseNotes` (`infra/dlqAlarms.ts`). Resolved by the merge: the highlights DLQ and its alarm are gone.
 
 ## Merge-cost checklist (What's New)
 

@@ -77,12 +77,17 @@ describe('org-connect callback: API posting opt-ins', () => {
     mockClearApiPosting.mockResolvedValue([]);
   });
 
-  it('drops opt-ins on the connected workspace that another organization granted, and writes no audit when there are none', async () => {
+  it('drops opt-ins on the connected workspace that another organization granted, and audits only the connect when there are none', async () => {
     const res = await runCallback();
 
     expect(mockClearApiPosting).toHaveBeenCalledTimes(1);
     expect(mockClearApiPosting).toHaveBeenCalledWith('T-new', 'org-a');
-    expect(mockRecordAudit).not.toHaveBeenCalled();
+    expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'user-1', scope: 'organization' }),
+      expect.objectContaining({ action: 'org.slack.connected', details: { slackTeamId: 'T-new' } })
+    );
     expect(mockWorkspaceCreate).toHaveBeenCalled();
     expect(res._getData()).toContain('slack_connected=true');
   });
