@@ -3,7 +3,14 @@ import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo';
-import { DELETED_USER_EMAIL, DELETED_USER_ID, DELETED_USER_NAME, DELETED_USER_OBJECT_ID } from './placeholder';
+import {
+  DELETED_USER_EMAIL,
+  DELETED_USER_ID,
+  DELETED_USER_NAME,
+  DELETED_USER_OBJECT_ID,
+  REDACTED_IP,
+  REDACTED_VALUE,
+} from './placeholder';
 import { SubjectErasureExecutor } from './subjectErasureExecutor';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
 import type { DataHolderRegistry } from './types';
@@ -37,6 +44,18 @@ const Page = mongoose.model(
 const Ledger = mongoose.model('DsxLedger', new Schema({ ownerId: ObjectId, campaign: String, watcherIds: [ObjectId] }));
 const Organization = mongoose.model('Organization');
 const Draft = mongoose.model('DsxDraft', new Schema({ userId: String, organizationId: String }));
+const projectSchema = new Schema({ ownerId: ObjectId, name: String });
+projectSchema.index({ ownerId: 1, name: 1 }, { unique: true });
+const Project = mongoose.model('DsxProject', projectSchema);
+const Audit = mongoose.model(
+  'DsxAudit',
+  new Schema({
+    actorId: ObjectId,
+    actorName: { type: String, required: true },
+    sourceIp: { type: String, required: true },
+    userAgent: { type: String, required: true },
+  })
+);
 
 const retention = { expiresBy: 'policy', years: 7, from: 'the transaction date' } as const;
 
@@ -114,6 +133,20 @@ const registry: DataHolderRegistry = {
   Organization: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['billingContact'] }],
+  },
+  DsxProject: { kind: 'holder', references: [{ path: 'ownerId', matchBy: 'userId', action: 'anonymize' }] },
+  DsxAudit: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'actorId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'Security record',
+        retention,
+        alsoRedact: ['actorName', 'sourceIp', 'userAgent'],
+      },
+    ],
   },
 };
 
@@ -226,6 +259,49 @@ describe('SubjectErasureExecutor', () => {
     expect(remaining).toEqual(['DsxPerson', 'Organization']);
   });
 
+  it('anonymizes a unique index key per row, so a second erasure does not collide', async () => {
+    await Project.init();
+    const first = await seedPerson();
+    const second = await Person.create({ email: 'second@example.com' });
+    await Project.create([
+      { ownerId: first.me._id, name: 'Demo' },
+      { ownerId: second._id, name: 'Demo' },
+    ]);
+
+    await new SubjectErasureExecutor(first.subject, noLease, registry).run();
+    await new SubjectErasureExecutor(
+      { userId: second.id as string, email: 'second@example.com' },
+      noLease,
+      registry
+    ).run();
+
+    const owners = (await raw(Project)).map(({ ownerId }) => String(ownerId));
+    expect(new Set(owners).size).toBe(2);
+    for (const owner of owners) {
+      expect(owner).toMatch(/^0{8}[0-9a-f]{16}$/);
+      expect([String(first.me._id), String(second._id)]).not.toContain(owner);
+    }
+  });
+
+  it('redacts a required field to a value of its own kind', async () => {
+    const { me, subject } = await seedPerson();
+    const audit = await Audit.create({
+      actorId: me._id,
+      actorName: 'Me',
+      sourceIp: '203.0.113.9',
+      userAgent: 'curl/8',
+    });
+
+    await new SubjectErasureExecutor(subject, noLease, registry).run();
+
+    expect(await Audit.collection.findOne({ _id: audit._id })).toMatchObject({
+      actorId: me._id,
+      actorName: DELETED_USER_NAME,
+      sourceIp: REDACTED_IP,
+      userAgent: REDACTED_VALUE,
+    });
+  });
+
   it('stops writing when the lease is lost, leaving later models untouched', async () => {
     const { me, subject } = await seedPerson();
     await Note.create({ ownerId: me._id });
@@ -303,6 +379,50 @@ describe('SubjectErasureExecutor', () => {
 
     expect(await Draft.collection.findOne({ _id: moved._id })).toMatchObject({ userId: me.id, organizationId: team });
     expect(await Draft.collection.countDocuments({ _id: stayed._id })).toBe(0);
+  });
+
+  it('leaves a personal file retagged between the read and the write', async () => {
+    const { me, subject } = await seedPerson();
+    const FabFile = mongoose.model('FabFile');
+    const retagged = new mongoose.Types.ObjectId();
+    const untouched = new mongoose.Types.ObjectId();
+    await FabFile.collection.insertMany([
+      { _id: retagged, userId: me.id, tags: [{ name: 'notes' }] },
+      { _id: untouched, userId: me.id, tags: [{ name: 'notes' }] },
+    ]);
+    const fileRegistry: DataHolderRegistry = {
+      DsxPerson: registry.DsxPerson,
+      FabFile: {
+        kind: 'holder',
+        references: [
+          { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+          { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+        ],
+      },
+    };
+    const collections = SubjectErasurePlan.prototype.collections;
+    const spy = vi.spyOn(SubjectErasurePlan.prototype, 'collections').mockImplementation(function (
+      this: SubjectErasurePlan,
+      checkpoint,
+      sink
+    ) {
+      return collections.call(this, checkpoint, async (model, entries) => {
+        if (model === 'FabFile') {
+          expect(entries.map(({ outcome }) => outcome)).toEqual(['deleted', 'deleted']);
+          // Tagging a file into a lake is what makes it an organization file.
+          await FabFile.collection.updateOne({ _id: retagged }, { $push: { tags: { name: 'team-lake' } } });
+        }
+        await sink?.(model, entries);
+      });
+    });
+    try {
+      await new SubjectErasureExecutor(subject, noLease, fileRegistry).run();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await FabFile.collection.countDocuments({ _id: retagged })).toBe(1);
+    expect(await FabFile.collection.countDocuments({ _id: untouched })).toBe(0);
   });
 
   it('changes nothing on a second run', async () => {

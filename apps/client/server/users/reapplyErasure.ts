@@ -23,10 +23,10 @@ type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
  * Erase an account again after a database restore brought its rows back, repeating what the original
  * path removed (record.initiatedBy): a self-serve or unknown-path erasure also purges files, content and
  * the personal org (completeAccountDeletion.ts); an admin one deletes the row and runs the shared
- * purge only. An 'admin' record cannot tell an admin delete (server/admin/deleteUserAsAdmin.ts, which
- * purges no content) from an admin erasure (completeAccountDeletion.ts, which also runs the content
- * purge and erasureRegistry.erase), so replay does only what both share and does not repeat an admin
- * erasure's content purge or registry erase. Keep in sync with those and with hardDeleteUser.ts.
+ * purge only. An 'admin' record alone cannot tell an admin delete (server/admin/deleteUserAsAdmin.ts,
+ * which purges no content) from an admin erasure (completeAccountDeletion.ts), so the restored row
+ * decides: a scheduled admin deletion (`deletion.source` or the `deletion.erasureScope` snapshot) was
+ * an erasure and is repeated in full. Keep in sync with those and with hardDeleteUser.ts.
  *
  * Sends no notifications or billing calls: no subscription cancel, deletion email, analytics event or
  * Slack/email notification, and `integrationGrants: null` skips the provider revokes. The original
@@ -47,12 +47,16 @@ export async function reapplyErasure(
 ): Promise<{ ownedOrganizationIds: string[] }> {
   const owned = await Organization.find({ userId, deletedAt: null, personal: { $ne: true } }, { _id: 1 }).lean();
   const writeRecord = () => erasureRecordRepository.record(record);
-  const restored = await User.findById(userId, { email: 1 }).lean<{ email?: string | null }>();
+  const restored = await User.findById(userId, { email: 1, deletion: 1 }).lean<{
+    email?: string | null;
+    deletion?: { source?: string; erasureScope?: unknown } | null;
+  }>();
   const subject = { userId, email: restored?.email ?? null };
+  const adminErasure = restored?.deletion?.source === 'admin' || restored?.deletion?.erasureScope != null;
   // Fail before deleting the retry anchor if realtime invalidation cannot complete. Unlike the
   // best-effort revoke service, replay must report a partial erasure as a failure.
   await realtimeConnectionRepository.endConnections({ userId });
-  if (record.initiatedBy !== 'admin') {
+  if (record.initiatedBy !== 'admin' || adminErasure) {
     // File erasure acquires its own User lease and permanent export fence, including restored
     // accounts without a deletion schedule. No scheduled-deletion lease exists for content replay.
     const assertLease = async () => {};

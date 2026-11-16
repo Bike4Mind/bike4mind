@@ -301,6 +301,22 @@ describe('reapplyErasure after a simulated restore', () => {
     expect(effects.purge).toHaveBeenCalledWith(id, expect.objectContaining({ integrationGrants: null }));
   });
 
+  it('repeats an admin erasure in full when the restored row shows a scheduled admin deletion', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'admin', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    await raw(User).updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { deletion: { source: 'admin', erasureScope: [] } } }
+    );
+
+    await reapplyErasure(id, { record, logger });
+
+    expect(await raw(Organization).countDocuments({ userId: id })).toBe(0);
+    expect(await raw(Session).countDocuments({ userId: id })).toBe(0);
+  });
+
   it('reports a non-personal organisation the restored account still owned, by org id', async () => {
     const { id, insertRows } = await seedAccount();
     await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'admin', logger }, users => users.delete(id));

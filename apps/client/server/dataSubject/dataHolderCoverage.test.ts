@@ -12,6 +12,7 @@ import {
   schemaDeclaresPath,
 } from './schemaPaths';
 import type { DataHolder, UserReference } from './types';
+import { uniqueIndexPaths } from './placeholder';
 
 const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
@@ -233,6 +234,22 @@ describe('data holder registry', () => {
         .map(reference => `${name}.${reference.path}`)
     );
     expect(misplaced).toEqual([]);
+  });
+
+  it('never redacts a unique index key to a shared placeholder', () => {
+    // The executor gives an anonymized `path` in a unique key a per-row placeholder, but `alsoRedact`
+    // fields get one shared value, which would collide (E11000) at the second erasure.
+    const collisions = classifiedModels.flatMap(name => {
+      const holder = DATA_HOLDER_REGISTRY[name];
+      if (holder.kind === 'noUserData') return [];
+      const unique = uniqueIndexPaths(mongoose.model(name).schema);
+      return referencesOf(holder).flatMap(reference =>
+        alsoRedactOf(reference)
+          .filter(path => unique.has(path))
+          .map(path => `${name}.${path}`)
+      );
+    });
+    expect(collisions).toEqual([]);
   });
 
   it.each(

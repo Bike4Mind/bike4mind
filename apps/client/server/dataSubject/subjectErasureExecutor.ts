@@ -3,7 +3,7 @@ import { mongoose } from '@bike4mind/database';
 import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
-import { DELETED_USER_NAME, DELETED_USER_OBJECT_ID, deletedUserValue } from './placeholder';
+import { deletedUserValue, redactedValue, uniqueIndexPaths } from './placeholder';
 import { SubjectErasurePlan, type ErasureCheckpoint, type ErasureEntry } from './subjectErasurePlan';
 import {
   MATCH_BATCH,
@@ -138,7 +138,10 @@ export class SubjectErasureExecutor {
         const clause = { ...reference.where, [reference.path]: { $in: values } };
         // A personal row moved into an organization since the read is no longer the person's to delete.
         if (reference.scope !== 'personal') return [clause];
-        return [{ $and: [clause, personalFilter(this.subject.userId, workspaces, reference.path)] }];
+        const personal = personalFilter(this.subject.userId, workspaces, reference.path);
+        // A file joins an organization lake by tag (isOrganizationFile), so a retag since the read voids it.
+        if (model === 'FabFile') return [{ $and: [clause, personal, { tags: document.tags ?? null }] }];
+        return [{ $and: [clause, personal] }];
       });
       return {
         _id: document._id,
@@ -182,7 +185,8 @@ export class SubjectErasureExecutor {
       return { update: { $pull: { [positional(segments.slice(0, lastArray + 1), arrays, null)]: condition } } };
     }
 
-    const placeholder = deletedUserValue(values[0], reference.matchBy);
+    const unique = uniqueIndexPaths(mongoose.model(model).schema).has(reference.path);
+    const placeholder = deletedUserValue(values[0], reference.matchBy, unique ? document._id : undefined);
     if (lastArray === undefined) {
       const redactions = this.redactions(model, reference.alsoRedact ?? [], null);
       return { update: compact({ ...redactions, $set: { ...redactions.$set, [reference.path]: placeholder } }) };
@@ -220,7 +224,7 @@ export class SubjectErasureExecutor {
       if (!type?.isRequired) {
         $unset[target] = '';
       } else {
-        $set[target] = type.instance === 'ObjectId' ? DELETED_USER_OBJECT_ID : DELETED_USER_NAME;
+        $set[target] = redactedValue(path, type.instance);
       }
     }
     return { $set, $unset };
