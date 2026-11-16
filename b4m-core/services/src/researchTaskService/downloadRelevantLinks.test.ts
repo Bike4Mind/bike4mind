@@ -3,6 +3,7 @@ import {
   downloadRelevantLinks,
   MAX_LINKS_PER_RESEARCH_TASK,
   MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK,
+  MAX_LINK_DOWNLOAD_BYTES,
 } from './downloadRelevantLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ResearchTaskType, ResearchTaskStatus, KnowledgeType } from '@bike4mind/common';
@@ -910,7 +911,8 @@ describe('downloadRelevantLinks', () => {
   });
 
   describe('per-task download limits', () => {
-    const MAX_FILE = 50 * 1024 * 1024;
+    const MAX_FILE = MAX_LINK_DOWNLOAD_BYTES;
+    const MiB = 1024 * 1024;
 
     const makeLinks = (n: number) =>
       Array.from({ length: n }, (_, i) => ({
@@ -974,6 +976,12 @@ describe('downloadRelevantLinks', () => {
       // 250 MiB budget at 50 MiB per file: 5 downloads, the rest skipped.
       const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
       expect(mockedDownload).toHaveBeenCalledTimes(fullFiles);
+      expect(mockedDownload.mock.calls.map(c => c[0]).sort()).toEqual(
+        links
+          .slice(-fullFiles)
+          .map(l => l.url)
+          .sort()
+      );
       expect(mockDb.researchTasks.addWarning).toHaveBeenCalledTimes(1);
       expect(mockDb.researchTasks.addWarning).toHaveBeenCalledWith(
         'test-task-id',
@@ -995,8 +1003,70 @@ describe('downloadRelevantLinks', () => {
       await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
 
       const maxes = mockedDownload.mock.calls.map(c => c[1]?.maxBytes as number);
-      expect(Math.min(...maxes)).toBeLessThan(MAX_FILE);
-      expect(Math.min(...maxes)).toBeGreaterThan(0);
+      // Five files of 49 MiB leave exactly the rest of the budget for the last link.
+      const lastReserve = MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK - fullFiles * (MAX_FILE - MiB);
+      expect(maxes).toEqual([...Array(fullFiles).fill(MAX_FILE), lastReserve]);
+    });
+
+    it('does not reuse bytes of a download that succeeded before a later step threw', async () => {
+      const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
+      setup(makeLinks(fullFiles + 1));
+      mockedDownload.mockImplementation(async (_url, opts) => ({
+        data: bigBuffer(opts?.maxBytes ?? 0),
+        contentType: undefined,
+        finalUrl: '',
+      }));
+      mockedFabFilesService.createFabFile.mockRejectedValueOnce(new Error('storage down'));
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      // The failed link already downloaded its bytes, so they stay spent.
+      expect(mockedDownload).toHaveBeenCalledTimes(fullFiles);
+      expect(mockDb.researchTasks.addWarning).toHaveBeenCalledWith(
+        'test-task-id',
+        expect.stringContaining('skipped 1 links')
+      );
+    });
+
+    it('downloads the remaining small links when slow downloads only reserved the budget', async () => {
+      const links = makeLinks(25); // download order: doc24 (highest relevance) first
+      setup(links);
+      const slow = new Map<string, () => void>();
+      mockedDownload.mockImplementation(async url => {
+        const index = Number(/doc(\d+)/.exec(url)?.[1]);
+        const rank = 24 - index; // 0 = first started
+        if (rank < 3) return { data: bigBuffer(MAX_FILE), contentType: undefined, finalUrl: '' };
+        if (rank < 5) {
+          await new Promise<void>(resolve => slow.set(url, resolve));
+          return { data: bigBuffer(1024), contentType: undefined, finalUrl: '' };
+        }
+        return { data: bigBuffer(1024), contentType: undefined, finalUrl: '' };
+      });
+
+      const done = downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+      await vi.waitFor(() => expect(slow.size).toBe(2));
+      // Queued links must wait for the two reservations instead of being skipped.
+      expect(mockedDownload).toHaveBeenCalledTimes(5);
+      slow.forEach(release => release());
+      await done;
+
+      expect(mockedDownload).toHaveBeenCalledTimes(25);
+      expect(mockDb.researchTasks.addWarning).not.toHaveBeenCalled();
+    });
+
+    it('still skips a link when the budget is spent and nothing is in flight', async () => {
+      const fullFiles = Math.floor(MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK / MAX_FILE);
+      setup(makeLinks(fullFiles + 1));
+      mockedDownload.mockImplementation(async (_url, opts) => ({
+        data: bigBuffer(opts?.maxBytes ?? 0),
+        contentType: undefined,
+        finalUrl: '',
+      }));
+
+      await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+      expect(mockedDownload).toHaveBeenCalledTimes(fullFiles);
+      expect(mockDb.researchTasks.addWarning).toHaveBeenCalledTimes(1);
     });
 
     it('refunds the reservation when a download fails', async () => {

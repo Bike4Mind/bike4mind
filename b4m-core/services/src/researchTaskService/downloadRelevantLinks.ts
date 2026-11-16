@@ -69,7 +69,7 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
 // TODO: have this as an admin settings
 const BATCH_SIZE = 3;
 // Safety net only; createFabFile still enforces the MaxFileSize admin setting afterwards.
-const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const LINK_DOWNLOAD_TIMEOUT_MS = 60_000;
 // Count of links downloaded per research task (highest relevance first).
 export const MAX_LINKS_PER_RESEARCH_TASK = 25;
@@ -133,6 +133,16 @@ export const downloadRelevantLinks = async (
   let budgetSkippedCount = 0;
   // Bytes are reserved synchronously before each await, so concurrent downloads cannot overshoot the budget.
   let remainingBytes = MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK;
+  // Reserved bytes of downloads still running; they come back unused if a download is smaller or fails.
+  let inFlightBytes = 0;
+  let settleWaiters: Array<() => void> = [];
+  const settle = (reservedBytes: number, usedBytes: number) => {
+    remainingBytes += reservedBytes - usedBytes;
+    inFlightBytes -= reservedBytes;
+    const waiters = settleWaiters;
+    settleWaiters = [];
+    waiters.forEach(wake => wake());
+  };
   const files: IFabFileDocument[] = [];
   const progressPerDownload = Math.floor(18 / relevantLinks.length); // Reserve 18% for downloads (within 29% range)
 
@@ -141,6 +151,10 @@ export const downloadRelevantLinks = async (
       limit(async () => {
         let reserved = 0;
         try {
+          // Skip or shrink the reservation only once no in-flight download can still refund bytes.
+          while (remainingBytes < MAX_LINK_DOWNLOAD_BYTES && inFlightBytes > 0) {
+            await new Promise<void>(wake => settleWaiters.push(wake));
+          }
           if (remainingBytes <= 0) {
             budgetSkippedCount++;
             await sendStatusUpdate(`\u23ed\ufe0f Skipped (download budget reached): ${link.text}`, progressPerDownload);
@@ -148,13 +162,14 @@ export const downloadRelevantLinks = async (
           }
           reserved = Math.min(MAX_LINK_DOWNLOAD_BYTES, remainingBytes);
           remainingBytes -= reserved;
+          inFlightBytes += reserved;
           logger?.info(`📥 [DOWNLOAD] Starting download: ${link.url}`);
           // Scraped page links are attacker-influenced: fetch through the full SSRF guard.
           const { data: buffer } = await ssrfSafeDownload(link.url, {
             maxBytes: reserved,
             timeoutMs: LINK_DOWNLOAD_TIMEOUT_MS,
           });
-          remainingBytes += reserved - buffer.length;
+          settle(reserved, buffer.length);
           reserved = 0;
           const fileType = await fileTypeFromBuffer(buffer);
           const index = getIndex(link.url) + 1;
@@ -247,7 +262,7 @@ export const downloadRelevantLinks = async (
             progressPerDownload
           );
         } catch (error) {
-          remainingBytes += reserved;
+          if (reserved > 0) settle(reserved, 0);
           logger?.error(`❌ [DOWNLOAD_ERROR] Failed to download file from ${link.url}: ${(error as Error).message}`);
           // Generic on purpose: the guard's message can name the private address a hostname resolved
           // to, which is logged above, not surfaced to the task owner.
