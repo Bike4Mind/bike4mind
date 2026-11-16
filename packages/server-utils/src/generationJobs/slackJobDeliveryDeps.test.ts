@@ -60,7 +60,7 @@ describe('createSlackJobDeliveryDeps getSlackClient', () => {
     });
     await expect(deps().getSlackClient('w1')).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
-      'slack bot token could not be decrypted; skipping video delivery',
+      'slack bot token could not be decrypted; skipping Slack delivery',
       expect.objectContaining({ workspaceId: 'w1' })
     );
     expect(h.initializeSlackPackage).not.toHaveBeenCalled();

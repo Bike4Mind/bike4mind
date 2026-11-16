@@ -77,6 +77,18 @@ describe('buildWatchSnapshot', () => {
     expect(snapshot.needsYouCount).toBe(1);
   });
 
+  it('counts a decision-waiting worker task as needs-you with nothing pending or waiting since', () => {
+    const waiting = session('a', 'root', {
+      workerTask: { state: { status: 'completed', accepted: false } },
+    } as Partial<ChatSessionSummary>);
+    const base = input({ sessions: [session('root', null), waiting, session('b', 'root')] });
+    const snapshot = buildWatchSnapshot(base);
+    expect(snapshot.overall).toBe('needs-you');
+    expect(snapshot.needsYouCount).toBe(1);
+    expect(snapshot.needsYouCount).toBe(needsYouCount(new Map(), base.sessions));
+    expect(snapshot.pending).toEqual([]);
+  });
+
   it('is done only for a finished orchestration nobody has looked at yet', () => {
     expect(buildWatchSnapshot(input({ unacknowledgedDone: new Set(['root']) })).overall).toBe('done');
     expect(buildWatchSnapshot(input()).overall).toBe('idle');

@@ -18,6 +18,15 @@ vi.mock('../utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ download: mocks.generatedDownload }),
 }));
 vi.mock('../utils/sqs', () => ({ sendToQueue: vi.fn() }));
+// Both read SST config when loaded; the group completion fan-out is not under test here.
+vi.mock('./imageGroupPush', () => ({
+  imageGroupPushSubscriber: vi.fn(() => ({ name: 'push', wants: () => false, deliver: async () => {} })),
+}));
+vi.mock('../utils/pushNotifications', () => ({
+  appPathDeepLink: (path: string) => path,
+  appRootDeepLink: () => '/',
+  publishPushNotification: vi.fn(async () => undefined),
+}));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {

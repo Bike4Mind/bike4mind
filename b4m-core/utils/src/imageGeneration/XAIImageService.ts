@@ -1,6 +1,7 @@
 import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { ImageModels } from '@bike4mind/common';
 import { ImageModerationBlockedError } from './imageGenerationErrors';
 
@@ -51,7 +52,7 @@ export class XAIImageService extends AIImageService {
         prompt,
         model: options.model ?? ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
         n: options.n || 1,
-        user: options.user,
+        user: toProviderEndUserId(options.user),
       });
 
       if (!response.data || response.data.length === 0) {

@@ -25,6 +25,7 @@ import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
+import { captureCodeFromFragment } from './routes/personas/personaRedeemCode';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -47,6 +48,7 @@ import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
+  PERSONA_LOGIN_PAGE_PATH,
   SUBSCRIBER_SOURCES,
   type IntegrationsPageSource,
   type SubscriberSource,
@@ -121,6 +123,7 @@ const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassi
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
+const PersonaRedeemPage = lazy(() => import('./routes/personas/redeem'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -907,13 +910,14 @@ const organizationDetailRoute = createRoute({
       <OrganizationDetailPage />
     </Suspense>
   ),
-  // Declares `tab` as this route's search contract, mirroring profileRoute. The page reads it via
-  // useSearch({ strict: false }), so this types the param rather than being what makes it work.
-  // Deliberately not exhaustive: the Slack org-connect callback returns to this route carrying
-  // slack_connected/slack_error, which OrgSlackIntegration reads loosely. Keep those reads loose,
-  // or declare the params here too - a strict schema listing only `tab` would hide them.
-  validateSearch: (search: Record<string, unknown>): { tab?: string } => {
-    return { tab: optionalStringParam(search, 'tab') };
+  // Declares `tab` and the Integrations tab's `section` as this route's search contract, mirroring
+  // profileRoute. The page reads them via useSearch({ strict: false }), so this types the params
+  // rather than being what makes them work. Deliberately not exhaustive: the Slack org-connect
+  // callback returns to this route carrying slack_connected/slack_error, which OrgSlackIntegration
+  // reads loosely. Keep those reads loose, or declare the params here too - a strict schema listing
+  // only `tab` and `section` would hide them.
+  validateSearch: (search: Record<string, unknown>): { tab?: string; section?: string } => {
+    return { tab: optionalStringParam(search, 'tab'), section: optionalStringParam(search, 'section') };
   },
 });
 
@@ -1372,6 +1376,19 @@ const bedrockNewsClaimRoute = createRoute({
   }),
 });
 
+// Test-persona sign-in (the mint response's login_path) - no layout, public. The code arrives in the
+// fragment and is moved out of the address before render; the page POSTs it to the redeem API.
+const personaRedeemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: PERSONA_LOGIN_PAGE_PATH,
+  beforeLoad: () => captureCodeFromFragment(),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <PersonaRedeemPage />
+    </Suspense>
+  ),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1491,6 +1508,7 @@ const routeTree = rootRoute.addChildren([
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
   bedrockNewsClaimRoute,
+  personaRedeemRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect

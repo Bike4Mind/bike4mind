@@ -27,8 +27,8 @@ export type MusicJobDeps = {
   resolveApiKey(providerId: MusicProviderId, userId: string): Promise<string | null>;
   /**
    * saveGeneratedAsset bound to the user's files. Idempotent per `generation.jobId`. `signal` is the step's
-   * lease-bounded signal; its abort must reject rather than report an ordinary save failure. The handler then
-   * falls back to saveToGeneratedBucket with a fresh bounded signal, so the song is still kept.
+   * lease-bounded signal; its abort must reject rather than report an ordinary save failure. storeGeneratedOutput
+   * then falls back to saveToGeneratedBucket with a fresh bounded signal, so the song is still kept.
    */
   saveToFiles(params: {
     userId: string;

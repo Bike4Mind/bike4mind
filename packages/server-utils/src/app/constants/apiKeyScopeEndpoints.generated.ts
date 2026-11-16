@@ -64,6 +64,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/files/tags/counts',
     'GET /api/v1/files',
     'GET /api/v1/files/:id',
+    'GET /api/v1/files/:id/lineage',
     'GET /api/v1/files/by-ids',
     'GET /api/v1/files/search',
   ],
@@ -213,6 +214,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agents/:id/generate-avatar',
     'POST /api/v1/agents/:id/generate-description',
     'POST /api/v1/agents/:id/generate-system-prompt',
+    'POST /api/v1/agents/:id/transfer-credits',
+    'POST /api/v1/agents/from-context',
   ],
   [ApiKeyScope.ME_READ]: [
     'GET /api/credits/transactions',

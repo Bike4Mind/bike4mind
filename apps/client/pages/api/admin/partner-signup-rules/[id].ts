@@ -17,6 +17,7 @@ import {
 import { assertGrantPackageExists, assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 
 interface RequestQuery {
   id: string;
@@ -58,7 +59,8 @@ const handler = adminApi({
       // Present (and non-null) only when the update sets/changes the org association.
       if (data.organizationId) await assertOrganizationExists(data.organizationId);
       // Also the "before" side of the audit diff. Read outside the transaction, so a concurrent PUT
-      // can leave `before` stale; acceptable for a last-writer-wins edit.
+      // can leave `before` stale; acceptable for a last-writer-wins edit. The managed-tag check
+      // re-reads inside the transaction instead.
       const stored = await partnerSignupRuleRepository.findById(id);
       // Only a changed package must be active: the edit form re-sends the current id, and a rule
       // linked to a since-deactivated package must stay editable.
@@ -72,6 +74,12 @@ const handler = adminApi({
       }
 
       const updated = await withTransaction(async () => {
+        // Rule tags are stamped at signup and outlive the rule. Read in the transaction, so a
+        // concurrent edit conflicts instead of being judged against a stale row.
+        if (data.tags) {
+          const current = await partnerSignupRuleRepository.findById(id);
+          assertCanChangeManagedTags(req.user, current?.tags, data.tags);
+        }
         const rule = await partnerSignupRuleRepository.update({ id, ...data });
         // Null => the row was deleted between check and write (or never existed). 404 rather
         // than a 200 with an empty body. update() decides existence; the findById above only

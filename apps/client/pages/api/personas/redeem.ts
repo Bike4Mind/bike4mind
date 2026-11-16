@@ -1,7 +1,8 @@
 /**
- * Redeems a single-use persona login code from POST /api/v1/personas for a session.
- *   GET  ?code=  browser sign-in: sets the HttpOnly refresh cookie and redirects to the app.
- *   POST {code}  headless bots: returns an access and refresh token pair.
+ * Redeems a single-use persona login code from POST /api/v1/personas for a session. POST only, so
+ * the code travels in the body and never in a URL:
+ *   {code, session: 'browser'}  the /personas/redeem page (login_path): sets the HttpOnly refresh cookie.
+ *   {code}                      headless bots: returns an access and refresh token pair.
  * The code is the only credential, so the route is auth: false and refuses API keys by having no
  * auth at all. A code is 256 random bits, stored only as a hash, lives 5 minutes, and is consumed
  * atomically, so a replay or a race gets one session at most.
@@ -20,7 +21,7 @@ import { logSignInSuccess } from '@server/auth/signInSecondFactor';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { loadPersonaSettings, redeemPersonaLoginCode } from '@server/personas/personaAccounts';
 
-const RedeemBodySchema = z.strictObject({ code: z.string().max(64) });
+const RedeemBodySchema = z.strictObject({ code: z.string().max(64), session: z.literal('browser').optional() });
 const INVALID_CODE = 'Login code is invalid, expired or already used';
 
 const sessionParams = (persona: { tokenVersion?: number; personaExpiresAt?: Date | null }, now: Date) => ({
@@ -42,28 +43,8 @@ const noStore = (res: Response) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
 };
 
-const handler = baseApi({ auth: false })
+const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'personas-redeem' }))
-  .get(
-    asyncHandler(async (req: Request, res: Response) => {
-      noStore(res);
-      if (!(await loadPersonaSettings(req.logger)).enabled) {
-        return res.status(404).json({ error: 'Not found', errorCode: PERSONA_ENDPOINT_OFF_CODE });
-      }
-      // Checked before the code is spent: replacing a signed-in browser's session with a persona's
-      // is how a forwarded link would swap someone into a test account, or drop an impersonation.
-      if (readRefreshCookie(req) || readAdminReturnCookie(req)) {
-        return res.status(409).json({ error: 'This browser is already signed in. Sign out or use a private window.' });
-      }
-      const code = typeof req.query.code === 'string' ? req.query.code : '';
-      const now = new Date();
-      const persona = await redeemPersonaLoginCode(code, now, loginClient(req));
-      if (!persona) return res.status(400).json({ error: INVALID_CODE });
-      await issueBrowserSession(req, res, persona.id, sessionParams(persona, now));
-      await logSignInSuccess(req, { userId: persona.id, strategy: 'persona', trustedDevice: null });
-      return res.redirect(303, '/');
-    })
-  )
   .post(
     asyncHandler(async (req: Request, res: Response) => {
       noStore(res);
@@ -72,9 +53,24 @@ const handler = baseApi({ auth: false })
       }
       const parsed = RedeemBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: INVALID_CODE });
+      const browser = parsed.data.session === 'browser';
+      // Browsers label a cross-site form POST; a page on another site must not sign this browser in.
+      if (browser && req.headers['sec-fetch-site'] === 'cross-site') {
+        return res.status(403).json({ error: 'Cross-site sign-in is not allowed' });
+      }
+      // Checked before the code is spent: replacing a signed-in browser's session with a persona's
+      // is how a forwarded link would swap someone into a test account, or drop an impersonation.
+      if (browser && (readRefreshCookie(req) || readAdminReturnCookie(req))) {
+        return res.status(409).json({ error: 'This browser is already signed in. Sign out or use a private window.' });
+      }
       const now = new Date();
       const persona = await redeemPersonaLoginCode(parsed.data.code, now, loginClient(req));
       if (!persona) return res.status(400).json({ error: INVALID_CODE });
+      if (browser) {
+        await issueBrowserSession(req, res, persona.id, sessionParams(persona, now));
+        await logSignInSuccess(req, { userId: persona.id, strategy: 'persona', trustedDevice: null });
+        return res.status(204).end();
+      }
       const { accessToken, refreshToken } = await issueSessionForRequest(req, persona.id, sessionParams(persona, now));
       await logSignInSuccess(req, { userId: persona.id, strategy: 'persona', trustedDevice: null });
       return res.status(200).json({

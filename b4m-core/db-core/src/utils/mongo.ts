@@ -255,6 +255,24 @@ export const getDB = () => {
   return mongoose;
 };
 
+const afterCommitBySession = new WeakMap<mongoose.mongo.ClientSession, Map<string, () => Promise<unknown>>>();
+
+/**
+ * Queues `work` to run once the withTransaction owning `session` commits; withTransaction awaits it
+ * before returning, so a Lambda cannot freeze mid-way. Latest wins per `key`; an aborted run's work
+ * is dropped. Returns false when withTransaction does not own `session`.
+ */
+export function runAfterCommit(
+  session: mongoose.mongo.ClientSession,
+  key: string,
+  work: () => Promise<unknown>
+): boolean {
+  const queue = afterCommitBySession.get(session);
+  if (!queue) return false;
+  queue.set(key, work);
+  return true;
+}
+
 /**
  * Execute a function within a MongoDB transaction with automatic retry on transient errors.
  *
@@ -294,12 +312,24 @@ export const withTransaction = async <T>(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await mongoose.connection.transaction(async session => {
+      let afterCommit = new Map<string, () => Promise<unknown>>();
+      const result = await mongoose.connection.transaction(async session => {
         logger?.debug('Starting transaction...', { attempt: attempt + 1 });
+        // Reset per callback run: the driver re-runs it in the same session on a transient commit error.
+        afterCommit = new Map();
+        afterCommitBySession.set(session, afterCommit);
         const result = await fn(session);
         logger?.debug('Transaction completed');
         return result;
       }, transactionOptions);
+      for (const work of afterCommit.values()) {
+        try {
+          await work();
+        } catch (error) {
+          logger?.warn('After-commit work failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return result;
     } catch (error) {
       lastError = error;
 

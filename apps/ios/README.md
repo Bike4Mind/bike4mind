@@ -52,7 +52,13 @@ update-required screen (`ClientUpgradeStatus`) without signing out. "Try again" 
 
 - **Committed output, no build plugin.** `Sources/B4MClient/Generated` is checked in, so a regeneration is a
   reviewable diff and building the app never fetches or compiles the generator.
-- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json`.
+- **Snapshot.** `Packages/B4MClient/openapi.json` is a copy of `apps/client/public/openapi.json` with overlay-only enum
+  values stripped (`Scripts/strip_overlay_literals.py`). Refresh it with `make generate-client SPEC_REF=origin/main`.
+- **Drift signal.** The snapshot is not refreshed by server changes. `native-openapi-drift.yml` compares it (after the
+  overlay-literal stripping above) with `apps/client/public/openapi.json` on every PR that touches the spec or a
+  snapshot, and keeps one PR comment up to date with the per-client difference. It **warns and never blocks**: the
+  check stays green so an API change does not have to regenerate Swift and Kotlin in the same PR. Additive changes
+  still decode; regenerate before shipping a removed, renamed or retyped field.
 - **Filter.** `openapi-generator-config.yaml` lists the operations the app uses. The full spec generates
   ~140k lines; add an operation to the `filter.operations` list when a screen needs it.
   `sendChatMessage` is excluded: its request schema has both `max_tokens` and `maxTokens`, which collide and do not compile,
@@ -170,7 +176,7 @@ App Store Connect questionnaire (all data is **linked to the user**, **not used 
 |-----------|-----------|-----|
 | Contact Info: Email Address, Name | Yes | Account sign-in (completed in the web sign-in sheet) |
 | Identifiers: User ID, Device ID | Yes | Session identity; APNs token for push |
-| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends |
+| User Content: Photos or Videos, Audio Data, Other User Content | Yes | Chat messages, files, images and voice notes the user sends. Voice conversation audio is recognized by Apple Speech, on the device where the language has an on-device model (otherwise Apple may process the audio), and only the resulting text is sent to Bike4Mind |
 | Diagnostics (crash, performance), Usage Data, Location, Health, Financial, Browsing, Search | No | Not collected |
 
 Does the app track users across other companies' apps or sites: **No**. Account deletion is available in the app. Keep this table

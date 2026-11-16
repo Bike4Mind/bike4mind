@@ -422,6 +422,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
   }
 
+  async retireOrgServiceAccount(userId: string, organizationId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, isSystem: true, serviceAccountOrganizationId: organizationId },
+      { $set: { serviceAccountRetiredAt: new Date() } }
+    );
+  }
+
   /** Add one group id to one user (idempotent via $addToSet). */
   async addGroupToUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
@@ -889,7 +896,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('email username isAdmin adminPermissions')
+      .select('email username isAdmin adminPermissions adminRoleIds')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -897,6 +904,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       username: d.username ?? undefined,
       isAdmin: d.isAdmin ?? undefined,
       adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+      adminRoleIds: d.adminRoleIds?.map(String),
     }));
   }
 
@@ -1723,6 +1731,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
+    // Assigned through the admin permissions endpoint. Resolved into the `roleAdminPermissions` virtual per request.
+    adminRoleIds: { type: [Schema.Types.ObjectId], ref: 'AdminRole', default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     loopsDailyCredits: { type: Number },
@@ -1804,6 +1814,23 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountFilePurge: {
+      type: new Schema(
+        {
+          startedAt: Date,
+          leaseId: String,
+          leaseExpiresAt: Date,
+          initialized: Boolean,
+          throughAuditId: String,
+          afterAuditId: String,
+          complete: Boolean,
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     accountDataExportLease: {
       type: new Schema(
         {
@@ -1822,6 +1849,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isSystem: { type: Boolean, default: false },
     // An organization's service account (see IUser.serviceAccountOrganizationId). Set on insert only.
     serviceAccountOrganizationId: { type: String },
+    serviceAccountRetiredAt: { type: Date },
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
@@ -2131,6 +2159,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
   }
 );
 
+// The permissions the user's admin roles carry, resolved per request into $locals by
+// packages/server-utils/src/auth/adminRoles.ts. A virtual so toJSON() carries it to the self view
+// while save() never persists it; undefined when roles were not resolved for this read.
+UserSchema.virtual('roleAdminPermissions').get(function () {
+  return this.$locals.roleAdminPermissions;
+});
+
 // Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
 // byte no legitimate strategy or id contains - nothing schema-level enforces this (the
 // strategy enum blocks it on validated paths; id has no validator), but no real value
@@ -2246,6 +2281,9 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Members of a role: the member count refused on delete and reported on edit, and access review.
+// Explicit name so migration 20261114140117 and autoIndex agree.
+UserSchema.index({ adminRoleIds: 1 }, { name: 'user_adminRoleIds' });
 // Serves the per-organization lookup of accounts an org invite unlocked.
 // Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.

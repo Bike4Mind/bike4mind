@@ -73,6 +73,13 @@ const { premiumPartnerSignupHooks } = vi.hoisted(() => ({
 }));
 vi.mock('@server/premium-generated/premiumPartnerSignupHooks.generated', () => ({ premiumPartnerSignupHooks }));
 
+const mockApplyOrgDomainMembership = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ joined: false, reason: 'no-claim' }))
+);
+vi.mock('@server/organizations/orgDomainClaims', () => ({
+  applyOrgDomainMembership: (...a: unknown[]) => mockApplyOrgDomainMembership(...a),
+}));
+
 import { applySignupDomainGrant } from './signupDomainGrant';
 
 const makeLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
@@ -806,5 +813,86 @@ describe('applySignupDomainGrant - rule linked to a grant package', () => {
   it('reports no refusal when the package pays out', async () => {
     grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
     expect((await run()).packageRefusal).toBeNull();
+  });
+});
+
+describe('applySignupDomainGrant - org domain auto-join', () => {
+  const noPartnerRule = { matched: false };
+  const nullOrgPartnerRule = {
+    matched: true,
+    ruleId: 'rule-2',
+    domain: 'partner.example',
+    entitlements: new Set<string>(),
+    signupCredits: 0,
+    organizationId: null,
+    tags: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    premiumPartnerSignupHooks.length = 0;
+    mockEntitlementsForEmail.mockReturnValue(new Set());
+    mockSignupCreditsForKeys.mockReturnValue(0);
+    mockApplyOrgDomainMembership.mockResolvedValue({ joined: true, organizationId: 'domain-org' });
+  });
+
+  it('joins the claim org when no partner rule matched, and wakes the entitlement cache', async () => {
+    mockPartnerGrant.mockResolvedValue(noPartnerRule);
+
+    const result = await run();
+
+    expect(mockApplyOrgDomainMembership).toHaveBeenCalledWith('user-1', 'dee@partner.example');
+    expect(result.joinedOrganizationId).toBe('domain-org');
+    expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+  });
+
+  it('still joins when the partner rule routes to no org, without handing that org to partner hooks', async () => {
+    mockPartnerGrant.mockResolvedValue(nullOrgPartnerRule);
+    const hook = vi.fn().mockResolvedValue(undefined);
+    premiumPartnerSignupHooks.push({ name: 'h', run: hook });
+
+    const result = await run();
+
+    expect(result.joinedOrganizationId).toBe('domain-org');
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ joinedOrganizationId: null }));
+  });
+
+  it('never runs when a partner rule routes the domain into an org (partner precedence)', async () => {
+    mockPartnerGrant.mockResolvedValue({ ...nullOrgPartnerRule, organizationId: 'partner-org' });
+    mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
+
+    const result = await run();
+
+    expect(mockApplyOrgDomainMembership).not.toHaveBeenCalled();
+    expect(result.joinedOrganizationId).toBe('partner-org');
+  });
+
+  it('reports no join when the org is full, and logs it', async () => {
+    mockPartnerGrant.mockResolvedValue(noPartnerRule);
+    mockApplyOrgDomainMembership.mockResolvedValue({
+      joined: false,
+      reason: 'at-capacity',
+      organizationId: 'domain-org',
+      seats: 3,
+    });
+    const logger = makeLogger();
+
+    const result = await run(logger);
+
+    expect(result.joinedOrganizationId).toBeNull();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('at capacity'));
+    expect(mockPushInvalidation).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the join fails', async () => {
+    mockPartnerGrant.mockResolvedValue(noPartnerRule);
+    mockApplyOrgDomainMembership.mockRejectedValue(new Error('db down'));
+    const logger = makeLogger();
+
+    const result = await run(logger);
+
+    expect(result.joinedOrganizationId).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Org-domain join failed'), expect.any(Error));
   });
 });

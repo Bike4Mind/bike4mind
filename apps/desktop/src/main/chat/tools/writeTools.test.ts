@@ -55,6 +55,45 @@ describe('write tools', () => {
     });
   });
 
+  // The approval key names the exact change, so the stale-file check can hold the user to it;
+  // the chat allowance names the file, so "Allow in this chat" covers the next change to it.
+  describe('the chat allowance', () => {
+    const notes = () => join(root, 'notes.md');
+
+    it('is the same for every change to one file, whichever tool makes it', async () => {
+      const first = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const second = await fileEdit.approval?.({ path: notes(), oldText: 'gamma', newText: 'G' }, context);
+      const rewrite = await fileWrite.approval?.({ path: notes(), content: 'new\n' }, context);
+
+      expect(second?.key).not.toBe(first?.key);
+      expect(first?.chatKey).toBeDefined();
+      expect(second?.chatKey).toBe(first?.chatKey);
+      expect(rewrite?.chatKey).toBe(first?.chatKey);
+      expect(first?.alwaysCovers).toBe(`changes to ${notes()}`);
+    });
+
+    it('differs for another file, including one whose path only extends this one', async () => {
+      await writeFile(join(root, 'notes.md.bak'), 'alpha\n', 'utf8');
+      const here = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const near = await fileEdit.approval?.(
+        { path: join(root, 'notes.md.bak'), oldText: 'alpha', newText: 'A' },
+        context
+      );
+
+      expect(near?.chatKey).not.toBe(here?.chatKey);
+    });
+
+    it('names a relative path by the file it resolves to', async () => {
+      const absolute = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const relative = await fileEdit.approval?.({ path: 'notes.md', oldText: 'beta', newText: 'B' }, {
+        ...context,
+        workingDirectory: root,
+      });
+
+      expect(relative?.chatKey).toBe(absolute?.chatKey);
+    });
+  });
+
   describe('file_write', () => {
     it('describes a new file as a creation before writing anything', async () => {
       const input = { path: join(root, 'fresh.txt'), content: 'hello\n' };

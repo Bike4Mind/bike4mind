@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import { entitlementsForEmail, signupCreditsForKeys } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
@@ -25,6 +26,7 @@ import {
   notifySeatCeilingRaised,
   type SeatCeilingRaiseTrigger,
 } from '@server/organizations/notifySeatCeilingRaised';
+import { applyOrgDomainMembership } from '@server/organizations/orgDomainClaims';
 import { premiumPartnerSignupHooks } from '@server/premium-generated/premiumPartnerSignupHooks.generated';
 
 export type SignupDomainGrantResult = {
@@ -112,6 +114,9 @@ async function stampGrantPackage(
  * withheld when another account already claimed this user's inbox; everything else the
  * domain confers - entitlements, membership, tags, subscription - still applies.
  *
+ * With no partner rule routing the domain into an org, a verified org domain claim set to auto-join
+ * adds the user instead (`applyOrgDomainMembership`); a partner org rule always takes precedence.
+ *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
  * transactionId), the membership write and the tag merge ($addToSet) are all idempotent, so a
@@ -162,6 +167,8 @@ export async function applySignupDomainGrant(params: {
 
   const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
   let coreStepFailed = false;
+  // Kept apart from a partner join: the partner hooks below must only ever see the partner's own org.
+  let orgDomainJoinedId: string | null = null;
 
   // A linked package replaces the rule's own credit amount; a missing, inactive or expired package
   // withholds the credits only, never the membership, tags or subscription.
@@ -250,6 +257,9 @@ export async function applySignupDomainGrant(params: {
     } else {
       coreStepFailed = true;
     }
+  } else {
+    orgDomainJoinedId = await applyOrgDomainJoin(userId, email, trigger, logger);
+    result.joinedOrganizationId = orgDomainJoinedId;
   }
 
   if (partnerTags.length > 0 && (await applyPartnerTags(userId, partnerTags, trigger, logger))) {
@@ -275,7 +285,7 @@ export async function applySignupDomainGrant(params: {
     await runPartnerSignupHooks(premiumPartnerSignupHooks, {
       userId,
       rule: partnerRule,
-      joinedOrganizationId: result.joinedOrganizationId,
+      joinedOrganizationId: orgDomainJoinedId ? null : result.joinedOrganizationId,
       trigger,
       logger,
     });
@@ -283,11 +293,44 @@ export async function applySignupDomainGrant(params: {
 
   // A tag can itself be an entitlement key (getUserEntitlements reads user.tags) and a subscription's
   // price can map to entitlement keys, so both wake the cache too.
-  if (domainGrantKeys.size > 0 || result.tagsApplied.length > 0 || result.subscriptionGranted) {
+  if (
+    domainGrantKeys.size > 0 ||
+    result.tagsApplied.length > 0 ||
+    result.subscriptionGranted ||
+    orgDomainJoinedId !== null
+  ) {
     await pushEntitlementInvalidation(userId, logger);
   }
 
   return result;
+}
+
+/** Org-domain auto-join. Returns the joined org id, or null; logs and swallows every failure. */
+async function applyOrgDomainJoin(
+  userId: string,
+  email: string,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<string | null> {
+  try {
+    const outcome = await applyOrgDomainMembership(userId, email);
+    if (outcome.joined) {
+      logger.info(`Org-domain join: added user ${userId} to org ${outcome.organizationId} (${trigger})`);
+      return outcome.organizationId;
+    }
+    if (outcome.reason === 'at-capacity') {
+      logger.info(
+        `Org-domain join: org ${outcome.organizationId} is at capacity (seats ${outcome.seats}); ` +
+          `user ${userId} not added (${trigger})`
+      );
+    }
+  } catch (joinError) {
+    logger.error(
+      `Org-domain join failed for user ${userId} (${trigger}); membership is idempotent so a retry is safe`,
+      joinError
+    );
+  }
+  return null;
 }
 
 type PartnerMembershipOutcome = { ok: true; joinedOrganizationId: string | null } | { ok: false };
@@ -389,6 +432,8 @@ async function applyPartnerMembership(
     );
     if (membership.added) {
       logger.info(`Partner-rule org membership: added user ${userId} to org ${organizationId} (${trigger})`);
+      // Here rather than in the service, so the bulk backfill route re-running the rule stays quiet.
+      await notifyOrgEvent({ type: 'member_joined', organizationId, userId });
       if (membership.reason === 'added-seat-raised') {
         // The join and raise already committed; the alert/audit is best-effort and never throws.
         await notifySeatCeilingRaised(
@@ -408,6 +453,7 @@ async function applyPartnerMembership(
       // No auto-raise: a Stripe-billed org (ceiling not raised out of band) or a non-Stripe org
       // already at MAX_SEATS (#1424). Alert an admin to add seats and admit this stranded user.
       await notifyPartnerSignupBlockedAtCapacity({ organizationId, userId, seats: membership.seats, trigger }, logger);
+      await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: membership.seats });
     } else if (membership.reason === 'org-missing') {
       // Surfaces a misconfiguration (dangling org ref) without failing the signup.
       logger.warn(`Partner-rule org membership not applied for user ${userId} (org ${organizationId}): org-missing`);

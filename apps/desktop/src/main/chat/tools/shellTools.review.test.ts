@@ -5,6 +5,7 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
@@ -50,7 +51,7 @@ describe('git rule and launcher review regressions', () => {
   it.each(['pnpm exec git f origin', 'npm x git f origin', 'npx git m other'])(
     'checks expanded launched options in %s',
     async command => {
-      expect((await promptFor(command)).askInAuto).toBe(true);
+      expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
     }
   );
   it.each(['npx printf git bang', 'pnpm exec printf git bang', 'pnpm exec printf node -e 1'])(
@@ -80,7 +81,7 @@ describe('git rule and launcher review regressions', () => {
     'for n in 1 2; do git commit; export EDITOR=vim; done',
     'f(){ export EDITOR=vim; }; f; git commit',
   ])('retains actual or uncertain fallback consumers in %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -121,7 +122,7 @@ describe('git rule and launcher review regressions', () => {
     'yarn exec git bang',
     'bunx git bang',
   ])('checks the executable launched by %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 
   it.each([
@@ -146,6 +147,6 @@ describe('git rule and launcher review regressions', () => {
     'export EDITOR=vim; pnpm exec git commit',
     'export EDITOR=vim; npm x git commit',
   ])('retains the program/config check for %s', async command => {
-    expect((await promptFor(command)).askInAuto).toBe(true);
+    expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 });

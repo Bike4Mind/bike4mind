@@ -149,7 +149,8 @@ export const evalSetRunReportSchema = z.object({
   }),
   /** Flagged held-out examples by cohort. */
   cohorts: z.array(verdictEvalCohortRowSchema),
-  labelSources: z.record(z.string(), countSchema),
+  // Mongoose omits this map when a run has no labelled examples.
+  labelSources: z.record(z.string(), countSchema).default({}),
 });
 export type EvalSetRunReport = z.infer<typeof evalSetRunReportSchema>;
 

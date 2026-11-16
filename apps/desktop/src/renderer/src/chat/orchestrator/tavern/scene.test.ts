@@ -14,6 +14,7 @@ import {
   type CastSubject,
   hiddenByCounter,
   nameLabelLayout,
+  needsYouBubbles,
   placeAgents,
   poseFor,
   zoneFor,
@@ -395,5 +396,37 @@ describe('nameLabelLayout', () => {
     expect(layout.get('right')?.shown).toBe(false);
     expect(layout.get('left')?.maxWidth).toBeLessThan(NAME_LABEL_MIN_WIDTH);
     expect(overlapping(points, layout)).toEqual([]);
+  });
+});
+
+describe('needsYouBubbles', () => {
+  const bar = TAVERN_SLOTS.bar;
+  const atBar = (id: string, slot: number) => ({ id, zone: 'bar' as const, point: bar[slot] });
+
+  it('gives a lone waiting agent its own bubble', () => {
+    expect(needsYouBubbles([atBar('a', 2)])).toEqual(new Map([['a', 1]]));
+  });
+
+  it('puts one bubble over the middle of a zone, speaking for everyone waiting there', () => {
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2)])).toEqual(new Map([['b', 3]]));
+  });
+
+  it('takes the leftmost of the two middle agents of an even group', () => {
+    expect(needsYouBubbles([atBar('b', 1), atBar('a', 0)])).toEqual(new Map([['a', 2]]));
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), atBar('c', 2), atBar('d', 3)])).toEqual(new Map([['b', 4]]));
+  });
+
+  it('keeps one bubble per zone', () => {
+    const bench = { id: 'e', zone: 'benches' as const, point: TAVERN_SLOTS.benches[0] };
+    expect(needsYouBubbles([atBar('a', 0), atBar('b', 1), bench])).toEqual(
+      new Map([
+        ['a', 2],
+        ['e', 1],
+      ])
+    );
+  });
+
+  it('draws no bubble when nobody is waiting', () => {
+    expect(needsYouBubbles([])).toEqual(new Map());
   });
 });

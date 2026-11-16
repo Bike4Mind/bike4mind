@@ -10,6 +10,7 @@ import {
   organizationRepository,
   projectRepository,
   inviteRepository,
+  spaceRepository,
   Organization,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
@@ -86,6 +87,10 @@ const getDocumentName = async (type: InviteType, id: string): Promise<string> =>
       const group = await Group.findById(id);
       return group?.name || 'a group';
     }
+    case InviteType.Space: {
+      const space = await spaceRepository.findLiveById(id);
+      return space?.name || 'a space';
+    }
     default:
       return 'content';
   }
@@ -106,7 +111,7 @@ export async function createDocumentInvite(
   }: {
     type: InviteType;
     id: string;
-    // link/allowedDomains: an Organization share link, built only by the org invite-links route.
+    // link/allowedDomains: an Organization or Space share link, built only by their invite-links routes.
     body: CreateInviteBody & { link?: boolean; allowedDomains?: string[] };
     typedAddressBucket?: TypedAddressBucket;
   }
@@ -114,7 +119,7 @@ export async function createDocumentInvite(
   const user = req.user!;
   const { expiresAt, ...restBody } = body;
   const budget = await reserveInviteSendBudget(user.id, restBody.recipients, {
-    chargeTypedAddresses: type === InviteType.Organization,
+    chargeTypedAddresses: type === InviteType.Organization || type === InviteType.Space,
     typedAddressBucket,
   });
   const created = await withTransaction(async () => {
@@ -130,6 +135,7 @@ export async function createDocumentInvite(
           sessions: sessionRepository,
           projects: projectRepository,
           organizations: organizationRepository,
+          spaces: spaceRepository,
           groups: Group,
         },
       }

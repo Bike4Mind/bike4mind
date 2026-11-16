@@ -3,6 +3,7 @@ import axios from 'axios';
 import { BFLImageService } from './BFLImageService';
 import { ImageModels, BFL_SAFETY_TOLERANCE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { ImageModerationBlockedError, ImageProviderUnavailableError } from './imageGenerationErrors';
 
 const API_KEY = 'TEST-BFL-KEY-0a1b2c3d-do-not-log';
@@ -212,6 +213,7 @@ describe('BFLImageService - reference image field', () => {
     });
 
     expect(Object.keys(submittedBody()).sort()).toEqual(['height', 'prompt', 'safety_tolerance', 'user', 'width']);
+    expect(submittedBody().user).toBe(toProviderEndUserId('user-1'));
   });
 
   it('sends FLUX 3 Image Klein its seed and output_format, and no upsampling field', async () => {

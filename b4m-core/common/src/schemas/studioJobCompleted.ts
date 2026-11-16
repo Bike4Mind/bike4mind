@@ -6,7 +6,7 @@ import { z } from 'zod';
  * ready: the web toast today, desktop native notifications and mobile push later. A breaking change bumps `version`
  * so an older consumer can skip what it cannot read.
  *
- * Producer: emitStudioJobCompletion (b4m-core/services/src/generationJobs/studioJobCompletion.ts).
+ * Producer: studioCompletionSubscriber (b4m-core/services/src/generationJobs/studioJobCompletion.ts).
  * Consumer: apps/workers/src/events/studioJobCompleted.ts, which relays it to the user's open sessions.
  */
 export const STUDIO_JOB_COMPLETED_EVENT = 'studio.job.completed';

@@ -15,10 +15,11 @@ import {
 import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
-import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
+import { fetchAndParseURL, ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
+import { RESEARCH_FEED_MAX_BYTES, researchFeedFingerprint } from '@bike4mind/common';
+import type { ResearchFeedCursor, ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
@@ -35,6 +36,8 @@ import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeL
  */
 
 const LOGGED_SEARCH_HOSTS = 10;
+const FEED_DOWNLOAD_TIMEOUT_MS = 10_000;
+const FEED_MAX_MEGABYTES = RESEARCH_FEED_MAX_BYTES / (1024 * 1024);
 
 /** What the loop reports back, so the handler can log a one-line outcome. */
 export interface ResearchRunOutcome {
@@ -67,6 +70,60 @@ async function fetchSourceForProposal(url: string, logger: Logger) {
     logger.info('[lakeResearch] could not fetch candidate source', { url, error });
     return null;
   }
+}
+
+const isOverCapError = (error: unknown): boolean =>
+  error instanceof Error && /maxContentLength|maxBodyLength/.test(error.message);
+
+/**
+ * Download and parse a feed. Every failure becomes a `FeedUnavailableError` whose message is what a
+ * lake manager reads on the run card. The raw cause goes to the log, since it can name internal hosts.
+ */
+export async function readFeedFromUrl(url: string, logger: Logger) {
+  let downloaded: Awaited<ReturnType<typeof ssrfSafeDownload>>;
+  try {
+    downloaded = await ssrfSafeDownload(url, {
+      maxBytes: RESEARCH_FEED_MAX_BYTES,
+      timeoutMs: FEED_DOWNLOAD_TIMEOUT_MS,
+    });
+  } catch (error) {
+    logger.info('[lakeResearch] could not download feed', { error: error instanceof Error ? error.message : error });
+    throw new dataLakeResearchService.FeedUnavailableError(
+      isOverCapError(error)
+        ? `This feed is larger than ${FEED_MAX_MEGABYTES} MB`
+        : 'The feed could not be downloaded. Check the address and that the site is reachable.'
+    );
+  }
+  let items: ReturnType<typeof dataLakeResearchService.parseFeed>;
+  try {
+    items = dataLakeResearchService.parseFeed(
+      decodeFeedBody(downloaded.data, downloaded.contentType),
+      downloaded.finalUrl
+    );
+  } catch (error) {
+    logger.info('[lakeResearch] could not parse feed', { error: error instanceof Error ? error.message : error });
+    items = null;
+  }
+  if (!items) throw new dataLakeResearchService.FeedUnavailableError('This address is not an RSS or Atom feed');
+  return items;
+}
+
+/** Charset from the Content-Type header, else the XML declaration, else UTF-8. An unknown label falls back to UTF-8. */
+export function decodeFeedBody(data: Buffer, contentType?: string | null): string {
+  const fromHeader = /charset\s*=\s*["']?([\w.:-]+)/i.exec(contentType ?? '')?.[1];
+  // The declaration is ASCII-compatible in every charset a feed uses, so latin1 reads it safely.
+  const fromDeclaration = /^\s*<\?xml[^>]*\sencoding\s*=\s*["']([\w.:-]+)["']/i.exec(
+    data.subarray(0, 256).toString('latin1')
+  )?.[1];
+  for (const label of [fromHeader, fromDeclaration]) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label).decode(data);
+    } catch {
+      // Unknown label: try the next source.
+    }
+  }
+  return new TextDecoder('utf-8').decode(data);
 }
 
 /** Provider errors can carry a whole request echo; the run card needs the gist, not the payload. */
@@ -265,6 +322,25 @@ export async function runLakeResearch(
   const recordRunEffects = (outcome: 'completed' | 'failed', amountMicroUsd: number) =>
     Promise.all([recordOutcome(outcome), recordSpend(amountMicroUsd)]);
 
+  // Best-effort: the run is already settled, and a lost cursor only means some items are judged again.
+  // Skipped when the config's settings changed mid-run, since the cursor no longer matches them. Two
+  // overlapping runs under the same settings are last-writer-wins.
+  const writeFeedCursor = async (configId: string, lakeId: string, feedUrl: string, cursor: ResearchFeedCursor) => {
+    try {
+      const current = await dataLakeResearchConfigRepository.findByIdInLake(configId, lakeId);
+      if (
+        !current ||
+        researchFeedFingerprint(dataLakeResearchService.feedFingerprintLevers(current)) !== cursor.fingerprint
+      ) {
+        logger.info('[lakeResearch] feed cursor not written: the config changed during the run', { runId });
+        return;
+      }
+      await dataLakeResearchConfigRepository.recordFeedCursor(configId, feedUrl, cursor);
+    } catch (error) {
+      logger.warn('[lakeResearch] feed cursor write failed; run unaffected', { runId, error });
+    }
+  };
+
   const keyAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
 
   // True once `executeResearchRun` itself has resolved - distinguishes "the run failed" from "the
@@ -273,8 +349,10 @@ export async function runLakeResearch(
   let executionSucceeded = false;
 
   try {
-    const [provider, backup] = await resolveWebSearchProviders(keyAdapters);
-    if (!provider) {
+    const isFeedRun = claimed.levers.source === 'feed';
+    // A feed run reads no search provider, so a deployment without one still runs feeds.
+    const [provider, backup] = isFeedRun ? [null, null] : await resolveWebSearchProviders(keyAdapters);
+    if (!isFeedRun && !provider) {
       // Not thrown: an unconfigured deployment is an operator fact, not a transient fault, and
       // throwing would burn three SQS deliveries and a DLQ entry on a message that can never
       // succeed. The message a lake manager reads names what an admin has to do.
@@ -393,7 +471,9 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       ...(claimed.levers.autoAdmitTrusted === true ? { autoAdmit } : {}),
+      ...(isFeedRun ? { readFeed: (url: string) => readFeedFromUrl(url, logger) } : {}),
       search: async (query, maxResults, recencyDays) => {
+        if (!provider) throw new Error('Web search is not available for this run');
         let outcome: Awaited<ReturnType<typeof searchWithHedge>>;
         try {
           outcome = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
@@ -457,7 +537,26 @@ export async function runLakeResearch(
       remainingTimeMs: options.remainingTimeMs,
     };
 
-    const result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports);
+    const storedFeedCursor = isFeedRun
+      ? ((await dataLakeResearchConfigRepository.findByIdInLake(claimed.configId, lake.id))?.feedCursor ?? null)
+      : null;
+
+    let result: Awaited<ReturnType<typeof dataLakeResearchService.executeResearchRun>>;
+    try {
+      result = await dataLakeResearchService.executeResearchRun(claimed.levers, runId, ports, storedFeedCursor);
+    } catch (error) {
+      if (!(error instanceof dataLakeResearchService.FeedUnavailableError)) throw error;
+      // Settled, not rethrown: an SQS retry would hit the same dead feed. The schedule tries again next cadence.
+      await settle({
+        status: 'failed',
+        completedAt: new Date(),
+        spentMicroUsd,
+        totals,
+        error: error.message,
+      });
+      await recordRunEffects('failed', spentMicroUsd);
+      return { claimed: true };
+    }
     executionSucceeded = true;
 
     const judgeFailure =
@@ -474,8 +573,13 @@ export async function runLakeResearch(
       stopReason: result.stopReason,
       spentMicroUsd: result.spentMicroUsd,
       totals: result.totals,
+      feedBacklog: result.feedBacklog,
       error: judgeFailure,
     });
+    // On a failed judge step the executor returns a retries-only cursor; every other failure returns none.
+    if (result.feedCursor && claimed.levers.feedUrl) {
+      await writeFeedCursor(claimed.configId, lake.id, claimed.levers.feedUrl, result.feedCursor);
+    }
     await recordRunEffects(outcome, result.spentMicroUsd);
     logger.log('[lakeResearch] run finished', {
       runId,
