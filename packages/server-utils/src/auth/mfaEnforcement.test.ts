@@ -64,6 +64,19 @@ describe('isMfaEnrollmentOwed', () => {
     expect(await isMfaEnrollmentOwed(user(false))).toBe(true);
   });
 
+  it('is owed by a forced account while enforcement is off, without reading the setting', async () => {
+    mockSettingsValue.mockReturnValue(false);
+    expect(await isMfaEnrollmentOwed(user(false, { mfaEnforcement: 'force' }))).toBe(true);
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
+  });
+
+  it('still exempts a forced account that is impersonated, a persona or already enrolled', async () => {
+    const forced = { mfaEnforcement: 'force' } as const;
+    expect(await isMfaEnrollmentOwed(user(false, forced), { impersonatedBy: 'admin-1' })).toBe(false);
+    expect(await isMfaEnrollmentOwed(user(false, { ...forced, isPersona: true }))).toBe(false);
+    expect(await isMfaEnrollmentOwed(user(true, forced))).toBe(false);
+  });
+
   it('is not owed while enforcement is off', async () => {
     mockSettingsValue.mockReturnValue(false);
     expect(await isMfaEnrollmentOwed(user(false))).toBe(false);

@@ -248,4 +248,29 @@ describe('POST /api/test/create-user', () => {
       expect(await tagsFor({ includePredefinedTags: 'false', tags: ['extra'] })).toEqual(['seed-tag', 'extra']);
     });
   });
+
+  describe('mfaEnforcement', () => {
+    const recordFor = async (over: Record<string, unknown>) => {
+      const { res, status } = makeRes();
+      await handler(makeReq(over) as never, res);
+      expect(status).toHaveBeenCalledWith(201);
+      return h.createUser.mock.calls[0][0].record;
+    };
+
+    it('forces MFA enrollment on the account when passed force', async () => {
+      expect(await recordFor({ mfaEnforcement: 'force' })).toMatchObject({ mfaEnforcement: 'force' });
+    });
+
+    it('leaves the field unset by default', async () => {
+      expect(await recordFor({})).not.toHaveProperty('mfaEnforcement');
+    });
+
+    it('refuses any other value with a 400 and creates nothing', async () => {
+      const { res, status, json } = makeRes();
+      await handler(makeReq({ mfaEnforcement: 'off' }) as never, res);
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: "mfaEnforcement must be 'force' when set" });
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+  });
 });

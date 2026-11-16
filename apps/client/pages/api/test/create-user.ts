@@ -48,6 +48,9 @@ interface CreateTestUserBody {
   // Starting credit balance. Defaults to a deliberately enormous grant so latency/tool suites
   // never run dry mid-run. Pass a small value to mint a low-balance user for the credit-gate spec.
   initialCredits?: number;
+  // 'force' holds this account to MFA enforcement with the stage setting untouched (IUser.mfaEnforcement),
+  // so a spec can drive the real enrollment gate. This route is the only writer of the field.
+  mfaEnforcement?: 'force';
 }
 
 // Effectively unlimited for E2E: large enough that no realistic multi-prompt run can exhaust it,
@@ -81,6 +84,7 @@ const handler = baseApi({ auth: false }).post(
       acceptedPolicies,
       apiKeyTrustApproved,
       initialCredits,
+      mfaEnforcement,
     } = req.body;
 
     // Guard 3: Only allow creating users the cleanup sweep can find - by the E2E email
@@ -91,6 +95,10 @@ const handler = baseApi({ auth: false }).post(
     }
     if (!email && !E2E_USERNAME_SUFFIX_PATTERN.test(username)) {
       return res.status(400).json({ error: 'Emailless test users must use the -e2e username suffix' });
+    }
+
+    if (mfaEnforcement !== undefined && mfaEnforcement !== 'force') {
+      return res.status(400).json({ error: "mfaEnforcement must be 'force' when set" });
     }
 
     const parsedPermissions =
@@ -123,6 +131,7 @@ const handler = baseApi({ auth: false }).post(
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
           apiKeyTrustApproved: apiKeyTrustApproved === true,
           ...(roleIds ? { adminRoleIds: roleIds } : {}),
+          ...(mfaEnforcement ? { mfaEnforcement } : {}),
         },
         isAdmin: isAdmin ?? false,
         adminPermissions: parsedPermissions?.data,

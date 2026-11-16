@@ -2133,6 +2133,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // See IUser.isPersona. Written only by the persona mint route.
     isPersona: { type: Boolean, required: false },
     personaExpiresAt: { type: Date, required: false },
+    // See IUser.mfaEnforcement. Written only by the e2e create-user route.
+    mfaEnforcement: { type: String, enum: ['force'], required: false },
     personaName: { type: String, required: false },
     personaOwnerId: { type: String, required: false },
     personaLoginCodeHash: { type: String, required: false },

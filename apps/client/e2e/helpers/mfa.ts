@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Page } from '@playwright/test';
+import { type APIRequestContext } from '@playwright/test';
 import { createHash } from 'crypto';
 import speakeasy from 'speakeasy';
 import { refreshTokenFromSetCookie } from './api';
@@ -97,51 +97,4 @@ export async function enrollMfa(
  */
 export function trustedDeviceCookieName(userId: string): string {
   return `b4m_td_${createHash('sha256').update(userId).digest('hex').slice(0, 16)}`;
-}
-
-interface SettingRow {
-  settingName: string;
-  settingValue: unknown;
-}
-
-const ENFORCE_MFA_ROW: SettingRow = { settingName: 'enforceMFA', settingValue: true };
-
-function isSettingRow(value: unknown): value is SettingRow {
-  return typeof value === 'object' && value !== null && 'settingName' in value;
-}
-
-function withEnforcedMfa(rows: unknown): SettingRow[] {
-  const kept = Array.isArray(rows) ? rows.filter(isSettingRow).filter(r => r.settingName !== 'enforceMFA') : [];
-  return [...kept, ENFORCE_MFA_ROW];
-}
-
-/**
- * Make this page's client see enforceMFA on, without touching the global admin setting: it is
- * stage-wide, and the server reads it through a settings cache, so flipping it would confine
- * every unenrolled session on a shared stage for a cache TTL after it is restored. This covers
- * MFAEnforcementWrapper, not the server's 403 gate.
- * Patches every source the client reads enforcement from: the public CDN artifact,
- * /api/settings/fetch, and the `required` field of /api/auth/mfa/status. Sign-in is decided by
- * the server, so with the stage's real setting on, an unenrolled user is sent to setup at sign-in.
- */
-export async function stubEnforcedMfaSetting(page: Page): Promise<void> {
-  await page.route('**/app-config/public-settings.json', async route => {
-    const response = await route.fetch().catch(() => null);
-    const body: unknown = response?.ok() ? await response.json().catch(() => null) : null;
-    const artifact = typeof body === 'object' && body !== null ? body : { version: 1, updatedAt: '' };
-    const settings = 'settings' in artifact ? artifact.settings : [];
-    await route.fulfill({ json: { ...artifact, settings: withEnforcedMfa(settings) } });
-  });
-  await page.route('**/api/settings/fetch**', async route => {
-    const response = await route.fetch();
-    if (!response.ok()) return route.fulfill({ response });
-    await route.fulfill({ response, json: withEnforcedMfa(await response.json()) });
-  });
-  await page.route('**/api/auth/mfa/status**', async route => {
-    const response = await route.fetch();
-    if (!response.ok()) return route.fulfill({ response });
-    const body: unknown = await response.json();
-    const status = typeof body === 'object' && body !== null ? body : {};
-    await route.fulfill({ response, json: { ...status, required: true } });
-  });
 }

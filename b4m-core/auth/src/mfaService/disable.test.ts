@@ -37,6 +37,13 @@ describe('disableMFA', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('refuses a forced account while the stage setting is off', async () => {
+    const update = makeUpdate();
+    const user = { ...userWith({ totpEnabled: true }), mfaEnforcement: 'force' } as IUserDocument;
+    await expect(disableMFA({ user, enforceMFA: false }, { update })).rejects.toThrow(/enforcement/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('throws when the write returns nothing', async () => {
     const update = vi.fn(async () => null);
     await expect(disableMFA({ user: userWith({ totpEnabled: true }), enforceMFA: false }, { update })).rejects.toThrow(

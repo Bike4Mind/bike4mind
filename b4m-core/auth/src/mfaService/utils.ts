@@ -1,7 +1,13 @@
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { timingSafeEqual, createHash } from 'crypto';
-import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS, canAccessAdmin } from '@bike4mind/common';
+import {
+  IUserDocument,
+  IMFAConfig,
+  MFA_MAX_FAILED_ATTEMPTS,
+  canAccessAdmin,
+  isMfaForcedForUser,
+} from '@bike4mind/common';
 
 export interface TOTPSetupData {
   secret: string;
@@ -127,7 +133,7 @@ export function isMfaEnforcementExempt(
 
 /** When MFA is enforced it applies to every user except the exempt ones (isMfaEnforcementExempt). */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting && !isMfaEnforcementExempt(user);
+  return (enforceMFASetting || isMfaForcedForUser(user)) && !isMfaEnforcementExempt(user);
 }
 
 /**
@@ -183,5 +189,5 @@ export function userEligibleForMFA(user: IUserDocument): boolean {
  * When MFA is enforced, NO user can disable it
  */
 export function userCanDisableMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return !enforceMFASetting;
+  return !enforceMFASetting && !isMfaForcedForUser(user);
 }

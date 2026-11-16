@@ -229,6 +229,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   isInternal: true,
   isPersona: true,
   personaExpiresAt: true,
+  mfaEnforcement: true,
   personaName: true,
   personaOwnerId: true,
   firstValueAt: true,

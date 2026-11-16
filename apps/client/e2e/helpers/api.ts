@@ -112,6 +112,9 @@ export async function apiCreateTestUser(
     // Starting credit balance. Omit for the default effectively-unlimited grant; pass a small
     // value to mint a low-balance user for the credit-gate spec.
     initialCredits?: number;
+    // Pass 'force' to hold this account to MFA enforcement with the stage's enforceMFA setting
+    // untouched, so a spec reaches the server's real enrollment gate.
+    mfaEnforcement?: 'force';
   }
 ): Promise<LoginResponse> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
@@ -157,7 +160,7 @@ export async function apiCreateThrowawayUser(
   // the free-tier rate limit and daily caps.
   options: Pick<
     Parameters<typeof apiCreateTestUser>[1],
-    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved'
+    'initialCredits' | 'includePredefinedTags' | 'emailVerified' | 'apiKeyTrustApproved' | 'mfaEnforcement'
   > = {}
 ) {
   const e2eId = getE2ETestId();

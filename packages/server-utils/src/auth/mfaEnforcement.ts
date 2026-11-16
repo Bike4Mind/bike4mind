@@ -1,4 +1,4 @@
-import type { IUserDocument } from '@bike4mind/common';
+import { isMfaForcedForUser, type IUserDocument } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -30,6 +30,8 @@ export async function readEnforceMfa({ skipCache = true }: { skipCache?: boolean
  * exempt: the admin proved their own factor, and support must reach the account. A test persona is
  * exempt too (mfaService.isMfaEnforcementExempt), matching the `required` flag of the MFA status.
  *
+ * An account forced on its own (isMfaForcedForUser) owes enrollment without the setting.
+ *
  * Reads the setting through the cache because it runs per request. An enrolled user never
  * reaches the read, and a toggle reaches other instances within one settings-cache TTL.
  */
@@ -40,7 +42,7 @@ export async function isMfaEnrollmentOwed(
   if (impersonatedBy || mfaService.isMfaEnforcementExempt(user) || mfaService.userHasMFAConfigured(user)) {
     return false;
   }
-  return readEnforceMfa({ skipCache: false });
+  return isMfaForcedForUser(user) || readEnforceMfa({ skipCache: false });
 }
 
 export const MFA_ENROLLMENT_REQUIRED_MESSAGE = 'MFA enrollment required.';
