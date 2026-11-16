@@ -653,7 +653,7 @@ function ModalsSection({
           {previewModal && (
             <Stack spacing={2}>
               <Typography id="preview-modal-title" level="h4">
-                {previewModal.title ?? 'What’s New'}
+                {previewModal.title ?? "What's New"}
               </Typography>
 
               {rawModalLoading ? (
