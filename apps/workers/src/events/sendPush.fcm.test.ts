@@ -113,11 +113,23 @@ describe('createHttpFcmTransport', () => {
     expect(fetchFn.mock.calls.filter(([url]) => String(url).includes('oauth2'))).toHaveLength(2);
   });
 
-  it('maps FCM error bodies to errorStatus and detail', async () => {
+  it('reads the FCM error code from the FcmError detail, not the coarse gRPC status', async () => {
     const fetchFn = vi.fn<typeof fetch>(async url =>
       String(url).includes('oauth2')
         ? tokenOk()
-        : json({ error: { code: 404, status: 'UNREGISTERED', message: 'Requested entity was not found.' } }, 404)
+        : json(
+            {
+              error: {
+                code: 404,
+                status: 'NOT_FOUND',
+                message: 'Requested entity was not found.',
+                details: [
+                  { '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' },
+                ],
+              },
+            },
+            404
+          )
     );
     const transport = createHttpFcmTransport(CONFIG, Date.now, fetchFn);
 
@@ -126,6 +138,25 @@ describe('createHttpFcmTransport', () => {
       errorStatus: 'UNREGISTERED',
       errorDetail: 'Requested entity was not found.',
       stage: 'send',
+    });
+  });
+
+  it('keeps a bare NOT_FOUND (no FcmError detail) as NOT_FOUND so it is never read as a dead token', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async url =>
+      String(url).includes('oauth2')
+        ? tokenOk()
+        : json(
+            {
+              error: { code: 404, status: 'NOT_FOUND', message: 'Project not found.', details: [{ '@type': 'other' }] },
+            },
+            404
+          )
+    );
+    const transport = createHttpFcmTransport(CONFIG, Date.now, fetchFn);
+
+    await expect(transport.send({ deviceToken: 'a', message: MESSAGE })).resolves.toMatchObject({
+      status: 404,
+      errorStatus: 'NOT_FOUND',
     });
   });
 

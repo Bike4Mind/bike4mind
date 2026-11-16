@@ -153,12 +153,29 @@ async function readJson(response: Response): Promise<Record<string, unknown> | u
   }
 }
 
+const FCM_ERROR_DETAIL_TYPE = 'type.googleapis.com/google.firebase.fcm.v1.FcmError';
+
+/**
+ * FCM puts its specific code (`UNREGISTERED`, `SENDER_ID_MISMATCH`, ...) in the `errorCode` of the
+ * FcmError entry of `error.details`; `error.status` only carries the coarse gRPC code (`NOT_FOUND`, ...).
+ * The detail wins and `status` is the fallback, so a bare `NOT_FOUND` stays distinguishable from a dead token.
+ */
 function errorBody(body: Record<string, unknown> | undefined): { status?: string; message?: string } {
   const error = body?.error;
   if (typeof error !== 'object' || error === null) return {};
-  const { status, message } = error as { status?: unknown; message?: unknown };
+  const { status, message, details } = error as { status?: unknown; message?: unknown; details?: unknown };
   return {
-    status: typeof status === 'string' ? status : undefined,
+    status: fcmErrorCode(details) ?? (typeof status === 'string' ? status : undefined),
     message: typeof message === 'string' ? message : undefined,
   };
+}
+
+function fcmErrorCode(details: unknown): string | undefined {
+  if (!Array.isArray(details)) return undefined;
+  for (const entry of details as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { errorCode, '@type': type } = entry as { errorCode?: unknown; '@type'?: unknown };
+    if (type === FCM_ERROR_DETAIL_TYPE && typeof errorCode === 'string') return errorCode;
+  }
+  return undefined;
 }
