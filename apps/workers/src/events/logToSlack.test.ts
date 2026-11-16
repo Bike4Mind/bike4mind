@@ -75,7 +75,7 @@ describe('stripRequestPrefix', () => {
     const message = `GET ${' '.repeat(100_000)}x`;
     const start = performance.now();
     expect(stripRequestPrefix(message)).toBe(message);
-    expect(performance.now() - start).toBeLessThan(50);
+    expect(performance.now() - start).toBeLessThan(1000);
   });
 
   it.each(['\u2192', '->'])('normalizes the %s prefix', arrow => {

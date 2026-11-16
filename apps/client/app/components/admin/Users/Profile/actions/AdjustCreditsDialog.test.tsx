@@ -262,13 +262,16 @@ describe('AdjustCreditsDialog', () => {
     );
     await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
 
-    typeAmount('800');
-    pickReason();
+    expect(screen.getByTestId('adjust-credits-amount-input')).toBeDisabled();
+    expect(screen.getByTestId('adjust-credits-dialog-reason-input-preset-0')).toBeDisabled();
     fireEvent.click(confirmButton());
     expect(mocks.update).not.toHaveBeenCalled();
 
     resolveRefetch(650);
-    await waitFor(() => expect(screen.getByTestId('adjust-credits-preview-before')).toHaveTextContent('650'));
+    await waitFor(() => expect(screen.getByTestId('adjust-credits-amount-input')).not.toBeDisabled());
+    expect(screen.getByTestId('adjust-credits-preview-before')).toHaveTextContent('650');
+    typeAmount('800');
+    pickReason();
     expect(screen.getByTestId('adjust-credits-preview-delta')).toHaveTextContent('+150');
 
     fireEvent.click(confirmButton());

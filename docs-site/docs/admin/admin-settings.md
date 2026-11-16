@@ -74,7 +74,7 @@ Within each tab, settings are grouped by service. Each service group card displa
 
 ### Operations Model Setting
 
-Located in the AI category, the Operations Model setting allows administrators to select which AI model is used for internal platform operations (such as auto-naming notebooks or generating summaries). The configuration includes:
+Located in [Models > Settings](./models.md#settings) under Defaults, the Operations Model setting allows administrators to select which AI model is used for internal platform operations (such as auto-naming notebooks or generating summaries). The configuration includes:
 
 - **Text Model** -- The primary model for text operations
 - **Image Model** -- The model for image-related operations
@@ -101,7 +101,7 @@ before retrying the upload.
 
 ### Generation Models
 
-Located in the AI category, this card has one section per generation modality (Video and Music), with one switch per model in that modality's catalog. Each switch shows whether the server will accept generation jobs for that model:
+Located in [Models > Settings](./models.md#settings) under Generation, this card has one section per generation modality (Video and Music), with one switch per model in that modality's catalog. Each switch shows whether the server will accept generation jobs for that model:
 
 - A model that is on by default and has no admin override reads "Enabled by default". Once you flip a switch, your choice overrides the model's default in either direction
 - Models marked "Preview" are early-access provider models whose behavior or pricing may still change
@@ -159,6 +159,6 @@ Sensitive settings (such as API keys) are marked as such and their values are hi
 
 ## Related Articles
 
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)
 - [System Health](./system-health.md)
 - [System Prompts](./system-prompts.md)

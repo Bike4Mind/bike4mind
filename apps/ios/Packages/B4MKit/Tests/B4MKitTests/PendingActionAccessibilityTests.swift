@@ -12,11 +12,11 @@ final class PendingActionAccessibilityTests: XCTestCase {
     ).accessibilityLabel(now: now)
   }
 
-  func testAnOpenApprovalSaysWhereToAnswerAndWithWhat() {
+  func testAnOpenApprovalOffersAnAnswerAndSaysWithWhat() {
     let text = label(
       for: PendingAction(
         tool: "web_browse", parameters: ["url": "https://example.com", "depth": "2"], requestedAt: now))
-    XCTAssertTrue(text.contains("Approve or deny this on Bike4Mind for the web"), text)
+    XCTAssertTrue(text.contains("Approve or deny this request"), text)
     XCTAssertTrue(text.contains("depth: 2, url: https://example.com"), text)
   }
 
