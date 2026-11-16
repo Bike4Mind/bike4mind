@@ -47,7 +47,10 @@ export class speechService {
     private bucketName: string,
     private region = process.env.AWS_REGION || 'us-east-2'
   ) {
-    this.s3 = new S3Client({ region: this.region });
+    // A custom S3 endpoint (self-host MinIO) is addressed path-style; see S3Storage in
+    // b4m-core/fab-pipeline.
+    const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+    this.s3 = new S3Client({ region: this.region, ...(endpoint ? { endpoint, forcePathStyle: true } : {}) });
   }
 
   /**

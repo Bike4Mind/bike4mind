@@ -4,12 +4,13 @@
  * it when a job finishes, which is what brings in the output file.
  */
 import { isAxiosError } from 'axios';
-import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { GenerationJobState, ImageJobRequest } from '@bike4mind/common';
+import type { GenerationJobState, ImageJobRequest, PublicImageModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { invalidateGenerationCreditBalances } from './generationCreditBalances';
+import { MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
 import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 import { SOCKET_DOWN_POLL_MS, isTerminalGenerationState, movesLiveStateBackwards } from './generationJobPolling';
 
@@ -38,6 +39,18 @@ export const studioImageJobKeys = {
   all: ['studioImageJobs'] as const,
   list: ['studioImageJobs', 'list'] as const,
 };
+
+// Under the model catalog's key, so the model-list revision push (modelListRevision.ts) refetches it too.
+const IMAGE_MODELS_QUERY_KEY = [...MODEL_CATALOG_QUERY_KEY, 'image-jobs'] as const;
+
+/** The image models the user can run as jobs (GET /api/v1/image-models), best first for a plain request. */
+export function useImageModels() {
+  return useQuery({
+    queryKey: IMAGE_MODELS_QUERY_KEY,
+    queryFn: async () => (await api.get<{ models: PublicImageModel[] }>('/api/v1/image-models')).data.models,
+    staleTime: 5 * 60_000,
+  });
+}
 
 /** The gallery: the caller's image jobs, newest first. Polls only while the socket is down and a job is live. */
 export function useStudioImageJobs() {

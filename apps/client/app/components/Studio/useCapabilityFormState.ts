@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export type StudioModel = { id: string; display_name: string };
 
@@ -63,5 +63,11 @@ export function useCapabilityFormState<TModel extends StudioModel, TState extend
     setChanges(clamped.changes);
   };
 
-  return { form, model, changes, update, selectModel };
+  /** Swaps in a whole state (a restored take) with the notices that explain it. */
+  const replace = useCallback((state: TState, notices: string[]) => {
+    setForm(state);
+    setChanges(notices);
+  }, []);
+
+  return { form, model, changes, update, selectModel, replace };
 }

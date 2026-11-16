@@ -98,7 +98,7 @@ export function recalculateSessionMetadata(messages: Message[]): {
  */
 export async function createFreshSession(ctx: SessionLifecycleContext): Promise<Session> {
   const currentSession = useCliStore.getState().session;
-  const model = currentSession?.model || ctx.defaultModel || ChatModels.CLAUDE_4_5_SONNET;
+  const model = currentSession?.model || ctx.defaultModel || ChatModels.CLAUDE_5_5_SONNET;
   const clearPinnedId = process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID;
   const newSession: Session = {
     id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : uuidv4(),

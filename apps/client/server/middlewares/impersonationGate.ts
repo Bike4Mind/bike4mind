@@ -10,7 +10,7 @@ const READS = [
   /^\/api\/(models|entitlements|chat-completion-status)$/,
   /^\/api\/users\/[^/]+\/(userInvites|friend-requests|activities)$/,
   /^\/api\/(gears\/status|models\/stats|help\/recently-viewed)$/,
-  /^\/api\/v1\/(video-models|music-models)$/,
+  /^\/api\/v1\/(image-models|video-models|music-models)$/,
   /^\/api\/security\/(user-recent|support-access)$/,
   /^\/api\/auth\/impersonation$/,
   /^\/api\/users\/me\/(sessions|storage-breakdown)$/,
