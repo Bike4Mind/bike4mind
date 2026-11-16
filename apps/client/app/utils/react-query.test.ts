@@ -110,6 +110,20 @@ describe('updateSingleQueryDataFast', () => {
     expect(result?.pages[0].data[0]).not.toHaveProperty('_optimistic');
   });
 
+  it('leaves a paged entry whose pages carry no data array untouched instead of throwing', () => {
+    const queryClient = new QueryClient();
+    const pages = [{ items: [{ id: 'item-1' }], cursor: 'next' }];
+    queryClient.setQueryData(queryKey, { pages, pageParams: [undefined] });
+
+    expect(() =>
+      updateSingleQueryDataFast(queryClient, queryKey, 'write', { id: 'item-1', value: 'server value' }, options)
+    ).not.toThrow();
+    expect(() => updateSingleQueryDataFast(queryClient, queryKey, 'delete', { id: 'item-1' }, options)).not.toThrow();
+
+    const result = queryClient.getQueryData<{ pages: typeof pages }>(queryKey);
+    expect(result?.pages[0]).toEqual(pages[0]);
+  });
+
   it('keeps the newer document when both cache entries are authoritative', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<CacheItem[]>(queryKey, [

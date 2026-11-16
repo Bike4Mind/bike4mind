@@ -1,8 +1,9 @@
 import { test, expect } from './fixtures';
-import type { Frame, Locator, Page, Response } from '@playwright/test';
+import type { Page, Response } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { isStagingEnv } from './helpers/env';
 import { checkoutUsdAmountPattern } from './helpers/checkout-currency';
+import { payButton } from './helpers/stripe-pay-button';
 import { wafBypassHeaders } from './helpers/waf-bypass';
 import type { TeamsPage } from './pages/TeamsPage';
 
@@ -37,41 +38,6 @@ const teamsUrl = (baseURL: string | undefined): string => new URL('/organization
 
 const isSubscribeResponse = (r: Response): boolean =>
   r.request().method() === 'POST' && new URL(r.url()).pathname === SUBSCRIBE_PATH;
-
-/**
- * Stripe's hosted page renders its payment form inside an Elements frame since 2026-11-13, and the
- * pay button there is a plain "Subscribe" (or "Pay") button with no test id. The button is looked
- * up in every frame, by the old test id or by that name, so the spec follows whichever layout
- * Stripe serves. Stripe's frames come and go while the page boots, so a frame that detaches
- * mid-look is skipped. Gives up after ACTION with every frame's URL and accessibility tree in the
- * error, which is the only way to see inside a cross-origin frame from CI.
- */
-async function payButton(page: Page): Promise<Locator> {
-  const candidate = (frame: Frame) =>
-    frame.getByTestId('hosted-payment-submit-button').or(frame.getByRole('button', { name: /^(subscribe|pay)\b/i }));
-  const deadline = Date.now() + TIMEOUTS.ACTION;
-  while (Date.now() < deadline) {
-    for (const frame of page.frames()) {
-      if (
-        await candidate(frame)
-          .count()
-          .catch(() => 0)
-      )
-        return candidate(frame).first();
-    }
-    await page.waitForTimeout(500);
-  }
-  const dump = await Promise.all(
-    page.frames().map(async frame => {
-      const tree = await frame
-        .locator('body')
-        .ariaSnapshot()
-        .catch(() => '(unreadable)');
-      return `${frame.url()}\n${tree.slice(0, 4000)}`;
-    })
-  );
-  throw new Error(`No pay button in any of ${page.frames().length} frames:\n${dump.join('\n---\n')}`);
-}
 
 /** "Total Price: $150/month" -> 150 */
 async function modalTotal(teamsPage: TeamsPage): Promise<number> {
