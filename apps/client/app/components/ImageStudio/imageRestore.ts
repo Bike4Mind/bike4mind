@@ -105,9 +105,10 @@ function restoreReferences(restore: StudioRestoreRequest, notices: string[]): Re
 }
 
 function noticeUnsetKeys(request: Record<string, unknown>, notices: string[]) {
+  // A false toggle is the off default the model uses anyway; chat images store prompt_upsampling: false on every take.
   const labels = new Set(
     Object.keys(request)
-      .filter(key => !READ_KEYS.has(key) && request[key] !== undefined)
+      .filter(key => !READ_KEYS.has(key) && request[key] !== undefined && request[key] !== false)
       .map(key => UNSET_LABELS[key] ?? key)
   );
   if (labels.size > 0) {

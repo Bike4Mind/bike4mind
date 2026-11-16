@@ -146,6 +146,7 @@ describe('restoreImageForm', () => {
           aspect_ratio: '3:2',
           output_format: 'png',
           safety_tolerance: 2,
+          prompt_upsampling: false,
         },
         { [CAT]: 'cat.png' },
         [
