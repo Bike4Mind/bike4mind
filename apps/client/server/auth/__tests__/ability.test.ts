@@ -1,32 +1,35 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
-vi.mock('@bike4mind/database', async () => ({
-  // The shared share arm is the REAL implementation - it takes the resource list as a parameter,
-  // so it registers rules against the stub classes below and CASL still matches them.
-  applySharedShareableRules: (
-    await vi.importActual<typeof import('../../../../../packages/database/src/utils/ability')>(
-      '../../../../../packages/database/src/utils/ability'
-    )
-  ).applySharedShareableRules,
-  AdminSettings: class AdminSettings {},
-  CounterLog: class CounterLog {},
-  Session: class Session {
-    static find() {
-      return { select: () => [] };
-    }
-  },
-  User: class User {},
-  Invite: class Invite {},
-  Prompt: class Prompt {},
-  UserActivityCounter: class UserActivityCounter {},
-  FeedbackModel: class FeedbackModel {},
-  ModalModel: class ModalModel {},
-  Organization: class Organization {},
-  FabFile: class FabFile {},
-  Memento: class Memento {},
-  Project: class Project {},
-}));
+vi.mock('@bike4mind/database', async () => {
+  // The shared share arm and the organization rules are the REAL implementations - they take the
+  // subject as a parameter, so they register rules against the stub classes below and CASL still
+  // matches them.
+  const { applySharedShareableRules, applyOrganizationRules } = await vi.importActual<
+    typeof import('../../../../../packages/database/src/utils/ability')
+  >('../../../../../packages/database/src/utils/ability');
+  return {
+    applySharedShareableRules,
+    applyOrganizationRules,
+    AdminSettings: class AdminSettings {},
+    CounterLog: class CounterLog {},
+    Session: class Session {
+      static find() {
+        return { select: () => [] };
+      }
+    },
+    User: class User {},
+    Invite: class Invite {},
+    Prompt: class Prompt {},
+    UserActivityCounter: class UserActivityCounter {},
+    FeedbackModel: class FeedbackModel {},
+    ModalModel: class ModalModel {},
+    Organization: class Organization {},
+    FabFile: class FabFile {},
+    Memento: class Memento {},
+    Project: class Project {},
+  };
+});
 
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: class SecretRotation {},
@@ -304,6 +307,19 @@ describe('defineAbilitiesFor - org manager rule', () => {
     expect(ability.can('read', doc)).toBe(true);
     expect(ability.can('update', doc)).toBe(true);
     expect(ability.can('addUser', doc)).toBe(true);
+  });
+
+  it('refuses read through isGlobalRead or a group share, as the REST membership rule does', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    expect(ability.can('read', Object.assign(org({ adminUserIds: [], users: [] }), { isGlobalRead: true }))).toBe(
+      false
+    );
+    expect(
+      ability.can(
+        'read',
+        Object.assign(org({ adminUserIds: [], users: [] }), { groups: [{ groupId: 'g1', permissions: ['read'] }] })
+      )
+    ).toBe(false);
   });
 
   it('denies a bare adminUserIds entry with no roster row', () => {

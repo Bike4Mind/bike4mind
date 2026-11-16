@@ -29,36 +29,38 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // The REAL accessibleBy plus the REAL defineAbilitiesFor: stubbing accessibleBy is how this suite
 // used to pass while production zipped an empty archive (no builder granted `export` on FabFile).
-// The share arm is the real implementation - it takes the resource list as a parameter, so it
-// registers rules against the stub classes below and CASL still matches them.
-vi.mock('@bike4mind/database', async () => ({
-  applySharedShareableRules: (
-    await vi.importActual<typeof import('../../../../../../packages/database/src/utils/ability')>(
-      '../../../../../../packages/database/src/utils/ability'
-    )
-  ).applySharedShareableRules,
-  AdminSettings: class AdminSettings {},
-  adminSettingsRepository: {},
-  CounterLog: class CounterLog {},
-  Session: class Session {
-    static find() {
-      return { select: () => [] };
-    }
-  },
-  User: class User {},
-  Invite: class Invite {},
-  Prompt: class Prompt {},
-  UserActivityCounter: class UserActivityCounter {},
-  FeedbackModel: class FeedbackModel {},
-  ModalModel: class ModalModel {},
-  Organization: class Organization {},
-  FabFile: class FabFile {
-    static find = vi.fn();
-  },
-  Memento: class Memento {},
-  Project: class Project {},
-  QuestMasterPlan: class QuestMasterPlan {},
-}));
+// The share arm and the organization rules are the real implementations - they take the subject as
+// a parameter, so they register rules against the stub classes below and CASL still matches them.
+vi.mock('@bike4mind/database', async () => {
+  const { applySharedShareableRules, applyOrganizationRules } = await vi.importActual<
+    typeof import('../../../../../../packages/database/src/utils/ability')
+  >('../../../../../../packages/database/src/utils/ability');
+  return {
+    applySharedShareableRules,
+    applyOrganizationRules,
+    AdminSettings: class AdminSettings {},
+    adminSettingsRepository: {},
+    CounterLog: class CounterLog {},
+    Session: class Session {
+      static find() {
+        return { select: () => [] };
+      }
+    },
+    User: class User {},
+    Invite: class Invite {},
+    Prompt: class Prompt {},
+    UserActivityCounter: class UserActivityCounter {},
+    FeedbackModel: class FeedbackModel {},
+    ModalModel: class ModalModel {},
+    Organization: class Organization {},
+    FabFile: class FabFile {
+      static find = vi.fn();
+    },
+    Memento: class Memento {},
+    Project: class Project {},
+    QuestMasterPlan: class QuestMasterPlan {},
+  };
+});
 
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: class SecretRotation {},

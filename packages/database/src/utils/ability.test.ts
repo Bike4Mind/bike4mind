@@ -21,7 +21,7 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings } from '../models';
+import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings, Organization } from '../models';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -337,6 +337,48 @@ describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
 // above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
 // registers rules against the models it imported and CASL matches subjects by constructor - so the
 // list is the one thing left that can diverge, and it is what this compares.
+describe('db-core defineAbilitiesFor - organization read follows membership', () => {
+  const org = (fields: Record<string, unknown> = {}) =>
+    Object.assign(new Organization(), { userId: 'owner', users: [], groups: [], adminUserIds: [], ...fields });
+
+  it('lets the owner, a member row and a current manager read', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1' }));
+    expect(ability.can('read', org({ userId: 'u1' }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['read'] }] }))).toBe(true);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['write'] }] }))).toBe(true);
+    expect(ability.can('read', org({ adminUserIds: ['u1'], users: [{ userId: 'u1', permissions: [] }] }))).toBe(true);
+  });
+
+  it('refuses an organization marked isGlobalRead to a non-member', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1' }));
+    expect(ability.can('read', org({ isGlobalRead: true }))).toBe(false);
+  });
+
+  it('refuses an organization shared with one of the caller groups', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1', groups: ['g1'] }));
+    expect(ability.can('read', org({ groups: [{ groupId: 'g1', permissions: ['read'] }] }))).toBe(false);
+  });
+
+  it('refuses update through isGlobalWrite or a group share', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1', groups: ['g1'] }));
+    expect(ability.can('update', org({ isGlobalWrite: true }))).toBe(false);
+    expect(ability.can('update', org({ groups: [{ groupId: 'g1', permissions: ['update'] }] }))).toBe(false);
+  });
+
+  it('refuses a manager entry without a roster row and a row that confers no membership', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1' }));
+    expect(ability.can('read', org({ adminUserIds: ['u1'] }))).toBe(false);
+    expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['share'] }] }))).toBe(false);
+  });
+
+  it('compiles no global or group arm into the organization read query', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1', groups: ['g1'] }));
+    const query = JSON.stringify(accessibleBy(ability, 'read').ofType(Organization));
+    expect(query).not.toContain('isGlobalRead');
+    expect(query).not.toContain('groups');
+  });
+});
+
 describe('shared shareable arm', () => {
   const dbCoreSource = fs.readFileSync(path.resolve(__dirname, './ability.ts'), 'utf-8');
   const clientSource = fs.readFileSync(
@@ -362,6 +404,13 @@ describe('shared shareable arm', () => {
 
   it('is given the same resource set by both', () => {
     expect(new Set(resourcesPassedTo(dbCoreSource))).toEqual(new Set(resourcesPassedTo(clientSource)));
+  });
+
+  it('keeps Organization off the shared arm and gives both builders the organization rules', () => {
+    expect(resourcesPassedTo(dbCoreSource)).not.toContain('Organization');
+    expect(resourcesPassedTo(clientSource)).not.toContain('Organization');
+    expect(dbCoreSource).toContain('applyOrganizationRules(allow, user, Organization)');
+    expect(clientSource).toContain('applyOrganizationRules(allow, user, Organization)');
   });
 
   it('covers Project, whose absence from db-core made shared projects unreachable in queue handlers', () => {

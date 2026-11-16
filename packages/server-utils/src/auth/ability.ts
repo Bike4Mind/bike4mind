@@ -15,6 +15,7 @@ import {
   Project,
   Memento,
   applySharedShareableRules,
+  applyOrganizationRules,
 } from '@bike4mind/database';
 import {
   InvitePermission,
@@ -88,12 +89,13 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('delete', AdminSettings);
     }
 
-    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
+    applySharedShareableRules(allow, user, [Session, FabFile, Project]);
+    applyOrganizationRules(allow, user, Organization);
 
-    // Org manager permissions: read and update the orgs they manage (but not billing-related fields).
-    // Needs a roster row too, like canAdministerOrganization: a bare `adminUserIds` entry is not a member.
+    // Org manager permissions: update the orgs they manage (but not billing-related fields); read
+    // comes from applyOrganizationRules. Needs a roster row too, like canAdministerOrganization: a
+    // bare `adminUserIds` entry is not a member.
     const managerPermission: MongoQuery = { adminUserIds: user.id, users: { $elemMatch: { userId: user.id } } };
-    allow(Permission.read, Organization, managerPermission);
     allow(Permission.update, Organization, managerPermission);
     allow('addUser', Organization, managerPermission);
     allow('removeUser', Organization, managerPermission);

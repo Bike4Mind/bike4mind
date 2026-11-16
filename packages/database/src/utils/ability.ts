@@ -17,6 +17,7 @@ import {
 import {
   InvitePermission,
   IUserDocument,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
   Permission,
   hasAdminPermission,
   hasDeveloperUserTag,
@@ -81,6 +82,35 @@ export function applySharedShareableRules(
   });
 }
 
+/**
+ * Organization rules, applied by BOTH ability builders (this one and
+ * packages/server-utils/src/auth/ability.ts). Organizations are not given the shared shareable arm:
+ * read follows the REST membership rule instead - the billing owner, a `users[]` row that confers
+ * membership (orgMembershipFilter in OrganizationModel, isOrgMember in @bike4mind/common) or a
+ * current manager with a roster row (canAdministerOrganization). Global flags and group shares do
+ * not grant anything on an organization.
+ */
+export function applyOrganizationRules(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id'>,
+  organization: Parameters<AllowFn>[1]
+) {
+  const ownOrganization: MongoQuery = { userId: user.id };
+
+  allow(Permission.create, organization);
+
+  allow(Permission.read, organization, ownOrganization);
+  allow(Permission.read, organization, {
+    users: { $elemMatch: { userId: user.id, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } },
+  });
+  allow(Permission.read, organization, { adminUserIds: user.id, users: { $elemMatch: { userId: user.id } } });
+
+  [Permission.update, Permission.delete, Permission.share].forEach(permission => {
+    allow(permission, organization, ownOrganization);
+    allow(permission, organization, { users: { $elemMatch: { userId: user.id, permissions: permission } } });
+  });
+}
+
 export function defineAbilitiesFor(user: IUserDocument | undefined) {
   const { can: allow, build } = new AbilityBuilder(createMongoAbility);
 
@@ -132,7 +162,8 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow<MongoQuery>('read', AdminSettings, { isAdmin: false });
     }
 
-    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
+    applySharedShareableRules(allow, user, [Session, FabFile, Project]);
+    applyOrganizationRules(allow, user, Organization);
 
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
