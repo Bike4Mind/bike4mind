@@ -34,6 +34,13 @@ export const DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS = 500;
 /** How many tags a producer may propose for one candidate. */
 export const DATA_LAKE_PROPOSAL_MAX_TAGS = 20;
 
+/** Why a trusted result was proposed instead of auto-admitted by an item rule. Never copied onto an admitted file. */
+export interface DataLakeProposalReviewReason {
+  kind: 'rule_match' | 'rule_undetermined' | 'rule_check_failed';
+  /** The review-rule conditions behind it. Absent for a failed check. */
+  conditions?: string[];
+}
+
 /** Where a proposal came from and when - carried onto the file an approval admits. */
 export interface DataLakeProposalProvenance {
   /** The producer kind, e.g. `research_run`. Free-form so a new producer needs no schema change. */
@@ -48,6 +55,8 @@ export interface DataLakeProposalProvenance {
   retrievedAt: Date;
   /** The source tier the producer routed this candidate under. Absent for other producers and older rows. */
   sourceTier?: 'trusted' | 'review';
+  /** Set when an item rule took this trusted result out of auto-admit. */
+  reviewReason?: DataLakeProposalReviewReason;
 }
 
 export interface IDataLakeProposal {

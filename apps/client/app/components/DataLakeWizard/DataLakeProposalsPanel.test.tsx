@@ -72,6 +72,43 @@ describe('DataLakeProposalsPanel', () => {
     );
   });
 
+  describe('review reason line', () => {
+    const withReason = (reviewReason: NonNullable<IDataLakeProposalDocument['provenance']['reviewReason']>) =>
+      renderPanel({
+        proposals: [
+          proposal({
+            provenance: { producer: 'research_run', retrievedAt: new Date('2026-08-01'), reviewReason },
+          }),
+        ],
+      });
+
+    it('names the rule condition that matched, joining several with a semicolon', () => {
+      withReason({ kind: 'rule_match', conditions: ['it is a press release', 'the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: matched it is a press release; the author is an employee'
+      );
+    });
+
+    it('says which condition could not be checked', () => {
+      withReason({ kind: 'rule_undetermined', conditions: ['the author is an employee'] });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: could not check the author is an employee'
+      );
+    });
+
+    it('says the rule check failed without naming a condition', () => {
+      withReason({ kind: 'rule_check_failed' });
+      expect(screen.getByTestId('datalake-proposal-review-reason').textContent).toBe(
+        'Sent to review: rule check failed'
+      );
+    });
+
+    it('shows no reason line for a proposal that was not sent by a rule', () => {
+      renderPanel();
+      expect(screen.queryByTestId('datalake-proposal-review-reason')).toBeNull();
+    });
+  });
+
   it('shows no feed line for a proposal that did not come from a feed', () => {
     renderPanel();
     expect(screen.queryByTestId('datalake-proposal-feed-source')).toBeNull();

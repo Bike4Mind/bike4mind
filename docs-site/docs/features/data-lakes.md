@@ -117,6 +117,26 @@ blogging platform, a code-hosting site or a shared file host, because anyone cou
 into your lake. Broad entries such as a bare top-level domain are rejected. Each automatic addition
 is marked in the lake's History tab and on the source itself.
 
+**Can I stop research from proposing items I do not want, such as press releases?**
+Yes. Add **Item rules** to a research configuration. A rule is a short plain-language condition, for
+example "the author works for a named company". Each rule either blocks the item or sends it to review.
+A model checks every rule against the item's feed fields and the text of its page. A blocked item is
+dropped and counted on the run card as blocked by an item rule. A review item waits in the review
+queue, and the proposal says which rule sent it there.
+
+A rule can never add anything. It also never removes content that is already in the lake. If a review
+rule cannot be checked, for example because the page has no text that answers it, the item goes to
+review even when its site is trusted. A failed check does the same. A failure never blocks an item and
+never adds one.
+
+Review rules are a convenience for ordinary content. They are not a control against an author who
+writes a page to fool the checker. If anyone can post on a site, turn off automatic adding for it.
+You can have up to 10 rules, each up to 300 characters.
+
+Rule checks use the model you chose for the run, so they count toward the cost ceiling. A blocked
+search result is checked again on each run that finds it. Rules apply from the next run. Changing them
+re-checks a feed's newest items once.
+
 **Who can connect a Google Drive folder to a Data Lake?**
 On an organization Data Lake, an organization owner or manager (or a platform admin). On a
 personal Data Lake, only the person who created it: the folder syncs using their own linked Google

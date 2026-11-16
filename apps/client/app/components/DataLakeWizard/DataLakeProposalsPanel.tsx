@@ -14,8 +14,15 @@ import {
   ToggleButtonGroup,
   Typography,
 } from '@mui/joy';
-import type { IDataLakeProposalDocument } from '@bike4mind/common';
+import type { DataLakeProposalReviewReason, IDataLakeProposalDocument } from '@bike4mind/common';
 import { RESEARCH_RUN_PRODUCER, feedLabel } from '@bike4mind/common';
+
+const reviewReasonLabel = (reason: DataLakeProposalReviewReason): string => {
+  const conditions = (reason.conditions ?? []).join('; ');
+  if (reason.kind === 'rule_match') return `Sent to review: matched ${conditions}`;
+  if (reason.kind === 'rule_undetermined') return `Sent to review: could not check ${conditions}`;
+  return 'Sent to review: rule check failed';
+};
 
 export type ProposalsView = 'pending' | 'declined';
 type ProposalSort = 'relevance' | 'newest';
@@ -337,6 +344,12 @@ export function DataLakeProposalsPanel({
               {proposal.provenance.feedUrl && (
                 <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-feed-source">
                   {`from feed ${feedLabel(proposal.provenance.feedUrl)}`}
+                </Typography>
+              )}
+
+              {proposal.provenance.reviewReason && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-review-reason">
+                  {reviewReasonLabel(proposal.provenance.reviewReason)}
                 </Typography>
               )}
 

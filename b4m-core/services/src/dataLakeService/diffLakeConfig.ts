@@ -261,6 +261,12 @@ export function researchTrustedSitesChange(
   return literalChange('researchConfig', undefined, `trusted sites ${parts.join('; ')}: ${configName}`);
 }
 
+/** The item rules of a research config changing. Counts only: the conditions stay on the config itself. */
+export function researchItemRulesChange(configName: string, added: number, removed: number): ILakeConfigLiteralChange {
+  const parts = [...(added > 0 ? [`${added} added`] : []), ...(removed > 0 ? [`${removed} removed`] : [])];
+  return literalChange('researchConfig', undefined, `item rules ${parts.join(', ')}: ${configName}`);
+}
+
 /**
  * A research config's source changing between web search and a feed, or to a different feed. The
  * feed is named by origin and path only: the query string of a private feed can carry a token.

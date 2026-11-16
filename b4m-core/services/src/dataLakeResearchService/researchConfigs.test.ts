@@ -880,3 +880,102 @@ describe('deleteResearchConfig', () => {
     );
   });
 });
+
+describe('research config item rules', () => {
+  const rule = (condition: string, action: 'block' | 'review' = 'block') => ({ condition, action });
+  const stored = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) => storedConfig(overrides);
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+  const create = (itemRules: unknown[]) => {
+    const made = makeAdapters();
+    return {
+      ...made,
+      run: () =>
+        createResearchConfig(
+          lake(),
+          actor(),
+          NO_GRANTS,
+          { name: 'n', query: 'q', itemRules } as Parameters<typeof createResearchConfig>[3],
+          made.adapters
+        ),
+    };
+  };
+  const many = (count: number) => Array.from({ length: count }, (_, i) => rule(`rule ${i}`));
+  const ruleChanges = (calls: unknown[][]) =>
+    (calls[0]?.[0] as { changes: { after: string }[] } | undefined)?.changes.filter(change =>
+      change.after.startsWith('item rules')
+    ) ?? [];
+
+  it('stores trimmed rules on create', async () => {
+    const { run, repo } = create([rule('  Published by Acme  ', 'review')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toEqual([rule('Published by Acme', 'review')]);
+  });
+
+  it.each([
+    ['11 rules', many(11)],
+    ['a 301-character condition', [rule('x'.repeat(301))]],
+  ])('refuses %s on create and on update', async (_label, rules) => {
+    const created = create(rules);
+    await expect(created.run()).rejects.toThrow(/item rule/);
+    expect(created.repo.createConfig).not.toHaveBeenCalled();
+    const updated = update(stored(), { itemRules: rules as never });
+    await expect(updated.run()).rejects.toThrow(/item rule/);
+    expect(updated.repo.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts 11 entries when one is a duplicate, and a 300-character condition', async () => {
+    const { run, repo } = create([...many(10), rule('RULE 0 ')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const long = create([rule('x'.repeat(300))]);
+    await expect(long.run()).resolves.toBeDefined();
+  });
+
+  it('treats a reordered or re-cased resubmit as a no-op with no history entry', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('A one'), rule('b two', 'review')] }), {
+      itemRules: [rule('B TWO', 'review'), rule(' a one ')],
+    });
+    await run();
+    expect(record).not.toHaveBeenCalled();
+    expect(repo.updateConfig).toHaveBeenCalled();
+  });
+
+  it('writes one entry with counts when rules are added and removed', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a'), rule('b')] }), {
+      itemRules: [rule('b'), rule('c'), rule('d', 'review')],
+    });
+    await run();
+    expect(ruleChanges(record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 2 added, 1 removed: Weekly sweep' },
+    ]);
+  });
+
+  it('keeps stored rules when an edit does not mention them', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('a')] }), { query: 'other' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2].itemRules).toEqual([rule('a')]);
+    expect(ruleChanges(record.mock.calls)).toEqual([]);
+  });
+
+  it('flipping an action alone is one removed and one added', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a', 'block')] }), { itemRules: [rule('a', 'review')] });
+    await run();
+    expect(ruleChanges(record.mock.calls)[0]).toMatchObject({
+      after: 'item rules 1 added, 1 removed: Weekly sweep',
+    });
+  });
+
+  it('records the count on create when there are rules, and nothing when there are none', async () => {
+    const withRules = create([rule('a'), rule('b'), rule('c', 'review')]);
+    await withRules.run();
+    expect(ruleChanges(withRules.record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 3 added: n' },
+    ]);
+    const none = create([]);
+    await none.run();
+    expect(ruleChanges(none.record.mock.calls)).toEqual([]);
+  });
+});

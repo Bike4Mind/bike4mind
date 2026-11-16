@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
   judge: vi.fn(),
+  evaluateRules: vi.fn(),
   fetchAndParseURL: vi.fn(),
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
@@ -61,6 +62,9 @@ vi.mock('@bike4mind/services', async importOriginal => {
       recordResearchRunOutcome: h.recordResearchRunOutcome,
       RelevanceJudgeService: class {
         judge = h.judge;
+      },
+      ItemRuleService: class {
+        evaluate = h.evaluateRules;
       },
       RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
       // Real: the live source rules are what these tests exercise.
@@ -411,6 +415,50 @@ describe('runLakeResearch', () => {
       h.claimForExecution.mockResolvedValueOnce(null);
       await runLakeResearch('run-1', logger);
       expect(h.recordOperationalUsage).toHaveBeenCalledOnce();
+    });
+
+    it('wires the item-rule port only when the config has rules, and adds its usage beside the judge', async () => {
+      type RulePorts = { evaluateItemRules?: (rules: unknown[], item: unknown) => Promise<unknown> };
+      const rule = { condition: 'is a press release', action: 'block' };
+      h.evaluateRules.mockResolvedValue({
+        status: 'evaluated',
+        answers: ['no_match'],
+        costMicroUsd: 300,
+        inputTokens: 7,
+        outputTokens: 3,
+        cacheReadInputTokens: 2,
+        cacheCreationInputTokens: 1,
+      });
+      let wired: RulePorts | undefined;
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        wired = ports;
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(wired?.evaluateItemRules).toBeUndefined();
+
+      h.recordOperationalUsage.mockClear();
+      h.claimForExecution.mockResolvedValue(
+        claimedRun({ levers: levers({ itemRules: [rule], model: 'gpt-4.1-mini' }) })
+      );
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        await ports.evaluateItemRules!([rule], { title: 'T', url: 'https://example.com', snippet: 'S' });
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 300, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(h.evaluateRules).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-4.1-mini', rules: [rule], endUserId: 'owner-1' })
+      );
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-4.1-mini',
+          inputTokens: 7,
+          outputTokens: 3,
+          cachedInputTokens: 2,
+          cacheWriteTokens: 1,
+        }),
+        expect.anything()
+      );
     });
 
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {

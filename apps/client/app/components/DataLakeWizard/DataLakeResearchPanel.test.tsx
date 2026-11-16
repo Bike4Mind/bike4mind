@@ -8,6 +8,8 @@ import {
   ChatModels,
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
   RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
@@ -189,6 +191,122 @@ describe('DataLakeResearchPanel', () => {
     const button = screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(button.textContent).toMatch(/run now/i);
+  });
+
+  describe('item rules', () => {
+    const openNewForm = () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      return spies;
+    };
+
+    it('sends no rules by default', () => {
+      const spies = openNewForm();
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onCreate).toHaveBeenCalledWith(expect.objectContaining({ itemRules: [] }));
+    });
+
+    it('adds, edits and submits rules with their actions', () => {
+      const spies = openNewForm();
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.change(screen.getByTestId('datalake-research-rule-condition-0'), {
+        target: { value: '  the author works for a named company  ' },
+      });
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.change(screen.getByTestId('datalake-research-rule-condition-1'), {
+        target: { value: 'it is a press release' },
+      });
+      fireEvent.click(screen.getByTestId('datalake-research-rule-action-1'));
+      fireEvent.click(screen.getByRole('option', { name: 'Block' }));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemRules: [
+            { condition: 'the author works for a named company', action: 'review' },
+            { condition: 'it is a press release', action: 'block' },
+          ],
+        })
+      );
+    });
+
+    it('removes the rule whose button was pressed', () => {
+      const spies = openNewForm();
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.change(screen.getByTestId('datalake-research-rule-condition-0'), { target: { value: 'first' } });
+      fireEvent.change(screen.getByTestId('datalake-research-rule-condition-1'), { target: { value: 'second' } });
+      fireEvent.click(screen.getByTestId('datalake-research-rule-remove-0'));
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ itemRules: [{ condition: 'second', action: 'review' }] })
+      );
+    });
+
+    it('disables adding at the maximum', () => {
+      openNewForm();
+      for (let i = 0; i < RESEARCH_ITEM_RULES_MAX; i += 1) {
+        fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      }
+      expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
+    });
+
+    it('blocks saving a rule over the length limit', () => {
+      openNewForm();
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      fireEvent.change(screen.getByTestId('datalake-research-rule-condition-0'), {
+        target: { value: 'x'.repeat(RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS + 1) },
+      });
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+      expect(screen.getByTestId('datalake-research-rules-error').textContent).toMatch(/300 characters/);
+    });
+
+    it('round-trips a saved rule through edit and save', () => {
+      const spies = renderPanel({
+        configs: [config({ itemRules: [{ condition: 'it is a press release', action: 'block' }] })],
+      });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect((screen.getByTestId('datalake-research-rule-condition-0') as HTMLInputElement).value).toBe(
+        'it is a press release'
+      );
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onUpdate).toHaveBeenCalledWith(
+        'config-1',
+        expect.objectContaining({ itemRules: [{ condition: 'it is a press release', action: 'block' }] })
+      );
+    });
+
+    it('shows a rule count on the config row only when there are rules', () => {
+      const { unmount } = render(
+        <Wrapper>
+          <DataLakeResearchPanel
+            configs={[config()]}
+            runs={[]}
+            isLoading={false}
+            error={null}
+            modelOptions={[]}
+            {...handlers()}
+          />
+        </Wrapper>
+      );
+      expect(screen.queryByTestId('datalake-research-config-rules')).toBeNull();
+      unmount();
+
+      renderPanel({
+        configs: [
+          config({
+            itemRules: [
+              { condition: 'a', action: 'block' },
+              { condition: 'b', action: 'review' },
+            ],
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-config-rules').textContent).toBe('2 item rules');
+    });
   });
 
   describe('the configuration form', () => {
@@ -710,6 +828,20 @@ describe('DataLakeResearchPanel', () => {
       expect(summary).toMatch(/4 proposed/);
       expect(summary).toMatch(/3 added automatically/);
       expect(summary).toMatch(/1 trusted, not added automatically/);
+    });
+
+    it('counts items blocked by a rule as a drop and rule reviews as a sub-count of proposed', () => {
+      renderPanel({
+        runs: [
+          run({
+            totals: { ...emptyResearchRunTotals(), searchHits: 8, proposed: 4, reviewedByRule: 2, blockedByRule: 3 },
+          }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/4 proposed/);
+      expect(summary).toMatch(/2 sent to review by a rule/);
+      expect(summary).toMatch(/3 blocked by an item rule/);
     });
 
     it('names the lever that stopped a run early', () => {

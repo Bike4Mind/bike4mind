@@ -22,6 +22,7 @@ import type {
   IDataLakeResearchConfigResponse,
   IDataLakeResearchRunDocument,
   ResearchPreset,
+  ResearchItemRuleAction,
   ResearchPresetId,
   ResearchRunTotals,
   ResearchSource,
@@ -36,6 +37,9 @@ import {
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
   RESEARCH_FEED_URL_MAX_CHARS,
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
@@ -86,7 +90,17 @@ export interface DataLakeResearchPanelProps {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-/** Every field a string, because that is what a form holds; conversion happens once, at submit. */
+interface ItemRuleDraft {
+  condition: string;
+  action: ResearchItemRuleAction;
+}
+
+const ITEM_RULE_ACTION_LABEL: Record<ResearchItemRuleAction, string> = {
+  block: 'Block',
+  review: 'Send to review',
+};
+
+/** Every field a string (item rules are rows of strings), because that is what a form holds; conversion happens once, at submit. */
 interface ConfigDraft {
   name: string;
   source: ResearchSource;
@@ -104,6 +118,7 @@ interface ConfigDraft {
   reviewDomains: string;
   unlistedSources: ResearchUnlistedSources;
   blockedDomains: string;
+  itemRules: ItemRuleDraft[];
   proposedTags: string;
   cadence: ResearchScheduleCadence;
   reviewBacklogLimit: string;
@@ -152,6 +167,7 @@ const emptyDraft = (): ConfigDraft => ({
   reviewDomains: '',
   unlistedSources: 'review',
   blockedDomains: '',
+  itemRules: [],
   proposedTags: '',
   cadence: 'off',
   reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
@@ -179,6 +195,7 @@ const draftFromConfig = (config: IDataLakeResearchConfigResponse): ConfigDraft =
     reviewDomains: reviewDomains.join('\n'),
     unlistedSources,
     blockedDomains: config.blockedDomains.join('\n'),
+    itemRules: (config.itemRules ?? []).map(rule => ({ condition: rule.condition, action: rule.action })),
     proposedTags: config.proposedTags.join(', '),
     // A config saved before this feature carries neither field on the wire - read that as off/default
     // rather than leaving the form blank.
@@ -298,6 +315,9 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
     }),
   };
+  if (draft.itemRules.some(rule => rule.condition.trim().length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS)) {
+    errors.itemRules = `Keep each rule to ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters or fewer.`;
+  }
   // Ignoring other sites with nothing listed would ignore every result.
   if (draft.unlistedSources === 'drop' && parseList(draft.reviewDomains).length === 0) {
     errors.unlistedSources = 'List at least one site to review, or send other sites to review.';
@@ -351,6 +371,9 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   reviewDomains: parseList(draft.reviewDomains),
   unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
+  itemRules: draft.itemRules
+    .map(rule => ({ condition: rule.condition.trim(), action: rule.action }))
+    .filter(rule => rule.condition),
   proposedTags: parseList(draft.proposedTags),
   cadence: draft.cadence,
   reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
@@ -435,6 +458,7 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
     reviewDomains,
     unlistedSources,
     blockedDomains,
+    itemRules,
     proposedTags,
     reviewBacklogLimit,
     cadence,
@@ -448,6 +472,7 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
       reviewDomains,
       unlistedSources,
       blockedDomains,
+      itemRules,
       proposedTags,
       // Only rendered with a schedule, so it cannot be the reason to unfold an unscheduled config.
       cadence === 'off' ? null : reviewBacklogLimit,
@@ -596,10 +621,11 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
  * the only place a manager can see it.
  */
 const DROP_REASON_LABEL: Record<
-  Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped'>,
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'>,
   string
 > = {
   filteredBySource: 'blocked by source rules',
+  blockedByRule: 'blocked by an item rule',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
   alreadyInLake: 'already in the lake',
@@ -636,6 +662,7 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
   if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
   if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted, not added automatically`);
+  if (totals.reviewedByRule > 0) parts.push(`${totals.reviewedByRule} sent to review by a rule`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
     if (count > 0) parts.push(`${count} ${label}`);
@@ -654,11 +681,18 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
 const JUDGED_BUCKETS: Record<
   Exclude<
     keyof ResearchRunTotals,
-    'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged' | 'autoAdmitted' | 'autoAdmitSkipped'
+    | 'searchHits'
+    | 'filteredBySource'
+    | 'judgeFailed'
+    | 'notJudged'
+    | 'autoAdmitted'
+    | 'autoAdmitSkipped'
+    | 'reviewedByRule'
   >,
   true
 > = {
   belowRelevance: true,
+  blockedByRule: true,
   fetchFailed: true,
   proposed: true,
   duplicatePending: true,
@@ -715,8 +749,7 @@ export function DataLakeResearchPanel({
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
-  const isDirty =
-    editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
+  const isDirty = editingId !== null && JSON.stringify(draft) !== JSON.stringify(draftBaseline);
   // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
   // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
   // panel's TabPanel, because an unmount takes the draft with it.
@@ -745,6 +778,22 @@ export function DataLakeResearchPanel({
     setDraft(prev => ({ ...prev, [field]: value }));
     // Only advanced fields are validated; pinning the section open stops it folding the moment an error is fixed.
     if (field !== 'name' && field !== 'query' && field !== 'source' && field !== 'feedUrl') setAdvancedOpen(true);
+  };
+
+  const setItemRule = (index: number, patch: Partial<ItemRuleDraft>) => {
+    setDraft(prev => ({
+      ...prev,
+      itemRules: prev.itemRules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)),
+    }));
+    setAdvancedOpen(true);
+  };
+  const addItemRule = () => {
+    setDraft(prev => ({ ...prev, itemRules: [...prev.itemRules, { condition: '', action: 'review' }] }));
+    setAdvancedOpen(true);
+  };
+  const removeItemRule = (index: number) => {
+    setDraft(prev => ({ ...prev, itemRules: prev.itemRules.filter((_, i) => i !== index) }));
+    setAdvancedOpen(true);
   };
 
   const openCreate = () => {
@@ -879,6 +928,11 @@ export function DataLakeResearchPanel({
               {config.autoAdmitTrusted === true && (
                 <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-auto-admit">
                   {`Adds trusted results automatically, up to ${config.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT} per run`}
+                </Typography>
+              )}
+              {(config.itemRules ?? []).length > 0 && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-rules">
+                  {pluralize((config.itemRules ?? []).length, 'item rule')}
                 </Typography>
               )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-model">
@@ -1320,6 +1374,64 @@ export function DataLakeResearchPanel({
                   <FormHelperText>One per line, subdomains included. Wins over every other setting.</FormHelperText>
                 </FormControl>
               </Stack>
+
+              <FormControl size="sm" error={!!errors.itemRules}>
+                <FormLabel>Item rules</FormLabel>
+                <Stack spacing={1}>
+                  {draft.itemRules.map((rule, index) => (
+                    <Stack key={index} direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                      <Input
+                        size="sm"
+                        sx={{ flex: 1 }}
+                        placeholder="For example: the author works for a named company"
+                        value={rule.condition}
+                        onChange={e => setItemRule(index, { condition: e.target.value })}
+                        slotProps={{ input: { 'data-testid': `datalake-research-rule-condition-${index}` } }}
+                      />
+                      <Select
+                        size="sm"
+                        value={rule.action}
+                        onChange={(_e, value) => value && setItemRule(index, { action: value })}
+                        slotProps={{ button: { 'data-testid': `datalake-research-rule-action-${index}` } }}
+                      >
+                        {RESEARCH_ITEM_RULE_ACTIONS.map(action => (
+                          <Option key={action} value={action}>
+                            {ITEM_RULE_ACTION_LABEL[action]}
+                          </Option>
+                        ))}
+                      </Select>
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        onClick={() => removeItemRule(index)}
+                        data-testid={`datalake-research-rule-remove-${index}`}
+                      >
+                        Remove
+                      </Button>
+                    </Stack>
+                  ))}
+                  <Box>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      disabled={draft.itemRules.length >= RESEARCH_ITEM_RULES_MAX}
+                      onClick={addItemRule}
+                      data-testid="datalake-research-rule-add"
+                    >
+                      Add rule
+                    </Button>
+                  </Box>
+                </Stack>
+                {errors.itemRules ? (
+                  <FormHelperText data-testid="datalake-research-rules-error">{errors.itemRules}</FormHelperText>
+                ) : (
+                  <FormHelperText>
+                    Checked by a model against each item before it is proposed. A rule can only block or send to review.
+                  </FormHelperText>
+                )}
+              </FormControl>
 
               <FormControl size="sm" error={!!errors.maxAutoAdmits}>
                 <Switch

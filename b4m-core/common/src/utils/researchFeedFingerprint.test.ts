@@ -28,6 +28,42 @@ describe('researchFeedFingerprint', () => {
     );
   });
 
+  describe('item rules', () => {
+    // Computed before itemRules existed; a change here re-judges every feed's newest items on deploy.
+    const PRE_RULES_FINGERPRINT = '093be9105481eb1876fe6de10ba5';
+    const rule = { condition: 'Published by Acme', action: 'block' as const };
+
+    it('leaves the fingerprint of a config with no rules unchanged', () => {
+      expect(researchFeedFingerprint(base)).toBe(PRE_RULES_FINGERPRINT);
+      expect(researchFeedFingerprint({ ...base, itemRules: [] })).toBe(PRE_RULES_FINGERPRINT);
+      expect(researchFeedFingerprint({ ...base, itemRules: [{ condition: '  ', action: 'block' }] })).toBe(
+        PRE_RULES_FINGERPRINT
+      );
+    });
+
+    it('changes when a rule is added, changed or its action flips', () => {
+      const withRule = researchFeedFingerprint({ ...base, itemRules: [rule] });
+      expect(withRule).not.toBe(PRE_RULES_FINGERPRINT);
+      expect(researchFeedFingerprint({ ...base, itemRules: [{ ...rule, condition: 'Published by Beta' }] })).not.toBe(
+        withRule
+      );
+      expect(researchFeedFingerprint({ ...base, itemRules: [{ ...rule, action: 'review' }] })).not.toBe(withRule);
+    });
+
+    it('ignores order, case and padding', () => {
+      const other = { condition: 'About sports', action: 'review' as const };
+      expect(researchFeedFingerprint({ ...base, itemRules: [rule, other] })).toBe(
+        researchFeedFingerprint({
+          ...base,
+          itemRules: [
+            { condition: ' ABOUT SPORTS ', action: 'review' },
+            { ...rule, condition: 'published by acme' },
+          ],
+        })
+      );
+    });
+  });
+
   it.each<[string, Partial<ResearchFeedFingerprintLevers>]>([
     ['feedUrl', { feedUrl: 'https://example.com/other.xml' }],
     ['query', { query: 'other' }],
