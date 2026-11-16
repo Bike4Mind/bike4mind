@@ -133,7 +133,12 @@ import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attach
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { chatReasoningOptionsFor } from './chatReasoningOptions';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
-import { buildRecentGeneratedImagesNote, type RecentImageJobFile } from './recentGeneratedImagesNote';
+import {
+  buildRecentGeneratedImagesNote,
+  resolveRecentImageJobFiles,
+  type ImageJobFilesResolver,
+  type RecentImageJobFile,
+} from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -2169,25 +2174,12 @@ export class ChatCompletionProcess {
     logger,
   }: {
     recentImageJobs: { jobId: string; prompt: string }[] | undefined;
-    resolver:
-      ((input: { jobIds: string[]; userId: string }) => Promise<{ jobId: string; fileId: string }[]>) | undefined;
+    resolver: ImageJobFilesResolver | undefined;
     wanted: boolean;
     logger: Logger;
   }): Promise<RecentImageJobFile[]> {
-    if (!wanted || !resolver || !recentImageJobs || recentImageJobs.length === 0) return [];
-    try {
-      const files = await resolver({ jobIds: recentImageJobs.map(job => job.jobId), userId: this.user.id });
-      const fileByJob = new Map(files.map(file => [file.jobId, file.fileId]));
-      return recentImageJobs.flatMap(job => {
-        const fileId = fileByJob.get(job.jobId);
-        return fileId ? [{ fileId, prompt: job.prompt }] : [];
-      });
-    } catch (error) {
-      logger.warn('Could not resolve recent image job outputs; the note lists generated keys only', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
+    if (!wanted) return [];
+    return resolveRecentImageJobFiles({ recentImageJobs, resolver, userId: this.user.id, logger });
   }
 
   public async process({

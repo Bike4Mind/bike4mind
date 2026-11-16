@@ -36,6 +36,7 @@ export { buildToolUsageEvent, recordToolUsageEvent } from './tools/ToolBuilder';
 export { buildSubagentUsageMeta, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
+export * from './recentGeneratedImagesNote';
 export * from './decisionProviders';
 export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';

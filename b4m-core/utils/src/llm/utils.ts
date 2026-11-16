@@ -12,6 +12,7 @@ import {
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItem,
+  IChatHistoryItemDocument,
   IChatHistoryItemRepository,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -946,11 +947,45 @@ export async function fetchAndProcessPreviousMessages(
     return acc;
   }, new Array<IMessage>());
 
-  // Surface recently generated images so a follow-up turn can edit or animate them
-  // ("make it cartoonish"). Generated images persist as bare storage keys in
-  // quest.images with no fabFile record, so the model otherwise has no handle on
-  // them. Newest first, capped, and filtered to actual image files (quest.images
-  // can also hold .xlsx/other generated artifacts).
+  const { recentGeneratedImages, recentImageJobs } = collectRecentGeneratedImages(chatHistoryItems);
+
+  // Real tool-usage signal for this window - see the field's own doc comment above for why the
+  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
+  const priorToolNames = chatHistoryItems
+    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
+    .filter((name): name is string => Boolean(name));
+
+  return [
+    convertedMessages,
+    chatHistoryItems.length,
+    {
+      cacheHit: fetchTime < 50,
+      fetchTime,
+      itemCount: chatHistoryItems.length,
+      oldestIncludedQuestId,
+      excludedOlderQuestCount,
+      recentGeneratedImages,
+      recentImageJobs,
+      priorToolNames,
+      toolTurns,
+    },
+  ];
+}
+
+type RecentGeneratedImages = {
+  recentGeneratedImages: { key: string; prompt: string }[];
+  recentImageJobs: { jobId: string; prompt: string }[];
+};
+
+/**
+ * Recently generated images, so a follow-up turn can edit or animate them ("make it cartoonish"). Legacy
+ * in-process images persist as bare storage keys in quest.images with no fabFile record; image jobs persist as
+ * job refs on quest.generationJobs (the caller resolves them to file ids). Newest first, each capped, and keys
+ * filtered to actual image files (quest.images can also hold .xlsx/other generated artifacts). `chatHistoryItems`
+ * is chronological. Shared by the chat path (fetchAndProcessPreviousMessages) and the agent path
+ * (fetchAgentRecentGeneratedImages), so both notes list the same images.
+ */
+function collectRecentGeneratedImages(chatHistoryItems: readonly IChatHistoryItemDocument[]): RecentGeneratedImages {
   const recentGeneratedImages: { key: string; prompt: string }[] = [];
   for (let i = chatHistoryItems.length - 1; i >= 0 && recentGeneratedImages.length < MAX_RECENT_GENERATED_IMAGES; i--) {
     const item = chatHistoryItems[i];
@@ -975,28 +1010,23 @@ export async function fetchAndProcessPreviousMessages(
       recentImageJobs.push({ jobId, prompt });
     }
   }
+  return { recentGeneratedImages, recentImageJobs };
+}
 
-  // Real tool-usage signal for this window - see the field's own doc comment above for why the
-  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
-  const priorToolNames = chatHistoryItems
-    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
-    .filter((name): name is string => Boolean(name));
-
-  return [
-    convertedMessages,
-    chatHistoryItems.length,
-    {
-      cacheHit: fetchTime < 50,
-      fetchTime,
-      itemCount: chatHistoryItems.length,
-      oldestIncludedQuestId,
-      excludedOlderQuestCount,
-      recentGeneratedImages,
-      recentImageJobs,
-      priorToolNames,
-      toolTurns,
-    },
-  ];
+/**
+ * The agent path's recently generated images (see collectRecentGeneratedImages), read over the same window as
+ * fetchAgentConversationHistory. The agent run seeds text-only history, so without this its model has no handle
+ * on an image an earlier turn generated and cannot edit it.
+ */
+export async function fetchAgentRecentGeneratedImages(
+  session: Pick<ISessionDocument, 'id'>,
+  questCount: number,
+  { db }: { db: { quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'> } }
+): Promise<RecentGeneratedImages> {
+  if (questCount <= 0) return { recentGeneratedImages: [], recentImageJobs: [] };
+  const chatHistoryItems = await db.quests.getMostRecentChatHistory(session.id, questCount);
+  // getMostRecentChatHistory returns newest-first; flip to chronological order.
+  return collectRecentGeneratedImages([...chatHistoryItems].reverse());
 }
 
 /**

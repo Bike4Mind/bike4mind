@@ -6,6 +6,7 @@ import {
   computeCosineSimilarity,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  fetchAgentRecentGeneratedImages,
   isStoppedBeforeReply,
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
@@ -2389,6 +2390,42 @@ describe('Context Management Tests', () => {
         db: { quests: { getMostRecentChatHistory } },
       });
       expect(messages).toEqual([]);
+      expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fetchAgentRecentGeneratedImages', () => {
+    it('returns legacy image keys and image job refs newest first, like the chat path', async () => {
+      const items = [
+        { id: '3', prompt: 'make it blue', generationJobs: [{ id: 'job-2', kind: 'image' }] },
+        { id: '2', prompt: 'a song', generationJobs: [{ id: 'music-1', kind: 'music' }] },
+        {
+          id: '1',
+          prompt: 'a fox',
+          images: ['fox.png', 'sheet.xlsx'],
+          generationJobs: [{ id: 'job-1', kind: 'image' }],
+        },
+      ];
+      const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 20, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+
+      expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 20);
+      expect(result.recentGeneratedImages).toEqual([{ key: 'fox.png', prompt: 'a fox' }]);
+      expect(result.recentImageJobs).toEqual([
+        { jobId: 'job-2', prompt: 'make it blue' },
+        { jobId: 'job-1', prompt: 'a fox' },
+      ]);
+    });
+
+    it('returns empty without querying when questCount <= 0', async () => {
+      const getMostRecentChatHistory = vi.fn();
+      const result = await fetchAgentRecentGeneratedImages({ id: 'session1' }, 0, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+      expect(result).toEqual({ recentGeneratedImages: [], recentImageJobs: [] });
       expect(getMostRecentChatHistory).not.toHaveBeenCalled();
     });
   });

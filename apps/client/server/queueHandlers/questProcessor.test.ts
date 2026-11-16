@@ -160,25 +160,6 @@ describe('questProcessor getImageJobsResolver', () => {
   }, 120_000);
 });
 
-vi.mock('@server/generations/findOwnGenerationJob', () => ({ findOwnGenerationJob: vi.fn() }));
-
-describe('questProcessor resolveImageJobFiles', () => {
-  it('returns the output file of each own succeeded job and skips the rest', async () => {
-    const { resolveImageJobFiles } = await import('./questProcessor');
-    const { findOwnGenerationJob } = await import('@server/generations/findOwnGenerationJob');
-    const jobs: Record<string, unknown> = {
-      done: { id: 'done', state: 'succeeded', payload: { output: { fileId: 'file-1' } } },
-      running: { id: 'running', state: 'running', payload: {} },
-      stored: { id: 'stored', state: 'succeeded', payload: { output: { location: 'generated' } } },
-    };
-    vi.mocked(findOwnGenerationJob).mockImplementation(async id => (jobs[id] ?? null) as never);
-
-    const files = await resolveImageJobFiles({ jobIds: ['done', 'running', 'stored', 'other'], userId: 'u1' });
-    expect(files).toEqual([{ jobId: 'done', fileId: 'file-1' }]);
-    expect(findOwnGenerationJob).toHaveBeenCalledWith('other', 'u1', 'image');
-  }, 120_000);
-});
-
 describe('questProcessor getStaticOptions', () => {
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getStaticOptions } = await import('./questProcessor');

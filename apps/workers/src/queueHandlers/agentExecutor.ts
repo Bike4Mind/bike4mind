@@ -236,6 +236,8 @@ import { capAgentRoundOutput, capsRoundOutput, outOfCreditsOutcome } from './age
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
+import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
+import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
@@ -3368,6 +3370,26 @@ async function runExecution(
           });
         }
       }
+      // Same iteration-0 window: the note rides on `context`, which the checkpoint carries in messages[0].
+      let recentImagesNote: string | undefined;
+      if (isNewExecution && iterationIndex === 0) {
+        try {
+          recentImagesNote = await buildAgentRecentImagesNote({
+            session,
+            callerId: execution.userId,
+            toolNames: tools.map(tool => tool.toolSchema?.name).filter((name): name is string => Boolean(name)),
+            questCount: AGENT_HISTORY_QUEST_COUNT,
+            questHistory: questRepository,
+            resolveImageJobFiles,
+            logger,
+          });
+        } catch (noteErr) {
+          logger.warn('[History] Failed to build the recent-images note; proceeding without it', {
+            error: noteErr instanceof Error ? noteErr.message : String(noteErr),
+          });
+        }
+      }
+      const systemContext = withRecentImagesNote(startPayload?.systemContext, recentImagesNote);
 
       // Fold extracted content in last, so it sits after every preamble. Stays a plain string
       // unless an image was inlined - only then does the message become a MessageContent array,
@@ -3393,10 +3415,10 @@ async function runExecution(
               maxIterations,
               confidenceGate,
               previousMessages,
-              // The caller's per-send system context. Read by ReActAgent only when it builds
+              // The caller's per-send system context plus the recent-images note. Read by ReActAgent only when it builds
               // the initial messages, where it is appended to the system message (messages[0])
               // that the checkpoint carries - so a continuation (no start payload) keeps it.
-              ...(startPayload?.systemContext ? { context: startPayload.systemContext } : {}),
+              ...(systemContext ? { context: systemContext } : {}),
               // Cache the (large, static) system prompt + tool schemas across iterations. An
               // agent run is always multi-iteration, and previously this was omitted - so the
               // full system prompt + tools were re-sent at full input price EVERY iteration

@@ -1,10 +1,12 @@
+import type { Logger } from '@bike4mind/observability';
+
 export type RecentGeneratedImage = { key: string; prompt: string };
 /** A finished image job's output: a regular file the caller owns, so both tools take its id as a file id. */
 export type RecentImageJobFile = { fileId: string; prompt: string };
 
 export type RecentGeneratedImagesNoteInput = {
   images: readonly RecentGeneratedImage[] | undefined;
-  /** Outputs of image jobs recent turns started (ChatCompletionProcess resolves them owner-scoped). */
+  /** Outputs of image jobs recent turns started, resolved owner-scoped (resolveRecentImageJobFiles). */
   imageJobFiles?: readonly RecentImageJobFile[];
   /** Whether each tool reached the BUILT tool list, not merely the requested one. */
   editImageAvailable: boolean;
@@ -77,4 +79,41 @@ export function buildRecentGeneratedImagesNote({
     'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
   ].join('\n');
   return [{ role: 'system', content }];
+}
+
+/** Maps job ids to the file ids of the ones that finished with a file, owner-scoped (see the chat and agent wiring). */
+export type ImageJobFilesResolver = (input: {
+  jobIds: string[];
+  userId: string;
+}) => Promise<{ jobId: string; fileId: string }[]>;
+
+/**
+ * The note's job outputs, in the recent-jobs order with each job's prompt. A lookup failure only drops them from the
+ * note: the turn still runs, with the legacy keys alone.
+ */
+export async function resolveRecentImageJobFiles({
+  recentImageJobs,
+  resolver,
+  userId,
+  logger,
+}: {
+  recentImageJobs: readonly { jobId: string; prompt: string }[] | undefined;
+  resolver: ImageJobFilesResolver | undefined;
+  userId: string;
+  logger: Pick<Logger, 'warn'>;
+}): Promise<RecentImageJobFile[]> {
+  if (!resolver || !recentImageJobs || recentImageJobs.length === 0) return [];
+  try {
+    const files = await resolver({ jobIds: recentImageJobs.map(job => job.jobId), userId });
+    const fileByJob = new Map(files.map(file => [file.jobId, file.fileId]));
+    return recentImageJobs.flatMap(job => {
+      const fileId = fileByJob.get(job.jobId);
+      return fileId ? [{ fileId, prompt: job.prompt }] : [];
+    });
+  } catch (error) {
+    logger.warn('Could not resolve recent image job outputs; the note lists generated keys only', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 }

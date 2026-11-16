@@ -83,7 +83,7 @@ import {
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
 import { createImageJobs } from '@bike4mind/services/imageJobs';
-import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
+import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -275,25 +275,6 @@ export const getImageJobsResolver = (apiKeyId: string | undefined) =>
   apiKeyId
     ? undefined
     : async () => (input: Parameters<typeof createImageJobs>[0]) => createImageJobs(input, getCreateImageJobsDeps());
-
-/**
- * The recent-images note's job outputs: each listed job the caller requested that finished with a file. Through
- * findOwnGenerationJob, so a job id from another user's quest resolves to nothing. The ids are capped upstream
- * (MAX_RECENT_GENERATED_IMAGES), so one lookup each stays cheap.
- */
-export const resolveImageJobFiles = async ({
-  jobIds,
-  userId,
-}: {
-  jobIds: string[];
-  userId: string;
-}): Promise<{ jobId: string; fileId: string }[]> => {
-  const jobs = await Promise.all(jobIds.map(id => findOwnGenerationJob(id, userId, 'image')));
-  return jobs.flatMap(job => {
-    const fileId = job?.state === 'succeeded' ? job.payload.output?.fileId : undefined;
-    return job && fileId ? [{ jobId: job.id, fileId }] : [];
-  });
-};
 
 /**
  * Quest Processor - shared processing core.
