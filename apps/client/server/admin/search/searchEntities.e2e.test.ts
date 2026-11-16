@@ -141,6 +141,25 @@ describe('provider end-user identifier lookup', () => {
       secondary: 'f***@example.com - suspended',
     });
   });
+  it('looks up provider hashes without a collation unsupported by DocumentDB 5', async () => {
+    const user = await User.create({
+      name: 'Provider lookup',
+      username: 'provider-lookup',
+      email: 'provider@example.com',
+    });
+    const identifier = toProviderEndUserId(String(user._id))!;
+    const collation = vi.spyOn(mongoose.Query.prototype, 'collation').mockImplementation(() => {
+      throw new Error('DocumentDB 5 rejects collation');
+    });
+    try {
+      expect(await searchAdminEntities(identifier.toUpperCase())).toEqual([
+        { type: 'user', id: String(user._id), displayName: 'Provider lookup', secondary: 'p***@example.com - active' },
+      ]);
+      expect(collation).not.toHaveBeenCalled();
+    } finally {
+      collation.mockRestore();
+    }
+  });
   it('returns nothing for an unknown identifier', async () => {
     expect(await searchAdminEntities('0'.repeat(64))).toEqual([]);
   });

@@ -90,25 +90,28 @@ export async function searchAdminEntities(query: string): Promise<AdminSearchRes
             : recencyOrder
               ? { _id: { $in: recencyOrder } }
               : null;
+  const userLookup = userFilter
+    ? User.find(userFilter)
+        .hint(
+          kind === 'email'
+            ? 'email_ci'
+            : kind === 'stripe'
+              ? 'user_stripeCustomerId'
+              : kind === 'providerEndUserId'
+                ? 'user_providerEndUserId'
+                : '_id_'
+        )
+        .select('_id name username email deletedAt isBanned moderation.status')
+        .sort({ _id: 1 })
+        .limit(GROUP_LIMIT)
+        .maxTimeMS(QUERY_TIMEOUT_MS)
+    : null;
+  // Canonical provider digests need only binary equality; DocumentDB 5 rejects collation options.
+  if (userLookup && kind !== 'providerEndUserId') {
+    userLookup.collation(kind === 'email' ? CI_COLLATION : { locale: 'simple' });
+  }
   const [users, namedOrganizations, identifiedOrganizations] = await Promise.all([
-    userFilter
-      ? User.find(userFilter)
-          .hint(
-            kind === 'email'
-              ? 'email_ci'
-              : kind === 'stripe'
-                ? 'user_stripeCustomerId'
-                : kind === 'providerEndUserId'
-                  ? 'user_providerEndUserId'
-                  : '_id_'
-          )
-          .collation(kind === 'email' ? CI_COLLATION : { locale: 'simple' })
-          .select('_id name username email deletedAt isBanned moderation.status')
-          .sort({ _id: 1 })
-          .limit(GROUP_LIMIT)
-          .maxTimeMS(QUERY_TIMEOUT_MS)
-          .lean()
-      : [],
+    userLookup ? userLookup.lean() : [],
     kind === 'name'
       ? Organization.find({ name: query })
           .hint('organization_name_ci')
