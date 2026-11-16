@@ -76,6 +76,7 @@ const complete = () => completeAccountDeletion(USER_ID, { logger: logger as neve
 type HardDeleteContext = {
   assertInTransaction?: () => Promise<void>;
   recordInTransaction?: (target: unknown) => Promise<void>;
+  afterDeleteInTransaction?: (session: never) => Promise<void>;
 };
 const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
@@ -116,6 +117,7 @@ beforeEach(() => {
       await context.assertInTransaction?.();
       const result = await commitDelete(users);
       await context.recordInTransaction?.(deletedTarget);
+      await context.afterDeleteInTransaction?.(undefined as never);
       return { result, subscriptionCancellation: null };
     }
   );
@@ -318,6 +320,7 @@ describe('completeAccountDeletion', () => {
       async (_id: string, context: HardDeleteContext, commitDelete: (repository: typeof users) => Promise<unknown>) => {
         const result = await commitDelete(users);
         await context.recordInTransaction?.(null);
+        await context.afterDeleteInTransaction?.(undefined as never);
         return { result, subscriptionCancellation: null };
       }
     );

@@ -1,19 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mongoose } from '@bike4mind/database';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import { SubjectErasurePlan } from './subjectErasurePlan';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer | undefined;
+let mongoServer: MongoMemoryReplSet | undefined;
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
 });
 

@@ -58,6 +58,10 @@ export type ImageSizing =
   | { kind: 'inputImage'; aspectRatio: boolean }
   | { kind: 'fixed' };
 
+/**
+ * @deprecated Read an image model's capabilities from IMAGE_MODEL_CATALOG (GET /api/v1/image-models). This still
+ * backs the `image` block of GET /api/v1/models and the chat size picker until the quest image path retires.
+ */
 export type ImageModelCapabilities = {
   sizing: ImageSizing;
   supports: {
@@ -120,6 +124,8 @@ function resolveQualities(model: ImageModels): readonly OpenAIImageQuality[] {
  * The size rules and supported params of an image model, derived from IMAGE_SIZE_CONSTRAINTS and
  * the modelHelpers predicates the request path enforces, so the advertised block cannot drift
  * from what a request is validated against.
+ *
+ * @deprecated Use IMAGE_MODEL_CATALOG; see ImageModelCapabilities.
  */
 export function getImageModelCapabilities(model: ImageModels): ImageModelCapabilities {
   return {

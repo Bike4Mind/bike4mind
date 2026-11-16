@@ -6,6 +6,7 @@ import {
   erasureRecordRepository,
   userRepository,
   withTransaction,
+  type mongoose,
 } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -37,6 +38,8 @@ export type HardDeleteContext = {
    */
   assertInTransaction?: () => Promise<void>;
   /** Runs inside the delete's transaction after the row goes, so an audit entry commits or rolls back with it. */
+  /** Database-only cleanup after User removal, committed with the same transaction. */
+  afterDeleteInTransaction?: (session: mongoose.ClientSession) => Promise<void>;
   recordInTransaction?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
   /** The delete's transaction failed after the subscription cancel, which cannot roll back. */
   onDeleteFailed?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
@@ -129,6 +132,7 @@ export async function hardDeleteUser<T>(
               initiatedBy: context.initiatedBy,
             });
             await context.recordInTransaction?.(target, cancellation);
+            await context.afterDeleteInTransaction?.(session);
             return deleted;
           });
         } catch (error) {

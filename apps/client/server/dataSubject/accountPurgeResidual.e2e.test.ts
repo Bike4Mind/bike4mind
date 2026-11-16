@@ -50,6 +50,11 @@ import { reapplyErasure } from '../users/reapplyErasure';
 import { erasureRegistry } from './erasureRegistry';
 import { DELETED_USER_ID } from './placeholder';
 import { SubjectErasurePlan } from './subjectErasurePlan';
+import { SubjectErasureExecutor } from './subjectErasureExecutor';
+import { SubjectRecordExport } from './subjectRecordExport';
+import { aiHolders } from './registry/ai';
+import { DATA_HOLDER_REGISTRY } from './registry';
+import { purgePersonalLakeById } from '@bike4mind/server-utils/users/purgeAccountContent';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -315,4 +320,335 @@ describe('a sole-owned paid organization tombstoned before the purge', () => {
       expect(String((await organizations.findOne({ _id: paid }))!.userId)).toBe(DELETED_USER_ID);
     }
   );
+});
+
+describe('retained organization creators', () => {
+  it('keeps organization Agents and same-name Skills while removing personal copies and creator memberships', async () => {
+    const first = await seedAccount('self');
+    const second = await seedAccount('self');
+    const name = `shared-${new ObjectId()}`;
+    const retained: { model: string; id: InstanceType<typeof ObjectId>; organizationId: string }[] = [];
+    const personal: { model: string; id: InstanceType<typeof ObjectId> }[] = [];
+    await mongoose.model('Skill').createIndexes();
+    for (const { userId } of [first, second]) {
+      const organizationId = String(new ObjectId());
+      for (const model of ['Agent', 'Skill']) {
+        retained.push({
+          model,
+          organizationId,
+          id: await insert(model, {
+            name,
+            userId,
+            organizationId,
+            users: [{ userId }],
+            description: 'organization content',
+          }),
+        });
+        personal.push({ model, id: await insert(model, { name: `personal-${userId}`, userId }) });
+      }
+      await completeAccountDeletion(userId, { logger, erasureRegistry });
+    }
+    for (const { model, id, organizationId } of retained) {
+      const row = await mongoose.model(model).collection.findOne({ _id: id });
+      expect(row).not.toBeNull();
+      expect(row!.name).toBe(name);
+      expect(String(row!.organizationId)).toBe(organizationId);
+      expect([first.userId, second.userId]).not.toContain(String(row!.userId));
+      expect(row!.users).toEqual([]);
+    }
+    for (const { model, id } of personal)
+      expect(await mongoose.model(model).collection.findOne({ _id: id })).toBeNull();
+    expect(await mongoose.model('Skill').collection.countDocuments({ name })).toBe(2);
+  });
+});
+
+describe('final organization cleanup commits with deletion', () => {
+  it.each(['self', 'admin'] as const)(
+    'keeps the %s retry anchor on a cleanup write failure and succeeds on retry',
+    async source => {
+      const { userId, email } = await seedAccount(source);
+      const organizations = mongoose.model('Organization').collection;
+      const original = await organizations.findOne({ userId, personal: false, deletedAt: { $ne: null } });
+      const database = mongoose.connection.db!;
+      const collection = database.collection(organizations.name);
+      const bulkWrite = collection.bulkWrite.bind(collection);
+      const originalCollection = database.collection.bind(database);
+      const collectionLookup = vi
+        .spyOn(database, 'collection')
+        .mockImplementation((name, options) =>
+          name === organizations.name ? collection : originalCollection(name, options)
+        );
+      const failure = vi.spyOn(collection, 'bulkWrite').mockImplementation(async (operations, options) => {
+        if (options?.session) throw new Error('final organization cleanup unavailable');
+        return bulkWrite(operations, options);
+      });
+      try {
+        await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).rejects.toThrow(
+          'final organization cleanup unavailable'
+        );
+      } finally {
+        failure.mockRestore();
+        collectionLookup.mockRestore();
+      }
+      expect(await mongoose.model('User').exists({ _id: userId })).not.toBeNull();
+      expect(await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) })).toBeNull();
+      const retained = await organizations.findOne({ _id: original!._id });
+      expect(String(retained!.userId)).toBe(userId);
+      expect(retained!.billingContact).toBe(email);
+      await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+      expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+      expect(await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) })).not.toBeNull();
+      expect(String((await organizations.findOne({ _id: original!._id }))!.userId)).toBe(DELETED_USER_ID);
+    }
+  );
+});
+
+describe('canonical personal lake ownership', () => {
+  it.each([
+    'creator',
+    'transferred-out',
+    'co-owned',
+    'expired-owner',
+    'transferred-in',
+    'organization',
+    'personal-workspace',
+  ] as const)('uses the same %s admission for export and erasure', async kind => {
+    const userId = String(new ObjectId());
+    const other = String(new ObjectId());
+    const workspace = kind === 'personal-workspace' ? await insert('Organization', { userId, personal: true }) : null;
+    const organizationId = kind === 'organization' ? String(new ObjectId()) : workspace ? String(workspace) : null;
+    const id = await insert('DataLake', {
+      createdByUserId: kind === 'transferred-in' ? other : userId,
+      organizationId,
+      name: 'private lake body',
+      datalakeTag: `lake-${new ObjectId()}`,
+    });
+    const owners =
+      kind === 'transferred-out' || kind === 'expired-owner'
+        ? [other]
+        : kind === 'co-owned'
+          ? [userId, other]
+          : kind === 'transferred-in'
+            ? [userId]
+            : [];
+    for (const principalId of owners)
+      await insert('DataLakeAccessGrant', {
+        dataLakeId: String(id),
+        principalType: 'user',
+        principalId,
+        role: 'owner',
+        grantedByUserId: other,
+        ...(kind === 'expired-owner' ? { expiresAt: new Date(Date.now() - 1_000) } : {}),
+      });
+    const registry = { DataLake: aiHolders.DataLake };
+    const subject = { userId, email: null };
+    const exporter = new SubjectRecordExport(subject, registry);
+    const records = [];
+    for await (const record of exporter.records('DataLake')) records.push(record);
+    const owned = ['creator', 'expired-owner', 'transferred-in', 'personal-workspace'].includes(kind);
+    expect(records).toHaveLength(1);
+    if (owned) expect(records[0].name).toBe('private lake body');
+    else expect(records[0]).not.toHaveProperty('name');
+    await new SubjectErasureExecutor(subject, async () => {}, registry).run();
+    expect((await mongoose.model('DataLake').collection.findOne({ _id: id })) !== null).toBe(!owned);
+    expect(await mongoose.model('DataLakeAccessGrant').collection.countDocuments({ dataLakeId: String(id) })).toBe(
+      owned ? 0 : owners.length
+    );
+  });
+
+  it('re-resolves ownership after a real concurrent transfer wins the write conflict', async () => {
+    const userId = String(new ObjectId());
+    const other = String(new ObjectId());
+    const id = await insert('DataLake', {
+      createdByUserId: userId,
+      name: 'retained',
+      datalakeTag: `lake-${new ObjectId()}`,
+    });
+    const child = await insert('DataLakeFinding', { dataLakeId: String(id), title: 'retained content' });
+    let checkpoints = 0;
+    let transferred = false;
+    const checkpoint = async () => {
+      checkpoints += 1;
+      if (transferred || checkpoints !== 3) return;
+      transferred = true;
+      const session = await mongoose.connection.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await mongoose.model('DataLakeAccessGrant').collection.insertOne(
+            {
+              dataLakeId: String(id),
+              principalType: 'user',
+              principalId: other,
+              role: 'owner',
+              grantedByUserId: userId,
+            },
+            { session }
+          );
+          await mongoose
+            .model('DataLake')
+            .collection.updateOne({ _id: id }, { $currentDate: { updatedAt: true } }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+    };
+    expect(await purgePersonalLakeById(userId, String(id), checkpoint)).toBe(false);
+    expect(transferred).toBe(true);
+    expect(checkpoints).toBeGreaterThan(3);
+    expect(await mongoose.model('DataLake').collection.findOne({ _id: id })).not.toBeNull();
+    expect(await mongoose.model('DataLakeFinding').collection.findOne({ _id: child })).not.toBeNull();
+  });
+
+  it('rolls back memory, content and grants when the lease is lost during the cascade', async () => {
+    const userId = String(new ObjectId());
+    const tag = `lake-${new ObjectId()}`;
+    const id = await insert('DataLake', { createdByUserId: userId, name: 'retry', datalakeTag: tag });
+    const child = await insert('DataLakeFinding', { dataLakeId: String(id), title: 'retry content' });
+    const grant = await insert('DataLakeAccessGrant', {
+      dataLakeId: String(id),
+      principalType: 'user',
+      principalId: userId,
+      role: 'owner',
+      grantedByUserId: userId,
+    });
+    let checkpoints = 0;
+    await expect(
+      purgePersonalLakeById(userId, String(id), async () => {
+        if (++checkpoints === 10) throw new Error('lease lost');
+      })
+    ).rejects.toThrow('lease lost');
+    for (const [model, rowId] of [
+      ['DataLake', id],
+      ['DataLakeFinding', child],
+      ['DataLakeAccessGrant', grant],
+    ] as const)
+      expect(await mongoose.model(model).collection.findOne({ _id: rowId })).not.toBeNull();
+    expect(
+      await mongoose.model('MemoryPrincipalKey').collection.findOne({ principalKind: 'lake', principalId: tag })
+    ).toBeNull();
+    expect(await purgePersonalLakeById(userId, String(id), async () => {})).toBe(true);
+    expect(await mongoose.model('DataLake').collection.findOne({ _id: id })).toBeNull();
+  });
+});
+
+describe('file family authority', () => {
+  it('preserves a parent and its actual chunk after a planned personal file joins an organization lake', async () => {
+    const userId = String(new ObjectId());
+    const tag = `team-${new ObjectId()}`;
+    await insert('DataLake', {
+      createdByUserId: String(new ObjectId()),
+      organizationId: String(new ObjectId()),
+      datalakeTag: tag,
+      name: 'team',
+    });
+    const file = await insert('FabFile', { userId, fileName: 'team.txt', tags: [{ name: 'notes' }] });
+    const chunk = await insert('FabFileChunk', { fabFileId: String(file), text: 'team text' });
+    const personal = await insert('FabFile', { userId, fileName: 'personal.txt' });
+    const personalChunk = await insert('FabFileChunk', { fabFileId: String(personal), text: 'personal text' });
+    const registry = { FabFile: DATA_HOLDER_REGISTRY.FabFile, FabFileChunk: DATA_HOLDER_REGISTRY.FabFileChunk };
+    const original = SubjectErasurePlan.prototype.collections;
+    const spy = vi.spyOn(SubjectErasurePlan.prototype, 'collections').mockImplementation(function (
+      this: SubjectErasurePlan,
+      checkpoint,
+      sink
+    ) {
+      return original.call(this, checkpoint, async (model, entries) => {
+        if (model === 'FabFile') {
+          expect(entries.find(entry => String(entry.document._id) === String(file))?.outcome).toBe('deleted');
+          await mongoose.model('FabFile').collection.updateOne({ _id: file }, { $push: { tags: { name: tag } } });
+        }
+        await sink?.(model, entries);
+      });
+    });
+    try {
+      await new SubjectErasureExecutor({ userId, email: null }, async () => {}, registry).run();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(String((await mongoose.model('FabFile').collection.findOne({ _id: file }))!.userId)).toBe(DELETED_USER_ID);
+    expect(await mongoose.model('FabFileChunk').collection.findOne({ _id: chunk })).not.toBeNull();
+    expect(await mongoose.model('FabFile').collection.findOne({ _id: personal })).toBeNull();
+    expect(await mongoose.model('FabFileChunk').collection.findOne({ _id: personalChunk })).toBeNull();
+  });
+
+  it('rolls back a file and its chunks together if the lease is lost after child deletion', async () => {
+    const userId = String(new ObjectId());
+    const file = await insert('FabFile', { userId, fileName: 'retry.txt' });
+    const chunk = await insert('FabFileChunk', { fabFileId: String(file), text: 'retry text' });
+    const registry = { FabFile: DATA_HOLDER_REGISTRY.FabFile, FabFileChunk: DATA_HOLDER_REGISTRY.FabFileChunk };
+    const checkpoint = async () => {
+      // ALS makes this observation read the actual deletion's snapshot.
+      const parent = await mongoose.model('FabFile').findById(file);
+      const child = await mongoose.model('FabFileChunk').findById(chunk);
+      if (parent && !child) throw new Error('lease lost after child delete');
+    };
+    await expect(new SubjectErasureExecutor({ userId, email: null }, checkpoint, registry).run()).rejects.toThrow(
+      'lease lost after child delete'
+    );
+    expect(await mongoose.model('FabFile').collection.findOne({ _id: file })).not.toBeNull();
+    expect(await mongoose.model('FabFileChunk').collection.findOne({ _id: chunk })).not.toBeNull();
+    await new SubjectErasureExecutor({ userId, email: null }, async () => {}, registry).run();
+    expect(await mongoose.model('FabFile').collection.findOne({ _id: file })).toBeNull();
+    expect(await mongoose.model('FabFileChunk').collection.findOne({ _id: chunk })).toBeNull();
+  });
+});
+
+describe('retained content settlement', () => {
+  it('anonymizes creator attribution when ownership transfers after the lake plan', async () => {
+    const userId = String(new ObjectId());
+    const other = String(new ObjectId());
+    const id = await insert('DataLake', {
+      createdByUserId: userId,
+      lastUpdatedByUserId: userId,
+      datalakeTag: `lake-${new ObjectId()}`,
+      name: 'transferred content',
+    });
+    const child = await insert('DataLakeFinding', { dataLakeId: String(id), title: 'retained content' });
+    const original = SubjectErasurePlan.prototype.collections;
+    const spy = vi.spyOn(SubjectErasurePlan.prototype, 'collections').mockImplementation(function (
+      this: SubjectErasurePlan,
+      checkpoint,
+      sink
+    ) {
+      return original.call(this, checkpoint, async (model, entries) => {
+        if (model === 'DataLake') {
+          await insert('DataLakeAccessGrant', {
+            dataLakeId: String(id),
+            principalType: 'user',
+            principalId: other,
+            role: 'owner',
+            grantedByUserId: other,
+          });
+          await mongoose.model('DataLake').collection.updateOne({ _id: id }, { $currentDate: { updatedAt: true } });
+        }
+        await sink?.(model, entries);
+      });
+    });
+    try {
+      await new SubjectErasureExecutor({ userId, email: null }, async () => {}, { DataLake: aiHolders.DataLake }).run();
+    } finally {
+      spy.mockRestore();
+    }
+    const lake = await mongoose.model('DataLake').collection.findOne({ _id: id });
+    expect(lake!.name).toBe('transferred content');
+    expect(lake!.createdByUserId).not.toBe(userId);
+    expect(lake!.createdByUserId).not.toBe(other);
+    expect(lake!.createdByUserId).toMatch(/^[a-f0-9]{24}$/);
+    expect(lake!.lastUpdatedByUserId).toBe(DELETED_USER_ID);
+    expect(await mongoose.model('DataLakeFinding').collection.findOne({ _id: child })).not.toBeNull();
+  });
+
+  it('commits owner cleanup before a self-service postcommit cancellation error', async () => {
+    const { userId } = await seedAccount('self');
+    const organizations = mongoose.model('Organization').collection;
+    const owner = await organizations.findOne({ userId, personal: false, deletedAt: { $ne: null } });
+    const { cancelAccountSubscriptions } = await import('@bike4mind/server-utils/billing/cancelAccountSubscriptions');
+    vi.mocked(cancelAccountSubscriptions).mockRejectedValueOnce(new Error('postcommit cancellation failed'));
+    await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).rejects.toThrow(
+      'postcommit cancellation failed'
+    );
+    expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+    expect(await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) })).not.toBeNull();
+    expect(String((await organizations.findOne({ _id: owner!._id }))!.userId)).toBe(DELETED_USER_ID);
+  });
 });

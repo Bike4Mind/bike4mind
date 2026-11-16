@@ -64,10 +64,9 @@ export async function findOrganizationFileIds(
   // Meta tags are looked up lowercased (`findMemberLakesForFile`), so both forms are prefetched.
   const tagNames = [...new Set(rawTags.flatMap(name => [name, name.toLowerCase()]))];
   const uploaders = [...new Set(unowned.filter(hasPrefixTag).map(file => file.userId))];
-  const [tagged, owned] = await Promise.all([
-    tagNames.length > 0 ? findLakes({ datalakeTag: { $in: tagNames } }) : [],
-    uploaders.length > 0 ? findLakes({ createdByUserId: { $in: uploaders } }) : [],
-  ]);
+  // This helper also runs inside a file-family transaction; one session cannot run parallel queries.
+  const tagged = tagNames.length > 0 ? await findLakes({ datalakeTag: { $in: tagNames } }) : [];
+  const owned = uploaders.length > 0 ? await findLakes({ createdByUserId: { $in: uploaders } }) : [];
   const byTag = new Map<string, MemberLake>();
   for (const lake of tagged) if (lake.datalakeTag && !byTag.has(lake.datalakeTag)) byTag.set(lake.datalakeTag, lake);
   const byCreator = new Map<string, MemberLake[]>();

@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUserDeletion } from '@bike4mind/common';
-import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import {
+  Organization,
+  User,
+  adminAuditLogRepository,
+  realtimeConnectionRepository,
+  type mongoose,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '../services/hardDeleteUser';
@@ -28,7 +34,12 @@ export type ErasureRegistry = {
   /** What an erasure of the subject covers, per collection. Throws when a registered model is unclassified. */
   scope(subject: ErasureSubject, assertLease: () => Promise<void>): Promise<AdminErasureCollection[]>;
   /** Deletes, anonymizes or detaches every row the registry finds naming the subject, or one stage of them. Idempotent. */
-  erase(subject: ErasureSubject, assertLease: () => Promise<void>, stage?: ErasureStage): Promise<void>;
+  erase(
+    subject: ErasureSubject,
+    assertLease: () => Promise<void>,
+    stage?: ErasureStage,
+    session?: mongoose.ClientSession
+  ): Promise<void>;
   /** After the purge: what still names the subject outside the stated retentions, and the models not checked. */
   audit(subject: ErasureSubject): Promise<{ remaining: AdminErasureCollection[]; unclassified: string[] }>;
 };
@@ -180,6 +191,7 @@ export async function completeAccountDeletion(
             { db: { adminAuditLog: adminAuditLogRepository }, logger }
           );
         },
+        afterDeleteInTransaction: session => erasureRegistry.erase(subject, async () => {}, 'afterDelete', session),
         onDeleteCommitted: () => {
           deleteCommitted = true;
         },
@@ -188,7 +200,6 @@ export async function completeAccountDeletion(
     );
   } catch (error) {
     if (deleteCommitted) {
-      await eraseAfterDelete(subject, erasureRegistry, logger);
       throw error;
     }
     try {
@@ -202,7 +213,6 @@ export async function completeAccountDeletion(
     throw error;
   }
 
-  await eraseAfterDelete(subject, erasureRegistry, logger);
   if (erasure) {
     logger.info(`[AccountDeletion] Deleted user ${userId} for an admin data subject erasure`);
     await recordErasureCompleted(subject, erasure.requestedBy, erasureRegistry, logger);
@@ -218,22 +228,6 @@ export async function completeAccountDeletion(
     }
   }
   return { deleted: true };
-}
-
-/**
- * The references held back until the user row is gone, written once the delete commits. A retry could not
- * find the user, so a failure is logged at error, not thrown; an erasure's completion audit lists what is left.
- */
-async function eraseAfterDelete(
-  subject: ErasureSubject,
-  erasureRegistry: ErasureRegistry,
-  logger: DeletionLogger
-): Promise<void> {
-  try {
-    await erasureRegistry.erase(subject, async () => {}, 'afterDelete');
-  } catch (error) {
-    logger.error(`Failed to finish erasure for deleted user ${subject.userId}: ${String(error)}`);
-  }
 }
 
 /**

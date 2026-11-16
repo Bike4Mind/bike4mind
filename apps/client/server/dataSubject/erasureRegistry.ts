@@ -48,9 +48,9 @@ export const erasureRegistry: ErasureRegistry = {
   },
   // No classification check here: it would block self-serve deletion on a deploy that registers
   // models outside this registry. Only registry holders are walked; audit lists the rest as unclassified.
-  async erase(subject, assertLease, stage) {
+  async erase(subject, assertLease, stage, session) {
     if (stage === 'afterDelete') {
-      await new SubjectErasureExecutor(subject, assertLease, registryForStage(stage)).run();
+      await new SubjectErasureExecutor(subject, assertLease, registryForStage(stage), session).run();
       return;
     }
     for (const name of beforeErasureHooks()) {

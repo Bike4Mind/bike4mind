@@ -1,5 +1,11 @@
-import { FabFile, mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
+import { z } from 'zod';
+import { dataLakeService } from '@bike4mind/services';
+import { FabFile, mongoose, withTransaction } from '@bike4mind/database';
+import {
+  findPersonalOrganizationIds,
+  personalFilter,
+  isSubjectOwnedPersonalLake,
+} from '@bike4mind/server-utils/users/purgeAccountContent';
 import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { findUnclassifiedModels } from './registry';
 import { valuesAt } from './documentPaths';
@@ -43,9 +49,73 @@ export function assertEveryModelClassified(modelNames: readonly string[]): void 
 }
 
 export class SubjectMatcher {
+  private lakeSnapshot: Promise<{ documents: LeanDocument[]; ownedIds: ReadonlySet<string> }> | undefined;
   private personalOrganizationIds: Promise<string[]> | undefined;
 
-  constructor(readonly subject: DataSubject) {}
+  constructor(
+    readonly subject: DataSubject,
+    private readonly session?: mongoose.ClientSession
+  ) {}
+
+  /** Ownership and the exported body are read from one snapshot, including transferred-in lakes. */
+  personalLakes(): Promise<{ documents: LeanDocument[]; ownedIds: ReadonlySet<string> }> {
+    this.lakeSnapshot ??= withTransaction(async session => {
+      const database = mongoose.connection.db;
+      if (!database) throw new Error('Subject lake walk requires a connected database');
+      const userId = this.subject.userId;
+      const personal = await findPersonalOrganizationIds(userId, session);
+      const active = { $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] };
+      const grantCollection = database.collection(mongoose.model('DataLakeAccessGrant').collection.name);
+      const transferredGrants = await grantCollection
+        .find({ ...active, principalType: 'user', principalId: userId, role: 'owner' }, { session })
+        .maxTimeMS(QUERY_MAX_TIME_MS)
+        .toArray();
+      const transferred = transferredGrants.map(
+        grant => new mongoose.Types.ObjectId(z.string().parse(grant.dataLakeId))
+      );
+      const documents: LeanDocument[] = await database
+        .collection(mongoose.model('DataLake').collection.name)
+        .find(
+          {
+            $or: [
+              { createdByUserId: userId },
+              { lastUpdatedByUserId: userId },
+              { organizationId: { $in: personal } },
+              { _id: { $in: transferred } },
+            ],
+          },
+          { session }
+        )
+        .maxTimeMS(QUERY_MAX_TIME_MS)
+        .toArray();
+      const grants = documents.length
+        ? await grantCollection
+            .find({ ...active, dataLakeId: { $in: documents.map(document => String(document._id)) } }, { session })
+            .maxTimeMS(QUERY_MAX_TIME_MS)
+            .toArray()
+        : [];
+      const grantSchema = z.object({
+        dataLakeId: z.string(),
+        principalType: z.enum(['user', 'organization']),
+        principalId: z.string(),
+        role: z.enum(['owner', 'curator', 'reader']),
+      });
+      const parsed = grants.map(grant => grantSchema.parse(grant));
+      const ownedIds = new Set<string>();
+      const lakeSchema = z.object({ createdByUserId: z.string(), organizationId: z.string().nullish() });
+      for (const document of documents) {
+        const lake = lakeSchema.parse(document);
+        const owners = dataLakeService.resolveEffectiveOwnerIds(
+          lake,
+          parsed.filter(grant => grant.dataLakeId === String(document._id))
+        );
+        if (isSubjectOwnedPersonalLake(userId, lake.organizationId, owners, personal))
+          ownedIds.add(String(document._id));
+      }
+      return { documents, ownedIds };
+    });
+    return this.lakeSnapshot;
+  }
 
   expectedValue(reference: UserReference): string | null {
     return reference.matchBy === 'email' ? this.subject.email : this.subject.userId;
@@ -102,9 +172,13 @@ export class SubjectMatcher {
       if (reference.scope !== 'personal') continue;
       const ids = new Set<string>();
       personal.set(reference, ids);
+      if (model === 'DataLake') {
+        for (const id of (await this.personalLakes()).ownedIds) ids.add(id);
+        continue;
+      }
       const filter = this.filterFor(reference);
       if (!filter) continue;
-      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.subject.userId);
+      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.subject.userId, this.session);
       const scoped = {
         ...filter,
         ...personalFilter(this.subject.userId, await this.personalOrganizationIds, reference.path),
@@ -112,7 +186,7 @@ export class SubjectMatcher {
       // The raw collection, as the purge runs it: Mongoose would cast its `''` organization id.
       const cursor = mongoose
         .model(model)
-        .collection.find(scoped, { projection: { _id: 1 } })
+        .collection.find(scoped, { projection: { _id: 1 }, session: this.session })
         .maxTimeMS(QUERY_MAX_TIME_MS);
       try {
         for await (const document of cursor) ids.add(String(document._id));
@@ -163,7 +237,7 @@ export class SubjectMatcher {
     const id = String(document._id);
     return references.filter(
       reference =>
-        this.matches(document, reference) &&
+        (this.matches(document, reference) || (reference.scope === 'personal' && personal.get(reference)?.has(id))) &&
         (reference.scope !== 'personal' || (personal.get(reference)?.has(id) === true && !organizationFiles.has(id)))
     );
   }
@@ -183,12 +257,13 @@ export const readsWholeDocument = (model: string, references: readonly UserRefer
 export function readDocuments(
   model: string,
   filter: Record<string, unknown>,
-  projection?: readonly string[]
+  projection?: readonly string[],
+  session?: mongoose.ClientSession
 ): AsyncIterable<LeanDocument> {
   return mongoose
     .model(model)
     .find(filter, projection ? projectionOf(projection) : undefined)
-    .setOptions({ strictQuery: 'throw', includeDeleted: true })
+    .setOptions({ strictQuery: 'throw', includeDeleted: true, ...(session ? { session } : {}) })
     .maxTimeMS(QUERY_MAX_TIME_MS)
     .lean<LeanDocument[]>()
     .cursor();

@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose, { Schema } from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo';
 import {
   DELETED_USER_EMAIL,
@@ -152,10 +155,10 @@ const registry: DataHolderRegistry = {
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer | undefined;
+let mongoServer: MongoMemoryReplSet | undefined;
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
+  mongoServer = await createMongoReplSet();
   await mongoose.connect(mongoServer.getUri());
 });
 

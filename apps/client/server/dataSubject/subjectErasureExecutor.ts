@@ -1,6 +1,11 @@
 import type { AdminErasureCollection } from '@bike4mind/common';
-import { mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds, personalFilter } from '@bike4mind/server-utils/users/purgeAccountContent';
+import { FabFile, mongoose, withTransaction } from '@bike4mind/database';
+import {
+  findPersonalOrganizationIds,
+  personalFilter,
+  purgePersonalLakeById,
+} from '@bike4mind/server-utils/users/purgeAccountContent';
+import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import { deletedUserValue, redactedValue, uniqueIndexPaths } from './placeholder';
@@ -19,8 +24,8 @@ import type { DataHolderRegistry, UserReference } from './types';
  * Carries out what SubjectErasurePlan decides for each document naming the person: deletes it,
  * anonymizes or pulls the matched references, and clears `alsoRedact` fields, per the rules in
  * `types.ts`. Writes go by `_id` through the raw collection, so Mongoose immutability and soft-delete
- * hooks do not block them and soft-deleted rows are reached. Never run it inside `withTransaction`:
- * Mongoose would join these writes to the transaction.
+ * hooks do not block them and soft-deleted rows are reached. Ordinary walks run outside a transaction;
+ * file families, personal lakes and the final organization stage use bounded transactions.
  *
  * A model is written as soon as it is decided, except a `viaParent` parent: its writes wait until
  * every other model is done and then run children before parents, so a run stopped part way never
@@ -72,16 +77,17 @@ export class SubjectErasureExecutor {
   constructor(
     private readonly subject: DataSubject,
     private readonly assertLease: ErasureCheckpoint,
-    private readonly registry: DataHolderRegistry = DATA_HOLDER_REGISTRY
+    private readonly registry: DataHolderRegistry = DATA_HOLDER_REGISTRY,
+    private readonly session?: mongoose.ClientSession
   ) {
-    this.matcher = new SubjectMatcher(subject);
+    this.matcher = new SubjectMatcher(subject, session);
     this.parents = new Set(parentKeyPaths(registry).keys());
   }
 
   /** Erases what the registry decides and returns those decisions, counted per collection. */
   async run(): Promise<AdminErasureCollection[]> {
     this.deferred.clear();
-    const plan = new SubjectErasurePlan(this.subject, this.registry);
+    const plan = new SubjectErasurePlan(this.subject, this.registry, this.session);
     const collections = await plan.collections(this.assertLease, (model, entries) => this.write(model, entries));
     for (const model of orderParentsFirst(this.registry).reverse()) {
       const operations = this.deferred.get(model);
@@ -93,11 +99,73 @@ export class SubjectErasureExecutor {
   private async write(model: string, entries: readonly ErasureEntry[]): Promise<void> {
     const skipped = await this.skippedIds(model);
     const workspaces = [...(await this.workspaceIds())];
-    const operations = entries.flatMap(entry =>
-      skipped.has(String(entry.document._id)) ? [] : this.operationsFor(model, entry, workspaces)
-    );
+    const ordinary: ErasureEntry[] = [];
+    for (const entry of entries) {
+      if (skipped.has(String(entry.document._id))) continue;
+      if (entry.outcome === 'deleted' && model === 'DataLake') {
+        const deleted = await purgePersonalLakeById(this.subject.userId, String(entry.document._id), this.assertLease);
+        if (!deleted) {
+          ordinary.push({
+            ...entry,
+            outcome: 'anonymized',
+            matched: entry.matched.filter(reference => reference.action !== 'deleteDocument'),
+          });
+        }
+      } else if (entry.outcome === 'deleted' && model === 'FabFile') {
+        const deleted = await this.deleteFileFamily(entry, workspaces);
+        if (!deleted) {
+          ordinary.push({
+            ...entry,
+            outcome: 'anonymized',
+            matched: entry.matched.filter(reference => reference.action !== 'deleteDocument'),
+          });
+        }
+      } else if (entry.outcome !== 'deleted' || model !== 'FabFileChunk' || !this.registry.FabFile) {
+        ordinary.push(entry);
+      }
+    }
+    const operations = ordinary.flatMap(entry => this.operationsFor(model, entry, workspaces));
     if (!this.parents.has(model)) return this.apply(model, operations);
     this.deferred.set(model, [...(this.deferred.get(model) ?? []), ...operations]);
+  }
+
+  private async deleteFileFamily(entry: ErasureEntry, workspaces: readonly string[]): Promise<boolean> {
+    const operation = this.operationsFor('FabFile', entry, workspaces)[0];
+    if (!operation || !('deleteOne' in operation)) throw new Error('Expected a file deletion');
+    return withTransaction(async session => {
+      await this.assertLease();
+      const database = mongoose.connection.db;
+      if (!database) throw new Error('Subject erasure requires a connected database');
+      const files = database.collection(FabFile.collection.name);
+      const file = await files.findOne(operation.deleteOne.filter, { session });
+      if (!file) return false;
+      // File retags and lake ownership updates serialize against these actual writes.
+      await files.updateOne({ _id: file._id }, { $currentDate: { updatedAt: true } }, { session });
+      const tags = Array.isArray(file.tags)
+        ? file.tags.flatMap(tag =>
+            isPlain(tag) && typeof tag.name === 'string' ? [tag.name, tag.name.toLowerCase()] : []
+          )
+        : [];
+      const lakes = database.collection(mongoose.model('DataLake').collection.name);
+      const clauses: Plain[] = tags.length ? [{ datalakeTag: { $in: tags } }] : [];
+      if (tags.some(tag => tag.includes(':'))) clauses.push({ createdByUserId: String(file.userId) });
+      if (clauses.length) {
+        await lakes.updateMany({ $or: clauses }, { $currentDate: { updatedAt: true } }, { session });
+      }
+      if ((await findOrganizationFileIds([FabFile.hydrate(file)], this.subject.userId)).has(String(file._id)))
+        return false;
+      await this.assertLease();
+      const chunks = this.registry.FabFileChunk;
+      if (chunks?.kind === 'viaParent' && chunks.parent === 'FabFile') {
+        await database
+          .collection(mongoose.model('FabFileChunk').collection.name)
+          .deleteMany({ [chunks.foreignKey]: String(file._id) }, { session });
+      }
+      await this.assertLease();
+      const deleted = await files.deleteOne(operation.deleteOne.filter, { session });
+      if (deleted.deletedCount !== 1) throw new Error('File ownership changed during erasure');
+      return true;
+    });
   }
 
   private async apply(model: string, operations: readonly Operation[]): Promise<void> {
@@ -106,7 +174,10 @@ export class SubjectErasureExecutor {
     const collection = database.collection(mongoose.model(model).collection.name);
     for (let start = 0; start < operations.length; start += MATCH_BATCH) {
       await this.assertLease();
-      await collection.bulkWrite(operations.slice(start, start + MATCH_BATCH), { ordered: true });
+      await collection.bulkWrite(operations.slice(start, start + MATCH_BATCH), {
+        ordered: true,
+        session: this.session,
+      });
     }
   }
 
@@ -120,7 +191,9 @@ export class SubjectErasureExecutor {
   }
 
   private workspaceIds(): Promise<ReadonlySet<string>> {
-    this.personalWorkspaces ??= findPersonalOrganizationIds(this.subject.userId).then(found => new Set(found));
+    this.personalWorkspaces ??= findPersonalOrganizationIds(this.subject.userId, this.session).then(
+      found => new Set(found)
+    );
     return this.personalWorkspaces;
   }
 
