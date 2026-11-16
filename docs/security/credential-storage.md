@@ -12,7 +12,7 @@ readable during the backfill. Changing a server's display name does not change i
 The credential backfill is an explicit operator command, `pnpm --filter @bike4mind/scripts migrate:protect-credentials --maintenance-window`.
 It is deliberately excluded from the automatic pre-deployment migrations: old readers cannot
 consume the new ciphertext formats. It encrypts legacy Slack app
-credentials, hashes legacy security answers, binds existing provider/MCP credentials, clears expired
+credentials, hashes legacy security answers, encrypts legacy TOTP seeds, binds existing provider/MCP credentials, clears expired
 rotation secrets and wraps raw memory data keys. Writes compare the values they read so a concurrent
 credential update is not overwritten. If a key is unavailable, the migration fails and remains pending.
 

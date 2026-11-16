@@ -143,7 +143,9 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@bike4mind/auth": "workspace:*",
     "@types/mailparser": "^3.9.0",
+    "@types/speakeasy": "^2.0.10",
     "@types/yargs": "^17.0.35",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
@@ -151,6 +153,7 @@
     "mailparser": "^3.12.4",
     "ora": "^9.4.1",
     "prettier": "^3.9.6",
+    "speakeasy": "^2.0.0",
     "tsx": "^4.23.0",
     "vitest": "^4.1.12"
   }

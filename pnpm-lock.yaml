@@ -2629,9 +2629,15 @@ importers:
         specifier: ^4.6.6
         version: 4.6.6
     devDependencies:
+      '@bike4mind/auth':
+        specifier: workspace:*
+        version: link:../../b4m-core/auth
       '@types/mailparser':
         specifier: ^3.9.0
         version: 3.9.0
+      '@types/speakeasy':
+        specifier: ^2.0.10
+        version: 2.0.10
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
@@ -2653,6 +2659,9 @@ importers:
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
+      speakeasy:
+        specifier: ^2.0.0
+        version: 2.0.0
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
