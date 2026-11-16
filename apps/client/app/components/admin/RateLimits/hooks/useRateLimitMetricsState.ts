@@ -1,11 +1,21 @@
 import { useState, useMemo } from 'react';
 import type { RateLimitSnapshot } from '../types';
+import type { RateLimitsSearchState } from '../rateLimitsSearch';
 
-export const useRateLimitMetricsState = (snapshots: RateLimitSnapshot[]) => {
-  const [dateFrom, setDateFrom] = useState<string>('');
-  const [dateTo, setDateTo] = useState<string>('');
-  const [integrationFilter, setIntegrationFilter] = useState<string>('');
-  const [throttledOnly, setThrottledOnly] = useState(false);
+export type RateLimitDraftFilters = Pick<
+  RateLimitsSearchState,
+  'dateFrom' | 'dateTo' | 'integration' | 'throttledOnly'
+>;
+
+/**
+ * The control panel's draft filters, seeded once from the applied (URL) filters. Edits stay local
+ * until the caller applies them.
+ */
+export const useRateLimitMetricsState = (snapshots: RateLimitSnapshot[], applied: RateLimitDraftFilters) => {
+  const [dateFrom, setDateFrom] = useState<string>(applied.dateFrom);
+  const [dateTo, setDateTo] = useState<string>(applied.dateTo);
+  const [integrationFilter, setIntegrationFilter] = useState<string>(applied.integration);
+  const [throttledOnly, setThrottledOnly] = useState(applied.throttledOnly);
 
   // Server already filters by integration and throttledOnly via query params;
   // no need to duplicate filtering on the client side.

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Button, Typography, Tabs, TabList, Tab, TabPanel, Sheet, Stack, Table } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { AdminPageHeader, EmptyState, LoadingState, StatStrip, StatTile } from '../shared';
@@ -8,11 +8,23 @@ import { useRateLimitMetricsState } from './hooks/useRateLimitMetricsState';
 import { processChartData } from './utils/chartDataProcessor';
 import { ControlPanel } from './components/ControlPanel';
 import { OverviewTab } from './components/OverviewTab';
+import { useRateLimitsSearchParams } from './hooks/useRateLimitsSearchParams';
+import { RATE_LIMIT_INTEGRATIONS } from '@bike4mind/common';
+import { oneOf } from '../adminSearchValues';
+import { DEFAULT_RATE_LIMITS_VIEW, RATE_LIMITS_VIEWS } from './rateLimitsSearch';
 import type { RateLimitFilters } from './types';
 
+const parseDraftIntegration = oneOf(RATE_LIMIT_INTEGRATIONS);
+const parseView = oneOf(RATE_LIMITS_VIEWS);
+
 const RateLimitsTab: React.FC = () => {
-  const [appliedFilters, setAppliedFilters] = useState<RateLimitFilters>({});
-  const [activeTab, setActiveTab] = useState<string>('overview');
+  const applied = useRateLimitsSearchParams();
+  const appliedFilters: RateLimitFilters = {
+    dateFrom: applied.dateFrom || undefined,
+    dateTo: applied.dateTo || undefined,
+    integration: applied.integration || undefined,
+    throttledOnly: applied.throttledOnly || undefined,
+  };
 
   const { data: snapshots, isLoading, forceRefresh } = useRateLimitMetrics(appliedFilters);
 
@@ -28,20 +40,20 @@ const RateLimitsTab: React.FC = () => {
     filteredSnapshots,
     summaryStats,
     clearFilters,
-  } = useRateLimitMetricsState(snapshots);
+  } = useRateLimitMetricsState(snapshots, applied);
 
   const handleApplyFilters = () => {
-    setAppliedFilters({
-      dateFrom: dateFrom || undefined,
-      dateTo: dateTo || undefined,
-      integration: integrationFilter || undefined,
-      throttledOnly: throttledOnly || undefined,
+    applied.patch({
+      dateFrom,
+      dateTo,
+      integration: parseDraftIntegration(integrationFilter) ?? '',
+      throttledOnly,
     });
   };
 
   const handleClearFilters = () => {
     clearFilters();
-    setAppliedFilters({});
+    applied.patch({ dateFrom: '', dateTo: '', integration: '', throttledOnly: false });
   };
 
   const chartData = processChartData(filteredSnapshots);
@@ -93,7 +105,11 @@ const RateLimitsTab: React.FC = () => {
       {isLoading ? (
         <LoadingState label="Loading rate limit data" testId="rate-limit-loading" />
       ) : (
-        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)} sx={{ bgcolor: 'transparent' }}>
+        <Tabs
+          value={applied.view}
+          onChange={(_, value) => applied.patch({ view: parseView(value) ?? DEFAULT_RATE_LIMITS_VIEW })}
+          sx={{ bgcolor: 'transparent' }}
+        >
           <TabList>
             <Tab value="overview">Overview</Tab>
             <Tab value="raw">Raw data</Tab>
