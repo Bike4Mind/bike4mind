@@ -104,7 +104,7 @@ Observations (not fixed here):
 - `apps/client/pages/api/admin/whats-new-backfill.ts` still enqueues a `WhatsNewGenerationPayload` to `whatsNewGenerationQueue`. `releaseNotes.dispatch` recognizes it as legacy, logs, and drops it (`isLegacyPayload`), so the route has no effect.
 - `apps/workers/src/queueHandlers/whatsNewGeneration.ts` (the retired generator) is still in the tree and is no longer wired to a queue subscription in `infra/queues.ts`.
 - `infra/emailMarketing.ts` comments still say batches of 16 recipients; the orchestrator uses 25.
-- The highlights DLQ alarm is tagged `application: 'WhatsNewGeneration'`, while the release-notes one is `ReleaseNotes` (`infra/dlqAlarms.ts`).
+- The highlights DLQ alarm was tagged `application: 'WhatsNewGeneration'`, while the release-notes one is `ReleaseNotes` (`infra/dlqAlarms.ts`). Resolved by the merge: the highlights DLQ and its alarm are gone.
 
 ## Merge-cost checklist (What's New)
 

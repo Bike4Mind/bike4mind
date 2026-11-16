@@ -62,7 +62,7 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? `decrypted:${value}` : null),
 }));
 
-const context = { functionName: 'whats-new-highlights', awsRequestId: 'req-1' } as unknown as Context;
+const context = { functionName: 'whats-new-job', awsRequestId: 'req-1' } as unknown as Context;
 
 const eventFor = (payload: Record<string, unknown>): SQSEvent =>
   ({ Records: [{ messageId: 'm-1', body: JSON.stringify(payload) }] }) as unknown as SQSEvent;
