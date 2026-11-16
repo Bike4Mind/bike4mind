@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { processAttachments } from './processAttachments';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  processAttachments,
+  MAX_ATTACHMENTS_PER_EMAIL,
+  MAX_FILE_SIZE,
+  MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL,
+} from './processAttachments';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
@@ -397,55 +402,107 @@ describe('emailIngestionService - processAttachments', () => {
   });
 
   describe('per-email caps', () => {
+    const MB = 1024 * 1024;
     const att = (name: string, size = 5000) => ({
       filename: name,
       contentType: 'application/pdf',
       size,
       content: Buffer.from('x'),
     });
+    const names = (n: number) => Array.from({ length: n }, (_, i) => `f${i}.pdf`);
     const run = (attachments: ReturnType<typeof att>[]) => {
       vi.mocked(createFabFile).mockResolvedValue({ id: 'ff' } as never);
       return processAttachments({ ...mockParsedEmail, attachments }, 'user123', 'Test Email', mockAdapters);
     };
+    const capWarnings = (warn: { mock: { calls: unknown[][] } }) =>
+      warn.mock.calls.map(c => String(c[0])).filter(m => m.includes('per-email limit'));
+    let warn: ReturnType<typeof vi.spyOn>;
 
-    it('stops after 20 attachments', async () => {
-      const result = await run(Array.from({ length: 25 }, (_, i) => att(`f${i}.pdf`)));
-
-      expect(result).toHaveLength(20);
-      expect(createFabFile).toHaveBeenCalledTimes(20);
-      expect(result.map(r => r.filename)).toEqual(Array.from({ length: 20 }, (_, i) => `f${i}.pdf`));
+    beforeEach(() => {
+      warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
     });
 
-    it('stops before the attachment that would exceed 25MB total', async () => {
-      const mb = 1024 * 1024;
-      const result = await run([att('a.pdf', 10 * mb), att('b.pdf', 10 * mb), att('c.pdf', 6 * mb)]);
+    it('stops after the per-email attachment limit', async () => {
+      const result = await run(Array.from({ length: MAX_ATTACHMENTS_PER_EMAIL + 5 }, (_, i) => att(`f${i}.pdf`)));
+
+      expect(result.map(r => r.filename)).toEqual(names(MAX_ATTACHMENTS_PER_EMAIL));
+      expect(createFabFile).toHaveBeenCalledTimes(MAX_ATTACHMENTS_PER_EMAIL);
+    });
+
+    it('stops before the attachment that would exceed the total byte limit', async () => {
+      const result = await run([att('a.pdf', 10 * MB), att('b.pdf', 10 * MB), att('c.pdf', 6 * MB)]);
 
       expect(result.map(r => r.filename)).toEqual(['a.pdf', 'b.pdf']);
       expect(createFabFile).toHaveBeenCalledTimes(2);
     });
 
+    it('allows a total of exactly the byte limit', async () => {
+      const result = await run([
+        att('a.pdf', MAX_FILE_SIZE),
+        att('b.pdf', MAX_TOTAL_ATTACHMENT_BYTES_PER_EMAIL - MAX_FILE_SIZE),
+      ]);
+
+      expect(result.map(r => r.filename)).toEqual(['a.pdf', 'b.pdf']);
+      expect(result.every(r => r.fabFileId)).toBe(true);
+      expect(capWarnings(warn)).toHaveLength(0);
+    });
+
     it('does not resume after a cap is hit, even for a small later attachment', async () => {
-      const mb = 1024 * 1024;
-      const result = await run([att('a.pdf', 20 * mb), att('big.pdf', 10 * mb), att('small.pdf', 5000)]);
+      const result = await run([att('a.pdf', 20 * MB), att('big.pdf', 10 * MB), att('small.pdf', 5000)]);
 
       expect(result.map(r => r.filename)).toEqual(['a.pdf']);
     });
 
     it('does not count phantom parts toward the count cap', async () => {
       const phantoms = Array.from({ length: 30 }, (_, i) => att(`tiny${i}.pdf`, 100));
-      const result = await run([...phantoms, ...Array.from({ length: 20 }, (_, i) => att(`f${i}.pdf`))]);
+      const result = await run([...phantoms, ...names(MAX_ATTACHMENTS_PER_EMAIL).map(n => att(n))]);
 
-      expect(result).toHaveLength(20);
-      expect(createFabFile).toHaveBeenCalledTimes(20);
+      expect(result.map(r => r.filename)).toEqual(names(MAX_ATTACHMENTS_PER_EMAIL));
+      expect(createFabFile).toHaveBeenCalledTimes(MAX_ATTACHMENTS_PER_EMAIL);
     });
 
-    it('logs one warning with the skipped count', async () => {
-      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
-      await run(Array.from({ length: 23 }, (_, i) => att(`f${i}.pdf`)));
+    it('per-file rejects do not consume the byte budget', async () => {
+      const result = await run([att('huge.pdf', 21 * MB), att('b.pdf', 10 * MB), att('c.pdf', 10 * MB)]);
 
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain('3 remaining');
-      warn.mockRestore();
+      expect(result.map(r => r.filename)).toEqual(['huge.pdf', 'b.pdf', 'c.pdf']);
+      expect(result.map(r => Boolean(r.fabFileId))).toEqual([false, true, true]);
+      expect(capWarnings(warn)).toHaveLength(0);
+    });
+
+    it('a single attachment over the total limit does not stop later valid ones', async () => {
+      const result = await run([att('huge.pdf', 30 * MB), att('small.pdf', 1 * MB)]);
+
+      expect(result.map(r => Boolean(r.fabFileId))).toEqual([false, true]);
+      expect(capWarnings(warn)).toHaveLength(0);
+    });
+
+    it('logs one count warning with the reason and skipped count', async () => {
+      await run(Array.from({ length: MAX_ATTACHMENTS_PER_EMAIL + 3 }, (_, i) => att(`f${i}.pdf`)));
+
+      expect(capWarnings(warn)).toHaveLength(1);
+      expect(capWarnings(warn)[0]).toContain('Skipping 3 remaining');
+      expect(capWarnings(warn)[0]).toContain(`limit of ${MAX_ATTACHMENTS_PER_EMAIL} attachments`);
+    });
+
+    it('logs one byte warning with the reason and skipped count', async () => {
+      await run([att('a.pdf', 20 * MB), att('b.pdf', 10 * MB), att('c.pdf', 1 * MB)]);
+
+      expect(capWarnings(warn)).toHaveLength(1);
+      expect(capWarnings(warn)[0]).toContain('Skipping 2 remaining');
+      expect(capWarnings(warn)[0]).toContain('total bytes');
+    });
+
+    it('does not count trailing phantom parts in the skipped count', async () => {
+      await run([
+        ...names(MAX_ATTACHMENTS_PER_EMAIL + 1).map(n => att(n)),
+        { ...att('smime.p7s', 3000), contentType: 'application/pkcs7-signature' },
+        att('tiny.pdf', 100),
+      ]);
+
+      expect(capWarnings(warn)[0]).toContain('Skipping 1 remaining');
     });
   });
 });
