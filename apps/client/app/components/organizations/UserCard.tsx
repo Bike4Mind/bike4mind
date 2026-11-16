@@ -224,14 +224,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     </Chip>
   );
 
-  // Not a role: update on the ACL row opens the Settings tab (canManageOrgSettings in
-  // routes/organizations/orgTabAccess.ts), so the owner needs to see who holds it.
-  const settingsAccessChip = user.role === 'member' && user.permissions.some(p => p === Permission.update) && (
-    <Chip size="sm" variant="outlined" data-testid="organization-user-card-settings-access-chip">
-      {t('organization.access.can_edit_settings')}
-    </Chip>
-  );
-
   const selectCell = selectable && (
     <Box display="flex" alignItems="center" sx={{ gridArea: 'select', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}>
       {onToggleSelect && (
@@ -366,7 +358,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
               )}
               <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
                 {roleChip}
-                {settingsAccessChip}
                 {statusChips}
                 {creditUsageCell}
               </Stack>
@@ -454,7 +445,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         sx={{ gridArea: 'role', [ROSTER_TABLE_QUERY]: { gridArea: 'auto' } }}
       >
         {roleChip}
-        {settingsAccessChip}
       </Stack>
       <Box
         className="organization-user-card-credits"

@@ -4,7 +4,6 @@ import {
   canAdministerOrganization,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
-  Permission,
   type AdministrableOrg,
 } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
@@ -49,38 +48,11 @@ export const LEGACY_INTEGRATION_TABS: Readonly<Record<string, IntegrationSection
   connectors: IntegrationSections.Connectors,
 };
 
-/**
- * Who may edit the team profile (the system prompt). Mirrors organizationService.update, whose
- * finder admits the owner and a `users[]` row holding `update` (updateAccessArms in
- * SharableDocumentModel.ts), plus a platform admin. `share` alone is not enough: the save would
- * 404. Group-granted `update` is not visible here, so such a member fails closed.
- */
-export const canEditOrgProfile = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization:
-    { userId: string; users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> } | null | undefined
-): boolean => {
-  if (!currentUser || !organization) return false;
-  if (currentUser.isAdmin === true || currentUser.id === organization.userId) return true;
-  const row = organization.users?.find(u => u.userId === currentUser.id);
-  return row?.permissions?.includes(Permission.update) ?? false;
-};
-
-/**
- * Who may open the Settings tab (and the header's Settings button): anyone who can edit the
- * profile, plus a current manager, whom organizationService.update admits for `sharingPolicy`
- * alone (OrganizationSharingSettings). The single source for `canManageOrg`; the page computes it
- * once and passes it down.
- */
+/** Who may open and edit the Settings tab. Mirrors organizationService.update's team-role gate. */
 export const canManageOrgSettings = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization:
-    | (Omit<AdministrableOrg, 'users'> & { users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> })
-    | null
-    | undefined
-): boolean =>
-  canEditOrgProfile(currentUser, organization) ||
-  (!!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization));
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
 
 /**
  * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run

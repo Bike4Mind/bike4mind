@@ -94,8 +94,7 @@ const ORG = {
   storageLimit: 0,
   users: [
     { userId: 'owner1' },
-    // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
-    // gates disagree, so a deep link must be honoured for Settings and refused for Usage.
+    // Holds update on the sharing ACL but is neither owner nor manager, so no admin tab opens.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
   ],
 } as unknown as IOrganizationDocument;
@@ -234,15 +233,14 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
   });
 
-  // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
-  // blanket "trust the URL once the org lands".
-  it('honours Settings but not Usage for a member who may manage the org', () => {
+  it('refuses Settings to a member whose only claim is update on the sharing ACL', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'manager2' };
 
     renderThroughLoad();
 
-    expect(selectedTabName()).toBe('Settings');
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
   });
 
   it('opens the Billing tab for the owner, the only caller its actions accept', () => {
@@ -253,10 +251,8 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Billing');
   });
 
-  // Same caller, same manage permissions, opposite answer to the Settings case above: Billing
-  // rides its own owner-only gate because Subscribe, Manage Seats and Billing Portal all reject a
-  // non-owner. Before the split this member got the whole tab and an error from every control.
-  it('refuses Billing for a member who may manage the org', () => {
+  // Billing rides its own owner-only gate: Subscribe, Manage Seats and Billing Portal all reject a non-owner.
+  it('refuses Billing for a member who is not the owner', () => {
     searchParams.current = { tab: 'billing' };
     user.current = { id: 'manager2' };
 
@@ -264,7 +260,6 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Billing' })).toBeNull();
-    expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
   });
 
   it('falls back to Overview for a non-member', () => {

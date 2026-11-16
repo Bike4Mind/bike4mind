@@ -41,7 +41,7 @@ const compressLogo = (file: File): Promise<File | Blob> =>
 /**
  * Team name, description, logo and billing contact. The fields follow their server gates:
  * - name and description: `canEditProfile`, the Settings section's mirror of organizationService.update's
- *   update access. Settings also opens to managers without it (for sharing), so they see these read-only;
+ *   team-role gate (owner, current manager or platform admin);
  * - logo: owner, manager or platform admin (upload-logo.ts, verifyOrgAccess);
  * - billing contact: owner or platform admin. update.ts ignores it from a manager, and
  *   toSafeOrganization strips it from everyone else, so nobody else could see what they edit.
@@ -232,7 +232,7 @@ const OrganizationGeneralSection: FC<{ organization: WithId<IOrganizationDocumen
 
         {!canEditProfile ? (
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="organization-general-read-only-note">
-            Only the owner or someone with edit access can change the team name and description.
+            Only the owner or a manager can change the team name and description.
           </Typography>
         ) : (
           <Stack direction="row" spacing={1}>

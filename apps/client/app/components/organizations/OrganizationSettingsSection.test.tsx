@@ -60,11 +60,11 @@ const renderAs = (user: Partial<IUserDocument> | null, organization: IOrganizati
 
 /**
  * The Danger Zone mirrors the server gate in organizationService/delete.ts (billing owner or
- * platform admin). The rest of this tab is open to anyone with org update, or a current manager, so these pin that
- * a member who can reach the tab is not shown a Delete button whose call would 403.
+ * platform admin). The rest of this tab is open to current managers too, so these pin that a caller who can
+ * reach the tab is not shown a Delete button whose call would 403.
  */
 describe('OrganizationSettingsSection - Danger Zone visibility', () => {
-  it('exposes policy controls to read-only managers while keeping generic profile writes disabled', () => {
+  it('lets a current manager edit the sharing policy and the system prompt', () => {
     updateOrg.mockClear();
     renderAs({ id: 'manager', isAdmin: false }, {
       ...org,
@@ -72,10 +72,15 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
       users: [{ userId: 'manager', permissions: ['read'] }],
     } as IOrganizationDocument);
     expect(screen.getByTestId('organization-sharing-save-btn')).not.toBeDisabled();
-    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
-    // A disabled prompt cannot be edited, so the save bar never appears for it.
-    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).not.toBeDisabled();
+    expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
     expect(updateOrg).not.toHaveBeenCalled();
+  });
+
+  it('keeps the system prompt read-only for a member holding update on the sharing ACL', () => {
+    renderAs({ id: 'member1', isAdmin: false });
+
+    expect(screen.getByTestId('organization-settings-system-prompt-input')).toBeDisabled();
   });
 
   it('shows Delete Team to the billing owner', () => {
@@ -90,12 +95,10 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     expect(screen.getByTestId('organization-settings-delete-btn')).toBeTruthy();
   });
 
-  it('hides Delete Team from a member who can otherwise manage the org', () => {
+  it('hides Delete Team from a member who is not the owner', () => {
     renderAs({ id: 'member1', isAdmin: false });
 
     expect(screen.queryByTestId('organization-settings-delete-btn')).toBeNull();
-    // The rest of the tab still renders for them.
-    expect(screen.getByText('Team System Prompt')).toBeTruthy();
   });
 
   it('hides Delete Team when there is no resolved user', () => {

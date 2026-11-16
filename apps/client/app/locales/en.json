@@ -136,9 +136,6 @@
       "manager": "Manager",
       "member": "Member"
     },
-    "access": {
-      "can_edit_settings": "Can edit settings"
-    },
     "admin_preview": {
       "title": "Explore Team administration before subscribing",
       "description": "See sample members, monthly credit limits and usage, plus which controls each role can access.",
