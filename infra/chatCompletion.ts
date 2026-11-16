@@ -307,7 +307,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     },
     // Lock the public ALB's ingress to its two legitimate sources so /process is NOT reachable
     // from the open internet (defense-in-depth on top of the CHAT_COMPLETION_INTERNAL_SECRET
-    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on each listener port with:
+    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on the listener ports with:
     //   1. CloudFront's origin-facing edge IPs -> /api/ai/v1/completions (the only route CloudFront
     //      forwards here; CF fronts WAF at the edge).
     //   2. The VPC NAT egress IP -> the frontend Lambda's /process dispatch (it hairpins out through
@@ -329,25 +329,26 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
             .apply(eips => $util.all(eips.map(e => e.publicIp)))
             .apply(ips => ips.map(ip => `${ip}/32`));
 
-      const listenerPorts = originDomain ? [443, 80] : [80];
-      sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) =>
-        listenerPorts.flatMap(port => [
-          {
-            protocol: 'tcp',
-            fromPort: port,
-            toPort: port,
-            prefixListIds: [plId],
-            description: 'CloudFront edge to public /api/ai/v1/completions',
-          },
-          {
-            protocol: 'tcp',
-            fromPort: port,
-            toPort: port,
-            cidrBlocks: cidrs,
-            description: 'VPC NAT egress to internal /process dispatch',
-          },
-        ])
-      );
+      // One rule per source spanning the listener ports: the CloudFront prefix list counts its
+      // full entry limit against the group's rule quota for every rule that references it, so a
+      // rule per port does not fit.
+      const toPort = originDomain ? 443 : 80;
+      sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) => [
+        {
+          protocol: 'tcp',
+          fromPort: 80,
+          toPort,
+          prefixListIds: [plId],
+          description: 'CloudFront edge to public /api/ai/v1/completions',
+        },
+        {
+          protocol: 'tcp',
+          fromPort: 80,
+          toPort,
+          cidrBlocks: cidrs,
+          description: 'VPC NAT egress to internal /process dispatch',
+        },
+      ]);
       // egress left at SST's default (0.0.0.0/0): the ALB must reach the tasks.
     },
     // The provider default policy still negotiates TLS 1.0 and 1.1.
