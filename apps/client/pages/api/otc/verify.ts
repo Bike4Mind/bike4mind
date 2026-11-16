@@ -1,6 +1,7 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { blockedSignInMessage, configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
@@ -341,6 +342,8 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
+      // Before the session is minted, so a role lookup failure leaves nothing to undo.
+      await resolveRoleAdminPermissions(existingUser);
       const { accessToken, refreshToken } = await issueSessionForRequest(req, existingUser.id, {
         createdVia: 'otc',
         tokenVersion: existingUser.tokenVersion ?? 0,
@@ -720,7 +723,7 @@ const handler = baseApi({ auth: false })
     });
     setRefreshCookie(res, registrationSession.refreshToken);
     return respond(res, otcRegistrationResponseSchema, {
-      user: redactUserSecretsForSelf(newUser),
+      user: redactUserSecretsForSelf(await resolveRoleAdminPermissions(newUser)),
       accessToken: registrationSession.accessToken,
       ...(domainGrant.packageRefusal && {
         signupGrantNotice: signupDomainGrantRefusalNotice(domainGrant.packageRefusal),
