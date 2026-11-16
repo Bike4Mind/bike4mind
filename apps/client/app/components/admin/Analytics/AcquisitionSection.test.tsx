@@ -113,6 +113,26 @@ describe('AcquisitionSection', () => {
     expect(screen.queryByTestId('acquisition-row-other-drill-btn')).not.toBeInTheDocument();
   });
 
+  it('disables a drill-down with nobody behind it', () => {
+    renderSection({
+      data: ok([
+        touchRow('empty|cpc|spring', { signups: 0, converted: 0 }),
+        touchRow('unpaid|cpc|spring', { converted: 0 }),
+      ]),
+      onSelectRow: vi.fn(),
+    });
+    expect(screen.getByTestId('acquisition-row-empty|cpc|spring-drill-btn')).toBeDisabled();
+    expect(screen.getByTestId('acquisition-row-unpaid|cpc|spring-drill-btn')).toBeEnabled();
+    expect(screen.getByTestId('acquisition-row-unpaid|cpc|spring-drill-converted-btn')).toBeDisabled();
+  });
+
+  it('shows first action out of the week-old signups and came back', () => {
+    renderSection({ data: ok([touchRow('ads|cpc|spring')]) });
+    const row = screen.getByTestId('acquisition-row-ads|cpc|spring');
+    expect(within(row).getByText('6 of 10')).toBeInTheDocument();
+    expect(within(row).getByText('3')).toBeInTheDocument();
+  });
+
   it('reports a control change', () => {
     const { onControlsChange } = renderSection();
     fireEvent.click(screen.getByTestId('acquisition-touch-toggle-last'));

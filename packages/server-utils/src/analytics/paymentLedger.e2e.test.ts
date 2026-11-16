@@ -259,6 +259,21 @@ describe('loadPaymentLedger', () => {
       [at('2026-05-20'), true],
     ]);
   });
+
+  it('holds a second user dispute against the next subscription back, not the one already disputed', async () => {
+    const owner = newId();
+    await seedSubscription('User', owner, { subscriptionId: `sub_old_${owner}`, createdAt: at('2026-05-10') });
+    await seedSubscription('User', owner, { subscriptionId: `sub_new_${owner}`, createdAt: at('2026-05-20') });
+    await openDispute('dp_first_of_two', { subjectId: owner });
+    await openDispute('dp_second_of_two', { subjectId: owner });
+
+    const ledger = (await loadPaymentLedger([owner], opts)).get(owner)!;
+
+    expect(ledger.payments.map(p => [p.at, p.reversed])).toEqual([
+      [at('2026-05-10'), true],
+      [at('2026-05-20'), true],
+    ]);
+  });
 });
 
 describe('classifyFirstPaid', () => {

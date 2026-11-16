@@ -199,13 +199,15 @@ export async function loadPaymentLedger(
     const at = firstChargeAt(sub, until);
     return at ? [{ sub, at }] : [];
   });
-  // A user dispute names no subscription, so it is held against the latest one charged before it opened.
+  // A user dispute names no subscription, so it is held against the latest one charged before it opened that
+  // no earlier dispute already took.
   const disputedSubscriptions = new Set<SubscriptionRow>();
   for (const [ownerId, openedDates] of userDisputesOpened) {
-    for (const openedAt of openedDates) {
+    for (const openedAt of [...openedDates].sort((a, b) => a.getTime() - b.getTime())) {
       let latest: { sub: SubscriptionRow; at: Date } | undefined;
       for (const charged of chargedSubscriptions) {
         if (charged.sub.ownerId !== ownerId || charged.at > openedAt) continue;
+        if (disputedSubscriptions.has(charged.sub)) continue;
         if (!latest || charged.at > latest.at) latest = charged;
       }
       if (latest) disputedSubscriptions.add(latest.sub);
