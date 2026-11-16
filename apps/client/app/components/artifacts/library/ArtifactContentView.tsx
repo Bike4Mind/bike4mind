@@ -1,13 +1,10 @@
 import React from 'react';
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress } from '@mui/joy';
-import {
-  HtmlArtifactSchema,
-  PythonArtifactSchema,
-  ReactArtifactSchema,
-  SvgArtifactSchema,
-  type IArtifactDocument,
-} from '@bike4mind/common';
+import { HtmlArtifactSchema, PythonArtifactSchema, ReactArtifactSchema, SvgArtifactSchema } from '@bike4mind/common';
+import type { artifactService } from '@bike4mind/services';
+
+type ArtifactViewerView = artifactService.ArtifactViewerView;
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 
@@ -44,7 +41,8 @@ const RechartsRenderer = dynamic(() => import('@client/app/components/Charts/Rec
 });
 
 type ArtifactContentViewProps = {
-  artifact: IArtifactDocument;
+  /** Only the fields a public-only reader also gets, so any read access can render. */
+  artifact: ArtifactViewerView;
   content: string;
 };
 

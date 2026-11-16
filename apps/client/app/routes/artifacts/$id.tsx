@@ -28,7 +28,8 @@ const ArtifactPage: React.FC = () => {
     error: olderVersionError,
   } = useArtifactVersionContent(isViewingOlderVersion ? id : null, isViewingOlderVersion ? pinnedVersion : null);
 
-  const source = artifact ? getArtifactSource(artifact) : null;
+  // A public-only reader's view carries no session or project, so it has no source to link to.
+  const source = data && data.access !== 'public' ? getArtifactSource(data.artifact) : null;
   const content = isViewingOlderVersion ? olderVersion?.content : data?.content?.content;
 
   const renderBody = () => {

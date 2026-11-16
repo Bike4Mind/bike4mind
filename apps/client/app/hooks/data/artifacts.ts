@@ -3,6 +3,9 @@ import { useCallback, useMemo } from 'react';
 import { api } from '@/app/contexts/ApiContext';
 import { useSubscribeCollection, updateAllQueryData } from '@/app/utils/react-query';
 import { IArtifactDocument, IArtifactVersionDocument } from '@bike4mind/common';
+import type { artifactService } from '@bike4mind/services';
+
+type ArtifactViewerView = artifactService.ArtifactViewerView;
 
 interface ArtifactVersion {
   _id: string;
@@ -142,12 +145,16 @@ export const useSubscribeToArtifactVersions = (artifactId?: string) => {
   useSubscribeCollection('artifact_versions', query, callback);
 };
 
-/** `GET /api/artifacts/:id`. The server returns 403 unless the caller owns the artifact, was granted read, or it is public. */
-export type ArtifactDetailResponse = {
-  access: 'owner' | 'shared' | 'public';
-  artifact: IArtifactDocument;
-  content?: { content: string; version: number };
-};
+type ArtifactDetailContent = { content: string; version: number };
+
+/**
+ * `GET /api/artifacts/:id`. The server answers 404 unless the caller owns the artifact, was granted
+ * read, or it is public; a public-only reader gets the trimmed viewer view (no owner, session,
+ * project or permission fields).
+ */
+export type ArtifactDetailResponse =
+  | { access: 'owner' | 'shared'; artifact: IArtifactDocument; content?: ArtifactDetailContent }
+  | { access: 'public'; artifact: ArtifactViewerView; content?: ArtifactDetailContent };
 
 export const useArtifact = (
   artifactId: string | null,
