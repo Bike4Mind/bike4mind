@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -125,16 +126,16 @@ fun SessionListScreen(graph: AppGraph, onOpen: (String) -> Unit, onNewChat: () -
                                 graph.session.restore()
                             }
                         }
-                    }) { Text("Sign out") }
+                    }, modifier = Modifier.testTag("settings-signout-btn")) { Text("Sign out") }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = onNewChat) { Text("New chat") }
+            ExtendedFloatingActionButton(onClick = onNewChat, modifier = Modifier.testTag("sessions-new-conversation-btn")) { Text("New chat") }
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize().testTag("sessions-list")) {
                 state.defaultModel?.let { defaultModel ->
                     item {
                         Text(

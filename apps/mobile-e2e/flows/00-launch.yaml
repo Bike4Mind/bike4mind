@@ -1,0 +1,16 @@
+appId: com.bike4mind.app
+name: Launch shows the sign-in screen
+tags:
+  - smoke
+---
+# Needs no credentials and no server: proves the Debug build installs, launches and renders on this platform.
+- launchApp:
+    clearState: true
+    stopApp: true
+- runFlow: ../subflows/skip-onboarding.yaml
+- extendedWaitUntil:
+    visible:
+      id: signin-submit-btn
+    timeout: 30000
+- assertVisible:
+    id: signin-submit-btn

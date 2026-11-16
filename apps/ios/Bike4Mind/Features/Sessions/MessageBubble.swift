@@ -26,6 +26,7 @@ struct MessageBubble: View {
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(message.accessibilityLabel(approval: approvalState))
+    .accessibilityIdentifier(isUser ? "message-user" : "message-assistant")
     .accessibilityActions {
       codeCopyActions(blocks)
       approvalAccessibilityActions

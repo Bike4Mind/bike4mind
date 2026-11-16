@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bike4mind.app.AppGraph
@@ -41,13 +42,13 @@ fun SignInScreen(app: B4MApplication, graph: AppGraph, signInError: MutableState
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Bike4Mind", style = MaterialTheme.typography.headlineLarge)
-        Button(onClick = {
+        Button(modifier = Modifier.testTag("signin-submit-btn"), onClick = {
             signInError.value = null
             CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(graph.beginSignIn()))
         }) {
             Text("Sign in")
         }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("signin-error-text")) }
         if (app.environments.canSwitch) ServerPicker(app = app, current = graph.environment.baseUrl)
     }
 }
@@ -60,8 +61,13 @@ private fun ServerPicker(app: B4MApplication, current: String) {
 
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Server (debug builds only)", style = MaterialTheme.typography.labelLarge)
-        OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedButton(enabled = url.trim().trimEnd('/') != current, onClick = {
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("debug-server-url-input"),
+        )
+        OutlinedButton(modifier = Modifier.testTag("debug-server-apply-btn"), enabled = url.trim().trimEnd('/') != current, onClick = {
             scope.launch {
                 problem = try {
                     app.switchServer(url)

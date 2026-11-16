@@ -1,0 +1,43 @@
+appId: com.bike4mind.app
+---
+# Fresh install -> signed in as the staging test user, on either platform.
+# Env (from CI secrets / your shell): B4M_E2E_SERVER_URL, B4M_E2E_EMAIL, B4M_E2E_CLEANUP_SECRET.
+- launchApp:
+    clearState: true
+    stopApp: true
+- runFlow: skip-onboarding.yaml
+- extendedWaitUntil:
+    visible:
+      id: signin-submit-btn
+    timeout: 30000
+- runFlow:
+    file: select-server.yaml
+- tapOn:
+    id: signin-submit-btn
+# iOS asks permission before opening the web sign-in sheet.
+- runFlow:
+    when:
+      platform: iOS
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+# The server's own web login (email + one-time code) opens in a system browser surface.
+- extendedWaitUntil:
+    visible: "Enter your email address"
+    timeout: 45000
+- tapOn: "Enter your email address"
+- inputText: ${B4M_E2E_EMAIL}
+- tapOn: "Continue"
+# Staging exposes the plaintext one-time code to the gated test endpoint, so no mailbox is needed.
+- runScript:
+    file: ../scripts/fetch-otc.js
+    env:
+      B4M_E2E_SERVER_URL: ${B4M_E2E_SERVER_URL}
+      B4M_E2E_EMAIL: ${B4M_E2E_EMAIL}
+      B4M_E2E_CLEANUP_SECRET: ${B4M_E2E_CLEANUP_SECRET}
+- extendedWaitUntil:
+    visible: "Verify Code"
+    timeout: 30000
+- inputText: ${output.otc}
+- tapOn: "Verify Code"
+- runFlow: assert-signed-in.yaml

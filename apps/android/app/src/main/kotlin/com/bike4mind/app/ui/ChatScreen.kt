@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -94,10 +95,10 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("chat-composer-field"),
                     placeholder = { Text("Message") },
                 )
-                Button(enabled = draft.isNotBlank() && !state.sending, onClick = {
+                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
                     model.controller.send(draft)
                     draft = ""
                 }) {
@@ -112,13 +113,13 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 private fun Turn(turn: Quest) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         turn.prompt?.let { prompt ->
-            Card { Text(prompt, modifier = Modifier.padding(12.dp)) }
+            Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(12.dp)) }
         }
         val reply = turn.reply
         when {
             turn.failed -> Text("The reply failed${turn.errorCode?.let { " ($it)" } ?: ""}.", color = MaterialTheme.colorScheme.error)
             reply.isNullOrEmpty() && !turn.status.isTerminal -> Text("...", style = MaterialTheme.typography.bodyLarge)
-            reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge)
+            reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("message-assistant"))
         }
     }
 }

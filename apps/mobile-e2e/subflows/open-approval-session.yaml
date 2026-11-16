@@ -1,0 +1,8 @@
+appId: com.bike4mind.app
+---
+# iOS fixtures: the first notebook ("Trip planning") carries a pending agent approval.
+- tapOn:
+    id: home-menu-btn
+- tapOn:
+    id: drawer-notebook-row
+    index: 0

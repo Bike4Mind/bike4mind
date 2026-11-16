@@ -1,0 +1,175 @@
+name: Mobile E2E
+
+# One Maestro suite (apps/mobile-e2e) run against the iOS simulator and the Android emulator. The two lanes are
+# separate jobs on purpose: a flow that breaks on one platform fails only that platform's job.
+#
+# Staging test-user secrets (repo secrets; the lanes skip the live flows with a warning when they are unset):
+#   MOBILE_E2E_SERVER_URL      origin of the staging server the Debug builds sign in to
+#   MOBILE_E2E_EMAIL           a staging test user whose address ends in -e2e@test.com
+#   MOBILE_E2E_CLEANUP_SECRET  the staging value of the server's E2E_CLEANUP_SECRET (serves the login one-time code)
+on:
+  pull_request:
+    paths:
+      - 'apps/mobile-e2e/**'
+      - 'apps/ios/**'
+      - 'apps/android/**'
+      - '.github/workflows/mobile-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile-e2e/**'
+      - 'apps/ios/**'
+      - 'apps/android/**'
+      - '.github/workflows/mobile-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Pinned release and its published sha256 (maestro.zip on the GitHub release).
+  MAESTRO_VERSION: '2.12.0'
+  MAESTRO_SHA256: 'a6044a84542f522f434c5dc3d609e60c7446d423f3ed1b2ae513f5c48663ec5e'
+  B4M_E2E_SERVER_URL: ${{ secrets.MOBILE_E2E_SERVER_URL }}
+  B4M_E2E_EMAIL: ${{ secrets.MOBILE_E2E_EMAIL }}
+  B4M_E2E_CLEANUP_SECRET: ${{ secrets.MOBILE_E2E_CLEANUP_SECRET }}
+
+jobs:
+  ios:
+    name: iOS simulator
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Select Xcode
+        run: |
+          xcode_app=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode_app" ]; then
+            echo "No Xcode 26.x found on this runner image" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+
+      # Same pick as ios.yml: an iPhone from the newest iOS runtime, by UDID.
+      - name: Boot simulator
+        run: |
+          pick=$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          runtimes = []
+          for key, devices in json.load(sys.stdin)["devices"].items():
+              match = re.search(r"SimRuntime\.iOS-(\d+(?:-\d+)*)$", key)
+              iphones = sorted((d for d in devices if d["name"].startswith("iPhone")), key=lambda d: d["name"])
+              if match and iphones:
+                  runtimes.append((tuple(int(part) for part in match.group(1).split("-")), iphones[0]))
+          if not runtimes:
+              sys.exit("No available iPhone simulator on any iOS runtime")
+          print(max(runtimes, key=lambda runtime: runtime[0])[1]["udid"])
+          ')
+          echo "SIMULATOR_UDID=$pick" >> "$GITHUB_ENV"
+          xcrun simctl boot "$pick"
+          xcrun simctl bootstatus "$pick" -b
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/ios/build/DerivedData/SourcePackages
+            apps/ios/Packages/B4MKit/.build
+            apps/ios/Packages/B4MClient/.build
+          key: ios-spm-${{ runner.os }}-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+          restore-keys: ios-spm-${{ runner.os }}-
+
+      - name: Build Debug app
+        working-directory: apps/ios
+        run: make build DESTINATION="platform=iOS Simulator,id=$SIMULATOR_UDID"
+
+      - name: Install app
+        working-directory: apps/ios
+        run: xcrun simctl install "$SIMULATOR_UDID" "$(find build/DerivedData/Build/Products -name 'Bike4Mind.app' -path '*Debug-iphonesimulator*' | head -n 1)"
+
+      - name: Install Maestro
+        run: .github/scripts/install-maestro.sh
+
+      - name: Run flows
+        run: apps/mobile-e2e/scripts/run-flows.sh ios
+        env:
+          REPORT_DIR: ${{ github.workspace }}/maestro-report
+
+      # Quarantined flows never fail the lane; their result is still visible in the job log and report.
+      - name: Run quarantined flows (non-blocking)
+        continue-on-error: true
+        run: apps/mobile-e2e/scripts/run-flows.sh ios --quarantine
+        env:
+          REPORT_DIR: ${{ github.workspace }}/maestro-report
+
+      - name: Upload Maestro report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: maestro-ios
+          path: maestro-report
+          if-no-files-found: ignore
+
+  android:
+    name: Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Maestro
+        run: .github/scripts/install-maestro.sh
+
+      # The emulator needs KVM; the hosted Linux runner exposes it through this udev rule.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build Debug app
+        working-directory: apps/android
+        run: |
+          if [ -n "$B4M_E2E_SERVER_URL" ]; then
+            ./gradlew --no-daemon :app:assembleDebug "-Pb4m.serverUrl=$B4M_E2E_SERVER_URL"
+          else
+            ./gradlew --no-daemon :app:assembleDebug
+          fi
+
+      - name: Run flows on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+            REPORT_DIR="$GITHUB_WORKSPACE/maestro-report" apps/mobile-e2e/scripts/run-flows.sh android
+            REPORT_DIR="$GITHUB_WORKSPACE/maestro-report" apps/mobile-e2e/scripts/run-flows.sh android --quarantine || echo "::warning::Quarantined Android flows failed (non-blocking)"
+
+      - name: Upload Maestro report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: maestro-android
+          path: maestro-report
+          if-no-files-found: ignore
