@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
@@ -193,6 +193,42 @@ describe('ExperimentalFeatureToggle telemetry deletion outcome', () => {
     await waitFor(() => expect(updatePreferences).toHaveBeenCalledTimes(2));
     expect(await screen.findByTestId('telemetry-deletion-retry-btn')).not.toBeDisabled();
     expect(screen.getByTestId('telemetry-deletion-incomplete')).toBeTruthy();
+  });
+
+  it('keeps the notice and the retry action when the retry request does not land', async () => {
+    updatePreferences.mockResolvedValueOnce({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+    updatePreferences.mockResolvedValueOnce(undefined);
+    renderToggle();
+    confirmStopAndDelete();
+
+    fireEvent.click(await screen.findByTestId('telemetry-deletion-retry-btn'));
+
+    await waitFor(() => expect(updatePreferences).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('telemetry-deletion-retry-btn')).not.toBeDisabled());
+    expect(screen.getByTestId('telemetry-deletion-incomplete')).toBeTruthy();
+    expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();
+  });
+
+  it('drops the result of a deletion request the user moved on from', async () => {
+    let resolveFirst: (value: unknown) => void = () => {};
+    updatePreferences.mockReturnValueOnce(new Promise(resolve => (resolveFirst = resolve)));
+    const { rerender } = renderToggle();
+    const rerenderToggle = () =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ExperimentalFeatureToggle />
+        </CssVarsProvider>
+      );
+    confirmStopAndDelete();
+
+    // Back to a collecting level while the first request is still in flight, then its result arrives.
+    fireEvent.click(screen.getByTestId('telemetry-level-basic'));
+    await act(async () => resolveFirst({ telemetryDeletion: { verified: false, remainingCount: 2 } }));
+    userSettingsState.settings.contextTelemetryLevel = 'none';
+    rerenderToggle();
+
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+    expect(screen.queryByTestId('telemetry-deletion-pending')).toBeNull();
   });
 
   it('shows no deletion notice when the save itself did not land', async () => {

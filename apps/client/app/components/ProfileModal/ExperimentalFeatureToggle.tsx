@@ -7,7 +7,7 @@ import type { ExperimentalFeature } from '@client/app/contexts/UserSettingsConte
 import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { Box, Button, ButtonGroup, CircularProgress, Typography } from '@mui/joy';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
@@ -41,6 +41,8 @@ export default function ExperimentalFeatureToggle() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'error' | 'empty'>('idle');
   const [deletionStatus, setDeletionStatus] = useState<'idle' | 'incomplete' | 'complete'>('idle');
   const [isDeleting, setIsDeleting] = useState(false);
+  // Bumped by every deletion request and every level change, so a result that was overtaken is dropped.
+  const deletionRequestRef = useRef(0);
 
   const handleExportTelemetry = useCallback(async () => {
     if (!currentUserId) return;
@@ -72,20 +74,24 @@ export default function ExperimentalFeatureToggle() {
       setShowNoneConfirm(true);
       return;
     }
+    deletionRequestRef.current += 1;
+    setIsDeleting(false);
     setDeletionStatus('idle');
     updatePreferences({ contextTelemetryLevel: level });
   };
 
   // Always asks for the deletion to run, so confirming again while already on None repeats it.
   const stopAndDeleteTelemetry = async () => {
+    const request = ++deletionRequestRef.current;
     setIsDeleting(true);
-    try {
-      const saved = await updatePreferences({ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true });
-      const outcome = saved?.telemetryDeletion;
-      setDeletionStatus(!outcome ? 'idle' : outcome.verified ? 'complete' : 'incomplete');
-    } finally {
-      setIsDeleting(false);
-    }
+    const saved = await updatePreferences({ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true });
+    if (request !== deletionRequestRef.current) return;
+    setIsDeleting(false);
+    // No result means the request did not land, so what is on screen (an earlier incomplete notice
+    // and its retry button in particular) still stands.
+    if (!saved) return;
+    const outcome = saved.telemetryDeletion;
+    setDeletionStatus(!outcome ? 'idle' : outcome.verified ? 'complete' : 'incomplete');
   };
 
   const handleToggle = (feature: ExperimentalFeature) => {

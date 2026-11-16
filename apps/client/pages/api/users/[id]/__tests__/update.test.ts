@@ -1826,4 +1826,18 @@ describe('PUT /api/users/:id/update - telemetry opt-out deletion', () => {
     expect(json.telemetryDeletion).toEqual({ verified: false, remainingCount: 3 });
     expect(json.ignoredFields).toBeUndefined();
   });
+
+  it('runs the deletion for the target account, not the admin, when an admin opts another user out', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'u1',
+      body: { preferences: { contextTelemetryLevel: 'none' } },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledTimes(1);
+    expect(mockDeletion).toHaveBeenCalledWith('u1', expect.anything());
+    expect(res._getJSONData().telemetryDeletion).toEqual({ verified: true, remainingCount: 0 });
+  });
 });
