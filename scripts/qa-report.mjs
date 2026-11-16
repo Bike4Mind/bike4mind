@@ -297,15 +297,29 @@ export function latencyGateTests(fileName, json) {
     if (promptSeconds(entry.totalEndToEnd) <= 0)
       return gateTest(testKey, title, 'failed', 'no measurement; the prompt crashed or timed out');
     if (entry.exceedsThreshold !== true) return gateTest(testKey, title, 'passed');
-    const threshold =
-      typeof entry.thresholdSec === 'number' ? `threshold ${entry.thresholdSec}s` : 'no threshold declared';
-    return gateTest(
-      testKey,
-      title,
-      'failed',
-      `${promptSeconds(entry.actualResponseLatency).toFixed(2)}s, ${threshold}`
-    );
+    return gateTest(testKey, title, 'failed', promptBreachReason(entry));
   });
+}
+
+/**
+ * Names the check(s) behind `exceedsThreshold`: the producer sets it when a detected rapid reply
+ * beats `initialResponseThresholdSec`, or the actual or end-to-end time beats `thresholdSec`.
+ */
+function promptBreachReason(entry) {
+  const limit = entry.thresholdSec;
+  const initialLimit = entry.initialResponseThresholdSec;
+  const initial = promptSeconds(entry.initialResponseLatency);
+  const actual = promptSeconds(entry.actualResponseLatency);
+  const total = promptSeconds(entry.totalEndToEnd);
+  const reasons = [];
+  if (entry.rapidResponseDetected === true && typeof initialLimit === 'number' && initial > initialLimit)
+    reasons.push(`initial response ${initial.toFixed(2)}s, threshold ${initialLimit}s`);
+  // End-to-end usually equals the actual time, so it is named only when it alone is over.
+  if (typeof limit === 'number' && actual > limit) reasons.push(`${actual.toFixed(2)}s, threshold ${limit}s`);
+  else if (typeof limit === 'number' && total > limit)
+    reasons.push(`end-to-end ${total.toFixed(2)}s, threshold ${limit}s`);
+  if (reasons.length > 0) return reasons.join('; ');
+  return `${actual.toFixed(2)}s, ${typeof limit === 'number' ? `threshold ${limit}s` : 'no threshold declared'}`;
 }
 
 /** Fallback when the workflow reports a breach but no cell file explains it. */

@@ -313,6 +313,40 @@ describe('per-prompt latency results', () => {
     ]);
   });
 
+  it('names the check that tripped a breach', () => {
+    const over = (promptName, fields) =>
+      prompt({ promptName, exceedsThreshold: true, initialResponseThresholdSec: 15, ...fields });
+    const tests = latencyGateTests(file, [
+      over('Initial', {
+        rapidResponseDetected: true,
+        initialResponseLatency: '22.10 secs.',
+        actualResponseLatency: '40.00 secs.',
+        totalEndToEnd: '40.00 secs.',
+      }),
+      over('Initial ignored', {
+        rapidResponseDetected: false,
+        initialResponseLatency: '22.10 secs.',
+        actualResponseLatency: '130.00 secs.',
+        totalEndToEnd: '130.00 secs.',
+      }),
+      over('End-to-end', { actualResponseLatency: '110.00 secs.', totalEndToEnd: '125.00 secs.' }),
+      over('Both', {
+        rapidResponseDetected: true,
+        initialResponseLatency: '16.00 secs.',
+        actualResponseLatency: '121.00 secs.',
+        totalEndToEnd: '121.00 secs.',
+      }),
+      over('Unexplained', { actualResponseLatency: '40.00 secs.', totalEndToEnd: '40.00 secs.' }),
+    ]);
+    expect(tests.map(t => t.error)).toEqual([
+      'initial response 22.10s, threshold 15s',
+      '130.00s, threshold 120s',
+      'end-to-end 125.00s, threshold 120s',
+      'initial response 16.00s, threshold 15s; 121.00s, threshold 120s',
+      '40.00s, threshold 120s',
+    ]);
+  });
+
   it('leaves a single-cell summary file exactly as latencyMetric and latencyGateTest read it', () => {
     const json = { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 6.5 };
     expect(latencyMetrics(file, json)).toEqual([latencyMetric(file, json)]);
