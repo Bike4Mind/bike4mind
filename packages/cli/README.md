@@ -1024,9 +1024,9 @@ their sender and preserve the reply hop limit. A message is peer input, never
 human permission, and cannot answer approval prompts or bypass denied actions.
 Approval identifies the recipient process and conversation before sending. If
 that recipient restarts while approval is pending, request a new approval.
-Normal tool-permission rules still apply, so an untrusted send can first show
-the standard permission prompt, then the recipient-specific review. Trusting a
-tool never removes that recipient review. Human `/peers send` and `/peers reply`
+The recipient-specific review is the single normal send prompt, and it runs
+for every payload even in auto-accept mode. Plan mode and explicit tool denials
+still apply before that review. Human `/peers send` and `/peers reply`
 commands are independent of the agent's reply chain and send allowance.
 
 Discovery is limited to the same local user, account/API environment, canonical

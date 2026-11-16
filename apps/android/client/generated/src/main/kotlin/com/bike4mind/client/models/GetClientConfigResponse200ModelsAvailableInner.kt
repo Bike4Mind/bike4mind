@@ -36,6 +36,8 @@ import kotlinx.serialization.Contextual
  * @param type
  * @param backend The provider that serves the model.
  * @param description
+ * @param blurb How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise.
+ * @param providerLabel The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise.
  * @param contextWindow Input context, in tokens.
  * @param maxOutputTokens
  * @param supportsStreaming
@@ -72,6 +74,14 @@ data class GetClientConfigResponse200ModelsAvailableInner (
 
     @SerialName(value = "description")
     val description: kotlin.String?,
+
+    /* How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+    @SerialName(value = "blurb")
+    val blurb: kotlin.String?,
+
+    /* The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+    @SerialName(value = "provider_label")
+    val providerLabel: kotlin.String?,
 
     /* Input context, in tokens. */
     @SerialName(value = "context_window")

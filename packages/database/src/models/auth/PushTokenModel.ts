@@ -3,8 +3,8 @@ import mongoose, { Schema, Types, type Document, type Model } from 'mongoose';
 export const PUSH_TOKEN_KINDS = ['device', 'liveActivity'] as const;
 export type PushTokenKind = (typeof PUSH_TOKEN_KINDS)[number];
 
-/** Open for future platforms; widen the tuple, not the schema. */
-export const PUSH_TOKEN_PLATFORMS = ['ios'] as const;
+/** Open for future platforms; widen the tuple, not the schema. `ios` is delivered over APNs, `android` over FCM. */
+export const PUSH_TOKEN_PLATFORMS = ['ios', 'android'] as const;
 export type PushTokenPlatform = (typeof PUSH_TOKEN_PLATFORMS)[number];
 
 export const PUSH_TOKEN_ENVIRONMENTS = ['sandbox', 'production'] as const;

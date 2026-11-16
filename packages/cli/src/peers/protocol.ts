@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export interface PeerIdentity {
   id: string;
   generation: string;
@@ -24,17 +26,21 @@ export interface PeerMessage {
   expiresAt: number;
 }
 
-export type PeerReceiptStatus =
-  | 'queued'
-  | 'held'
-  | 'delivered'
-  | 'completed'
-  | 'rejected'
-  | 'expired'
-  | 'cancelled'
-  | 'unknown'
-  | 'failed'
-  | 'stopped';
+export const peerReceiptStatusSchema = z.enum([
+  'queued',
+  'held',
+  'delivered',
+  'completed',
+  'rejected',
+  'expired',
+  'cancelled',
+  'unknown',
+  'failed',
+  'stopped',
+]);
+export type PeerReceiptStatus = z.infer<typeof peerReceiptStatusSchema>;
+export const peerInboundPolicySchema = z.enum(['hold', 'accept', 'refuse']);
+export type PeerInboundPolicy = z.infer<typeof peerInboundPolicySchema>;
 
 export interface PeerReceipt {
   id: string;
@@ -57,7 +63,7 @@ export type PeerRequest =
   | { type: 'cancel'; messageId: string };
 
 export type PeerResponse =
-  | { ok: true; receipt?: PeerReceipt; presence?: { policy: 'hold' | 'accept' | 'refuse'; ready: boolean } }
+  | { ok: true; receipt?: PeerReceipt; presence?: { policy: PeerInboundPolicy; ready: boolean } }
   | { ok: false; error: string; unknown?: boolean };
 
 export const PEER_PROTOCOL_VERSION = 1;

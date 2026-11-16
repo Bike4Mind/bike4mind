@@ -9,6 +9,8 @@ import { StringDecoder } from 'node:string_decoder';
 import {
   isPeerIdentity,
   isPeerRequest,
+  peerReceiptStatusSchema,
+  peerInboundPolicySchema,
   PEER_FRAME_LIMIT,
   PEER_LEASE_MS,
   PEER_PROTOCOL_VERSION,
@@ -168,14 +170,41 @@ async function acquireEnrollment(root: string, identity: PeerIdentity): Promise<
       await delay(10);
     }
   }
-  const original = await handle.stat();
+  let original: { ino: number; dev: number } | undefined;
   const owner = JSON.stringify({ id: identity.id, generation: identity.generation, processId: process.pid });
   try {
+    original = await handle.stat();
     await handle.writeFile(owner);
   } catch (error) {
-    await handle.close();
+    const cleanupErrors: unknown[] = [];
+    try {
+      const held = original ?? (await handle.stat());
+      const current = await lstat(file).catch(failure => {
+        if (missing(failure)) return null;
+        throw failure;
+      });
+      if (current?.ino === held.ino && current.dev === held.dev) await rm(file);
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      await handle.close();
+    } catch (closeError) {
+      cleanupErrors.push(closeError);
+    }
+    if (cleanupErrors.length > 0) {
+      const detail = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
+      throw Object.assign(
+        new Error(
+          `Peer enrollment initialization failed: ${detail(error)}. Owned-lock cleanup failed: ${cleanupErrors.map(detail).join('; ')} (${file})`
+        ),
+        { cause: error, cleanupErrors }
+      );
+    }
     throw error;
   }
+  if (!original) throw new Error('Peer enrollment ownership was not established');
+  const owned = original;
   let released = false;
   return async () => {
     if (released) return;
@@ -185,12 +214,11 @@ async function acquireEnrollment(root: string, identity: PeerIdentity): Promise<
         if (missing(error)) return null;
         throw error;
       });
-      if (!current || current.ino !== original.ino || current.dev !== original.dev) return;
+      if (!current || current.ino !== owned.ino || current.dev !== owned.dev) return;
       const read = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const checked = await read.stat();
-        if (checked.ino !== original.ino || checked.dev !== original.dev || (await read.readFile('utf8')) !== owner)
-          return;
+        if (checked.ino !== owned.ino || checked.dev !== owned.dev || (await read.readFile('utf8')) !== owner) return;
       } finally {
         await read.close();
       }
@@ -533,7 +561,7 @@ function validResponse(value: unknown): value is PeerResponse {
     const presence = response.presence as Record<string, unknown>;
     if (
       !onlyKeys(presence, ['policy', 'ready']) ||
-      !['hold', 'accept', 'refuse'].includes(String(presence.policy)) ||
+      !peerInboundPolicySchema.safeParse(presence.policy).success ||
       typeof presence.ready !== 'boolean'
     )
       return false;
@@ -558,18 +586,7 @@ function validResponse(value: unknown): value is PeerResponse {
     ['id', 'senderId', 'recipientId'].every(
       key => typeof receipt[key] === 'string' && idPattern.test(receipt[key] as string)
     ) &&
-    [
-      'queued',
-      'held',
-      'delivered',
-      'completed',
-      'rejected',
-      'expired',
-      'cancelled',
-      'unknown',
-      'failed',
-      'stopped',
-    ].includes(String(receipt.status)) &&
+    peerReceiptStatusSchema.safeParse(receipt.status).success &&
     typeof receipt.createdAt === 'number' &&
     Number.isFinite(receipt.createdAt) &&
     receipt.createdAt >= 0 &&

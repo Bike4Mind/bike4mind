@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, fork } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isPeerIdentity, isPeerName, isPeerRequest, type PeerIdentity, type PeerRequest } from './protocol.js';
 import { callPeer, discoverPeers, ensurePeerRoot, preparePeerRoot, startPeerTransport } from './transport.js';
@@ -226,6 +227,59 @@ describe('peer transport', () => {
       })
     ).toBe(false);
   });
+  it.each(['stat', 'write'] as const)(
+    'cleans only its owned enrollment lock after a transient %s failure',
+    async phase => {
+      const root = await fixture();
+      const value = identity();
+      const files = await import('node:fs/promises');
+      const originalOpen = files.open;
+      const failure = new Error(`enrollment ${phase} failed`);
+      const closed = vi.fn();
+      const open = vi.spyOn(files, 'open').mockImplementationOnce(async (file, flags, mode) => {
+        expect(String(file)).toMatch(/enrollments\/[^/]+\.lock$/);
+        const handle = await originalOpen(file, flags, mode);
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, 'close').mockImplementation(async () => {
+          closed();
+          await close();
+        });
+        if (phase === 'stat') vi.spyOn(handle, 'stat').mockRejectedValueOnce(failure);
+        else vi.spyOn(handle, 'writeFile').mockRejectedValueOnce(failure);
+        return handle;
+      });
+      await expect(startPeerTransport({ root, identity: value, handle: async () => ({ ok: true }) })).rejects.toBe(
+        failure
+      );
+      expect(closed).toHaveBeenCalledTimes(1);
+      expect(await files.readdir(join(root, 'enrollments'))).toEqual([]);
+      open.mockRestore();
+      await peer(root, value);
+    }
+  );
+
+  it('preserves a replacement enrollment file when initialization of its original inode fails', async () => {
+    const root = await fixture();
+    const files = await import('node:fs/promises');
+    const originalOpen = files.open;
+    const failure = new Error('enrollment write failed');
+    let replacement = '';
+    vi.spyOn(files, 'open').mockImplementationOnce(async (file, flags, mode) => {
+      const handle = await originalOpen(file, flags, mode);
+      replacement = String(file);
+      vi.spyOn(handle, 'writeFile').mockImplementationOnce(async () => {
+        await files.rename(replacement, `${replacement}.retired`);
+        await files.writeFile(replacement, 'replacement owner', { mode: 0o600 });
+        throw failure;
+      });
+      return handle;
+    });
+    await expect(startPeerTransport({ root, identity: identity(), handle: async () => ({ ok: true }) })).rejects.toBe(
+      failure
+    );
+    expect(await readFile(replacement, 'utf8')).toBe('replacement owner');
+  });
+
   it('discovers scoped identities without publishing capability secrets', async () => {
     const root = await fixture();
     const source = await peer(root);
@@ -697,6 +751,12 @@ describe('peer transport', () => {
     const registry = join(directory, 'registry');
     const protocol = await readFile(new URL('./protocol.ts', import.meta.url), 'utf8');
     const transport = await readFile(new URL('./transport.ts', import.meta.url), 'utf8');
+    await mkdir(join(directory, 'node_modules'), { mode: 0o700 });
+    await symlink(
+      fileURLToPath(new URL('../../node_modules/zod', import.meta.url)),
+      join(directory, 'node_modules', 'zod'),
+      'dir'
+    );
     await writeFile(join(directory, 'protocol.ts'), protocol);
     await writeFile(join(directory, 'transport.ts'), transport.replace("'./protocol.js'", "'./protocol.ts'"));
     const script = join(directory, 'enroll.mts');

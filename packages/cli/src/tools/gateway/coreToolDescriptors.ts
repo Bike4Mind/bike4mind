@@ -45,7 +45,8 @@ export const CORE_TOOL_DESCRIPTORS: ReadonlyMap<string, ToolDescriptor> = new Ma
     find_definition: { source: CLI, effect: 'read', approval: 'auto_approve' },
     peer_list: { source: CLI, effect: 'read', approval: 'prompt_default' },
     peer_status: { source: CLI, effect: 'read', approval: 'prompt_default' },
-    peer_send: { source: CLI, effect: 'execute', approval: 'prompt_always' },
+    // peer_send owns an exact-payload human review gate on every invocation.
+    peer_send: { source: CLI, effect: 'execute', approval: 'auto_approve' },
     ask_user_question: { source: CORE, effect: 'session', approval: 'auto_approve' },
 
     agent_delegate: sessionTool(),

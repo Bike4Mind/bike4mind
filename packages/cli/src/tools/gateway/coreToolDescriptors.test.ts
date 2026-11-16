@@ -18,7 +18,7 @@ const LEGACY_POLICY: ReadonlyArray<[string, ToolCategory, boolean, boolean, stri
   ['find_definition', 'auto_approve', true, false, undefined],
   ['peer_list', 'prompt_default', true, false, undefined],
   ['peer_status', 'prompt_default', true, false, undefined],
-  ['peer_send', 'prompt_always', false, false, undefined],
+  ['peer_send', 'auto_approve', false, false, undefined],
   ['ask_user_question', 'auto_approve', true, false, undefined],
   ['agent_delegate', 'auto_approve', true, false, undefined],
   ['check_agent_status', 'auto_approve', true, false, undefined],
@@ -100,7 +100,12 @@ describe('core tool descriptor parity', () => {
 });
 
 describe('core tool descriptor coherence', () => {
-  it.each([...CORE_TOOL_DESCRIPTORS])('%s pairs its effect with a matching approval tier', (_name, descriptor) => {
+  it.each([...CORE_TOOL_DESCRIPTORS])('%s pairs its effect with a matching approval tier', (name, descriptor) => {
+    if (name === 'peer_send') {
+      expect(descriptor.effect).toBe('execute');
+      expect(descriptor.approval).toBe('auto_approve');
+      return;
+    }
     if (descriptor.effect === 'write' || descriptor.effect === 'execute') {
       expect(descriptor.approval).toBe('prompt_always');
     }

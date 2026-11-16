@@ -1,4 +1,5 @@
 import {
+  CreditHolderType,
   CompletionApiUsageTransaction,
   DecisionUsageTransaction,
   GenericCreditDeductTransaction,
@@ -19,6 +20,7 @@ import {
   TransferCreditTransaction,
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import type { CreditLedgerWrite } from './ledgerWrite';
 import { z } from 'zod';
 
@@ -285,6 +287,7 @@ export async function subtractCreditsWithLedgerRow(
     if (!currentCreditHolder) {
       throw new BadRequestError('currentCreditHolder is required when skipBalanceUpdate is true');
     }
+    await notifyOrgDebit(ownerType, ownerId, currentCreditHolder);
     return { creditHolder: currentCreditHolder, creditTransactionId: tx?.id };
   }
 
@@ -293,7 +296,14 @@ export async function subtractCreditsWithLedgerRow(
     throw new BadRequestError('Failed to update credits');
   }
 
+  await notifyOrgDebit(ownerType, ownerId, updatedEntity);
   return { creditHolder: updatedEntity, creditTransactionId: tx?.id };
+}
+
+/** Raised after the ledger row and balance write; notifyOrgEvent swallows alert failures. */
+async function notifyOrgDebit(ownerType: string, ownerId: string, holder: ICreditHolder): Promise<void> {
+  if (ownerType !== CreditHolderType.Organization) return;
+  await notifyOrgEvent({ type: 'credit_debit', organizationId: ownerId, balanceAfter: Number(holder.currentCredits) });
 }
 
 /** subtractCredits for callers that need the ledger row id; see subtractCreditsWithLedgerRow. */

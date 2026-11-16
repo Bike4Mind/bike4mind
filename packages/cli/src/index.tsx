@@ -153,6 +153,7 @@ import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
 import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
 import { whenTurnIdle } from './session/whenTurnIdle.js';
+import { holdIdleSession, type IdleSessionClaim } from './session/holdIdleSession.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { sanitizeTerminalText } from './utils/sanitizeTerminalText.js';
@@ -399,6 +400,7 @@ function CliApp() {
   const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
   const peerServiceRef = useRef<PeerService | null>(null);
   const peerConversationEpochRef = useRef(0);
+  const peerEnrollmentEpochRef = useRef(0);
   const peerToolsBindingRef = useRef<((enabled: boolean) => void) | null>(null);
   const peerStoppingRef = useRef(false);
   const peerReadyRef = useRef<() => boolean>(() => false);
@@ -418,6 +420,7 @@ function CliApp() {
   livePeerScopeRef.current = currentPeerScope;
 
   const stopPeers = async (reason?: string) => {
+    ++peerEnrollmentEpochRef.current;
     const service = peerServiceRef.current;
     peerServiceRef.current = null;
     peerToolsBindingRef.current?.(false);
@@ -430,7 +433,14 @@ function CliApp() {
 
   useEffect(() => {
     const unsubscribe = useCliStore.subscribe((next, previous) => {
-      if (next.session?.id !== previous.session?.id) void stopPeers('the active conversation changed.').catch(() => {});
+      if (next.session?.id !== previous.session?.id)
+        void stopPeers('the active conversation changed.').catch(error =>
+          console.error(`Peer cleanup failed: ${String(error)}`)
+        );
+      else if (next.session?.model !== previous.session?.model)
+        void stopPeers('the active model changed.').catch(error =>
+          console.error(`Peer cleanup failed: ${String(error)}`)
+        );
     });
     return () => {
       unsubscribe();
@@ -1481,7 +1491,12 @@ function CliApp() {
    * Handle custom command execution with proper display
    * Shows concise user message but sends full template to agent
    */
-  const handleCustomCommandMessage = async (fullTemplate: string, displayMessage: string) => {
+  const handleCustomCommandMessage = async (
+    fullTemplate: string,
+    displayMessage: string,
+    sessionClaim: IdleSessionClaim
+  ) => {
+    sessionClaim.assertHeld();
     const session = useCliStore.getState().session;
     if (!state.agent || !session) {
       console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
@@ -1491,10 +1506,8 @@ function CliApp() {
     // A sign-in restart replaced the session: nothing this command produces after that belongs in the new one.
     const replaced = () => initGenerationRef.current !== generation;
 
-    // Set thinking state to show loading indicator
+    // Custom dispatch owns the same claim across expansion, model override and this turn.
     useCliStore.getState().setIsThinking(true);
-    // Released in the finally below; this finalizes "the last message" from a snapshot.
-    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1589,6 +1602,7 @@ function CliApp() {
       // See: TavernModule.getSystemPromptSection() for the review gate instructions.
       let result;
       try {
+        peerServiceRef.current?.resetSendBudget();
         result = await state.agent.run(messageContent, {
           previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
           signal: abortController.signal,
@@ -1763,7 +1777,6 @@ function CliApp() {
       setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
-      releaseSession();
     }
   };
 
@@ -1843,7 +1856,9 @@ function CliApp() {
     if (useCliStore.getState().peerTurnActive)
       throw new Error('Wait for the active peer turn to finish before enabling a new peer session.');
     if (process.platform === 'win32') throw new Error('Local peer messaging currently supports macOS and Linux.');
+    const enrollmentEpoch = peerEnrollmentEpochRef.current + 1;
     await stopPeers();
+    if (enrollmentEpoch !== peerEnrollmentEpochRef.current) throw new Error('Peer enrollment was cancelled');
     const session = useCliStore.getState().session;
     if (!session) throw new Error('No active session.');
     const scope = livePeerScopeRef.current;
@@ -1863,15 +1878,20 @@ function CliApp() {
       name,
       grantedDirectories: state.additionalDirectories,
     });
-    if (
-      scope !== livePeerScopeRef.current ||
-      generation !== initGenerationRef.current ||
-      useCliStore.getState().session?.id !== session.id
-    )
-      throw new Error('Session changed; enable peers again.');
+    const assertCurrentEnrollment = () => {
+      if (
+        enrollmentEpoch !== peerEnrollmentEpochRef.current ||
+        scope !== livePeerScopeRef.current ||
+        generation !== initGenerationRef.current ||
+        useCliStore.getState().session?.id !== session.id
+      )
+        throw new Error('Session changed or peer enrollment was cancelled; enable peers again.');
+    };
+    assertCurrentEnrollment();
+    const root = await preparePeerRoot(path.join(homedir(), '.bike4mind', 'peers'));
+    assertCurrentEnrollment();
     peerScopeRef.current = scope;
     peerGenerationRef.current = generation;
-    const root = await preparePeerRoot(path.join(homedir(), '.bike4mind', 'peers'));
     const service: PeerService = new PeerService({
       root,
       identity,
@@ -1904,6 +1924,7 @@ function CliApp() {
     peerServiceRef.current = service;
     try {
       await service.start();
+      assertCurrentEnrollment();
       if (
         scope !== livePeerScopeRef.current ||
         generation !== initGenerationRef.current ||
@@ -1980,9 +2001,12 @@ function CliApp() {
     const stillThisSession = () =>
       initGenerationRef.current === startedGeneration && useCliStore.getState().session?.id === session.id;
 
-    // Set thinking state
+    const sessionClaim = holdIdleSession();
+    if (!sessionClaim) {
+      whenTurnIdle(() => useCliStore.getState().setPendingBackgroundTrigger(true));
+      return;
+    }
     useCliStore.getState().setIsThinking(true);
-    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -2016,6 +2040,7 @@ function CliApp() {
       // The actual notification will be injected by NotifyingLlmBackend
       const cliConfig = await state.configStore.get();
 
+      peerServiceRef.current?.resetSendBudget();
       const result = await state.agent.run(backgroundPrompt, {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
@@ -2086,7 +2111,7 @@ function CliApp() {
       if (!stillThisSession()) {
         useCliStore.setState(prev => ({ pendingMessages: prev.pendingMessages.filter(m => m.id !== pendingId) }));
       }
-      releaseSession();
+      sessionClaim.release();
     }
   };
 
@@ -2337,10 +2362,16 @@ function CliApp() {
     const prompt = buildHandoffPrompt(session);
     if (!prompt) return null;
 
+    if (useCliStore.getState().session !== session) return null;
+    const sessionClaim = holdIdleSession();
+    if (!sessionClaim) {
+      console.log('Wait for the current turn to finish before generating a handoff.');
+      return null;
+    }
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
-    const releaseSession = useCliStore.getState().holdSession();
     try {
+      peerServiceRef.current?.resetSendBudget();
       const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
 
@@ -2371,7 +2402,7 @@ function CliApp() {
       return null;
     } finally {
       useCliStore.getState().setIsThinking(false);
-      releaseSession();
+      sessionClaim.release();
     }
   };
 
@@ -2529,11 +2560,11 @@ function CliApp() {
     // the point that actually executes - one derivation of the reserved set, not two.
     const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
-      if (useCliStore.getState().peerTurnActive) {
-        console.log('Wait for the active peer turn to finish before running a custom command.');
+      const sessionClaim = holdIdleSession();
+      if (!sessionClaim) {
+        console.log('Wait for the current turn to finish before running a custom command.');
         return;
       }
-      const releaseSession = useCliStore.getState().holdSession();
       try {
         // Show that the command is being executed
         const sourceIcon = customCommand.source === 'global' ? '🏠' : '📁';
@@ -2595,12 +2626,12 @@ function CliApp() {
           await runWithModelOverride(
             { applyModel: applyModelToSession, sessionStore: state.sessionStore },
             customCommand.model,
-            () => handleCustomCommandMessage(substitutedBody, displayMessage)
+            () => handleCustomCommandMessage(substitutedBody, displayMessage, sessionClaim)
           );
         } else {
           // Execute without model override
           console.log('🤖 Sending to agent...\n');
-          await handleCustomCommandMessage(substitutedBody, displayMessage);
+          await handleCustomCommandMessage(substitutedBody, displayMessage, sessionClaim);
         }
 
         return; // Custom command handled, exit
@@ -2611,7 +2642,7 @@ function CliApp() {
         );
         return;
       } finally {
-        releaseSession();
+        sessionClaim.release();
       }
     }
 
@@ -4117,7 +4148,11 @@ function CliApp() {
 
       // Hot-swap agent tools: remove old feature tools, add new ones
       const newFeatureTools = newFeatureRegistry.getAllTools();
-      state.agent.setTools([...baseTools, ...newFeatureTools]);
+      // A peer toggle or deferred tool search may have changed this array during registry loading.
+      // Publish from the current live list and retain its identity for tool_search.
+      const liveTools = state.agent.getTools();
+      const currentBaseTools = liveTools.filter(tool => !oldFeatureToolNames.has(tool.toolSchema.name));
+      liveTools.splice(0, liveTools.length, ...currentBaseTools, ...newFeatureTools);
 
       // Rebuild system prompt with new feature module sections
       const newFeaturePrompts = newFeatureRegistry.getSystemPromptSections();

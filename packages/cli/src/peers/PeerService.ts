@@ -326,18 +326,28 @@ export class PeerService {
     } catch (error) {
       response = { ok: false, unknown: true, error: error instanceof Error ? error.message : String(error) };
     }
-    await this.exclusive(async () => {
+    return this.exclusive(async () => {
       this.remoteRequests--;
+      if (stored.removed) {
+        await this.persist();
+        return failure('Sent message was deleted locally');
+      }
+      const localError = stored.receipt.error;
       if (response.ok && response.receipt && receiptMatches(response.receipt, stored.receipt))
         stored.receipt = { ...stored.receipt, ...response.receipt };
       else {
         stored.receipt.status = !response.ok && !response.unknown ? 'rejected' : 'unknown';
         stored.receipt.error = truncateUtf8(response.ok ? 'Invalid peer receipt' : response.error, 1024);
       }
+      if (stored.archived) {
+        delete stored.receipt.text;
+        delete stored.receipt.result;
+        stored.receipt.error = localError;
+      }
       stored.updatedAt = this.now();
       await this.persist();
+      return response.ok ? { ok: true as const, receipt: { ...stored.receipt } } : response;
     });
-    return response.ok ? { ok: true, receipt: { ...stored.receipt } } : response;
   }
 
   async reply(
@@ -543,15 +553,29 @@ export class PeerService {
     } catch (error) {
       response = { ok: false, error: error instanceof Error ? error.message : String(error), unknown: true };
     }
-    await this.exclusive(async () => {
+    return this.exclusive(async () => {
       this.remoteRequests--;
-      if (response.ok && response.receipt && receiptMatches(response.receipt, stored.receipt)) {
+      if (stored.removed) {
+        await this.persist();
+        return failure('Sent message was deleted locally');
+      }
+      if (response.ok) {
+        if (!response.receipt || !receiptMatches(response.receipt, stored.receipt)) {
+          await this.persist();
+          return { ok: false as const, unknown: true, error: 'Invalid peer receipt' };
+        }
+        const localError = stored.receipt.error;
         stored.receipt = { ...response.receipt, text: stored.receipt.text };
+        if (stored.archived) {
+          delete stored.receipt.text;
+          delete stored.receipt.result;
+          stored.receipt.error = localError;
+        }
         stored.updatedAt = this.now();
       }
       await this.persist();
+      return response.ok ? { ok: true as const, receipt: remoteReceipt(stored.receipt) } : response;
     });
-    return response;
   }
 
   private async handle(sender: PeerIdentity, request: PeerRequest): Promise<PeerResponse> {
@@ -935,7 +959,13 @@ function fingerprint(sender: PeerIdentity, message: PeerMessage): string {
 
 function receiptMatches(actual: PeerReceipt, expected: PeerReceipt): boolean {
   return (
-    actual.id === expected.id && actual.senderId === expected.senderId && actual.recipientId === expected.recipientId
+    actual.id === expected.id &&
+    actual.senderId === expected.senderId &&
+    actual.recipientId === expected.recipientId &&
+    actual.createdAt === expected.createdAt &&
+    actual.expiresAt === expected.expiresAt &&
+    actual.hops === expected.hops &&
+    actual.replyTo === expected.replyTo
   );
 }
 
