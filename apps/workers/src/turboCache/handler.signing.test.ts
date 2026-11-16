@@ -3,7 +3,6 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 vi.mock('sst', () => ({
   Resource: {
-    turboCacheBucket: { name: 'fixture-cache' },
     TURBO_CACHE_TOKEN: { value: 'fixture-write-token' },
     TURBO_CACHE_READ_TOKEN: { value: 'fixture-read-token' },
   },
@@ -16,6 +15,7 @@ afterEach(() => {
 
 describe('cache upload URL signing', () => {
   it('does not bind a future artifact upload to the checksum of an empty body', async () => {
+    vi.stubEnv('TURBO_CACHE_BUCKET', 'fixture-cache');
     vi.stubEnv('AWS_REGION', 'us-east-2');
     vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access-key');
     vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret-key');

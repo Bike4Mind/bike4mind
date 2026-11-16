@@ -32,8 +32,21 @@ describe('Turborepo cache secret scope', () => {
     const functionStart = source.indexOf("new sst.aws.Function('TurboCacheHandler'");
     expect(functionStart).toBeGreaterThan(-1);
     const declaration = source.slice(functionStart, source.indexOf('\n      })', functionStart));
-    expect(declaration).toMatch(/link: \[turboCacheBucket, turboCacheWriteToken, turboCacheReadToken\]/);
+    expect(declaration).toMatch(/link: \[turboCacheWriteToken, turboCacheReadToken\]/);
     expect(declaration).toMatch(/concurrency: \{ reserved: \d+ \}/);
     expect(source).not.toMatch(/from '\.\/secrets'/);
+  });
+
+  it('grants the cache handler object read/write and ListBucket only, not the s3:* a bucket link brings', () => {
+    const source = read('infra/turborepoCache.ts');
+    const functionStart = source.indexOf("new sst.aws.Function('TurboCacheHandler'");
+    const declaration = source.slice(functionStart, source.indexOf('\n      })', functionStart));
+    const link = declaration.match(/link: \[([^\]]*)\]/)?.[1] ?? '';
+    expect(link).not.toContain('turboCacheBucket');
+    expect(declaration).toContain('environment: { TURBO_CACHE_BUCKET: turboCacheBucket.name }');
+    const actions = [...declaration.matchAll(/actions: \[([^\]]*)\]/g)].map(match => match[1]);
+    expect(actions).toEqual(["'s3:GetObject', 's3:PutObject'", "'s3:ListBucket'"]);
+    expect(declaration).toContain('resources: [$interpolate`${turboCacheBucket.arn}/*`]');
+    expect(declaration).toContain('resources: [turboCacheBucket.arn]');
   });
 });

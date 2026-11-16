@@ -47,7 +47,15 @@ const turboCacheFunction =
         // The Function URL is public (bearer auth runs in the handler), so cap it: unauthenticated
         // traffic must not draw down the account concurrency the app's Lambdas share.
         concurrency: { reserved: 20 },
-        link: [turboCacheBucket, turboCacheWriteToken, turboCacheReadToken],
+        // The bucket is passed by name, not linked: an SST bucket link grants `s3:*`, including
+        // delete and bucket-policy actions. The handler only reads, writes and presigns objects.
+        // ListBucket keeps a HeadObject miss a 404; without it S3 answers 403.
+        link: [turboCacheWriteToken, turboCacheReadToken],
+        environment: { TURBO_CACHE_BUCKET: turboCacheBucket.name },
+        permissions: [
+          { actions: ['s3:GetObject', 's3:PutObject'], resources: [$interpolate`${turboCacheBucket.arn}/*`] },
+          { actions: ['s3:ListBucket'], resources: [turboCacheBucket.arn] },
+        ],
         url: { cors: false },
       })
     : undefined;

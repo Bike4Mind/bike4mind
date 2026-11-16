@@ -12,7 +12,9 @@ const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
 const TEAM_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 function bucketName(): string {
-  return (Resource as unknown as Record<string, { name: string }>).turboCacheBucket.name;
+  const name = process.env.TURBO_CACHE_BUCKET;
+  if (!name) throw new Error('TURBO_CACHE_BUCKET is not set');
+  return name;
 }
 
 function artifactKey(hash: string, team?: string): string {

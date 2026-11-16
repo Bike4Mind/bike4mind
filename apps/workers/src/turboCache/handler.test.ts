@@ -37,7 +37,6 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 
 vi.mock('sst', () => ({
   Resource: {
-    turboCacheBucket: { name: 'test-turbo-cache-bucket' },
     TURBO_CACHE_TOKEN: { value: 'test-token-abc123' },
     TURBO_CACHE_READ_TOKEN: { value: 'read-token-abc123' },
   },
@@ -76,6 +75,7 @@ describe('turboCache handler', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.stubEnv('TURBO_CACHE_BUCKET', 'test-turbo-cache-bucket');
     (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value = 'test-token-abc123';
     (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_READ_TOKEN.value = 'read-token-abc123';
     handler = (await import('./handler')).handler;
@@ -369,6 +369,14 @@ describe('turboCache handler', () => {
     (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_READ_TOKEN.value = 'test-token-abc123';
     const result = await handler(makeEvent({ method: 'PUT', path: '/v8/artifacts/abc123' }));
     expect(result.statusCode).toBe(403);
+  });
+
+  it('fails rather than guessing a bucket when TURBO_CACHE_BUCKET is unset', async () => {
+    vi.stubEnv('TURBO_CACHE_BUCKET', '');
+    await expect(handler(makeEvent({ method: 'HEAD', path: '/v8/artifacts/abc123' }))).rejects.toThrow(
+      'TURBO_CACHE_BUCKET is not set'
+    );
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it.each(['GET', 'HEAD'])('allows read-only %s hits', async method => {
