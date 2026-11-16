@@ -49,8 +49,8 @@ type OrganizationField = keyof IOrganizationDocument;
 
 /**
  * What a plain member receives. The client computes role and membership checks from `userId`,
- * `adminUserIds`, `billingManagerUserIds` and `users`, so those stay; the rest backs the Overview, Members tab,
- * account switcher and the member's own budget notice.
+ * `adminUserIds`, `billingManagerUserIds` and `users`, so those stay; the rest backs the Overview,
+ * Members tab, account switcher and the member's own budget notice.
  */
 export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
   'id',
