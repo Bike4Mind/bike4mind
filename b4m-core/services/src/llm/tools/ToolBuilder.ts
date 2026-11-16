@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
-  ForbiddenError,
+  AiAccessRefusedError,
   IChatHistoryItemDocument,
   IMessage,
   IUserDocument,
@@ -543,7 +543,8 @@ export interface BuildToolPromptArgs {
   deferGuidanceFor?: ReadonlySet<string>;
 }
 
-// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
+// The paid media tools: onToolStart re-checks account standing for these, then records a gate
+// estimate (gateImageCredits, gateAudioCredits).
 const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
 // Reuse one async context store for the process; each tool invocation gets a unique token.
 const gatedToolInvocation = new AsyncLocalStorage<symbol>();
@@ -648,7 +649,7 @@ export class ToolBuilder {
   /**
    * Re-reads the user before a paid media tool call so a suspension, ban or other AI-access
    * block applied mid-turn refuses the call; the request-time `deps.user` snapshot cannot see
-   * it. Throws ForbiddenError on a denial. Exposed for unit-testing.
+   * it. Throws AiAccessRefusedError on a denial, which ends the turn. Exposed for unit-testing.
    */
   async assertToolAccountAllowed(toolName: string): Promise<void> {
     let denial: string | null;
@@ -662,7 +663,7 @@ export class ToolBuilder {
     }
     if (denial) {
       this.deps.logger.warn(`[toolAccountCheck] refused ${toolName} for user ${this.deps.user.id}: ${denial}`);
-      throw new ForbiddenError(denial);
+      throw new AiAccessRefusedError(denial);
     }
   }
 

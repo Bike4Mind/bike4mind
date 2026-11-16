@@ -248,6 +248,12 @@ export class ForbiddenError extends HTTPError {
   }
 }
 
+/**
+ * A 403 raised by a tool when the account lost AI access mid-turn. Terminal for the tool loop
+ * (`isTerminalToolError`, `@bike4mind/llm-adapters`): it ends the turn instead of going back to the model.
+ */
+export class AiAccessRefusedError extends ForbiddenError {}
+
 /** 405: the route exists but does not serve this HTTP method. Set an `Allow` header before throwing. */
 export class MethodNotAllowedError extends HTTPError {
   constructor(

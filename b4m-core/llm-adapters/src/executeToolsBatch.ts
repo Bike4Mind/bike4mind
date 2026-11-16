@@ -1,4 +1,10 @@
-import { PermissionDeniedError, getQuestErrorCode, visibleReplyText, isExpectedToolError } from '@bike4mind/common';
+import {
+  AiAccessRefusedError,
+  PermissionDeniedError,
+  getQuestErrorCode,
+  visibleReplyText,
+  isExpectedToolError,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
@@ -8,12 +14,17 @@ export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unkno
 
 /**
  * A tool failure that must end the turn rather than be fed back to the model as a
- * recoverable observation: a declined tool (PermissionDeniedError) or an out-of-credits
- * error (tagged via `getQuestErrorCode`), neither of which any retry can satisfy.
+ * recoverable observation: a declined tool (PermissionDeniedError), an out-of-credits
+ * error (tagged via `getQuestErrorCode`) or an account that lost AI access mid-turn
+ * (AiAccessRefusedError), none of which any retry can satisfy.
  * Also exempts these from the services tool failure guard (toolFailureGuard.ts).
  */
 export function isTerminalToolError(error: unknown): boolean {
-  return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+  return (
+    error instanceof PermissionDeniedError ||
+    error instanceof AiAccessRefusedError ||
+    getQuestErrorCode(error) !== undefined
+  );
 }
 
 /**

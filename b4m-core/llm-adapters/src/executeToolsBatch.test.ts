@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PermissionDeniedError, insufficientCreditsError, ExpectedToolError } from '@bike4mind/common';
+import {
+  AiAccessRefusedError,
+  ExpectedToolError,
+  ForbiddenError,
+  PermissionDeniedError,
+  insufficientCreditsError,
+} from '@bike4mind/common';
 import {
   executeToolsBatch,
   DEFAULT_MAX_PARALLEL_TOOLS,
@@ -194,6 +200,34 @@ describe('executeToolsBatch', () => {
       const task = () => Promise.reject(insufficientCreditsError('No credits left.'));
 
       await expect(executeToolsBatch([task], { parallel: true })).rejects.toThrow('No credits left.');
+    });
+  });
+
+  describe('terminal account refusals', () => {
+    it('throws the refusal before returning any results (parallel)', async () => {
+      const tasks = [
+        delayedTask('ok', 5),
+        failingTask(new AiAccessRefusedError('Your account is suspended.'), 10),
+        delayedTask('also-ok', 15),
+      ];
+
+      await expect(executeToolsBatch(tasks, { parallel: true })).rejects.toThrow('Your account is suspended.');
+    });
+
+    it('breaks the sequential loop on a refusal so later tools do not run', async () => {
+      const taskC = vi.fn(async () => 'C-result');
+      const tasks = [async () => 'A-result' as string, failingTask(new AiAccessRefusedError('Banned.')), taskC];
+
+      await expect(executeToolsBatch(tasks, { parallel: false })).rejects.toThrow('Banned.');
+      expect(taskC).not.toHaveBeenCalled();
+    });
+
+    it('keeps an ordinary 403 recoverable', async () => {
+      const outcomes = await executeToolsBatch([failingTask(new ForbiddenError('No access to that notebook.'))], {
+        parallel: false,
+      });
+
+      expect(outcomes[0]).toMatchObject({ ok: false });
     });
   });
 

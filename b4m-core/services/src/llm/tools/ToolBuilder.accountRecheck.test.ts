@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ImageModels } from '@bike4mind/common';
-import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { isTerminalToolError, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import {
   ACCOUNT_BANNED_MESSAGE,
@@ -47,12 +47,11 @@ const { imageGenerationTool } = await import('./implementation/imageGeneration')
 
 const build = (findById: ReturnType<typeof vi.fn>) => {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
-  const toolCreditsMap = new Map<string, number[]>();
   const deps = {
     user: { id: 'u1', currentCredits: 1_000_000 },
     logger,
     db: { users: { findById }, quests: { addGenerationJobs: vi.fn() } },
-    toolCreditsMap,
+    toolCreditsMap: new Map<string, number[]>(),
     toolCreditModels: new Set(),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     extraContextMessages: [],
@@ -69,7 +68,7 @@ const build = (findById: ReturnType<typeof vi.fn>) => {
     organization: null,
   } as never);
   if (!captured.callbacks) throw new Error('buildSharedTools was not called');
-  return { onToolStart: captured.callbacks.onToolStart, gateImage, gateAudio, toolCreditsMap, logger };
+  return { onToolStart: captured.callbacks.onToolStart, gateImage, gateAudio, logger };
 };
 
 const MEDIA_TOOLS = ['image_generation', 'edit_image', 'audio_generation'] as const;
@@ -89,14 +88,14 @@ describe('ToolBuilder onToolStart account re-check', () => {
   describe.each(MEDIA_TOOLS)('%s', toolName => {
     it.each(BLOCKED_USERS)('refuses a %s user with 403 before the credit gate', async (_label, fresh, message) => {
       expect(aiAccessDeniedMessage(fresh)).toBe(message);
-      const { onToolStart, gateImage, gateAudio, toolCreditsMap } = build(vi.fn().mockResolvedValue(fresh));
+      const { onToolStart, gateImage, gateAudio } = build(vi.fn().mockResolvedValue(fresh));
 
       const err = await onToolStart(toolName, {}).catch((e: unknown) => e);
 
       expect(err).toMatchObject({ name: 'ForbiddenError', statusCode: 403, message });
       expect(gateImage).not.toHaveBeenCalled();
       expect(gateAudio).not.toHaveBeenCalled();
-      expect(toolCreditsMap.size).toBe(0);
+      expect(isTerminalToolError(err)).toBe(true);
     });
 
     it('lets an unblocked user through to the credit gate', async () => {
@@ -159,7 +158,9 @@ describe('ToolBuilder onToolStart account re-check', () => {
       size: '1024x1024',
     });
 
-    await expect(toolFn({ prompt: 'a red bike' })).rejects.toMatchObject({ statusCode: 403 });
+    const err = await toolFn({ prompt: 'a red bike' }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 403 });
+    expect(isTerminalToolError(err)).toBe(true);
 
     expect(mockOpenAIGenerate).not.toHaveBeenCalled();
     expect(gateImage).not.toHaveBeenCalled();
