@@ -54,6 +54,7 @@ vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () =
   default: () => <input aria-label="Unsaved settings draft" defaultValue="original" />,
 }));
 vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgModelPolicySection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
