@@ -102,6 +102,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['organizations/[id]/api-keys/options.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/custom-mcp/connections.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/custom-mcp/policy.ts', ORG_MANAGER_REASON],
+  ['organizations/[id]/model-policy.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report.ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report/[feedbackId].ts', ORG_MANAGER_REASON],
   ['organizations/[id]/feedback-report/items.ts', ORG_MANAGER_REASON],
