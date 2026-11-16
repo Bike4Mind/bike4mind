@@ -23,6 +23,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { listOf, readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import { musicJob, musicOutput } from '@client/app/hooks/data/__test__/musicGenerationFixtures';
+import { chatImageJobKeys, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
 import { studioImageJobKeys, type StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
@@ -364,5 +365,31 @@ describe('GenerationUpdatesListener Studio image jobs', () => {
     renderListener();
     await send(frame({ id: 'img-from-elsewhere', kind: 'image', state: 'pending' }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+  });
+});
+
+describe('GenerationUpdatesListener chat image jobs', () => {
+  const chatJob = (state: ChatImageJob['state']): ChatImageJob =>
+    ({ id: 'img-1', object: 'image_generation', state }) as ChatImageJob;
+  const cachedState = () => queryClient.getQueryData<ChatImageJob>(chatImageJobKeys.detail('img-1'))?.state;
+
+  it('patches a cached card without stepping a live state back', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-1'), chatJob('storing'));
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState()).toBe('storing');
+  });
+
+  it('refetches a cached card when its job finishes', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-1'), chatJob('running'));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded' }));
+    expect(cachedState()).toBe('succeeded');
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: chatImageJobKeys.detail('img-1'),
+      exact: true,
+      refetchType: 'all',
+    });
   });
 });

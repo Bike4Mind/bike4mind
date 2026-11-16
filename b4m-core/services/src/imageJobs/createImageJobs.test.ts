@@ -103,7 +103,12 @@ const validRequest = { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt:
 const run = (
   deps: CreateImageJobsDeps,
   request: unknown,
-  extra: { count?: number; idempotencyKey?: string; delivery?: CreateImageJobsInput['delivery'] } = {}
+  extra: {
+    count?: number;
+    idempotencyKey?: string;
+    delivery?: CreateImageJobsInput['delivery'];
+    questId?: string;
+  } = {}
 ) => createImageJobs({ user, request, count: extra.count ?? 1, source: 'api', ...extra }, deps);
 
 describe('createImageJobs', () => {
@@ -325,6 +330,20 @@ describe('createImageJobs', () => {
       const result = await run(deps, validRequest, { count: 2 });
       if (!result.ok) throw new Error(`refused: ${result.code}`);
       for (const job of result.jobs) expect(job).not.toHaveProperty('delivery');
+    });
+
+    it('stamps the chat turn on every job of the batch', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest, { count: 2, questId: 'q-1' });
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      for (const job of result.jobs) expect(job.questId).toBe('q-1');
+    });
+
+    it('stores no questId when the batch was not started from a chat turn', async () => {
+      const { deps } = makeDeps();
+      const result = await run(deps, validRequest);
+      if (!result.ok) throw new Error(`refused: ${result.code}`);
+      expect(result.jobs[0]).not.toHaveProperty('questId');
     });
 
     it('records the batch size on every job so the group completes only when all members are in', async () => {

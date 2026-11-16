@@ -685,6 +685,11 @@ export async function fetchAndProcessPreviousMessages(
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
       /**
+       * Image jobs recent turns started (chat's image tools run on the job engine), newest first. Only ids: a job's
+       * output file is known once it settles, so ChatCompletionProcess resolves them owner-scoped at prompt time.
+       */
+      recentImageJobs?: { jobId: string; prompt: string }[];
+      /**
        * Names of tools actually invoked across the returned window, read straight off each
        * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history. Priority
        * 1 (`structuredReplies`) still never fires (nothing writes that field); Priority 2 now does
@@ -959,6 +964,18 @@ export async function fetchAndProcessPreviousMessages(
     }
   }
 
+  const recentImageJobs: { jobId: string; prompt: string }[] = [];
+  for (let i = chatHistoryItems.length - 1; i >= 0 && recentImageJobs.length < MAX_RECENT_GENERATED_IMAGES; i--) {
+    const item = chatHistoryItems[i];
+    const imageJobIds = (item.generationJobs ?? []).filter(ref => ref.kind === 'image').map(ref => ref.id);
+    if (imageJobIds.length === 0) continue;
+    const prompt = (item.prompt ?? '').slice(0, RECENT_IMAGE_PROMPT_PREVIEW_CHARS);
+    for (const jobId of imageJobIds) {
+      if (recentImageJobs.length >= MAX_RECENT_GENERATED_IMAGES) break;
+      recentImageJobs.push({ jobId, prompt });
+    }
+  }
+
   // Real tool-usage signal for this window - see the field's own doc comment above for why the
   // reconstructed message history cannot answer "was this tool used earlier in the conversation".
   const priorToolNames = chatHistoryItems
@@ -975,6 +992,7 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      recentImageJobs,
       priorToolNames,
       toolTurns,
     },

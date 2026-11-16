@@ -245,6 +245,7 @@ async function persistBatch(
           ...owner,
           requestedBy: input.user.id,
           ...(input.apiKeyId !== undefined && { apiKeyId: input.apiKeyId }),
+          ...(input.questId !== undefined && { questId: input.questId }),
           source: input.source,
           ...(input.delivery && { delivery: input.delivery }),
           state: 'pending',

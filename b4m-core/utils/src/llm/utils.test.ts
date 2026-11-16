@@ -1916,6 +1916,46 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('recentImageJobs', () => {
+      it('collects image job ids newest turn first with their prompt, skipping other kinds', async () => {
+        const items = [
+          makeItem(4, { generationJobs: [{ id: 'j-current', kind: 'image' }] }),
+          makeItem(3, {
+            generationJobs: [
+              { id: 'v-1', kind: 'video' },
+              { id: 'j-3', kind: 'image' },
+            ],
+          }),
+          makeItem(2, {
+            generationJobs: [
+              { id: 'j-2a', kind: 'image' },
+              { id: 'j-2b', kind: 'image' },
+            ],
+          }),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toEqual([
+          { jobId: 'j-3', prompt: 'prompt 3' },
+          { jobId: 'j-2a', prompt: 'prompt 2' },
+          { jobId: 'j-2b', prompt: 'prompt 2' },
+        ]);
+      });
+
+      it('caps the list at 6 jobs', async () => {
+        const generationJobs = Array.from({ length: 8 }, (_, i) => ({ id: `j${i}`, kind: 'image' as const }));
+        const items = [makeItem(3), makeItem(2, { generationJobs }), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.recentImageJobs).toHaveLength(6);
+      });
+    });
+
     describe('Research Mode turns', () => {
       // Research Mode stores its answers in researchModeResults and leaves replies empty.
       const makeResearchItem = (n: number, researchModeResults: unknown[]) =>

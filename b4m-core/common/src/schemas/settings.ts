@@ -823,6 +823,9 @@ export const SettingKeySchema = z.enum([
   'musicGeneration',
   'agentMusicTracksPerRun',
 
+  // IMAGE GENERATION
+  'agentImagesPerRun',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -895,6 +898,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
     // to expose.
+    // Start capped image jobs when the run gets an image job config (agentImagesPerRun).
     'image_generation',
     'edit_image',
     // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
@@ -8513,6 +8517,19 @@ export const settingsMap = {
     category: 'AI',
     order: 148,
     // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  agentImagesPerRun: makeNumberSetting({
+    key: 'agentImagesPerRun',
+    name: 'Agent Images Per Run',
+    defaultValue: 12,
+    min: 1,
+    int: true,
+    description:
+      'Most images image_generation and edit_image may start as jobs in one agent-mode run, counted across the run and all of its subagents. Each image still holds and settles its own credits.',
+    category: 'AI',
+    order: 149,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.imageToolConfig.ts.
     scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({

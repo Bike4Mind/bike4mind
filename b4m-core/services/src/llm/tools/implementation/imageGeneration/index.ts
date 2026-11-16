@@ -20,6 +20,7 @@ import {
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
+  type OpenAIImageQuality,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -46,6 +47,23 @@ import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
+import { IMAGE_JOB_BATCH_MAX } from '../../../../imageJobs/types';
+import {
+  buildGenerateJobRequest,
+  clampImageCount,
+  createImageJobsForTool,
+  imageSelectionOf,
+  isImageJobToolConfig,
+  reportImageJobs,
+  type ImageToolConfig,
+} from './imageJobTool';
+
+export {
+  isImageJobToolConfig,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './imageJobTool';
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -177,6 +195,35 @@ function expectedFailureToolResult(error: unknown, logMessage: string): string |
   return `Error: ${error.message}`;
 }
 
+type GenerationToolArgs = {
+  prompt: string;
+  n?: number | null;
+  size?: string | null;
+  quality?: OpenAIImageQuality | null;
+  background?: OpenAIImageBackground | null;
+  output_format?: ImageOutputFormat | null;
+};
+
+// Billing is each job's own credit hold, so this path never calls context.onStart/onFinish.
+async function startGenerationJobs(
+  context: Omit<ToolContext, 'config'>,
+  config: ImageToolConfig,
+  selection: GenerateImageToolCall,
+  parameters: unknown
+): Promise<string> {
+  const args = parameters as GenerationToolArgs;
+  const request = buildGenerateJobRequest(selection, args.prompt, {
+    size: args.size,
+    quality: args.quality,
+    background: args.background,
+    outputFormat: args.output_format,
+  });
+  const { count, note } = clampImageCount(args.n ?? selection.n);
+  const result = await createImageJobsForTool(context, config, 'image_generation', request, count);
+  if (typeof result === 'string') return result;
+  return reportImageJobs(context, config, 'Image generation', result, note ? [note] : []);
+}
+
 export const imageGenerationTool: ToolDefinition = {
   name: 'image_generation',
   implementation: (context, config: unknown) => ({
@@ -184,7 +231,7 @@ export const imageGenerationTool: ToolDefinition = {
       // Get imageConfig from config (passed from client via imageConfig).
       // When no imageConfig is pre-set, signal via pendingAction so the caller
       // can handle model selection (e.g., show a picker UI).
-      const imageConfig = config as GenerateImageToolCall | undefined;
+      const imageConfig = imageSelectionOf(config);
       if (!imageConfig) {
         const { prompt } = val as { prompt?: string };
         await context.statusUpdate({
@@ -196,6 +243,7 @@ export const imageGenerationTool: ToolDefinition = {
         });
         return 'Image model selection required. A model picker has been presented to the user.';
       }
+      if (isImageJobToolConfig(config)) return startGenerationJobs(context, config, imageConfig, val);
 
       // Extract tool call arguments (LLM can still override via tool call)
       const {
@@ -500,13 +548,15 @@ export const imageGenerationTool: ToolDefinition = {
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
             // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
-            enum: isGPTImage25Model((config as GenerateImageToolCall | undefined)?.model)
+            enum: isGPTImage25Model(imageSelectionOf(config)?.model)
               ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
               : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },
           n: {
             type: 'number',
-            description: 'Number of images to generate',
+            description: isImageJobToolConfig(config)
+              ? `Number of images to generate (1 to ${IMAGE_JOB_BATCH_MAX})`
+              : 'Number of images to generate',
           },
           safety_tolerance: {
             type: 'number',

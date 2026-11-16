@@ -234,6 +234,7 @@ import {
 import { capAgentRoundOutput, capsRoundOutput, outOfCreditsOutcome } from './agentExecutor.roundOutputCap';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
+import { buildAgentImageToolConfig, getAgentImageToolConfigDeps } from './agentExecutor.imageToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
@@ -1891,11 +1892,7 @@ async function runExecution(
           executionId,
           childExecutionId,
           error:
-            accountDenial !== null
-              ? 'account_blocked'
-              : isTimeout
-                ? 'Subagent timed out'
-                : 'Subagent execution failed',
+            accountDenial !== null ? 'account_blocked' : isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
           isTimeout: timedOut,
           partialAnswer: timedOut ? partialResult?.finalAnswer : undefined,
         });
@@ -2353,6 +2350,17 @@ async function runExecution(
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      imageJobConfig: await buildAgentImageToolConfig(
+        {
+          userId: execution.userId,
+          organizationId: execution.organizationId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          selection: execution.imageConfig,
+          toolEnabled: profileEnabledTools.includes('image_generation') || profileEnabledTools.includes('edit_image'),
+        },
+        getAgentImageToolConfigDeps(logger)
+      ),
       videoConfig: await buildAgentVideoToolConfig(
         {
           userId: execution.userId,
@@ -4738,7 +4746,7 @@ async function processSubagentDispatch(
       apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
-      // No videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
+      // No imageJobConfig, videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
       // below), and the per-run caps live in agentExecutor.generationJobCap.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });

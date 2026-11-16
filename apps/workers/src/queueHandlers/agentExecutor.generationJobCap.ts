@@ -1,6 +1,6 @@
 /**
  * The per-run cap shared by the agent-mode generation tools (agentExecutor.videoToolConfig.ts,
- * agentExecutor.musicToolConfig.ts). One run can fan out across in-process subagents and many
+ * agentExecutor.musicToolConfig.ts, agentExecutor.imageToolConfig.ts). One run can fan out across in-process subagents and many
  * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
  * tool) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
  */
@@ -19,7 +19,7 @@ export type AgentRunLimitCaller = { userId: string; organizationId?: string };
 
 type CreateJobResult = { ok: true; created: boolean } | { ok: false };
 
-type LimitJobsPerRunOptions<TResult> = {
+type LimitJobsPerRunOptions<TInput, TResult> = {
   questId: string;
   limit: number;
   slots: AgentGenerationSlots;
@@ -30,25 +30,26 @@ type LimitJobsPerRunOptions<TResult> = {
   releaseNoun: string;
   /** The tool result the model sees once the cap is reached. */
   refusal: TResult;
+  /** Slots one call takes, for a call that starts a batch (one image job per slot). Defaults to 1. */
+  slotsFor?: (input: TInput) => number;
 };
 
 const startedNewJob = (result: CreateJobResult): boolean => result.ok && result.created;
 
 /**
- * Wraps `createJob` so a call past the cap returns `refusal` instead of starting a job. A slot is
- * given back only when createJob RETURNED without starting a job: a refusal, or an idempotent replay
- * of a job this run already started (`created: false`). A throw keeps the slot, because createJob can
- * throw after the job is persisted (a failed enqueue whose cleanup also failed), and so can a Lambda
- * killed mid-call: both err toward one job fewer, never one too many.
+ * Wraps `createJob` so a call past the cap returns `refusal` instead of starting a job. A call takes all of its
+ * slots or none: a batch that does not fit gives back what it claimed and starts nothing. Slots are given back only
+ * when createJob RETURNED without starting a job: a refusal, or an idempotent replay of a job this run already
+ * started (`created: false`). A throw keeps them, because createJob can throw after the job is persisted (a failed
+ * enqueue whose cleanup also failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one
+ * too many.
  */
 export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
   createJob: (input: TInput) => Promise<TResult>,
-  { questId, limit, slots, logger, logTag, releaseNoun, refusal }: LimitJobsPerRunOptions<TResult>
+  { questId, limit, slots, logger, logTag, releaseNoun, refusal, slotsFor }: LimitJobsPerRunOptions<TInput, TResult>
 ): (input: TInput) => Promise<TResult> {
-  return async input => {
-    if (!(await slots.claim(questId, limit))) return refusal;
-    const result = await createJob(input);
-    if (!startedNewJob(result)) {
+  const release = async (count: number) => {
+    for (let index = 0; index < count; index++) {
       await slots.release(questId).catch(error =>
         logger.warn(`${logTag} failed to release an unused ${releaseNoun} slot; the run keeps one fewer`, {
           questId,
@@ -56,6 +57,17 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
         })
       );
     }
+  };
+  return async input => {
+    const wanted = slotsFor?.(input) ?? 1;
+    let claimed = 0;
+    while (claimed < wanted && (await slots.claim(questId, limit))) claimed++;
+    if (claimed < wanted) {
+      await release(claimed);
+      return refusal;
+    }
+    const result = await createJob(input);
+    if (!startedNewJob(result)) await release(claimed);
     return result;
   };
 }
@@ -72,7 +84,7 @@ export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerat
  * lift an org's 0 back to the platform value.
  */
 export const resolveAgentRunLimit =
-  (key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun', logger: Logger) =>
+  (key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun' | 'agentImagesPerRun', logger: Logger) =>
   async (caller: AgentRunLimitCaller): Promise<number> => {
     const { value } = await scopedSettingsService.resolveScopedSetting(
       key,

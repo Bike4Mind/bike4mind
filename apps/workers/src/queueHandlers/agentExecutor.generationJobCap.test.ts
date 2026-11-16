@@ -35,12 +35,14 @@ vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getCreateMusicJobDeps: vi.fn(),
   getVideoJobDeps: vi.fn(),
   getCreateVideoJobDeps: vi.fn(),
+  getCreateImageJobsDeps: vi.fn(),
 }));
 vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
 vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
 
 const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
 const { getAgentVideoToolConfigDeps } = await import('./agentExecutor.videoToolConfig');
+const { getAgentImageToolConfigDeps } = await import('./agentExecutor.imageToolConfig');
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 
@@ -70,6 +72,24 @@ describe('production generation deps factories', () => {
 
     expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'video', 2);
     expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'video');
+  });
+
+  it('counts images on the image counter, via the image Quest', async () => {
+    const deps = getAgentImageToolConfigDeps(logger);
+
+    await deps.slots.claim('q-1', 12);
+    await deps.slots.release('q-1');
+
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'image', 12);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'image');
+  });
+
+  it('reads the image setting key for the run org and returns its value', async () => {
+    const deps = getAgentImageToolConfigDeps(logger);
+
+    await expect(deps.resolveImageLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+
+    expect(h.resolveScopedSetting.mock.calls[0]?.[0]).toBe('agentImagesPerRun');
   });
 
   it('reads the music setting key for the run org and returns its value', async () => {

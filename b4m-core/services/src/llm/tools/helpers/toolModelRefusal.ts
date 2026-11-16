@@ -40,6 +40,16 @@ export async function toolModelRefusal(
     await admission.assert(modelId);
     return null;
   } catch (error) {
-    return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + SETTINGS_MODEL_NOTE;
+    return settingsModelRefusalOrRethrow(context, error, modelId, toolName);
   }
+}
+
+/** paidPlanRefusalOrRethrow for a model taken from the user's settings (see SETTINGS_MODEL_NOTE). */
+export function settingsModelRefusalOrRethrow(
+  context: Pick<ToolContext, 'logger'>,
+  error: unknown,
+  modelId: string,
+  toolName: string
+): string {
+  return paidPlanRefusalOrRethrow(context, error, modelId, toolName) + SETTINGS_MODEL_NOTE;
 }

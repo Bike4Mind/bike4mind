@@ -647,6 +647,7 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
+    agentImagesClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -964,6 +965,7 @@ export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
+  image: 'agentImagesClaimed',
 } as const satisfies Record<QuestGenerationJobKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {

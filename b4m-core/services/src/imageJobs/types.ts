@@ -54,6 +54,8 @@ export type ImageJobDeps = {
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
     derivedFrom?: GeneratedAssetLineageEntry[];
+    /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
+    questId?: string;
     signal: AbortSignal;
   }): Promise<SaveGeneratedAssetResult>;
   saveToGeneratedBucket(params: {
@@ -90,6 +92,8 @@ export type CreateImageJobsInput = {
   count: number;
   source: GenerationJobSource;
   apiKeyId?: string;
+  /** The chat turn that started the batch; every job carries it, so its output is linked to that notebook. */
+  questId?: string;
   /** Where the finished batch is posted besides the websocket update; every job in the batch carries it. */
   delivery?: GenerationJobDelivery;
   /** Scopes the whole batch; each job holds `${idempotencyKey}:${index}/${count}`. */

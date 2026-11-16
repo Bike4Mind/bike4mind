@@ -145,6 +145,18 @@ beforeEach(() => {
 });
 
 describe('image job handler through the real engine', () => {
+  it('links a chat-made job output to its quest and bills it to that quest', async () => {
+    const t = setup(vi.fn<Generate>(async () => succeeded));
+    const created = await createImageJobs(
+      { user, request: request(), count: 1, source: 'agent', questId: 'q-1' },
+      t.deps
+    );
+    const job = t.jobOf(created);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ questId: 'q-1' }));
+    expect(vi.mocked(settleCreditHold).mock.calls[0][2]).toMatchObject({ sessionId: 'q-1', questId: 'q-1' });
+  });
+
   it('generates, moderates, saves to Files and settles the hold', async () => {
     const generate = vi.fn<Generate>(async () => succeeded);
     const t = setup(generate);

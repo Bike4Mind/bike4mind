@@ -13,6 +13,10 @@ vi.mock('./MusicJobCard', () => ({
   default: ({ jobId }: { jobId: string }) => <div data-testid="music-job-card-stub">{jobId}</div>,
 }));
 
+vi.mock('./ImageJobCard', () => ({
+  default: ({ jobId }: { jobId: string }) => <div data-testid="image-job-card-stub">{jobId}</div>,
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderJobs = (jobs: readonly GenerationJobRef[] | undefined) =>
   render(
@@ -34,6 +38,20 @@ describe('GeneratedJobs', () => {
       'music-job-card-stub:b',
       'video-job-card-stub:c',
     ]);
+  });
+
+  it('groups consecutive image jobs into one grid and leaves other kinds alone', () => {
+    renderJobs([
+      { id: 'a', kind: 'video' },
+      { id: 'b', kind: 'image' },
+      { id: 'c', kind: 'image' },
+      { id: 'd', kind: 'music' },
+      { id: 'e', kind: 'image' },
+    ]);
+    const list = screen.getByTestId('generated-jobs-list');
+    expect(list.children).toHaveLength(4);
+    const grids = screen.getAllByTestId('generated-jobs-image-grid');
+    expect(grids.map(grid => grid.textContent)).toEqual(['bc', 'e']);
   });
 
   it.each([undefined, []])('renders nothing for %j', jobs => {

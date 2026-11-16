@@ -6,6 +6,7 @@ import {
   type GenerationJobState,
   type IGenerationJobDocument,
   type IGenerationJobDocumentOf,
+  type ImageJobOutput,
   type MusicJobOutput,
   type VideoJobOutput,
 } from '@bike4mind/common';
@@ -17,7 +18,12 @@ import {
   type SignedOutput,
   type StoredOutputRef,
 } from '@bike4mind/server-utils/generations/signedOutput';
-import { MUSIC_JOB_ERROR_COPY, VIDEO_JOB_ERROR_COPY, type GenerationJobErrorCopy } from './generationJobErrorCopy';
+import {
+  IMAGE_JOB_ERROR_COPY,
+  MUSIC_JOB_ERROR_COPY,
+  VIDEO_JOB_ERROR_COPY,
+  type GenerationJobErrorCopy,
+} from './generationJobErrorCopy';
 
 type JobOutput = StoredOutputRef & { contentType: string };
 
@@ -114,6 +120,7 @@ export async function toPublicGenerationJob<
 
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type MusicJob = IGenerationJobDocumentOf<'music'>;
+type ImageJob = IGenerationJobDocumentOf<'image'>;
 
 // Must stay in sync with VideoGenerationSchema (b4m-core/common/src/schemas/videoGenerations.ts), key order included.
 export const VIDEO_GENERATION_PROJECTION = {
@@ -151,4 +158,23 @@ export const MUSIC_GENERATION_PROJECTION = {
     duration_seconds: output.durationSeconds,
     lyrics: output.lyrics ?? null,
   }),
+};
+
+/**
+ * The internal per-id image resource the chat job card reads (GET /api/image-jobs/[id]). Not published yet: the copy
+ * table covers every code, so nothing is folded.
+ */
+export const IMAGE_GENERATION_PROJECTION = {
+  object: 'image_generation' as const,
+  toPublicErrorCode: (code: GenerationJobErrorCode) => code,
+  errorCopy: IMAGE_JOB_ERROR_COPY,
+  requestFields: ({ payload: { request, groupId } }: ImageJob) => ({
+    model: request.model,
+    mode: request.mode,
+    prompt: request.prompt,
+    group_id: groupId ?? null,
+  }),
+  statusFields: () => ({}),
+  outputOf: (job: ImageJob): ImageJobOutput | undefined => job.payload.output,
+  outputFields: () => ({}),
 };

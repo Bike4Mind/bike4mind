@@ -138,6 +138,7 @@ export function createImageJobHandler(deps: ImageJobDeps): GenerationJobHandler<
           request: payload.request,
         },
         derivedFrom: lineageOf(job),
+        questId: job.questId,
         bucketFolder: 'generated-images',
         extension: extensionFromMimeType(contentType) ?? 'bin',
         // A sync submit cannot retry, so a throwing Files save still keeps the image in the bucket.

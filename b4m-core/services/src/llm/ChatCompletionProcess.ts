@@ -132,7 +132,7 @@ import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attach
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { chatReasoningOptionsFor } from './chatReasoningOptions';
 import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
-import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
+import { buildRecentGeneratedImagesNote, type RecentImageJobFile } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
@@ -242,6 +242,7 @@ import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
+import type { ImageToolConfig } from './tools/implementation/imageGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -2158,6 +2159,35 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** The recent-images note's job outputs; a lookup failure only drops them from the note. */
+  private async resolveRecentImageJobFiles({
+    recentImageJobs,
+    resolver,
+    wanted,
+    logger,
+  }: {
+    recentImageJobs: { jobId: string; prompt: string }[] | undefined;
+    resolver:
+      ((input: { jobIds: string[]; userId: string }) => Promise<{ jobId: string; fileId: string }[]>) | undefined;
+    wanted: boolean;
+    logger: Logger;
+  }): Promise<RecentImageJobFile[]> {
+    if (!wanted || !resolver || !recentImageJobs || recentImageJobs.length === 0) return [];
+    try {
+      const files = await resolver({ jobIds: recentImageJobs.map(job => job.jobId), userId: this.user.id });
+      const fileByJob = new Map(files.map(file => [file.jobId, file.fileId]));
+      return recentImageJobs.flatMap(job => {
+        const fileId = fileByJob.get(job.jobId);
+        return fileId ? [{ fileId, prompt: job.prompt }] : [];
+      });
+    } catch (error) {
+      logger.warn('Could not resolve recent image job outputs; the note lists generated keys only', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
   public async process({
     body,
     logger,
@@ -2167,6 +2197,8 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    imageJobsResolver,
+    imageJobFilesResolver,
     abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
@@ -2183,6 +2215,19 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Resolves the image job engine's create step; only invoked when image_generation or edit_image is enabled.
+     * Null (or no resolver) keeps those tools rendering in-process.
+     */
+    imageJobsResolver?: () => Promise<ImageToolConfig['createJobs'] | null>;
+    /**
+     * The output file of each listed image job that the caller requested and that succeeded (any other id is left
+     * out), so the recent-images note can name those files. Without it the note lists generated keys only.
+     */
+    imageJobFilesResolver?: (input: {
+      jobIds: string[];
+      userId: string;
+    }) => Promise<{ jobId: string; fileId: string }[]>;
     /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
      * way the cancel watcher does: process() releases or reconciles its own credit reservation,
@@ -3826,6 +3871,13 @@ export class ChatCompletionProcess {
       const musicToolConfig = enabledTools.includes('music_generation')
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
+      const createImageJobs =
+        enabledTools.includes('image_generation') || enabledTools.includes('edit_image')
+          ? await resolveToolConfigSafely('image_generation', imageJobsResolver, logger)
+          : null;
+      const imageToolConfig: ImageToolConfig | typeof imageConfig = createImageJobs
+        ? { selection: imageConfig, createJobs: createImageJobs }
+        : imageConfig;
 
       const subagentModels = agentStore
         ? shadowSettings
@@ -3857,8 +3909,8 @@ export class ChatCompletionProcess {
             apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
           edit_file: shadowSettings ? { model: runModel } : undefined,
-          image_generation: imageConfig,
-          edit_image: imageConfig,
+          image_generation: imageToolConfig,
+          edit_image: imageToolConfig,
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
@@ -4303,6 +4355,13 @@ export class ChatCompletionProcess {
 
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
+      const recentImageJobFiles = await this.resolveRecentImageJobFiles({
+        recentImageJobs: cacheInfo.recentImageJobs,
+        resolver: imageJobFilesResolver,
+        wanted: (editImageAvailable || videoGenerationAvailable) && session.userId === this.user.id,
+        logger,
+      });
+
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top
@@ -4379,6 +4438,7 @@ export class ChatCompletionProcess {
         // assumption that broke the view registry once navigate_view became auto-added.
         recentImages: buildRecentGeneratedImagesNote({
           images: cacheInfo.recentGeneratedImages,
+          imageJobFiles: recentImageJobFiles,
           editImageAvailable,
           videoGenerationAvailable,
           sessionOwnerId: session.userId,
@@ -5641,7 +5701,7 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
-      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music),
+      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music, image),
       // statusUpdate({ generationJobs }); applyQuestStatusChanges (tools/ToolBuilder.ts) merges both with
       // dedup, so growth means a new file or a new job card.
       const countDeliverables = () => (quest.images?.length ?? 0) + questGenerationJobs(quest).length;
