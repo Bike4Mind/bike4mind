@@ -69,9 +69,12 @@ export type AdminUsersQueryContext = {
   funnelStepUserIds?: string[];
   /** Users the AI advisory flags as abuse; required when the filter sets `aiVerdict`. */
   aiAbuseUserIds?: string[];
+  /** Users in the filter's Analytics acquisition row; required with `acqSource` or `acqUnattributed`. */
+  acquisitionUserIds?: string[];
 };
 
-type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds';
+type ResolvedIdsKey =
+  'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds' | 'acquisitionUserIds';
 
 function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsKey, filterKey: string): Condition {
   const ids = context[key];
@@ -81,7 +84,7 @@ function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsK
 
 /**
  * The `$match` for a filter. Every condition is on a User field, so it also serves `find()` callers.
- * `hasApiKey`, `verdict`, the active window and `funnelStep` match `_id` against ids resolved up front
+ * `hasApiKey`, `verdict`, the active window, `funnelStep` and the acquisition row match `_id` against ids resolved up front
  * rather than a per-user `$lookup`: the lookup cost one subquery per filtered user, and the DocumentDB
  * converter dropped its `status` condition.
  */
@@ -135,6 +138,9 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
   }
   if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
   if (filter.aiVerdict) conditions.push(resolvedIdsCondition(context, 'aiAbuseUserIds', 'aiVerdict'));
+  if (filter.acqSource || filter.acqUnattributed) {
+    conditions.push(resolvedIdsCondition(context, 'acquisitionUserIds', 'acqSource'));
+  }
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

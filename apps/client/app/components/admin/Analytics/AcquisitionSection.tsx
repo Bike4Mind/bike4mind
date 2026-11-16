@@ -41,6 +41,8 @@ type Props = {
   onControlsChange: (patch: Partial<AcquisitionControls>) => void;
   onRetry: () => void;
   onShowDefaultRange?: () => void;
+  /** Opens the Users list for the row's signups, or with `converted` only those who converted. */
+  onSelectRow?: (row: AcquisitionRow, converted: boolean) => void;
 };
 
 const part = (value: string | null) => (value === null || value === ACQUISITION_NONE ? null : value);
@@ -81,7 +83,7 @@ const renewedCell = (row: AcquisitionRow) =>
         row.renewalUnavailable > 0 ? ` (${formatCount(row.renewalUnavailable)} unknown)` : ''
       }`;
 
-const COLUMNS: DataColumn<AcquisitionRow>[] = [
+const columnsOf = (onSelectRow: Props['onSelectRow'], updating: boolean): DataColumn<AcquisitionRow>[] => [
   { id: 'source', label: 'Source / medium / campaign', render: row => <SourceCell row={row} /> },
   { id: 'signups', label: 'Signups', numeric: true, render: row => formatCount(row.signups) },
   {
@@ -132,6 +134,41 @@ const COLUMNS: DataColumn<AcquisitionRow>[] = [
     help: 'Signups whose own organization was paid for inside the window; not part of the rate.',
     render: row => formatCount(row.orgBuyers),
   },
+  ...(onSelectRow
+    ? [
+        {
+          id: 'drill',
+          label: 'Users',
+          render: (row: AcquisitionRow) =>
+            row.kind === 'other' ? null : (
+              <Stack direction="row" gap={0.5}>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  disabled={updating || row.signups === 0}
+                  aria-label={`List the ${formatCount(row.signups)} signups in ${rowLabel(row).title}`}
+                  onClick={() => onSelectRow(row, false)}
+                  data-testid={`acquisition-row-${row.key}-drill-btn`}
+                  sx={{ px: 0.5, minHeight: 0 }}
+                >
+                  Signups
+                </Button>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  disabled={updating || row.converted === 0}
+                  aria-label={`List the ${formatCount(row.converted)} converted signups in ${rowLabel(row).title}`}
+                  onClick={() => onSelectRow(row, true)}
+                  data-testid={`acquisition-row-${row.key}-drill-converted-btn`}
+                  sx={{ px: 0.5, minHeight: 0 }}
+                >
+                  Converted
+                </Button>
+              </Stack>
+            ),
+        } satisfies DataColumn<AcquisitionRow>,
+      ]
+    : []),
 ];
 
 export function AcquisitionSection({
@@ -146,6 +183,7 @@ export function AcquisitionSection({
   onControlsChange,
   onRetry,
   onShowDefaultRange,
+  onSelectRow,
 }: Props) {
   const controlBar = (
     <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap" data-testid="acquisition-section-controls">
@@ -218,7 +256,7 @@ export function AcquisitionSection({
     <Stack gap={1}>
       <DataTable
         rows={ok?.rows ?? []}
-        columns={COLUMNS}
+        columns={columnsOf(onSelectRow, updating)}
         getRowId={row => row.key}
         rowTestId={row => `acquisition-row-${row.key}`}
         label="Signups by acquisition source"

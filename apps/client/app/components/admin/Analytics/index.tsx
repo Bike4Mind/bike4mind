@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type { ActivationFunnel } from '@client/app/utils/activationFunnel';
+import { ACQUISITION_NONE, type AcquisitionQuery, type AcquisitionRow } from '@client/app/utils/acquisitionConversion';
 import { getErrorMessage } from '@client/app/utils/error';
 import type { UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import type {
@@ -253,7 +254,9 @@ const AnalyticsTab = () => {
     if (!data) return;
     setExporting(true);
     try {
-      await downloadAnalyticsExport(data, topAccounts.data);
+      // Another range's placeholder rows must not ride into this range's zip.
+      const acquisition = acquisitionQuery.isPlaceholderData ? undefined : acquisitionQuery.data;
+      await downloadAnalyticsExport(data, topAccounts.data, acquisition);
     } catch {
       toast.error("Couldn't export the analytics. Try again.");
     } finally {
@@ -270,6 +273,33 @@ const AnalyticsTab = () => {
         ...funnel.window,
         funnelStep: step,
         verdict: funnel.signups === 'legit' ? ('legit' as const) : undefined,
+      }),
+    });
+  };
+
+  const openAcquisitionRow = (row: AcquisitionRow, converted: boolean) => {
+    const acquisition = acquisitionQuery.data;
+    if (acquisition?.status !== 'ok' || row.kind === 'other') return;
+    void navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG),
+        ...acquisition.window,
+        acqTouch: acquisition.touch,
+        ...(row.kind === 'unattributed'
+          ? { acqUnattributed: 'true' as const }
+          : {
+              acqSource: row.source ?? undefined,
+              acqMedium: row.medium === ACQUISITION_NONE ? undefined : (row.medium ?? undefined),
+              acqCampaign: row.campaign === ACQUISITION_NONE ? undefined : (row.campaign ?? undefined),
+            }),
+        ...(converted
+          ? {
+              acqConverted: 'true' as const,
+              acqWindow: String(acquisition.conversionWindowDays) as AcquisitionQuery['window'],
+            }
+          : {}),
+        verdict: acquisition.signups === 'legit' ? ('legit' as const) : undefined,
       }),
     });
   };
@@ -501,6 +531,7 @@ const AnalyticsTab = () => {
         onControlsChange={setAcquisitionControls}
         onRetry={() => void acquisitionQuery.refetch()}
         onShowDefaultRange={showDefaultRange}
+        onSelectRow={openAcquisitionRow}
       />
 
       <CohortsSection signups={query.signups} />

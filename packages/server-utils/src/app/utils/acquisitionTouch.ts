@@ -13,6 +13,13 @@ export type AttributedTouch = { key: string; source: string; medium: string; cam
 
 const fold = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '');
 
+/** The cohort key for a touch's parts, folded the same way a stored touch is; absent parts are ACQUISITION_NONE. */
+export function acquisitionKeyOf(parts: { source: string; medium?: string; campaign?: string }): string {
+  return [fold(parts.source), fold(parts.medium) || ACQUISITION_NONE, fold(parts.campaign) || ACQUISITION_NONE].join(
+    '|'
+  );
+}
+
 /**
  * The cohort a signup falls in for `touch`, or null when it has no usable campaign touch. Either touch
  * falls back to the other when it alone is missing, so a signup is attributed under both or neither.
@@ -27,5 +34,5 @@ export function attributedTouch(acquisition: StoredAcquisition, touch: Acquisiti
   if (!source) return null;
   const medium = fold(stored?.medium) || ACQUISITION_NONE;
   const campaign = fold(stored?.campaign) || ACQUISITION_NONE;
-  return { key: `${source}|${medium}|${campaign}`, source, medium, campaign };
+  return { key: acquisitionKeyOf({ source, medium, campaign }), source, medium, campaign };
 }

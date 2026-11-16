@@ -731,7 +731,7 @@ describe('AnalyticsTab', () => {
       resolveTop({ data: topAccounts() });
       await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
       fireEvent.click(screen.getByTestId('analytics-export-btn'));
-      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts()));
+      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts(), expect.anything()));
     });
 
     it('disables Export while a new range loads, so the zip never mixes two ranges', async () => {
@@ -906,6 +906,49 @@ describe('acquisition controls', () => {
     fireEvent.click(screen.getByTestId('analytics-range-28d'));
     await waitFor(() => expect(router.state.location.search.range).toBeUndefined());
     expect(router.state.location.search).toMatchObject({ acquisitionTouch: 'last' });
+  });
+
+  it('drills a converted row to the Users list with the matching acquisition filter', async () => {
+    const metrics = { signups: 3, matureSignups: 3, converted: 1, provisionalConverted: 0, provisional: false };
+    const row = {
+      ...metrics,
+      kind: 'touch',
+      key: 'ads|(none)|spring',
+      source: 'ads',
+      medium: '(none)',
+      campaign: 'spring',
+    };
+    mocks.acquisition.mockResolvedValueOnce({
+      data: {
+        status: 'ok',
+        signups: 'legit',
+        touch: 'last',
+        window: { createdFrom: '2026-05-19T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
+        coverage: { signups: 3, attributed: 3, pct: 100 },
+        conversionWindowDays: 7,
+        followUpDays: 90,
+        renewalBasis: 'subscription-state',
+        totals: row,
+        rows: [row],
+        truncated: false,
+      },
+    } as never);
+    const router = await renderPage('/admin?tab=analytics');
+    fireEvent.click(await screen.findByTestId('acquisition-row-ads|(none)|spring-drill-converted-btn'));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: 'users',
+        createdFrom: '2026-05-19T00:00:00.000Z',
+        createdTo: '2026-06-16T00:00:00.000Z',
+        acqTouch: 'last',
+        acqSource: 'ads',
+        acqCampaign: 'spring',
+        acqConverted: 'true',
+        acqWindow: '7',
+        verdict: 'legit',
+      })
+    );
+    expect(router.state.location.search.acqMedium).toBeUndefined();
   });
 
   it('drops the acquisition controls on a switch to another tab', () => {

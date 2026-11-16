@@ -96,6 +96,20 @@ describe('AcquisitionSection', () => {
     expect(screen.getByTestId('acquisition-section-unattributed-note')).toBeInTheDocument();
   });
 
+  it('drills a row down to its signups or its converted signups, never the other row', () => {
+    const onSelectRow = vi.fn();
+    const ads = touchRow('ads|cpc|spring');
+    renderSection({
+      data: ok([ads, { ...touchRow('other'), kind: 'other', source: null, medium: null, campaign: null }]),
+      onSelectRow,
+    });
+    fireEvent.click(screen.getByTestId('acquisition-row-ads|cpc|spring-drill-btn'));
+    expect(onSelectRow).toHaveBeenLastCalledWith(ads, false);
+    fireEvent.click(screen.getByTestId('acquisition-row-ads|cpc|spring-drill-converted-btn'));
+    expect(onSelectRow).toHaveBeenLastCalledWith(ads, true);
+    expect(screen.queryByTestId('acquisition-row-other-drill-btn')).not.toBeInTheDocument();
+  });
+
   it('reports a control change', () => {
     const { onControlsChange } = renderSection();
     fireEvent.click(screen.getByTestId('acquisition-touch-toggle-last'));

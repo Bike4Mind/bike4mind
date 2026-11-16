@@ -20,6 +20,8 @@ import type {
 import { withSafeOrganization } from '../../utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '../../users/signupAnomaly';
 import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '../../analytics/activationFunnel';
+import { acquisitionCohortUserIds } from '../../analytics/acquisitionConversion';
+import { ACQUISITION_UNATTRIBUTED_KEY, acquisitionKeyOf } from '../../app/utils/acquisitionTouch';
 import { signupVerdictUserIds } from '../../analytics/realSignup';
 import { listAiAbuseAdvisories } from '../aiAdvisory/aiAbuseAdvisories';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
@@ -34,7 +36,7 @@ export const ACTIVE_USERS_MAX = 50_000;
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
 
 /** The created window `verdict` and `funnelStep` classify; the filter schema requires both ends with them. */
-function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep') {
+function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep' | 'acqSource') {
   if (!filter.createdFrom || !filter.createdTo) throw new Error(`${key} needs createdFrom and createdTo`);
   return { start: new Date(filter.createdFrom), end: new Date(filter.createdTo) };
 }
@@ -80,7 +82,12 @@ export async function adminUsersPipeline(
     ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
     : undefined;
   const cohortOptions = { now, deadlineMs: LIST_MAX_TIME_MS };
-  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds] = await Promise.all([
+  const acquisitionCohort = filter.acqUnattributed
+    ? ACQUISITION_UNATTRIBUTED_KEY
+    : filter.acqSource
+      ? acquisitionKeyOf({ source: filter.acqSource, medium: filter.acqMedium, campaign: filter.acqCampaign })
+      : undefined;
+  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds, acquisitionIds] = await Promise.all([
     filter.verdict
       ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
       : undefined,
@@ -93,6 +100,18 @@ export async function adminUsersPipeline(
           advisories.map(advisory => advisory.userId)
         )
       : undefined,
+    acquisitionCohort
+      ? acquisitionCohortUserIds(
+          cohortWindow(filter, 'acqSource'),
+          {
+            touch: filter.acqTouch ?? 'first',
+            key: acquisitionCohort,
+            converted: filter.acqConverted === 'true',
+            windowDays: Number(filter.acqWindow ?? '30'),
+          },
+          { now, maxTimeMS: () => LIST_MAX_TIME_MS }
+        )
+      : undefined,
   ]);
   const match = buildAdminUsersMatch(filter, {
     now,
@@ -103,6 +122,7 @@ export async function adminUsersPipeline(
     activeUserIds: activeIds,
     funnelStepUserIds: funnelIds,
     aiAbuseUserIds,
+    acquisitionUserIds: acquisitionIds,
   });
   // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
   return [{ $match: match }] as unknown as mongoose.PipelineStage[];

@@ -27,6 +27,25 @@ import {
 } from '../usersTabSearch';
 import { PLAN_LABELS, SIGNUP_METHOD_LABELS } from './usersColumns';
 
+const CLEARED_ACQUISITION = {
+  acqTouch: undefined,
+  acqSource: undefined,
+  acqMedium: undefined,
+  acqCampaign: undefined,
+  acqUnattributed: undefined,
+  acqConverted: undefined,
+  acqWindow: undefined,
+} satisfies Partial<UsersListParams>;
+
+// The Analytics acquisition row the list is narrowed to.
+function acquisitionLabel(params: UsersListParams): string {
+  const touch = params.acqTouch === 'last' ? 'last touch' : 'first touch';
+  const row = params.acqUnattributed
+    ? 'Unattributed'
+    : [params.acqSource, params.acqMedium, params.acqCampaign].filter(Boolean).join(' / ');
+  return `${row} (${touch}${params.acqConverted ? `, paid within ${params.acqWindow ?? '30'}d` : ''})`;
+}
+
 const capitalize = (value: string) => value[0].toUpperCase() + value.slice(1);
 
 const SINGLE_FILTERS: { key: Exclude<UsersFilterKey, 'emailDomain'>; label: string; options: FilterChipOption[] }[] = [
@@ -214,7 +233,13 @@ export function UsersToolbar({
             onChange={value => {
               // Verdict and funnel step classify the created window, so they go with it.
               if (value === undefined) {
-                update({ createdFrom: undefined, createdTo: undefined, verdict: undefined, funnelStep: undefined });
+                update({
+                  createdFrom: undefined,
+                  createdTo: undefined,
+                  verdict: undefined,
+                  funnelStep: undefined,
+                  ...CLEARED_ACQUISITION,
+                });
               }
             }}
           />
@@ -246,6 +271,17 @@ export function UsersToolbar({
             options={FUNNEL_STEP_OPTIONS}
             value={params.funnelStep}
             onChange={value => update({ funnelStep: USERS_SEARCH_PARSERS.funnelStep(value) })}
+          />
+        )}
+        {(params.acqSource || params.acqUnattributed) && (
+          <FilterChip
+            id="acquisition"
+            label="Acquisition"
+            options={[{ value: 'row', label: acquisitionLabel(params) }]}
+            value="row"
+            onChange={value => {
+              if (value === undefined) update(CLEARED_ACQUISITION);
+            }}
           />
         )}
         {params.aiVerdict && (

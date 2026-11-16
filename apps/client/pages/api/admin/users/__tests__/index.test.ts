@@ -166,6 +166,23 @@ describe('GET /api/admin/users', () => {
       expect(mockGroups).toHaveBeenCalledWith(expect.objectContaining({ funnelStep: 'paid' }));
     });
 
+    it('forwards an acquisition row and rejects one without a created window', async () => {
+      const row = {
+        ...month,
+        acqTouch: 'last',
+        acqSource: 'ads',
+        acqMedium: 'cpc',
+        acqConverted: 'true',
+        acqWindow: '7',
+      };
+      expect((await call(handler, row))._getStatusCode()).toBe(200);
+      expect(mockList.mock.calls[0][0]).toMatchObject(row);
+      mockList.mockClear();
+      await rejected({ acqUnattributed: 'true' }, /needs both createdFrom and createdTo/);
+      await rejected({ ...month, acqUnattributed: 'true', acqSource: 'ads' }, /excludes acqSource/);
+      expect(mockList).not.toHaveBeenCalled();
+    });
+
     it('rejects a funnel step that is unknown, has no created window or spans too long', async () => {
       await rejected({ ...month, funnelStep: 'bought' }, /signedUp/);
       await rejected({ funnelStep: 'firstAction' }, /needs both createdFrom and createdTo/);

@@ -8,6 +8,9 @@ import { classifyFunnelCohort } from '@bike4mind/server-utils/analytics/activati
 import { acquisitionQuerySchema, ACQUISITION_UNATTRIBUTED_LABEL } from '@client/app/utils/acquisitionConversion';
 import { getAcquisitionConversion } from './acquisitionConversionSummary';
 import { toUserAcquisition } from './funnel';
+import { adminUsersPipeline } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
+import { AdminUsersFilterSchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
+import { ACQUISITION_NONE } from '@client/app/utils/acquisitionConversion';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -228,6 +231,64 @@ describe('getAcquisitionConversion', () => {
     });
     expect(byKey.unattributed).toMatchObject({ signups: 1, matureSignups: 1, converted: 0, conversionPct: 0 });
     expect(result.totals).toMatchObject({ signups: 5, matureSignups: 4, converted: 3, provisionalConverted: 1 });
+  });
+
+  it('drills every row down to a Users list of the same size, signups and converted', async () => {
+    await User.createIndexes();
+    const april = { createdAt: new Date('2026-04-01T08:00:00Z') };
+    const paid = await seedSignup({ firstTouch: { source: 'Ads', medium: 'CPC', campaign: 'Spring' } }, april);
+    await seedSignup({ firstTouch: { source: ' ads ', medium: 'cpc', campaign: 'spring' } }, april);
+    await seedSignup({ firstTouch: { source: 'news' }, lastTouch: { source: 'ads', medium: 'cpc' } }, april);
+    const unattributedBuyer = await seedSignup({}, april);
+    await seedSignup({}, { createdAt: new Date('2026-06-10T08:00:00Z') });
+    await seedSignup(
+      { firstTouch: { source: 'ads', medium: 'cpc', campaign: 'spring' } },
+      {
+        ...april,
+        isInternal: true,
+      }
+    );
+    for (const owner of [paid, unattributedBuyer]) {
+      await CreditTransaction.collection.insertOne({
+        ownerId: String(owner._id),
+        ownerType: 'User',
+        credits: 500,
+        type: 'purchase',
+        status: 'completed',
+        stripePaymentIntentId: `pi_${owner._id}`,
+        createdAt: new Date('2026-04-03T00:00:00Z'),
+      });
+    }
+
+    for (const touch of ['first', 'last'] as const) {
+      const result = await getAcquisitionConversion(
+        acquisitionQuerySchema.parse({ range: 'custom', from: '2026-04-01', to: '2026-06-15', signups: 'all', touch }),
+        NOW
+      );
+      if (result.status !== 'ok') throw new Error(`unexpected status ${result.status}`);
+      expect(result.rows.length).toBeGreaterThan(1);
+      for (const row of result.rows) {
+        for (const converted of [false, true]) {
+          // Built the way the Analytics page builds its drill-down link.
+          const filter = AdminUsersFilterSchema.parse({
+            ...result.window,
+            acqTouch: touch,
+            ...(row.kind === 'unattributed'
+              ? { acqUnattributed: 'true' }
+              : {
+                  acqSource: row.source,
+                  acqMedium: row.medium === ACQUISITION_NONE ? undefined : row.medium,
+                  acqCampaign: row.campaign === ACQUISITION_NONE ? undefined : row.campaign,
+                }),
+            ...(converted ? { acqConverted: 'true', acqWindow: String(result.conversionWindowDays) } : {}),
+          });
+          const [counted] = await User.aggregate([...(await adminUsersPipeline(filter, NOW)), { $count: 'n' }]);
+          expect(counted?.n ?? 0, `${touch} ${row.key} converted=${converted}`).toBe(
+            converted ? row.converted : row.signups
+          );
+        }
+      }
+    }
   });
 
   it('leaves the activation funnel cohort unchanged by the shared eligibility read', async () => {

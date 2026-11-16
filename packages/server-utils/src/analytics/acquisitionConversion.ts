@@ -1,4 +1,5 @@
 import {
+  ACQUISITION_UNATTRIBUTED_KEY,
   attributedTouch,
   type AcquisitionTouchKind,
   type AttributedTouch,
@@ -155,4 +156,34 @@ export async function conversionOutcomes(
       outcomes.set(member.id, memberOutcome(member.signupAt, ledgers.get(member.id), options));
   }
   return outcomes;
+}
+
+/**
+ * The ids behind one acquisition row (the Users list's acq* filter): the same attributedSignups cohort the
+ * section groups, narrowed to `key` (ACQUISITION_UNATTRIBUTED_KEY for no touch), and with `converted` to the
+ * mature members who paid inside `windowDays`, which is the row's `converted` count.
+ */
+export async function acquisitionCohortUserIds(
+  window: { start: Date; end: Date },
+  {
+    touch,
+    key,
+    converted,
+    windowDays,
+  }: { touch: AcquisitionTouchKind; key: string; converted: boolean; windowDays: number },
+  { now, maxTimeMS }: { now: Date; maxTimeMS: () => number }
+): Promise<string[]> {
+  const cohort = await attributedSignups(window, { touch, maxTimeMS });
+  const members = cohort.filter(member =>
+    key === ACQUISITION_UNATTRIBUTED_KEY ? !member.touch : member.touch?.key === key
+  );
+  if (!converted) return members.map(member => member.id);
+  // Follow-up does not decide conversion, so any period serves.
+  const outcomes = await conversionOutcomes(members, { windowDays, followUpDays: windowDays, now, maxTimeMS });
+  return members
+    .filter(member => {
+      const outcome = outcomes.get(member.id);
+      return !!outcome?.mature && !!outcome.firstPaid;
+    })
+    .map(member => member.id);
 }

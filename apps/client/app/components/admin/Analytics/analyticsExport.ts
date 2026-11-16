@@ -1,3 +1,8 @@
+import {
+  ACQUISITION_UNATTRIBUTED_LABEL,
+  type AcquisitionConversion,
+  type AcquisitionRow,
+} from '@client/app/utils/acquisitionConversion';
 import type { AnalyticsOverview, AnalyticsTopAccounts, TopAccountRow } from '@client/app/utils/analyticsOverview';
 import { CSV_BOM, toCsvFromRecords } from '@client/app/utils/csv';
 import { downloadData } from '@client/app/utils/download';
@@ -41,6 +46,79 @@ function topAccountsFile(name: string, idLabel: string, rows: readonly TopAccoun
   );
 }
 
+type AcquisitionOk = Extract<AcquisitionConversion, { status: 'ok' }>;
+
+function acquisitionFile(acquisition: AcquisitionOk): AnalyticsCsvFile {
+  const window = `Converted within (days)`;
+  const followUp = `Follow-up (days)`;
+  const columns = [
+    'Row',
+    'Source',
+    'Medium',
+    'Campaign',
+    'Touch',
+    'Signups',
+    'Signups past window',
+    'Converted',
+    'Converted, still in window',
+    'Conversion (%)',
+    'Provisional',
+    'Subscription first',
+    'Credits first',
+    'Both',
+    'Org buyers',
+    'Retained',
+    'Buyers past follow-up',
+    'Buyers in follow-up',
+    'Repeat credit buyers',
+    'Renewals due',
+    'Renewed',
+    'Renewal unknown',
+    window,
+    followUp,
+    'Renewal basis',
+    'Attributed signups (%)',
+  ];
+  const record = (label: string, row: AcquisitionRow | AcquisitionOk['totals'], parts?: AcquisitionRow) => ({
+    Row: label,
+    Source: parts?.source ?? '',
+    Medium: parts?.medium ?? '',
+    Campaign: parts?.campaign ?? '',
+    Touch: acquisition.touch,
+    Signups: row.signups,
+    'Signups past window': row.matureSignups,
+    Converted: row.converted,
+    'Converted, still in window': row.provisionalConverted,
+    'Conversion (%)': row.conversionPct === null ? null : share(row.conversionPct),
+    Provisional: yesNo(row.provisional),
+    'Subscription first': row.subscriptionFirst,
+    'Credits first': row.creditFirst,
+    Both: row.both,
+    'Org buyers': row.orgBuyers,
+    Retained: row.retained,
+    'Buyers past follow-up': row.followUpBuyers,
+    'Buyers in follow-up': row.followUpPending,
+    'Repeat credit buyers': row.repeatCredit,
+    'Renewals due': row.renewalDue,
+    Renewed: row.renewed,
+    'Renewal unknown': row.renewalUnavailable,
+    [window]: acquisition.conversionWindowDays,
+    [followUp]: acquisition.followUpDays,
+    'Renewal basis': acquisition.renewalBasis,
+    'Attributed signups (%)': acquisition.coverage.pct === null ? null : share(acquisition.coverage.pct),
+  });
+  const label = (row: AcquisitionRow) =>
+    row.kind === 'unattributed'
+      ? ACQUISITION_UNATTRIBUTED_LABEL
+      : row.kind === 'other'
+        ? 'Other campaigns'
+        : 'Campaign';
+  return csvFile('acquisition-conversion.csv', columns, [
+    ...acquisition.rows.map(row => record(label(row), row, row)),
+    record('Total', acquisition.totals),
+  ]);
+}
+
 /**
  * One CSV per section on the page, for the range on screen (spec 4.10). Days are UTC `YYYY-MM-DD`, units
  * are in the headers, and a missing rollup day is an empty cell rather than 0. Cells go through
@@ -48,7 +126,8 @@ function topAccountsFile(name: string, idLabel: string, rows: readonly TopAccoun
  */
 export function buildAnalyticsCsvFiles(
   overview: AnalyticsOverview,
-  topAccounts: AnalyticsTopAccounts | undefined
+  topAccounts: AnalyticsTopAccounts | undefined,
+  acquisition?: AcquisitionConversion
 ): AnalyticsCsvFile[] {
   const compare = overview.window.previous !== null;
   const { sources } = overview.activeUsers;
@@ -154,18 +233,20 @@ export function buildAnalyticsCsvFiles(
       topAccountsFile('top-organizations.csv', 'Organization ID', topAccounts.orgs)
     );
   }
+  if (acquisition?.status === 'ok') files.push(acquisitionFile(acquisition));
   return files;
 }
 
 /** Downloads every section as one zip, named for the UTC range on screen. */
 export async function downloadAnalyticsExport(
   overview: AnalyticsOverview,
-  topAccounts: AnalyticsTopAccounts | undefined
+  topAccounts: AnalyticsTopAccounts | undefined,
+  acquisition?: AcquisitionConversion
 ): Promise<void> {
   // Loaded on click: the zip writer is only needed by this one button.
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
-  for (const file of buildAnalyticsCsvFiles(overview, topAccounts)) zip.file(file.name, file.csv);
+  for (const file of buildAnalyticsCsvFiles(overview, topAccounts, acquisition)) zip.file(file.name, file.csv);
   const blob = await zip.generateAsync({ type: 'blob' });
   downloadData(blob, `analytics_${overview.window.from}_${overview.window.to}_utc.zip`, 'application/zip');
 }

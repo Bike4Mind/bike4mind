@@ -158,6 +158,50 @@ describe('buildAnalyticsCsvFiles', () => {
     expect(rows[1]).toBe(`1,u1,"'=HYPERLINK(""x""), ""Ada""",PaidUser,4,3,9,75`);
   });
 
+  it('adds the acquisition file only for a computed range, defusing formula campaigns', () => {
+    const metrics = {
+      signups: 4,
+      matureSignups: 3,
+      converted: 1,
+      subscriptionFirst: 1,
+      creditFirst: 0,
+      both: 0,
+      provisionalConverted: 1,
+      provisional: true,
+      conversionPct: 100 / 3,
+      orgBuyers: 0,
+      retained: 1,
+      followUpBuyers: 1,
+      followUpPending: 0,
+      repeatCredit: 0,
+      renewalDue: 1,
+      renewed: 0,
+      renewalUnavailable: 0,
+    };
+    const acquisition = {
+      status: 'ok',
+      signups: 'all',
+      touch: 'last',
+      window: { createdFrom: '2026-06-09T00:00:00.000Z', createdTo: '2026-06-16T00:00:00.000Z' },
+      coverage: { signups: 4, attributed: 4, pct: 100 },
+      conversionWindowDays: 30,
+      followUpDays: 90,
+      renewalBasis: 'subscription-state',
+      totals: metrics,
+      rows: [{ ...metrics, kind: 'touch', key: 'ads|cpc|=cmd()', source: 'ads', medium: 'cpc', campaign: '=cmd()' }],
+      truncated: false,
+    } as const;
+    const rows = fileNamed(buildAnalyticsCsvFiles(overview, topAccounts, acquisition), 'acquisition-conversion.csv');
+    expect(rows[0]).toContain('Converted within (days)');
+    expect(rows[1]).toBe(
+      "Campaign,ads,cpc,'=cmd(),last,4,3,1,1,33.33,yes,1,0,0,0,1,1,0,0,1,0,0,30,90,subscription-state,100"
+    );
+    expect(rows[2]).toMatch(/^Total,,,,last,4,/);
+    expect(
+      buildAnalyticsCsvFiles(overview, topAccounts, { status: 'rangeTooLong', maxDays: 93 }).map(f => f.name)
+    ).not.toContain('acquisition-conversion.csv');
+  });
+
   it('skips the top-account files until they have loaded', () => {
     expect(buildAnalyticsCsvFiles(overview, undefined).map(f => f.name)).not.toContain('top-users.csv');
   });

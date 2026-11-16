@@ -13,6 +13,8 @@ import {
   YES_NO_FILTERS,
   type AdminUsersFilter,
   type AdminUsersSortField,
+  USER_ACQUISITION_TOUCH_FILTERS,
+  USER_ACQUISITION_WINDOW_FILTERS,
 } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 import { USER_AI_VERDICT_FILTERS } from '@bike4mind/server-utils/app/utils/aiAdvisory';
@@ -66,6 +68,13 @@ export const USERS_FILTER_PARAMS = {
   activeTo: 'activeTo',
   funnelStep: 'funnelStep',
   aiVerdict: 'aiVerdict',
+  acqTouch: 'acqTouch',
+  acqSource: 'acqSource',
+  acqMedium: 'acqMedium',
+  acqCampaign: 'acqCampaign',
+  acqUnattributed: 'acqUnattributed',
+  acqConverted: 'acqConverted',
+  acqWindow: 'acqWindow',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -125,6 +134,13 @@ export type UsersSearch = {
   activeTo?: string;
   funnelStep?: UsersListView['funnelStep'];
   aiVerdict?: UsersListView['aiVerdict'];
+  acqTouch?: UsersListView['acqTouch'];
+  acqSource?: UsersListView['acqSource'];
+  acqMedium?: UsersListView['acqMedium'];
+  acqCampaign?: UsersListView['acqCampaign'];
+  acqUnattributed?: UsersListView['acqUnattributed'];
+  acqConverted?: UsersListView['acqConverted'];
+  acqWindow?: UsersListView['acqWindow'];
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -169,6 +185,13 @@ const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): n
  * invalid becomes undefined.
  */
 const parsePlan = oneOf(USER_PLAN_FILTERS);
+const parseFlag = oneOf(['true'] as const);
+// A campaign part as the Analytics row carries it; the server folds case and spacing.
+const parseAcquisitionPart = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const part = value.trim();
+  return part.length > 0 && part.length <= 200 ? part : undefined;
+};
 
 export const USERS_SEARCH_PARSERS: {
   readonly [K in keyof UsersSearch]-?: (value: unknown, search?: Record<string, unknown>) => UsersSearch[K];
@@ -197,6 +220,13 @@ export const USERS_SEARCH_PARSERS: {
   activeTo: parseUtcDay,
   funnelStep: oneOf(USER_FUNNEL_STEP_FILTERS),
   aiVerdict: oneOf(USER_AI_VERDICT_FILTERS),
+  acqTouch: oneOf(USER_ACQUISITION_TOUCH_FILTERS),
+  acqSource: parseAcquisitionPart,
+  acqMedium: parseAcquisitionPart,
+  acqCampaign: parseAcquisitionPart,
+  acqUnattributed: parseFlag,
+  acqConverted: parseFlag,
+  acqWindow: oneOf(USER_ACQUISITION_WINDOW_FILTERS),
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -218,6 +248,13 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     activeTo: parseUtcDay(search.activeTo),
     funnelStep: USERS_SEARCH_PARSERS.funnelStep(search.funnelStep),
     aiVerdict: USERS_SEARCH_PARSERS.aiVerdict(search.aiVerdict),
+    acqTouch: USERS_SEARCH_PARSERS.acqTouch(search.acqTouch),
+    acqSource: USERS_SEARCH_PARSERS.acqSource(search.acqSource),
+    acqMedium: USERS_SEARCH_PARSERS.acqMedium(search.acqMedium),
+    acqCampaign: USERS_SEARCH_PARSERS.acqCampaign(search.acqCampaign),
+    acqUnattributed: USERS_SEARCH_PARSERS.acqUnattributed(search.acqUnattributed),
+    acqConverted: USERS_SEARCH_PARSERS.acqConverted(search.acqConverted),
+    acqWindow: USERS_SEARCH_PARSERS.acqWindow(search.acqWindow),
   };
 }
 
@@ -294,6 +331,13 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     activeTo: parseUtcDay(params.activeTo),
     funnelStep: params.funnelStep,
     aiVerdict: params.aiVerdict,
+    acqTouch: params.acqTouch,
+    acqSource: params.acqSource,
+    acqMedium: params.acqMedium,
+    acqCampaign: params.acqCampaign,
+    acqUnattributed: params.acqUnattributed,
+    acqConverted: params.acqConverted,
+    acqWindow: params.acqWindow,
   };
 }
 
