@@ -47,7 +47,7 @@ describe('StatusSummary', () => {
     expect(screen.getAllByTestId('qa-summary-latency')).toHaveLength(1);
     expect(screen.getByTestId('qa-summary-latency')).toHaveTextContent('Latency100.0%1 of 1 run passed');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent(
-      '7 days (Nov 10 - Nov 16) . branch main . all envs . all products, scheduled runs'
+      'Scheduled runs summary7 days (Nov 10 - Nov 16) . branch main . all envs . all products'
     );
   });
 
@@ -76,7 +76,7 @@ describe('StatusSummary', () => {
       { wrapper: QaTestWrapper }
     );
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('1 day (Nov 16) . branch main');
-    expect(screen.getByTestId('qa-summary')).toHaveTextContent('staging . all products, scheduled runs');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent('staging . all products');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('oldest were left out');
     expect(screen.getByTestId('qa-summary-empty')).toHaveTextContent('No scheduled runs in this range.');
   });

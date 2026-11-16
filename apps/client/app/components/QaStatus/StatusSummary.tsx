@@ -72,9 +72,9 @@ const StatusSummary: FC<{
   return (
     <Stack spacing={1.5} data-testid="qa-summary">
       <Box>
-        <Typography level="title-md">Summary</Typography>
+        <Typography level="title-md">Scheduled runs summary</Typography>
         <Typography level="body-sm">
-          {rangeLine(range)} . branch {branch} . {env ?? 'all envs'} . all products, scheduled runs
+          {rangeLine(range)} . branch {branch} . {env ?? 'all envs'} . all products
         </Typography>
       </Box>
       {summary.truncated && (
