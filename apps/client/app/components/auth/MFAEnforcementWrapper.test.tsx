@@ -855,6 +855,25 @@ describe('MFAEnforcementWrapper - the server decides, not the settings copy in t
     expect(mfaSetupCalls()).toBe(0);
   });
 
+  it('blocks after a refusal when the refetch fails and only a pre-refusal not-required status is cached', async () => {
+    // e.g. enforcement was turned on after this tab cached its status, then the refetch errors.
+    get.mockResolvedValueOnce({ data: { enabled: false, required: false } });
+    renderWrapper();
+    await waitFor(() => expect(mfaStatusCalls()).toBe(1));
+    expect(await screen.findByTestId('app-content')).not.toBeNull();
+    // Keep the cached answer strictly older than the refusal.
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    get.mockRejectedValue(new Error('status unavailable'));
+    const onRejected = await registeredRefusalHandler();
+    await onRejected(enrollmentRefusal()).catch(() => undefined);
+
+    await waitFor(() => expect(mfaStatusCalls()).toBeGreaterThanOrEqual(2));
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+
   it('does not re-prompt an enrolled user the server requires', async () => {
     get.mockResolvedValue({ data: { enabled: true, required: true } });
 

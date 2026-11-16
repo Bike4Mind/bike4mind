@@ -45,7 +45,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const [isLoading, setIsLoading] = useState(true);
   // The server answers an unenrolled session with a 403 instead of this tab's settings query
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
-  const [enrollmentRefused, setEnrollmentRefused] = useState(false);
+  // Epoch ms of the latest handled refusal; null until one is seen.
+  const [refusedAt, setRefusedAt] = useState<number | null>(null);
+  const enrollmentRefused = refusedAt !== null;
   const [verifyError, setVerifyError] = useState<string | null>(null);
   // Backup codes from a passkey enrolled as the factor, shown until the user continues.
   const [passkeyBackupCodes, setPasskeyBackupCodes] = useState<string[] | null>(null);
@@ -63,8 +65,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // step-up-gated setup call at an enrolled user, which then 409'd.
   // `required: false` is the server exempting this user (a test persona) or enforcement being off.
   // An older server omits `required`; then only a refusal, never a missing field, asks for setup.
+  // After a refusal only a status fetched since then can clear it: a failed refetch keeps the
+  // data cached before the refusal, and that answer is no longer the server's.
+  const statusPredatesRefusal = refusedAt !== null && mfaStatusQuery.dataUpdatedAt < refusedAt;
   const needsEnrollment =
-    !mfaStatus?.enabled && (mfaStatus?.required === true || (enrollmentRefused && mfaStatus?.required !== false));
+    statusPredatesRefusal ||
+    (!mfaStatus?.enabled && (mfaStatus?.required === true || (enrollmentRefused && mfaStatus?.required !== false)));
 
   // The app renders at once, with the check still running behind it, for a user this browser last
   // saw enrolled or while this tab's settings say enforcement is off: most users owe nothing, and
@@ -128,7 +134,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       registerMfaEnrollmentInterceptor(api, () => {
         if (refusalRefetchInFlightRef.current) return;
         refusalRefetchInFlightRef.current = true;
-        setEnrollmentRefused(true);
+        setRefusedAt(Date.now());
         const rearm = () => {
           refusalRefetchInFlightRef.current = false;
         };
