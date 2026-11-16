@@ -41,7 +41,7 @@ export const FUNNEL_COHORT_MAX = 20_000;
 /** ms. Per-query time limit for every cohort read, shared by the funnel counts and the Users drill-down. */
 export const COHORT_MAX_TIME_MS = 10_000;
 /** Stripe statuses under which no payment has been collected yet. */
-const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
+export const UNPAID_SUBSCRIPTION_STATUSES = ['incomplete', 'incomplete_expired', 'trialing'];
 
 const utcDayOf = (date: Date) => date.toISOString().slice(0, 10);
 const dayStart = (day: string) => Date.parse(`${day}T00:00:00.000Z`);
