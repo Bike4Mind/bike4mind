@@ -1358,11 +1358,16 @@ export class ChatService {
    * caches, so a blank chat asking for this costs no more than the next turn will.
    */
   async listCreationTools(model: string): Promise<CreationTool[]> {
-    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    if (!this.deps.media || !this.deps.getApiClient()) return [];
     const [catalog, video] = await Promise.all([
-      this.deps.models?.list().catch(() => undefined),
+      isLocalModel(model)
+        ? this.localModelsFor(model)
+            .then(models => ({ models }))
+            .catch(() => undefined)
+        : this.deps.models?.list().catch(() => undefined),
       this.deps.models?.listVideoModels().catch(() => []),
     ]);
+    if (isLocalModel(model) && !catalog?.models.find(option => option.id === model)) return [];
     if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
     return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
@@ -3885,7 +3890,7 @@ export class ChatService {
       let scopeVersion = this.scopeVersion(sessionId);
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
-      const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
+      const serverConfig = api ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {
@@ -3901,15 +3906,14 @@ export class ChatService {
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
-      const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
+      const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
-      const web =
-        api && !localTurn
-          ? webContextFor(api, {
-              searches: this.webSearches.turn(sessionId),
-              log: line => this.deps.logger.warn(line),
-            })
-          : undefined;
+      const web = api
+        ? webContextFor(api, {
+            searches: this.webSearches.turn(sessionId),
+            log: line => this.deps.logger.warn(line),
+          })
+        : undefined;
       // Started now and awaited where the tool list is built, so it overlaps the reads below.
       // Asked every turn that can generate, from a short cache: a server with no video model gets
       // no generate_video at all rather than one that fails when called.
