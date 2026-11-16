@@ -152,7 +152,7 @@ describe('ExperimentalFeatureToggle telemetry deletion outcome', () => {
     confirmStopAndDelete();
 
     expect(await screen.findByTestId('telemetry-deletion-complete')).toHaveTextContent(
-      'Your existing telemetry data was deleted.'
+      'Deleted the telemetry we could identify from the last 90 days.'
     );
     expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
   });
@@ -164,7 +164,7 @@ describe('ExperimentalFeatureToggle telemetry deletion outcome', () => {
     confirmStopAndDelete();
 
     expect(await screen.findByTestId('telemetry-deletion-incomplete')).toHaveTextContent(
-      'could not confirm that all of your existing telemetry data was deleted'
+      'could not confirm deletion of the telemetry we can identify from the last 90 days'
     );
     expect(screen.getByTestId('telemetry-deletion-retry-btn')).toHaveTextContent('Retry deletion');
     expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();

@@ -27,6 +27,7 @@ import {
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
+import { normalizeTelemetryUserId } from '@server/utils/telemetryIdentity';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
@@ -207,7 +208,8 @@ function adminEditSessionEndReason(
 
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-    const { id: userId } = idParamSchema.parse(req.query);
+    const { id: rawUserId } = idParamSchema.parse(req.query);
+    const userId = normalizeTelemetryUserId(rawUserId);
     const currentUser = req.user;
 
     const isSelf = isSameUserId(currentUser.id, userId);

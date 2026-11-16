@@ -1,6 +1,7 @@
 import { Quest, TelemetryAuditLogModel } from '@bike4mind/database';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { regenerateUserTelemetryHashes } from './telemetryHashLookup';
+import { normalizeTelemetryUserId } from './telemetryIdentity';
 
 export interface TelemetryDeletionResult {
   /** True only when the re-check ran and found no matching document still carrying telemetry. */
@@ -26,9 +27,10 @@ export interface TelemetryDeletionResult {
  * `pages/api/users/[id]/update.ts`, which is gated by `baseApi()` auth middleware.
  */
 export async function triggerTelemetryDeletion(
-  userId: string,
+  rawUserId: string,
   req: { ip?: string; headers: Record<string, unknown> }
 ): Promise<TelemetryDeletionResult> {
+  const userId = normalizeTelemetryUserId(rawUserId);
   const startTime = Date.now();
   let deletedCount = 0;
   let remainingCount: number | undefined;

@@ -317,12 +317,12 @@ export default function ExperimentalFeatureToggle() {
           )}
           {telemetryLevel === 'none' && isDeleting && deletionStatus !== 'incomplete' && (
             <Typography data-testid="telemetry-deletion-pending" level={TYPE.caption} sx={{ mt: 0.5 }}>
-              Deleting your existing telemetry data...
+              Deleting the telemetry we can identify from the last 90 days...
             </Typography>
           )}
           {telemetryLevel === 'none' && !isDeleting && deletionStatus === 'complete' && (
             <Typography data-testid="telemetry-deletion-complete" level={TYPE.caption} color="success" sx={{ mt: 0.5 }}>
-              Your existing telemetry data was deleted.
+              Deleted the telemetry we could identify from the last 90 days.
             </Typography>
           )}
           {telemetryLevel === 'none' && deletionStatus === 'incomplete' && (
@@ -332,7 +332,8 @@ export default function ExperimentalFeatureToggle() {
               sx={{ mt: 0.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
             >
               <Typography level={TYPE.caption} color="danger">
-                Collection is stopped, but we could not confirm that all of your existing telemetry data was deleted.
+                Collection is stopped, but we could not confirm deletion of the telemetry we can identify from the last
+                90 days.
               </Typography>
               <Button
                 data-testid="telemetry-deletion-retry-btn"
@@ -476,7 +477,7 @@ export default function ExperimentalFeatureToggle() {
           setShowNoneConfirm(false);
         }}
         title="Stop Telemetry Collection"
-        description="This will stop telemetry collection and delete all your existing telemetry data. This cannot be undone."
+        description="This will stop telemetry collection and delete the telemetry we can identify from the last 90 days. This cannot be undone."
         confirmText="Stop & Delete"
         confirmColor="danger"
         showWarningIcon

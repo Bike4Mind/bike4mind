@@ -1840,4 +1840,17 @@ describe('PUT /api/users/:id/update - telemetry opt-out deletion', () => {
     expect(mockDeletion).toHaveBeenCalledWith('u1', expect.anything());
     expect(res._getJSONData().telemetryDeletion).toEqual({ verified: true, remainingCount: 0 });
   });
+
+  it.each([false, true])('uses the canonical account target for an uppercase alias (admin=%s)', async admin => {
+    const targetId = 'abcdef0123456789abcdef01';
+    mockUserFindById.mockReturnValue({ id: targetId, name: 'Target', preferences: { contextTelemetryLevel: 'basic' } });
+    const { res, promise } = run({
+      user: admin ? ADMIN : { id: targetId, isAdmin: false },
+      userId: targetId.toUpperCase(),
+      body: { preferences: { contextTelemetryLevel: 'none' } },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeletion).toHaveBeenCalledWith(targetId, expect.anything());
+  });
 });
