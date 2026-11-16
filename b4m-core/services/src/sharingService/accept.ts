@@ -509,9 +509,23 @@ const acceptProject = async (
   ]);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
-  const grant = { add: [{ userId: user.id, permissions, projectId }] };
-  for (const file of files) await db.fabFiles.shareable.updateUserShares(file.id, grant);
-  for (const session of sessions) await db.sessions.shareable.updateUserShares(session.id, grant);
+  // A non-owner's invite re-shares each attached item as well as the project, so every item goes
+  // through the same gate-then-cap as a notebook's knowledge files: nothing where the minter holds
+  // no share, otherwise only what they hold there. Owner-minted and legacy invites pass through.
+  const isReshare = !!invite.inviterId && invite.inviterId !== project.userId;
+  const grantOn = (item: IShareableDocument & { userId: string }) => {
+    const granted = isReshare ? reshareableBy(item, inviter, permissions).granted : permissions;
+    return isReshare && granted.length === 0 ? null : { add: [{ userId: user.id, permissions: granted, projectId }] };
+  };
+
+  for (const file of files) {
+    const grant = grantOn(file);
+    if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
+  }
+  for (const session of sessions) {
+    const grant = grantOn(session);
+    if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
+  }
 };
 
 /**
