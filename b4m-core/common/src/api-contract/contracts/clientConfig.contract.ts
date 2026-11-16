@@ -2,7 +2,7 @@ import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import { ApiErrorSchema } from '../../schemas/chat';
-import { ClientConfigResponseSchema } from '../../schemas/clientConfig';
+import { ClientConfigPublicSchema, ClientConfigResponseSchema } from '../../schemas/clientConfig';
 
 /**
  * Contract for GET /api/v1/client-config: one call that tells an API client how to configure
@@ -25,6 +25,9 @@ export const getClientConfigContract = defineEndpoint({
     '`GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment ' +
     "offers the feature, not whether this caller has opted in. The caller's identity, plan and " +
     'entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. ' +
+    'The optional catalog preserves picker order, disabled entries, locked cards and revision/fallback signals; ' +
+    'it never includes internal pricing or dispatch configuration. Transport URLs require authentication. ' +
+    'Pre-login clients use `GET /api/v1/client-config/public`, which returns only public login configuration. ' +
     'Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.',
   tags: ['Account'],
   auth: 'apiKeyOrJwt',
@@ -63,6 +66,8 @@ export const getClientConfigContract = defineEndpoint({
               type: 'text',
               backend: 'anthropic',
               description: null,
+              blurb: null,
+              provider_label: null,
               context_window: 1_000_000,
               max_output_tokens: 128_000,
               supports_streaming: true,
@@ -86,4 +91,32 @@ export const getClientConfigContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+export const getPublicClientConfigContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/client-config/public',
+  operationId: 'getPublicClientConfig',
+  summary: 'Get pre-login client configuration',
+  description:
+    'Public login and registration configuration only. Empty strings preserve unconfigured values. ' +
+    'No caller models, transport URLs, credentials or admin configuration are returned. Responses are never cacheable.',
+  tags: ['Account'],
+  auth: 'public',
+  responses: {
+    200: {
+      description: 'The public login configuration.',
+      schema: ClientConfigPublicSchema,
+      example: {
+        api_url: 'https://app.example.com',
+        default_theme: 'bike4mind',
+        allow_open_registration: false,
+        pyodide_base_url: '',
+        allow_trusted_devices: true,
+        turnstile_site_key: '',
+        apple_sign_in_enabled: false,
+        support_email: '',
+      },
+    },
+  },
 });

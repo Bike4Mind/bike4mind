@@ -8,7 +8,7 @@ DERIVED_DATA := $(CURDIR)/build/DerivedData
 # Generated sources are excluded from formatting so a regeneration diff is exactly the generator's output.
 SWIFT_SOURCES = $(shell find Bike4Mind Widgets CaptureUI ShareExtension Tools/GenerateAppIcon.swift Packages -name '*.swift' -not -path '*/Generated/*' -not -path '*/.build/*')
 
-.PHONY: build test format lint clean generate-client check-entitlements
+.PHONY: build test format lint clean generate-client generate-tokens check-entitlements
 
 CLIENT_PKG := Packages/B4MClient
 GENERATOR_PKG := Tools/Generator
@@ -54,3 +54,8 @@ generate-client:
 	$(GENERATOR_PKG)/.build/debug/swift-openapi-generator generate build/openapi-open-enums.json \
 		--config $(CLIENT_PKG)/openapi-generator-config.yaml \
 		--output-directory $(CLIENT_PKG)/Sources/B4MClient/Generated
+
+# Regenerates the design-token Swift (Packages/B4MKit/.../Theme/Generated) and the AccentColor sets from
+# packages/design-tokens. The design-tokens tests fail when the committed files drift from the tokens.
+generate-tokens:
+	cd ../.. && pnpm --filter @bike4mind/design-tokens generate:native

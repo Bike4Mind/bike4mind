@@ -1,6 +1,8 @@
 import { ToolDefinition } from './base/types';
 export type { ToolContext, ToolDefinition } from './base/types';
 export { mergeRetrievalSummary, type RetrievalSummary } from './retrievalSummaryMerge';
+// For tools defined outside this package, so their nested llm.complete calls record usage the same way.
+export { recordToolOperationalUsage, type RecordToolOperationalUsageArgs } from './base/recordToolOperationalUsage';
 import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';

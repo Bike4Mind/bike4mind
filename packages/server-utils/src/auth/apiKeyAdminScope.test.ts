@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { ApiKeyScope, hasAdminPermission } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  attachOrgApiKeyReach,
+  hasAdminPermission,
+  orgApiKeyReachOf,
+  readableGroupIds,
+} from '@bike4mind/common';
 import { ownerWithheldUsers, persistedIsAdmin, requesterScopedUsers, withholdAdminRole } from './apiKeyAdminScope';
 
 const TestUser = mongoose.model(
@@ -89,6 +95,37 @@ describe('requesterScopedUsers', () => {
   it('returns the adapter unchanged for an admin-scoped key or a session', () => {
     expect(requesterScopedUsers({ user: { id: 'me' }, apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } }, repo)).toBe(repo);
     expect(requesterScopedUsers({ user: { id: 'me' } }, repo)).toBe(repo);
+  });
+
+  describe('for an org-owned key', () => {
+    const reach = { organizationId: 'org-1', readGroupIds: ['grp-1'], dataLakeOrgIds: ['org-1'] };
+    const keyRequester = () => attachOrgApiKeyReach({ id: 'svc' }, reach);
+    const groupRepo = {
+      findById: vi.fn(async (id: string) => ({ id, isAdmin: false, groups: [] as string[] })),
+    };
+
+    it('carries the reach onto the re-read requester, and only the requester', async () => {
+      const users = requesterScopedUsers(
+        { user: keyRequester(), apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] } },
+        groupRepo
+      );
+      expect(users).not.toBe(groupRepo);
+
+      const reread = await users.findById('svc');
+      expect(orgApiKeyReachOf(reread)).toEqual(reach);
+      expect(reread && readableGroupIds(reread)).toEqual(['grp-1']);
+      expect(orgApiKeyReachOf(await users.findById('other'))).toBeUndefined();
+    });
+
+    it('carries both the reach and the withheld role for a key without the admin scope', async () => {
+      const users = requesterScopedUsers(
+        { user: keyRequester(), apiKeyInfo: { scopes: [ApiKeyScope.WRITE_FILES] } },
+        repo
+      );
+      const reread = await users.findById('svc');
+      expect(reread?.isAdmin).toBe(false);
+      expect(orgApiKeyReachOf(reread)).toEqual(reach);
+    });
   });
 });
 

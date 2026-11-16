@@ -52,6 +52,15 @@ export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
  */
 export const NATIVE_DEV_OAUTH_CLIENT_ID = 'b4m-ios-app-dev';
 
+/**
+ * The Android app's release client: authorization-code + PKCE like NATIVE_OAUTH_CLIENT_ID, with a
+ * verified App Link redirect (https://app.bike4mind.com/android/auth-callback) backed by
+ * /.well-known/assetlinks.json. Android debug builds reuse NATIVE_DEV_OAUTH_CLIENT_ID. Same sync
+ * rule: the app lives in apps/android with no build-time check against this value. Seeded by
+ * packages/scripts/migrate/migrations/20260921236952_ensure-android-oauth-client.ts.
+ */
+export const ANDROID_OAUTH_CLIENT_ID = 'b4m-android-app';
+
 const MAX_SOURCE_SLUG_LENGTH = 64;
 const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
 

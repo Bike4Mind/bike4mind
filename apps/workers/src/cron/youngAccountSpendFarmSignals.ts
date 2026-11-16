@@ -218,7 +218,7 @@ export async function loadFarmSignals(input: {
           spendChannels: channels === null ? null : (channels[spender.userId] ?? { apiCredits: 0, chatCredits: 0 }),
           minutesToApiKey: firstKey ? minutesBetween(createdAt, new Date(firstKey)) : null,
           minutesToAuthenticator:
-            profile?.totpEnabled && profile.mfaSetupAt ? minutesBetween(createdAt, new Date(profile.mfaSetupAt)) : null,
+            profile?.mfaEnabled && profile.mfaSetupAt ? minutesBetween(createdAt, new Date(profile.mfaSetupAt)) : null,
           networkPeers,
           flaggedLinkedAccounts,
         },

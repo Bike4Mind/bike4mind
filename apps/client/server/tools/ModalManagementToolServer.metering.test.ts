@@ -14,7 +14,9 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database/social', () => ({ ModalModel: {} }));
 vi.mock('@client/pages/api/admin/modal-tool', () => ({ parseNaturalLanguageQueryDirect: h.parse }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: h.createCompletionMeter,
+}));
 vi.mock('@client/app/services/adminTools/modalToolHelpers', () => ({
   showHelp: vi.fn(),
   buildModalFromParams: vi.fn(),

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import { ImageModels, LEGACY_DALL_E_3_MODEL_ID } from '@bike4mind/common';
 
 // The service builds its OpenAI client inside each call, so there is no instance to
@@ -335,6 +336,13 @@ describe('OpenAIImageService.generate output controls', () => {
 
   const service = () => new OpenAIImageService('test-key', new Logger());
 
+  it('sends OpenAI the hashed end-user id, never the internal user id', async () => {
+    await service().generate('an inventory icon', { model: ImageModels.GPT_IMAGE_2, user: 'user-1' });
+
+    expect(imagesGenerate.mock.calls[0][0].user).toBe(toProviderEndUserId('user-1'));
+    expect(imagesGenerate.mock.calls[0][0].user).not.toBe('user-1');
+  });
+
   it('sends background and output_format to gpt-image so a cutout PNG is possible', async () => {
     // gpt-image-2 rejects background: 'transparent', so this must use gpt-image-1.
     await service().generate('an inventory icon', {
@@ -515,7 +523,7 @@ describe('OpenAIImageService.edit', () => {
     expect(params.n).toBe(1);
     expect(params.size).toBe('512x512');
     expect(params.response_format).toBe('url');
-    expect(params.user).toBe('user-1');
+    expect(params.user).toBe(toProviderEndUserId('user-1'));
   });
 
   it.each(['1792x1024', '1024x1792'])(

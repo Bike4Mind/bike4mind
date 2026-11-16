@@ -16,7 +16,7 @@ import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
-import { hostingNetworkOf } from '@server/auth/datacenterAsns';
+import { hostingNetworkOf } from '@bike4mind/server-utils/auth/datacenterAsns';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminOwnerSlackRef } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';

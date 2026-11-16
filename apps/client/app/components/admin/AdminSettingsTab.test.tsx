@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -7,13 +7,15 @@ import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] = [];
 let serverConfig: { hiddenAdminSettingKeys?: string[] } | undefined = { hiddenAdminSettingKeys: [] };
+let isLoading = false;
+let isError = false;
+const refetchSettings = vi.fn();
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ data: serverSettings, isLoading: false }),
+  useSettingsFromServer: () => ({ data: serverSettings, isLoading, isError, refetch: refetchSettings }),
   useConfig: () => ({ data: serverConfig }),
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
-vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
 vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
@@ -22,15 +24,21 @@ vi.mock('./AdminTurnstileStatusNotice', () => ({
 }));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
-vi.mock('./AdminGenerationModelsSetting', () => ({
-  AdminGenerationModelsSetting: () => <div data-testid="admin-generation-models-card" />,
-}));
-vi.mock('./AdminRecommendedModelsSetting', () => ({
-  AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
-}));
 vi.mock('./AdminSettingInputField', () => ({
-  default: ({ setting, defaultValue }: { setting: { key: SettingKey }; defaultValue: unknown }) => (
-    <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
+  default: ({
+    setting,
+    defaultValue,
+    lockedNote,
+  }: {
+    setting: { key: SettingKey };
+    defaultValue: unknown;
+    lockedNote?: string;
+  }) => (
+    <div
+      data-testid={`generic-setting-${setting.key}`}
+      data-default-value={JSON.stringify(defaultValue)}
+      data-locked-note={lockedNote}
+    />
   ),
 }));
 vi.mock('./AdminStringListSettingField', () => ({
@@ -51,10 +59,12 @@ vi.mock('@tanstack/react-router', () => ({
 import AdminSettingsTab from './AdminSettingsTab';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { MODEL_SETTINGS_ONLY_KEYS } from './Models/Settings/modelSettingsKeys';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { useUser } from '@client/app/contexts/UserContext';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -101,6 +111,9 @@ const renderAiTab = () => renderTab(aiTab);
 const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
+  isLoading = false;
+  isError = false;
+  refetchSettings.mockReset();
   serverSettings = [];
   serverConfig = { hiddenAdminSettingKeys: [] };
   router.search = {};
@@ -108,6 +121,38 @@ beforeEach(() => {
 });
 
 describe('AdminSettingsTab URL state', () => {
+  it('starts with the page header and keeps text labels on every section tab', () => {
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    for (const tab of Object.values(SETTING_TABS)) {
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`)).toHaveTextContent(tab.name);
+      expect(screen.getByTestId(`admin-settings-section-tab-${tab.id}`).querySelector('svg')).toBeNull();
+    }
+  });
+
+  it('keeps the page header visible while settings load', () => {
+    isLoading = true;
+    renderSettings();
+    expect(screen.getByTestId('admin-settings-page').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getByText('Loading settings')).toBeInTheDocument();
+  });
+
+  it('shows an inline error with a retry action', () => {
+    isError = true;
+    renderSettings();
+    expect(screen.getByText('Could not load settings.')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetchSettings).toHaveBeenCalledOnce();
+  });
+
+  it('offers to clear a search with no matches', () => {
+    router.search = { tab: 'admin-settings', q: 'zzzz-no-setting-matches' };
+    renderSettings();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No settings match these filters');
+    fireEvent.click(screen.getByTestId('admin-settings-clear-filters-btn'));
+    expect(screen.getByTestId('admin-settings-search-input')).toHaveValue('');
+  });
+
   it('focuses the real settings search with /', () => {
     render(
       <CssVarsProvider theme={appTheme}>
@@ -223,22 +268,74 @@ describe('AdminSettingsTab URL state', () => {
   });
 });
 
-describe('AdminSettingsTab generation models setting', () => {
-  it('renders the bespoke generation models card and no generic video or music card', () => {
-    renderAiTab();
+describe('AdminSettingsTab model settings', () => {
+  const moved = [...MODEL_SETTINGS_ONLY_KEYS];
 
-    expect(screen.getByTestId('admin-generation-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
-    expect(screen.queryByTestId('generic-setting-musicGeneration')).toBeNull();
+  it('covers the discovery, default, free-tier and generation keys', () => {
+    for (const key of [
+      'enableModelDiscovery',
+      'modelDiscoveryMode',
+      'DefaultAPIModel',
+      'recommendedModelIds',
+      'freeTierModelGateEnabled',
+      'freeTierAllowedModels',
+      'videoGeneration',
+      'musicGeneration',
+    ] as const) {
+      expect(MODEL_SETTINGS_ONLY_KEYS.has(key), key).toBe(true);
+    }
   });
-});
 
-describe('AdminSettingsTab recommended models setting', () => {
-  it('renders the bespoke recommended models editor and no generic recommendedModelIds card', () => {
+  it('shares no key with a setting home, so no setting gets two editors', () => {
+    const shared = moved.filter(key => HOME_BY_KEY.has(key));
+    expect(shared).toEqual([]);
+  });
+
+  it.each([
+    ['AI', aiTab],
+    ['SecOps', findTab(settingsMap.freeTierModelGateEnabled.category)],
+  ] as const)('renders no editor for a moved key in the %s sections', (_name, tab) => {
+    renderTab(tab);
+
+    for (const key of moved) {
+      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+      expect(screen.queryByTestId(`string-list-setting-${key}`), key).toBeNull();
+    }
+    expect(screen.queryByTestId('admin-generation-models-card')).toBeNull();
+  });
+
+  it('still lists the other AI settings and links to Models > Settings', () => {
     renderAiTab();
 
-    expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
+    expect(screen.getByTestId('generic-setting-agentVideoClipsPerRun')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-settings-models-link-AI'));
+    const call = router.navigate.mock.calls.at(-1)?.[0] as { to: string; search: Record<string, unknown> };
+    expect(call.to).toBe('/admin');
+    expect(call.search).toMatchObject({ tab: 'models', modelsSection: 'settings' });
+  });
+
+  it('points to Models > Settings from every category that lost a key', () => {
+    renderTab(findTab(settingsMap.freeTierModelGateEnabled.category));
+
+    expect(
+      screen.getByTestId(`admin-settings-models-link-${settingsMap.freeTierModelGateEnabled.category}`)
+    ).toBeTruthy();
+  });
+
+  it('points a search for a moved key to Models > Settings', () => {
+    router.search = { tab: 'admin-settings', q: 'free-tier model gate' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-freeTierModelGateEnabled')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-models-link'));
+    expect(router.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin' }));
+  });
+
+  it('shows no Models pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-models-hint')).toBeNull();
   });
 });
 
@@ -315,6 +412,29 @@ describe('AdminSettingsTab field default value', () => {
     renderAiTab();
 
     expect(passedDefault('forcedRetrievalSpreadFloorPct')).toBe(settingsMap.forcedRetrievalSpreadFloorPct.defaultValue);
+  });
+});
+
+describe('AdminSettingsTab full-admin-only settings', () => {
+  const lockedNote = (key: SettingKey) => screen.getByTestId(`generic-setting-${key}`).getAttribute('data-locked-note');
+  const signInAs = (user: { isAdmin: boolean; adminPermissions?: string[] }) =>
+    useUser.setState({ currentUser: user as unknown as ReturnType<typeof useUser.getState>['currentUser'] });
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('locks a setting that constrains delegates for a settings:manage delegate, and only that one', () => {
+    signInAs({ isAdmin: false, adminPermissions: ['settings:manage'] });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBe('Only full administrators can change this setting.');
+    expect(lockedNote('turnstileEnabled')).toBeNull();
+  });
+
+  it('leaves it editable for a full admin', () => {
+    signInAs({ isAdmin: true });
+    renderTab(usersTab);
+
+    expect(lockedNote('enforceMFA')).toBeNull();
   });
 });
 

@@ -6,7 +6,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import { useGetSubscriptions, useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
+import { useGetSeatPlan, useGetSubscriptions, useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
@@ -26,7 +26,7 @@ import { trackUpsell } from '@client/app/utils/funnelEvents';
 import { BILLING_PLANS_SURFACE } from './billingUpsell';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
-export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
+export type BillingEntry = 'credits_chip' | 'credits_cta' | 'studio_header' | 'deep_link' | 'profile_menu' | 'unknown';
 
 interface BillingModalProps {
   open: boolean;
@@ -121,6 +121,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const { t } = useTranslation();
   const transactions = useGetCreditTransactions({ enabled: open });
   const subscriptions = useGetSubscriptions({ enabled: open });
+  const seatPlanQuery = useGetSeatPlan({ enabled: open });
   const plans = useGetSubscriptionPlans({ enabled: open });
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
@@ -175,16 +176,18 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   // plans-first). Data from an earlier successful read is still the user's plan.
   const planUnknown = subscriptions.isError && !subscriptions.data;
   // A failed payment keeps plans on top: fixing the card is the action that matters.
-  const plansFirst = !planUnknown && (!currentSubscription || hasPaymentIssue);
+  // A plan held through an org seat stands in only when there is no personal one to show or fix.
+  const seatPlan = currentSubscription || planUnknown ? null : (seatPlanQuery.data ?? null);
+  const plansFirst = !planUnknown && !seatPlan && (!currentSubscription || hasPaymentIssue);
   // Waits for the plan prices too (PlansSection reads the same cached queries), so PlansSection never
   // swaps its own skeleton for cards after mount: a deep-link scroll to a section below the plans would
   // otherwise land on a position that moves. isLoading, not isPending: a disabled query stays pending.
-  const ready = !subscriptions.isPending && !plans.isLoading;
+  const ready = !subscriptions.isPending && !plans.isLoading && !seatPlanQuery.isLoading;
   // useGetSubscriptionPlans only fetches with enforceCredits on; a disabled query is pending forever, so
   // PlansSection would hold its skeleton for good. Without plans, Billing is the credit packs alone.
   const plansOffered = !(plans.isPending && plans.fetchStatus === 'idle');
   const plansLead = ready && plansOffered && plansFirst;
-  const nudgeToCredits = !!currentSubscription || planUnknown || !plansOffered;
+  const nudgeToCredits = !!currentSubscription || !!seatPlan || planUnknown || !plansOffered;
 
   useEffect(() => {
     if (!open || !plansLead || impressionShownRef.current) return;
@@ -219,11 +222,17 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       : t('billing.team_no_plan', 'No team plan')
     : currentSubscription
       ? (SUBSCRIPTION_PLANS_MAP[currentSubscription.priceId]?.name ?? t('billing.plan_fallback', 'Subscription'))
-      : t('billing.free_plan', 'Free');
+      : seatPlan
+        ? seatPlan.planName
+        : t('billing.free_plan', 'Free');
   const planDetail = !headerSubscription
     ? teamAccount
       ? t('billing.team_no_plan_detail', 'Credits are added by a team admin')
-      : t('billing.free_plan_detail', 'Pay as you go with credit packs')
+      : seatPlan
+        ? t('billing.seat_plan_detail', 'Included with your seat in {{organization}}', {
+            organization: seatPlan.organizationName,
+          })
+        : t('billing.free_plan_detail', 'Pay as you go with credit packs')
     : headerPaymentIssue
       ? t('billing.payment_failed', 'Payment failed')
       : headerSubscription.canceledAt
@@ -240,7 +249,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       title={
         planUnknown
           ? t('billing.plans_heading', 'Plans')
-          : currentSubscription
+          : currentSubscription || seatPlan
             ? t('billing.plans_change', 'Your plan')
             : t('billing.plans_upgrade', 'Upgrade')
       }
@@ -249,14 +258,27 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
           ? t('billing.plans_heading_sub', 'Monthly plans with a credit allowance.')
           : currentSubscription
             ? t('billing.plans_change_sub', 'Manage, change or cancel your subscription.')
-            : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
+            : seatPlan
+              ? t('billing.seat_plan_detail', 'Included with your seat in {{organization}}', {
+                  organization: seatPlan.organizationName,
+                })
+              : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
       }
     >
-      <PlansSection
-        onSubscriptionChanged={() => {
-          purchasedRef.current = true;
-        }}
-      />
+      {seatPlan ? (
+        <Typography level="body-sm" data-testid="billing-seat-plan-notice">
+          {t(
+            'billing.seat_plan_notice',
+            'Your team covers your plan, so there is nothing to upgrade here. Credit packs still top up your personal balance.'
+          )}
+        </Typography>
+      ) : (
+        <PlansSection
+          onSubscriptionChanged={() => {
+            purchasedRef.current = true;
+          }}
+        />
+      )}
     </Section>
   );
   const creditsSection = (
@@ -438,7 +460,13 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
                   ? t('billing.low_org', 'An organization admin can add credits to this account.')
                   : currentSubscription
                     ? t('billing.low_with_plan', 'Top up to keep working until your allowance renews.')
-                    : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
+                    : seatPlan
+                      ? t(
+                          'billing.low_seat_plan',
+                          "A pack tops you up now. Your team's credits are on the {{organization}} account.",
+                          { organization: seatPlan.organizationName }
+                        )
+                      : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
               </Typography>
               {ready && !isOrgAccount && (
                 <Button

@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ Session: { findById: (...a: unknown[]) => mockFindById(...a) } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {

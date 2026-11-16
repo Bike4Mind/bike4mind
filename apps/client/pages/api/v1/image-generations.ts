@@ -9,9 +9,9 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
+import { getImageGeneration } from '@bike4mind/server-utils/imageGenerations/imageGeneration';
 import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';

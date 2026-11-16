@@ -6,7 +6,8 @@ import type {
   DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
-  IDataLakeResearchConfigDocument,
+  IDataLakeResearchConfigResponse,
+  ResearchSource,
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
   ResearchScheduleCadence,
@@ -2486,11 +2487,17 @@ export type ResearchConfigInput = {
   cadence?: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT. */
   reviewBacklogLimit?: number;
+  source?: ResearchSource;
+  /** Absolute http(s) address of an RSS or Atom feed; sent when `source` is 'feed', null clears it. */
+  feedUrl?: string | null;
   query?: string;
   model?: string | null;
   maxResults?: number;
   maxProposals?: number;
   recencyDays?: number | null;
+  trustedDomains?: string[];
+  autoAdmitTrusted?: boolean;
+  maxAutoAdmits?: number;
   reviewDomains?: string[];
   unlistedSources?: ResearchUnlistedSources;
   blockedDomains?: string[];
@@ -2887,7 +2894,7 @@ export function useDataLakeResearchConfigs(dataLakeId: string | null, opts?: { e
   const query = useQuery({
     queryKey: dataLakeKeys.researchConfigs(dataLakeId),
     queryFn: async () => {
-      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[]; pendingProposals: number }>(
+      const { data } = await api.get<{ data: IDataLakeResearchConfigResponse[]; pendingProposals: number }>(
         `/api/data-lakes/${dataLakeId}/research/configs`
       );
       return data;
@@ -2910,7 +2917,7 @@ export function useCreateDataLakeResearchConfig(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: ResearchConfigInput) => {
-      const { data } = await api.post<{ data: IDataLakeResearchConfigDocument }>(
+      const { data } = await api.post<{ data: IDataLakeResearchConfigResponse }>(
         `/api/data-lakes/${dataLakeId}/research/configs`,
         input
       );
@@ -2930,7 +2937,7 @@ export function useUpdateDataLakeResearchConfig(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ configId, ...input }: ResearchConfigInput & { configId: string }) => {
-      const { data } = await api.put<{ data: IDataLakeResearchConfigDocument }>(
+      const { data } = await api.put<{ data: IDataLakeResearchConfigResponse }>(
         `/api/data-lakes/${dataLakeId}/research/configs/${configId}`,
         input
       );

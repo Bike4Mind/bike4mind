@@ -34,7 +34,7 @@ vi.mock('@bike4mind/server-utils/middlewares/clientVersionGate', () => ({
   checkClientVersion: (...args: unknown[]) => mockCheckClientVersion(...args),
 }));
 const mockResolveAuth = vi.fn();
-vi.mock('@server/cli/resolveContractAuth', () => ({
+vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({
   resolveContractAuth: (...args: unknown[]) => mockResolveAuth(...args),
 }));
 

@@ -116,6 +116,42 @@ describe('verifyMFA', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
+  describe('passkey-only user (no authenticator app, no secret)', () => {
+    const passkeyOnlyUser = () => makeUser({ totpEnabled: false, passkeyEnabled: true, totpSecret: undefined });
+
+    it('accepts a valid backup code and consumes it atomically', async () => {
+      const repo = makeRepo();
+      const result = await verifyMFA({ user: passkeyOnlyUser(), token: 'abcde12345' }, repo);
+      expect(result.verified).toBe(true);
+      expect(result.usedBackupCode).toBe(hashBackupCode('ABCDE12345'));
+      expect(repo.atomicConsumeBackupCode).toHaveBeenCalledWith('user-1', hashBackupCode('ABCDE12345'));
+      expect(repo.update.mock.calls[0][0]).not.toHaveProperty('mfa');
+    });
+
+    it('rejects a 6-digit code, and never tries to claim a TOTP step', async () => {
+      const repo = makeRepo();
+      const error = await verifyMFA({ user: passkeyOnlyUser(), token: currentToken() }, repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect(repo.atomicClaimTotpStep).not.toHaveBeenCalled();
+      expect(repo.atomicConsumeBackupCode).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('never claims a TOTP step even when the backup code is valid', async () => {
+      const repo = makeRepo();
+      await verifyMFA({ user: passkeyOnlyUser(), token: 'FGHIJ67890' }, repo);
+      expect(repo.atomicClaimTotpStep).not.toHaveBeenCalled();
+    });
+  });
+
+  it('refuses a user with neither factor (pending app setup only)', async () => {
+    const repo = makeRepo();
+    await expect(verifyMFA({ user: makeUser({ totpEnabled: false }), token: currentToken() }, repo)).rejects.toThrow(
+      /not enabled/
+    );
+    expect(repo.atomicReserveMfaAttempt).not.toHaveBeenCalled();
+  });
+
   it('claims the step of a previous-step token, not the current step', async () => {
     const nowMs = 1_700_000_000_000; // 20s into a 30s step, clear of the boundary
     vi.useFakeTimers();
@@ -196,10 +232,7 @@ describe('verifyMFA', () => {
       lockedUntil: new Date(Date.now() + 1000),
     });
     await verifyMFA({ user, token: currentToken() }, repo);
-    const [data, options] = repo.update.mock.calls[0] as unknown as [
-      Record<string, unknown>,
-      { unset?: string[] },
-    ];
+    const [data, options] = repo.update.mock.calls[0] as unknown as [Record<string, unknown>, { unset?: string[] }];
     // Only the attempt/lockout fields are written - there is no whole-`mfa` `$set` that could
     // rebuild (and so wipe) the select:false secrets or the stored backup set.
     expect(data).not.toHaveProperty('mfa');

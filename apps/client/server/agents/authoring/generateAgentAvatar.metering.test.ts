@@ -15,8 +15,12 @@ const m = vi.hoisted(() => ({
 
 const TEXT_MODEL = { id: 'text-model', backend: 'anthropic', pricing: {} };
 
-vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: m.reserveRequestCredits }));
-vi.mock('@server/billing/assertMediaModelAdmission', () => ({ assertMediaModelAdmission: async () => undefined }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: m.reserveRequestCredits,
+}));
+vi.mock('@bike4mind/server-utils/billing/assertMediaModelAdmission', () => ({
+  assertMediaModelAdmission: async () => undefined,
+}));
 vi.mock('@bike4mind/services/imageCost', () => ({ estimateImageCredits: () => ({ requiredCredits: 1, usdCost: 0 }) }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},

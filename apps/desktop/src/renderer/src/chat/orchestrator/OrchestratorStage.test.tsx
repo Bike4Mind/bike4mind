@@ -265,6 +265,10 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-view-menu-btn')).toBeNull();
       expect(query('fake-dock-control')).toBeNull();
 
+      // No pill in the ambient line, so the count rides in it, as on the menu bar and the mini Tavern.
+      await renderSettled([agentFixture('n', 'needs-you'), agentFixture('d', 'done')], true, 'needs-action');
+      expect(el('orchestrator-ambient-status').textContent).toContain('2 need you');
+
       await renderSettled([agentFixture('w', 'working')], false);
       expect(query('orchestrator-ambient-status')).toBeNull();
       expect(query('orchestrator-view-menu-btn')).not.toBeNull();

@@ -50,7 +50,12 @@ vi.mock('@bike4mind/database', () => ({
 // behaviour).
 vi.mock('@server/services/publish', async () => {
   const { buildListQuery } = await import('./buildListQuery');
-  return { buildListQuery, buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a) };
+  return {
+    buildListQuery,
+    buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a),
+    // Every owner live: the owner-state clause is covered in artifacts/__tests__/index.test.ts.
+    excludeNonLiveOwners: async () => null,
+  };
 });
 
 import handler from '@pages/api/publish/artifacts';

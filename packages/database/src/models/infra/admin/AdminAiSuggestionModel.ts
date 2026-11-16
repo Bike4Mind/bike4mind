@@ -106,6 +106,8 @@ export const AdminAiSuggestionSchema: Schema<IAdminAiSuggestionDocument> = new S
 
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, inputHash: 1, policyVersion: 1 }, { unique: true });
 AdminAiSuggestionSchema.index({ feature: 1, status: 1, createdAt: -1 });
+AdminAiSuggestionSchema.index({ feature: 1, actionClass: 1, policyVersion: 1, status: 1, decidedAt: -1 });
+AdminAiSuggestionSchema.index({ status: 1, decidedAt: -1 });
 AdminAiSuggestionSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 AdminAiSuggestionSchema.index({ feature: 1, entityId: 1, createdAt: -1, _id: -1 });
 
@@ -187,6 +189,20 @@ export class AdminAiSuggestionRepository {
         if (attempt >= 1) throw error;
       }
     }
+  }
+
+  /** Rows for any of these (entityId, inputHash) pairs, across policy versions; may over-match pairs. */
+  async findForEntities(
+    feature: AdminAiFeature,
+    keys: { entityId: string; inputHash: string }[]
+  ): Promise<AdminAiSuggestionItem[]> {
+    if (keys.length === 0) return [];
+    const docs = await AdminAiSuggestionModel.find({
+      feature,
+      entityId: { $in: [...new Set(keys.map(key => key.entityId))] },
+      inputHash: { $in: [...new Set(keys.map(key => key.inputHash))] },
+    }).lean<LeanAdminAiSuggestion[]>();
+    return docs.map(toItem);
   }
 
   async findLatestForEntity(feature: AdminAiFeature, entityId: string): Promise<AdminAiSuggestionItem | null> {

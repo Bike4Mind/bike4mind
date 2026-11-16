@@ -41,4 +41,12 @@ describe('uploadFileToUrl', () => {
     expect(cfg.onUploadProgress).toBe(onUploadProgress);
     expect(cfg.headers['Content-Type']).toBe('text/markdown');
   });
+
+  it.each([
+    ['an absolute S3 presigned URL', 'https://bucket.s3.us-east-2.amazonaws.com/key.md?sig=x', axiosPut],
+    ['the same-origin proxy path', '/api/files/abc/upload', apiPut],
+  ])('makes the upload create-only for %s', async (_name, url, put) => {
+    await uploadFileToUrl(url, file, 'text/markdown');
+    expect(put.mock.calls[0][2].headers['If-None-Match']).toBe('*');
+  });
 });

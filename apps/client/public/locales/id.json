@@ -102,7 +102,9 @@
     "no_subscription": "Tidak Ada Langganan",
     "x_members": "{{count}} anggota",
     "x_credits": "{{count}} kredit",
-    "owner": "Pemilik"
+    "roles": {
+      "owner": "Pemilik"
+    }
   },
   "session": {
     "typeYourMessage": "Ketik pesan Anda di sini",

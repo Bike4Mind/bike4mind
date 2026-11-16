@@ -86,7 +86,7 @@ const CreateTeamModal = () => {
           organizationData: {
             name: teamName,
           },
-          callbackUrl: window.location.href,
+          callbackUrl: new URL('/organizations', window.location.origin).href,
         });
         window.location.href = sessionUrl;
       }

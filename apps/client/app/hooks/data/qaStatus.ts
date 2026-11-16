@@ -24,6 +24,7 @@ import type {
   QaTile,
 } from '@server/qa/reads';
 import { api } from '@client/app/contexts/ApiContext';
+import { rangeInstants, resolveRange } from '@client/app/components/QaStatus/dateRange';
 
 export type {
   QaDiffTest,
@@ -52,12 +53,16 @@ export interface QaStatusSearch {
   tenant?: string;
   env?: string;
   branch?: string;
+  /** Inclusive local days, YYYY-MM-DD; see components/QaStatus/dateRange.ts. */
+  from?: string;
+  to?: string;
+  /** Older links only; from/to win when present. */
   range?: '7d' | '30d';
 }
 
 export function parseQaStatusSearch(search: Record<string, unknown>): QaStatusSearch {
   const out: QaStatusSearch = {};
-  for (const key of ['product', 'tenant', 'env', 'branch'] as const) {
+  for (const key of ['product', 'tenant', 'env', 'branch', 'from', 'to'] as const) {
     const value = search[key];
     if (typeof value === 'string' && value) out[key] = value;
   }
@@ -69,7 +74,7 @@ function filterParams(search: QaStatusSearch): Record<string, string> {
   const params: Record<string, string> = {
     product: search.product ?? '',
     branch: search.branch || 'main',
-    range: search.range ?? '7d',
+    ...rangeInstants(resolveRange(search)),
   };
   if (search.tenant) params.tenant = search.tenant;
   if (search.env) params.env = search.env;
@@ -95,8 +100,8 @@ export function useQaOverview(search: QaStatusSearch) {
 
 /** Every product, so product and tenant are left out of the key and the request. */
 export function useQaSummary(search: QaStatusSearch) {
-  const { branch, range, env } = filterParams(search);
-  const params = { branch, range, ...(env ? { env } : {}) };
+  const { branch, from, to, env } = filterParams(search);
+  const params = { branch, from, to, ...(env ? { env } : {}) };
   return useQuery({
     queryKey: ['qa-summary', params],
     refetchInterval: 60_000,

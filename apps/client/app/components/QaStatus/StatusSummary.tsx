@@ -1,6 +1,7 @@
 import { FC } from 'react';
 import { Alert, Box, Card, Chip, Divider, Stack, Typography } from '@mui/joy';
 import type { QaE2eStats, QaLatencyStats, QaSummary, QaSummaryRow } from '@client/app/hooks/data/qaStatus';
+import { parseIsoDay, spanDays, type DayRange } from './dateRange';
 
 /** 0.98765 -> "98.8%"; null -> "-". */
 export function formatPercent(rate: number | null): string {
@@ -11,7 +12,14 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const e2eLine = (s: QaE2eStats) => `${s.cleanRuns} of ${plural(s.runs, 'run')} with no failures`;
 const latencyLine = (s: QaLatencyStats) => `${s.passedRuns} of ${plural(s.runs, 'run')} passed`;
 
-const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const shortDay = (day: string) =>
+  (parseIsoDay(day) as Date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+/** "7 days (Nov 10 - Nov 16)"; one day names it once. */
+function rangeLine(range: DayRange): string {
+  const days = range.from === range.to ? shortDay(range.from) : `${shortDay(range.from)} - ${shortDay(range.to)}`;
+  return `${plural(spanDays(range), 'day')} (${days})`;
+}
 
 const Figure: FC<{ label: string; value: string; detail: string; testId: string }> = ({
   label,
@@ -57,9 +65,9 @@ const Row: FC<{ row: QaSummaryRow }> = ({ row }) => (
  * (scheduled, manual dispatch, after deploy), split per suite and trigger below the totals.
  * Definitions live in server/qa/summary.ts.
  */
-const StatusSummary: FC<{ summary: QaSummary; rangeDays: number; branch: string; env?: string }> = ({
+const StatusSummary: FC<{ summary: QaSummary; range: DayRange; branch: string; env?: string }> = ({
   summary,
-  rangeDays,
+  range,
   branch,
   env,
 }) => (
@@ -67,8 +75,7 @@ const StatusSummary: FC<{ summary: QaSummary; rangeDays: number; branch: string;
     <Box>
       <Typography level="title-md">Summary</Typography>
       <Typography level="body-sm">
-        Last {rangeDays} days ({shortDate(summary.from)} - {shortDate(summary.to)}) . branch {branch} .{' '}
-        {env ?? 'all envs'} . all products and triggers
+        {rangeLine(range)} . branch {branch} . {env ?? 'all envs'} . all products and triggers
       </Typography>
     </Box>
     {summary.truncated && (

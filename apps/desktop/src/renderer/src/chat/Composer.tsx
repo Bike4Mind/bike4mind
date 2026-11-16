@@ -724,6 +724,8 @@ export function Composer({
         <SkillPicker
           commands={commandMatches}
           skills={matches}
+          installedCount={skills?.skills.length ?? 0}
+          query={query ?? ''}
           activeIndex={activeIndex}
           untrustedProject={skills?.untrustedProject ?? null}
           onPickCommand={runCommand}

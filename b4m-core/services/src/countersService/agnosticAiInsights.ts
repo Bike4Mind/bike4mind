@@ -82,6 +82,7 @@ export async function generateAgnosticAiInsights(
           temperature: 0.7,
           max_tokens: 500,
           stream: false,
+          store: false,
         });
         content = response.choices[0]?.message?.content || null;
         break;

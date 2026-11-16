@@ -1,5 +1,1 @@
-export * from './types';
-export * from './runRoute';
-export * from './settingsRoute';
-export * from './summaryRoute';
-export * from './overridesRoute';
+export * from '@bike4mind/server-utils/tutorials/routes/index';

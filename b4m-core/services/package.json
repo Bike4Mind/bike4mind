@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "25.0.0",
+  "version": "27.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -38,6 +38,16 @@
       "require": {
         "types": "./dist/dataLakeService/lakeGateWideningRule.d.cts",
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
+      }
+    },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
       }
     },
     "./evals/lakeRag": {
@@ -188,6 +198,16 @@
       "require": {
         "types": "./dist/llm/toolFinishObserver.d.cts",
         "default": "./dist/llm/toolFinishObserver.cjs"
+      }
+    },
+    "./organizationService/orgEventObserver": {
+      "import": {
+        "types": "./dist/organizationService/orgEventObserver.d.mts",
+        "default": "./dist/organizationService/orgEventObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/orgEventObserver.d.cts",
+        "default": "./dist/organizationService/orgEventObserver.cjs"
       }
     },
     "./llm/ChatCompletionInvoke": {
@@ -512,7 +532,7 @@
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
+    "mongoose": "^8.24.7",
     "openai": "^6.46.0",
     "p-limit": "^7.3.2",
     "sharp": "^0.35.4",

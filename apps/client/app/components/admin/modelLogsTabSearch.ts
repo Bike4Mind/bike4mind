@@ -1,5 +1,6 @@
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
-import { oneOf, parsePage, toNumber } from './adminSearchValues';
+import { parseCalendarDate, parsePage, toNumber } from './adminSearchValues';
+import { ADMIN_PAGE_SIZES } from './shared/adminPagination';
 import { DEFAULT_PRESET_DAYS, getPresetRange } from './EventMetrics/UserActivity/dateRange';
 
 /**
@@ -24,7 +25,8 @@ export const MODEL_LOGS_TAB_PARAMS = [
   MODEL_LOGS_MODEL_PARAM,
 ] as const;
 
-export const MODEL_LOGS_PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+// The DataTable footer's sizes, so every size it offers round-trips through the URL.
+export const MODEL_LOGS_PAGE_SIZE_OPTIONS = ADMIN_PAGE_SIZES;
 type ModelLogsPageSize = (typeof MODEL_LOGS_PAGE_SIZE_OPTIONS)[number];
 
 /** The model filter's options, in menu order; no param is every model. */
@@ -34,11 +36,9 @@ export const MODEL_LOGS_MODEL_OPTIONS = [
   { value: 'claude-3-opus', label: 'Claude 3 Opus' },
   { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet' },
 ] as const;
-export type ModelLogsModel = (typeof MODEL_LOGS_MODEL_OPTIONS)[number]['value'];
-const MODEL_VALUES = MODEL_LOGS_MODEL_OPTIONS.map(option => option.value);
-
-// The date inputs' and the model-logs API's format.
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** Any model id: the detail page of a model links here with its own id, which is rarely one of the options. */
+export type ModelLogsModel = string;
+const MODEL_ID_MAX_LENGTH = 200;
 
 export type ModelLogsSearch = {
   [MODEL_LOGS_PAGE_PARAM]?: number;
@@ -72,11 +72,11 @@ export const defaultModelLogsView = (): ModelLogsView => ({
   model: undefined,
 });
 
-// A calendar date only: the round trip rejects `2026-02-30`, which Date would roll into March.
-const parseDate = (value: unknown): string | undefined => {
-  if (typeof value !== 'string' || !DATE_PATTERN.test(value)) return undefined;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value) ? value : undefined;
+// Trimmed and bounded; empty or the legacy "all" sentinel means every model.
+const parseModelId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const id = value.trim();
+  return id.length > 0 && id !== 'all' && id.length <= MODEL_ID_MAX_LENGTH ? id : undefined;
 };
 
 const parseModelLogsPage = (value: unknown): number | undefined => {
@@ -95,9 +95,9 @@ export const MODEL_LOGS_SEARCH_PARSERS: {
 } = {
   [MODEL_LOGS_PAGE_PARAM]: parseModelLogsPage,
   [MODEL_LOGS_LIMIT_PARAM]: parseLimit,
-  [MODEL_LOGS_FROM_PARAM]: parseDate,
-  [MODEL_LOGS_TO_PARAM]: parseDate,
-  [MODEL_LOGS_MODEL_PARAM]: oneOf(MODEL_VALUES),
+  [MODEL_LOGS_FROM_PARAM]: parseCalendarDate,
+  [MODEL_LOGS_TO_PARAM]: parseCalendarDate,
+  [MODEL_LOGS_MODEL_PARAM]: parseModelId,
 };
 
 /**
@@ -107,8 +107,8 @@ export const MODEL_LOGS_SEARCH_PARSERS: {
  */
 export function modelLogsViewFromSearch(search: Record<string, unknown>): ModelLogsView {
   const defaults = defaultModelLogsView();
-  const startDate = parseDate(search[MODEL_LOGS_FROM_PARAM]) ?? defaults.startDate;
-  const endDate = parseDate(search[MODEL_LOGS_TO_PARAM]) ?? defaults.endDate;
+  const startDate = parseCalendarDate(search[MODEL_LOGS_FROM_PARAM]) ?? defaults.startDate;
+  const endDate = parseCalendarDate(search[MODEL_LOGS_TO_PARAM]) ?? defaults.endDate;
   return {
     page: parseModelLogsPage(search[MODEL_LOGS_PAGE_PARAM]) ?? defaults.page,
     limit: parseLimit(search[MODEL_LOGS_LIMIT_PARAM]) ?? defaults.limit,
@@ -131,8 +131,8 @@ export function modelLogsViewToSearch(view: ModelLogsView): {
   return {
     [MODEL_LOGS_PAGE_PARAM]: view.page === defaults.page ? undefined : parseModelLogsPage(view.page),
     [MODEL_LOGS_LIMIT_PARAM]: view.limit === defaults.limit ? undefined : parseLimit(view.limit),
-    [MODEL_LOGS_FROM_PARAM]: isDefaultRange ? undefined : parseDate(view.startDate),
-    [MODEL_LOGS_TO_PARAM]: isDefaultRange ? undefined : parseDate(view.endDate),
+    [MODEL_LOGS_FROM_PARAM]: isDefaultRange ? undefined : parseCalendarDate(view.startDate),
+    [MODEL_LOGS_TO_PARAM]: isDefaultRange ? undefined : parseCalendarDate(view.endDate),
     [MODEL_LOGS_MODEL_PARAM]: MODEL_LOGS_SEARCH_PARSERS[MODEL_LOGS_MODEL_PARAM](view.model),
   };
 }

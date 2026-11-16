@@ -30,7 +30,7 @@ import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
 import { admitPendingUploads, type PendingUploads } from '@server/files/pendingUploads';
 import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
@@ -217,6 +217,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
               getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
                 ContentLength: options?.ContentLength,
+                // Create-only for the SPA, whose uploader (uploadFileToUrl) sends `If-None-Match: *`.
+                // API-key callers are not yet required to send it, so their PUT stays unconditional.
+                ...(mode === 'put' && !req.apiKeyInfo && { IfNoneMatch: '*' as const }),
               }),
           },
           // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the

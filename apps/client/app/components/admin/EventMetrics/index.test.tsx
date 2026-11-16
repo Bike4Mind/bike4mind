@@ -81,6 +81,25 @@ beforeEach(() => {
 });
 
 describe('EventMetricsTab views', () => {
+  it('preserves adoption filters while switching through the raw views', async () => {
+    const router = await renderTab(
+      '/admin?tab=event-metrics&eventsView=by-user&adoptionAccounts=internal&adoptionClient=desktop&adoptionDays=28&adoptionEnd=2026-06-14&adoptionFeature=chat'
+    );
+    fireEvent.click(await screen.findByTestId('event-metrics-view-events'));
+    await screen.findByTestId('overview-tab');
+    fireEvent.click(screen.getByTestId('event-metrics-view-adoption'));
+    await screen.findByTestId('feature-adoption-view');
+    expect(router.state.location.search).toMatchObject({
+      eventsView: 'adoption',
+      adoptionAccounts: 'internal',
+      adoptionClient: 'desktop',
+      adoptionDays: '28',
+      adoptionEnd: '2026-06-14',
+      adoptionFeature: 'chat',
+    });
+    expect(screen.getByTestId('adoption-audience-internal')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('opens the By user grid from a deep link', async () => {
     await renderTab('/admin?tab=event-metrics&eventsView=by-user');
     expect(await screen.findByTestId('user-activity-view')).toBeInTheDocument();

@@ -221,3 +221,35 @@ describe('/api/admin/partner-signup-rules — list (GET)', () => {
     expect(repo.listRules).toHaveBeenCalledWith(expect.objectContaining({ page: 1, limit: 25 }));
   });
 });
+
+describe('/api/admin/partner-signup-rules - managed rule tags (POST)', () => {
+  const DELEGATE = { isAdmin: false, id: 'delegate-1', adminPermissions: ['settings:manage'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo.findByDomain.mockResolvedValue(null);
+    repo.create.mockImplementation(async (data: object) => ({ id: 'r1', enabled: true, ...data }));
+  });
+
+  it('refuses a managed tag from a settings:manage delegate with a 403 and never writes', async () => {
+    const { req, res } = makeReqRes('POST', {
+      user: DELEGATE,
+      body: { ...validRule, tags: ['beta', 'optihashi:pro'] },
+    });
+    await expect(handlers.post(req, res)).rejects.toThrow('Only full administrators can assign managed tags');
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate create a rule with ordinary tags', async () => {
+    const { req, res } = makeReqRes('POST', { user: DELEGATE, body: { ...validRule, tags: ['beta'] } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ tags: ['beta'] }));
+  });
+
+  it('lets a full admin create a rule with a managed tag', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, tags: ['optihashi:pro'] } });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+});

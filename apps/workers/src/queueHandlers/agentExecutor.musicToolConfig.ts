@@ -8,7 +8,7 @@
  */
 import type { MusicToolConfig } from '@bike4mind/services/llm/tools';
 import type { Logger } from '@bike4mind/observability';
-import { getCreateMusicJobDeps, getMusicJobDeps } from '@server/generationJobs/wiring';
+import { getCreateMusicJobDeps, getMusicJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
 import {
   limitJobsPerRun,

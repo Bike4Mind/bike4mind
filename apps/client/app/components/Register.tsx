@@ -1,4 +1,5 @@
 import { useUser } from '@client/app/contexts/UserContext';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
 import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
@@ -106,9 +107,7 @@ const Register: React.FC = () => {
       setOtcCode('');
       setPendingToken(null);
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }

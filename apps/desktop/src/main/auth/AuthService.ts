@@ -149,6 +149,8 @@ export class AuthService {
 
   /** Read the stored environment and session. Call after the app `ready` event. */
   async initialize(): Promise<void> {
+    // First, so no read or token refresh races the re-save.
+    await this.deps.vault.reencrypt();
     const stored = await this.deps.vault.getEnvironment();
     const selection = migrateSelection(stored);
     // Stored so the pick follows the baked default if it moves, not just labelled on each read.

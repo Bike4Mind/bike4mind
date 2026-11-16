@@ -1,5 +1,57 @@
 # @bike4mind/sdk
 
+## 2.2.0
+
+### Minor Changes
+
+- [#7146](https://github.com/Bike4Mind/bike4mind/pull/7146) [`17bfadb`](https://github.com/Bike4Mind/bike4mind/commit/17bfadb5b4024f0ba61dabd24aee3ed319b5bb4e) Thanks [@erikbethke](https://github.com/erikbethke)! - mint non-admin QA test personas with a personas:mint API key scope
+
+- [#7156](https://github.com/Bike4Mind/bike4mind/pull/7156) [`4c28bfe`](https://github.com/Bike4Mind/bike4mind/commit/4c28bfe4f44fd27300d180ba8f7e3bb649dc560f) Thanks [@onoya](https://github.com/onoya)! - issue completion runs and attribute orchestration spend to them
+
+- [#7356](https://github.com/Bike4Mind/bike4mind/pull/7356) [`b191684`](https://github.com/Bike4Mind/bike4mind/commit/b1916849f4804d9b017aff34c6efd0e07ecc0c60) Thanks [@vinchi777](https://github.com/vinchi777)! - add project usage export and manager reads
+
+- [#7356](https://github.com/Bike4Mind/bike4mind/pull/7356) [`b191684`](https://github.com/Bike4Mind/bike4mind/commit/b1916849f4804d9b017aff34c6efd0e07ecc0c60) Thanks [@vinchi777](https://github.com/vinchi777)! - enforce content sharing policies
+
+- [#7411](https://github.com/Bike4Mind/bike4mind/pull/7411) [`bfc13fa`](https://github.com/Bike4Mind/bike4mind/commit/bfc13fa58b24832e578f1735075c99d3f6d690c1) Thanks [@onoya](https://github.com/onoya)! - publish model card blurb and provider label on the v1 model lists
+
+- [#7537](https://github.com/Bike4Mind/bike4mind/pull/7537) [`aa6af34`](https://github.com/Bike4Mind/bike4mind/commit/aa6af34da65be95a353cbbecf747630c5b535ffa) Thanks [@onoya](https://github.com/onoya)! - add GET /api/v1/files/{id}/lineage
+
+- [#7563](https://github.com/Bike4Mind/bike4mind/pull/7563) [`a75cbd5`](https://github.com/Bike4Mind/bike4mind/commit/a75cbd5c119f287ef50b3d3096f8ce26df8dbf64) Thanks [@onoya](https://github.com/onoya)! - publish agent credit transfer and create-from-context as v1 contracts
+
+- [#7578](https://github.com/Bike4Mind/bike4mind/pull/7578) [`de83daa`](https://github.com/Bike4Mind/bike4mind/commit/de83daa13221fbc5c58af5e9093c4cf5fd436489) Thanks [@onoya](https://github.com/onoya)! - approve and deny agent pending actions from native clients
+
+### Patch Changes
+
+- [#7544](https://github.com/Bike4Mind/bike4mind/pull/7544) [`2ceaa6e`](https://github.com/Bike4Mind/bike4mind/commit/2ceaa6e667245f3819d501e24acb57873ab92cc4) Thanks [@onoya](https://github.com/onoya)! - carry the redeem code in the request body, not the URL
+
+## 2.1.0
+
+### Minor Changes
+
+- [#6638](https://github.com/Bike4Mind/bike4mind/pull/6638) [`5967a8c`](https://github.com/Bike4Mind/bike4mind/commit/5967a8c6dc37e9b3acc7a49c3aa0155a2f52b405) Thanks [@rexendy](https://github.com/rexendy)! - publish project member, invite and system-prompt routes as v1 contracts
+
+- [#6696](https://github.com/Bike4Mind/bike4mind/pull/6696) [`a885484`](https://github.com/Bike4Mind/bike4mind/commit/a8854848f821b2ecc9935bcc75b6be9874e98e5d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish session files, search and messages as v1 contracts
+
+- [#6862](https://github.com/Bike4Mind/bike4mind/pull/6862) [`748ea85`](https://github.com/Bike4Mind/bike4mind/commit/748ea85a8d1bd81600c3ae1a671b0ea27d350089) Thanks [@onoya](https://github.com/onoya)! - record why the chunker declined to read a file
+
+- [#6870](https://github.com/Bike4Mind/bike4mind/pull/6870) [`b7d3341`](https://github.com/Bike4Mind/bike4mind/commit/b7d3341723c84c82958228e4d08bfca11608c62a) Thanks [@jjmarfa](https://github.com/jjmarfa)! - count the primary toward the FLUX input-image cap and document ref_image_N
+
+- [#6893](https://github.com/Bike4Mind/bike4mind/pull/6893) [`8946448`](https://github.com/Bike4Mind/bike4mind/commit/894644869c6675b70f736b7dc2d5b5ec79015a2d) Thanks [@onoya](https://github.com/onoya)! - client version handshake with upgrade-required gate
+
+- [#6894](https://github.com/Bike4Mind/bike4mind/pull/6894) [`8705571`](https://github.com/Bike4Mind/bike4mind/commit/870557199347df6f57bab891817d4c92ebf73568) Thanks [@onoya](https://github.com/onoya)! - contract-backed client configuration endpoint
+
+- [#6897](https://github.com/Bike4Mind/bike4mind/pull/6897) [`d5ffa15`](https://github.com/Bike4Mind/bike4mind/commit/d5ffa15324a7ae076c80d4ae519c6854ae28723e) Thanks [@onoya](https://github.com/onoya)! - tell suspended users why and how to appeal
+
+- [#6975](https://github.com/Bike4Mind/bike4mind/pull/6975) [`f2fd74a`](https://github.com/Bike4Mind/bike4mind/commit/f2fd74a7f248679e9f9d3fbb2305fb18422e60a6) Thanks [@ken-b4m](https://github.com/ken-b4m)! - create, update and read skills from a SKILL.md with an API key
+
+- [#6983](https://github.com/Bike4Mind/bike4mind/pull/6983) [`a331c98`](https://github.com/Bike4Mind/bike4mind/commit/a331c985c1ba3ecad87139f2316d08de5aa89fe3) Thanks [@wescarda](https://github.com/wescarda)! - add bounding box support for BFL region edits
+
+- [#7193](https://github.com/Bike4Mind/bike4mind/pull/7193) [`83959a6`](https://github.com/Bike4Mind/bike4mind/commit/83959a656170b44fc09e59f85edb69f888a97424) Thanks [@onoya](https://github.com/onoya)! - look up an account from its provider end-user identifier
+
+### Patch Changes
+
+- [#6971](https://github.com/Bike4Mind/bike4mind/pull/6971) [`c957dbe`](https://github.com/Bike4Mind/bike4mind/commit/c957dbec656f7b243081a2b3b38c6b40dddcfa33) Thanks [@ken-b4m](https://github.com/ken-b4m)! - round-trip SKILL.md model and stop false missing-file warnings
+
 ## 2.0.0
 
 ### Major Changes

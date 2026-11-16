@@ -29,7 +29,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (h: unknown) => h }),
 }));
 vi.mock('@bike4mind/database', async () => ({
-  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: m.record },

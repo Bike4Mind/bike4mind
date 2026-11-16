@@ -100,6 +100,9 @@ export interface ChatMedia {
    * is how the user finds the same file in the web app's file browser.
    */
   fabFileId?: string;
+  /** Pixel size of a kept image, so its thumbnail holds its box before it loads. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -172,6 +175,8 @@ export interface ChatToolCall {
   name: string;
   input: Record<string, unknown>;
   status: ChatToolStatus;
+  /** Trusted local skill result; retained so resumed replies preserve its provenance. */
+  ownContent?: true;
   /** Truncated for display; the model receives the full (size-capped) result. */
   preview?: string;
   error?: string;
@@ -189,8 +194,20 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /**
+   * Set with `approvalId` when the gate gave reasons for asking (a shell call that runs a script
+   * written in this session, reaches a protected location, reads a secret, ...). Each is already a
+   * paragraph of `approvalDetail` below the command; kept apart so a surface showing only the
+   * first line knows it would drop them.
+   */
+  approvalReasons?: string[];
   /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
   approvalOnceOnly?: boolean;
+  /**
+   * Set with `approvalId` when the gate asks about this call in every mode because it acts as the
+   * signed-in user (`askInFull`). Only the full app card may answer it, never the menu bar.
+   */
+  approvalInAppOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -256,12 +273,6 @@ export interface ChatToolCall {
    */
   label?: string;
   /**
-   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
-   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
-   * Kept on the row so a continued reply, which replays it, judges it the same way.
-   */
-  ownContent?: true;
-  /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
    *
@@ -325,7 +336,7 @@ export interface ChatToolApproval {
   decidedBy: ChatApprovalDecidedBy;
   /** Whether a card was shown for this call. */
   asked: boolean;
-  /** Why the card asked when something beyond the tool itself raised it (a rule, a taint, a loop). */
+  /** Why the card asked when something beyond the tool itself raised it (a rule, a protected path, a loop). */
   askedBecause?: string;
   /** ISO time the card was shown; absent when none was. */
   requestedAt?: string;
@@ -737,6 +748,12 @@ export interface ChatMessage {
   model?: string;
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /**
+   * A plain reply's one request: its server request id and settled charge, which a reply with
+   * `rounds` keeps per round instead (see ChatReplyRound.requestId). Absent on older replies.
+   */
+  requestId?: string;
+  settled?: ChatSettledCharge;
   /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
   promptCache?: ChatPromptCacheStamp;
   contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
@@ -897,7 +914,7 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
-  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  /** A Skill Market import, written by someone else, so its body is framed as theirs. */
   imported?: true;
 }
 
@@ -1200,18 +1217,16 @@ export type ChatSessionMode = 'chat' | 'code';
  * goes ahead.
  *
  * Deliberately NOT ChatSessionMode, which says what a conversation is FOR. This says what it
- * may do without stopping, and it governs one axis only: filesystem and execution. The
- * generation tools are gated on COST, not safety, and ask in every mode - approving
- * `bash_execute` says nothing about whether the user wants to spend credits on an image.
+ * may do without stopping.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
  *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
- *           command naming a path outside the granted folders (or one that does not parse), a
- *           read of a `.env` file, or the same call a third time in a row. Modelled on
- *           opencode's permission defaults; see ChatService.autoApproves.
- *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
- *           this user can read and reach the internet with nobody looking. Chosen per
- *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.
+ *           command that writes outside the granted folders, a read of a `.env` file, a
+ *           command that writes permission settings, or the same call a third time in a row.
+ *           Commands that cannot be parsed or fully followed also ask; explicit user rules still apply.
+ *  - 'full' commands run as the user without OS confinement. Opaque commands, protected paths,
+ *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
+ *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
  * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
  * output can raise it; see ChatService.setApprovalMode and HostContext.
@@ -1620,6 +1635,11 @@ export interface SendMessageRequest {
   text: string;
   /** Descriptors returned by `addAttachments`; their bytes are already on disk. */
   attachments?: ChatAttachment[];
+  /**
+   * App-written context for this turn only, sent to the model and never drawn (ChatMessage.notes);
+   * e.g. the part a point-and-edit request in the 3D pane is about.
+   */
+  notes?: string[];
 }
 
 /**
@@ -2052,6 +2072,24 @@ export interface ChatReplyRound {
    * Persisted with the session, but stripped before the renderer sees it (sessionForRenderer).
    */
   sent?: ChatSentRound;
+  /**
+   * The server's id for this round's request: the `X-Request-ID` it was sent with, as the stream's
+   * `meta` event echoed it. The key that counts the round's charge exactly once. Absent on older
+   * rounds and on servers that send no `meta`.
+   */
+  requestId?: string;
+  /** What the server's ledger recorded for this round's request; see ChatSettledCharge. */
+  settled?: ChatSettledCharge;
+}
+
+/**
+ * The charge the server committed for one request, from the stream's `settled` event. Unlike
+ * `usage.creditsUsed`, computed before settlement, this is what the ledger holds. Stored only:
+ * totals still come from `usage`.
+ */
+export interface ChatSettledCharge {
+  creditsCharged: number;
+  usdCost?: number;
 }
 
 /** A round's assistant message as sent, plus any app text appended to its last tool result. */

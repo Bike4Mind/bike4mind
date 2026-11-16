@@ -4,7 +4,7 @@ import type {
   AdminUsersBulkAction,
   AdminUsersBulkExecuteRequest,
 } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
-import { cohortHashOf, type BulkUser, type ResolveDeps } from './resolve';
+import { cohortHashOf, type BulkUser, type ResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 
 const mocks = vi.hoisted(() => ({
   policy: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('@server/admin/approvals/service', () => ({
   getApprovalPolicy: mocks.policy,
   requestApproval: mocks.requestApproval,
 }));
-vi.mock('./adapters', () => ({ usersBulkResolveDeps: {} }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({ usersBulkResolveDeps: {} }));
 
 import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
 

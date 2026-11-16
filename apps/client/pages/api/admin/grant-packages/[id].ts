@@ -10,6 +10,7 @@ import {
   recordAdminActionFromRequest,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
+import { assertCanChangeManagedTags } from '@client/lib/entitlements/managedUserTags';
 import { z } from 'zod';
 
 const handler = adminApi({
@@ -49,6 +50,11 @@ const handler = adminApi({
     }
 
     const updated = await withTransaction(async () => {
+      // Read in the transaction, so a concurrent edit conflicts instead of being judged against a stale package.
+      if ('tags' in data) {
+        const current = await grantPackageRepository.findById(id);
+        assertCanChangeManagedTags(req.user, current?.tags, data.tags);
+      }
       const pkg = await grantPackageRepository.updatePackage(id, reason ? { ...data, reason } : data);
       if (!pkg) throw new NotFoundError('Grant package not found');
       const changes: AuditChange[] = changedFields.map(field => ({

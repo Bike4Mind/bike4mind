@@ -13,7 +13,16 @@ import {
 } from './subscriptionsTabSearch';
 
 export type SubscriptionsBuiltInView = {
-  id: 'paying' | 'pastDue' | 'mismatched' | 'canceling' | 'comped' | 'churned' | 'all';
+  id:
+    | 'paying'
+    | 'pastDue'
+    | 'mismatched'
+    | 'canceling'
+    | 'comped'
+    | 'churned'
+    | 'all'
+    | 'payingNoRecorded'
+    | 'cancelingRecent';
   label: string;
   /** The filters the view applies on top of a cleared filter set. */
   filters: Partial<SubscriptionsListView>;
@@ -22,7 +31,12 @@ export type SubscriptionsBuiltInView = {
 };
 
 /** Tab counts by view: the summary's views, plus All and Canceling read off filtered summary totals. */
-export type SubscriptionsViewCounts = AdminSubscriptionsSummary['views'] & { all: number; canceling: number };
+export type SubscriptionsViewCounts = AdminSubscriptionsSummary['views'] & {
+  all: number;
+  canceling: number;
+  payingNoRecorded?: number;
+  cancelingRecent?: number;
+};
 
 const NOT_TERMINAL: SubscriptionStatusFilter[] = SUBSCRIPTION_STATUS_FILTERS.filter(
   status => status !== 'canceled' && status !== 'incomplete_expired'
@@ -33,6 +47,25 @@ const NOT_TERMINAL: SubscriptionStatusFilter[] = SUBSCRIPTION_STATUS_FILTERS.fil
  * whose counts label these tabs, and with the views table in docs/admin-subscriptions-spec.md 5.1.
  */
 export const SUBSCRIPTIONS_BUILT_IN_VIEWS: readonly SubscriptionsBuiltInView[] = [
+  {
+    id: 'payingNoRecorded',
+    label: 'Paying, no recorded usage (28d)',
+    filters: { usageCohort: 'payingNoRecorded' },
+    empty: {
+      title: 'No matching observations',
+      description: 'New subscriptions and unknown or incomplete history are excluded, not treated as inactive.',
+    },
+  },
+  {
+    id: 'cancelingRecent',
+    label: 'Canceling, recent usage (28d)',
+    filters: { usageCohort: 'cancelingRecent' },
+    empty: {
+      title: 'No matching observations',
+      description:
+        'Only paid-standing subscriptions with a scheduled cancellation and recorded successful usage are included.',
+    },
+  },
   {
     id: 'paying',
     label: 'Paying',

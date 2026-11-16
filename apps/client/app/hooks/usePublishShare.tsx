@@ -32,6 +32,7 @@ interface ShareState {
   resolvePublished?: () => Promise<PublishResult | null>;
   orgOption?: { label: string; hint: string };
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 }
 
 interface PublishAndShareOpts {
@@ -70,6 +71,7 @@ interface PublishAndShareOpts {
    * can be handed on before anyone notices the artifact's controls are inert.
    */
   incompleteWarning?: string;
+  policySource?: { artifactId?: string; sessionId?: string };
 }
 
 /**
@@ -97,6 +99,7 @@ export function usePublishShare() {
       resolvePublished: opts.resolvePublished,
       orgOption: opts.orgOption,
       incompleteWarning: opts.incompleteWarning,
+      policySource: opts.policySource,
     });
   }, []);
 
@@ -114,6 +117,7 @@ export function usePublishShare() {
       resolvePublished={state.resolvePublished}
       orgOption={state.orgOption}
       incompleteWarning={state.incompleteWarning}
+      policySource={state.policySource}
     />
   );
 

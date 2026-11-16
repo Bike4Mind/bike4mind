@@ -31,6 +31,7 @@ vi.mock('./RevenueCharts', () => ({
   PayingByOwnerChart: () => <div data-testid="admin-revenue-by-owner-chart" />,
   AtRiskChart: () => <div data-testid="admin-revenue-at-risk-chart" />,
 }));
+vi.mock('./payments/PaymentsView', () => ({ PaymentsView: () => <div data-testid="admin-payments-view-stub" /> }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import AdminRevenue from './index';
@@ -363,6 +364,15 @@ describe('AdminRevenue', () => {
     );
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
     expect(screen.queryByTestId('admin-revenue-range')).toBeNull();
+  });
+
+  it('keeps the ledger-backed Payments view reachable without Stripe', async () => {
+    response = { stripeConfigured: false };
+    fakeAdminRouter.reset({ tab: 'revenue', revenueView: 'payments' });
+    renderTab();
+    expect(await screen.findByTestId('admin-payments-view-stub')).toBeTruthy();
+    expect(screen.getByTestId('admin-revenue-view')).toBeTruthy();
+    expect(screen.queryByTestId('admin-revenue-stripe-unconfigured')).toBeNull();
   });
 
   it('offers a retry when the read fails', async () => {

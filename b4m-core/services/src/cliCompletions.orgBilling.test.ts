@@ -254,6 +254,30 @@ describe('executeCompletion - org billing routing', () => {
     expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
   });
 
+  it("admits the org's own service account without a roster row and seeds no member row", async () => {
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'user1', currentCredits: 100, isSystem: true, serviceAccountOrganizationId: 'org1' });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+    expect(organizations.ensureUserDetails).not.toHaveBeenCalled();
+  });
+
+  it("still refuses another org's service account that is on no roster", async () => {
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'user1', currentCredits: 100, isSystem: true, serviceAccountOrganizationId: 'org2' });
+
+    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
+      /no longer a member of/i
+    );
+    expect(organizations.incrementCredits).not.toHaveBeenCalled();
+  });
+
   it('bills the org for its billing owner, who holds no users[] row', async () => {
     // Ownership never writes a roster row, so a roster-only check would 403 the principal most
     // entitled to spend the pool.

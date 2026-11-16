@@ -10,13 +10,23 @@
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
     static let studio: any StudioAPI = FixtureStudioAPI()
+    /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
+    static let frameUploader = FrameUploader(
+      capture: FixtureUploader(), media: media, put: { _, _, _ in }, sleep: { _ in })
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
     static let account: any AccountAPI = FixtureAccountAPI()
+    static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
+
+    /// `B4M_UI_FIXTURE_LINK` opens an app link at launch (e.g. `https://app.bike4mind.com/notebooks/fixture-1`),
+    /// so a screenshot run can land on a screen without driving taps.
+    static var initialLink: URL? {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_LINK"].flatMap(URL.init(string:))
+    }
 
     /// `B4M_UI_FIXTURE_ACCOUNT` picks the account-deletion story: `org-transfer` (the 409 list),
     /// `pending` (launch on the restore screen) or the default (deletion succeeds and signs out).
@@ -28,21 +38,84 @@
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
     }
 
+    /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
+    /// `resolved` (answered elsewhere) or `offline`; the default is success.
+    private struct FixturePendingActionAPI: PendingActionAPI {
+      func respond(
+        to target: PendingActionTarget, decision: PendingActionDecision
+      ) async throws
+        -> PendingActionResult
+      {
+        try await Task.sleep(for: .seconds(1))
+        switch ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_APPROVAL"] {
+        case "replaced": throw PendingActionFailure.replaced
+        case "expired": throw PendingActionFailure.expired
+        case "resolved": throw PendingActionFailure.alreadyResolved
+        case "offline": throw PendingActionFailure.api(.offline)
+        default: return PendingActionResult(decision: decision)
+        }
+      }
+    }
+
     /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
     private struct FixtureStudioAPI: StudioAPI {
       static let runTime: TimeInterval = 4
 
       func models(for kind: GenerationKind) async throws -> [GenerationModel] {
         switch kind {
-        case .image: [GenerationModel(id: "gpt-image-2", name: "GPT Image 2"), GenerationModel.regionEditModels[0]]
-        case .video: [GenerationModel(id: "fixture-video", name: "Fixture Video")]
-        case .music: [GenerationModel(id: "fixture-music", name: "Fixture Music")]
+        case .image:
+          [
+            GenerationModel(
+              id: "gpt-image-2", name: "GPT Image 2",
+              capabilities: .image(
+                ImageCapabilities(
+                  sizes: ["1024x1024", "1536x1024", "1024x1536"], defaultSize: "1024x1024",
+                  qualities: ["low", "medium", "high"], maxImages: 4, transparentBackground: true))),
+            GenerationModel(
+              id: GenerationModel.regionEditModels[0].id, name: GenerationModel.regionEditModels[0].name,
+              capabilities: .image(ImageCapabilities(seed: true, edit: true))),
+          ]
+        case .video:
+          [
+            GenerationModel(
+              id: "fixture-video", name: "Fixture Video",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["text_to_video", "image_to_video"], inputRoles: ["first_frame": 1],
+                  duration: .range(min: 1, max: 15, step: 1),
+                  aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
+                  defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
+                  creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-morph", name: "Fixture Video Morph",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["image_to_video"], inputRoles: ["first_frame": 1, "last_frame": 1],
+                  duration: .discrete([5, 8]), aspectRatios: ["16:9"], resolutions: ["720p"], defaultDuration: 5,
+                  defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+            GenerationModel(
+              id: "fixture-video-short", name: "Fixture Video Short",
+              capabilities: .video(
+                VideoCapabilities(
+                  duration: .discrete([4, 6, 8]), aspectRatios: ["16:9"], resolutions: ["720p", "1080p"],
+                  defaultDuration: 8, defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+          ]
+        case .music:
+          [
+            GenerationModel(
+              id: "fixture-music", name: "Fixture Music",
+              capabilities: .music(
+                MusicCapabilities(
+                  lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
+                  pricing: MusicPricing(unit: .perSong, credits: 160))))
+          ]
         }
       }
 
       func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
         GenerationHandle(
-          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date())
+          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+          modelID: request.modelID, params: request.params)
       }
 
       func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
@@ -61,6 +134,16 @@
       func cancel(_ handle: GenerationHandle) async throws {}
 
       func createSession(name: String) async throws -> String { "fixture-session" }
+    }
+
+    private struct FixtureUploader: FileUploading {
+      func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
+        UploadTicket(
+          fileID: "fixture-media-0", uploadURL: URL(string: "https://fixture.invalid/upload")!,
+          expiresAt: Date().addingTimeInterval(600))
+      }
+
+      func fileStatus(fileID: String) async throws -> RemoteFileStatus { .clean }
     }
 
     private struct FixtureAccountAPI: AccountAPI {
@@ -187,6 +270,10 @@
               "fixture-1-q2", "Draft two bullet points for the board deck.",
               "- Revenue grew 9% quarter over quarter, led by renewals.\n- Churn fell to its lowest level in two years.",
               ago: 6_900),
+            done(
+              "fixture-1-q3", "Show the churn query.",
+              "This reads the monthly churn rate:\n\n```sql\nSELECT month, churned / active AS rate\nFROM churn_by_month\nWHERE year = 2025;\n```\n\nRun it against the reporting replica.",
+              ago: 6_600),
           ]
         case "fixture-3":
           turns = [

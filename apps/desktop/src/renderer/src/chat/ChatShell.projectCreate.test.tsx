@@ -66,6 +66,10 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let createCodeSession = vi.fn<(request?: unknown) => Promise<unknown>>();
 let inspectProject = vi.fn<(directory: string) => Promise<unknown>>();
+let created: ChatSessionSummary | null = null;
+let supportsTools = true;
+const setSessionOrchestrate = vi.fn();
+const sendMessage = vi.fn();
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = () => undefined;
@@ -82,7 +86,18 @@ beforeEach(() => {
   );
   // Opens on a Code session, so the sidebar draws the project group and its "+".
   window.localStorage.setItem('b4m.chat.lastSession', JSON.stringify({ id: FIRST.id, mode: 'code' }));
-  createCodeSession = vi.fn(() => Promise.resolve({ ok: true, session: FRESH }));
+  created = null;
+  supportsTools = true;
+  setSessionOrchestrate.mockReset().mockImplementation(async (id: string, on: boolean) => {
+    if (!created || created.id !== id) return null;
+    created = { ...created, orchestrate: on };
+    return created;
+  });
+  sendMessage.mockReset().mockResolvedValue({ ok: true, messageId: 'first-message' });
+  createCodeSession = vi.fn(async () => {
+    created = FRESH;
+    return { ok: true, session: FRESH };
+  });
   inspectProject = vi.fn(async () => ({
     directory: PROJECT.directory,
     name: PROJECT.name,
@@ -93,12 +108,15 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
-        listSessions: async () => [FIRST, SECOND],
+        listSessions: async () => (created ? [FIRST, SECOND, created] : [FIRST, SECOND]),
         getSession: async (id: string) =>
-          ({ ...(id === FRESH.id ? FRESH : FIRST), messages: [] }) as unknown as ChatSession,
+          ({ ...(id === FRESH.id ? (created ?? FRESH) : FIRST), messages: [] }) as unknown as ChatSession,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
-        listModels: async () => ({ models: [] }),
+        listModels: async () => ({ models: [{ id: 'test-model', name: 'Test Model', supportsTools }] }),
+        defaultsForNewSession: async () => ({ model: 'test-model', approvalMode: 'auto', reasoningEffort: 'default' }),
+        setSessionOrchestrate,
+        sendMessage,
         // The bridge's `[]` default is truthy, so the changes bar would render it as a reading.
         workspaceChanges: async () => null,
         inspectProject,
@@ -147,14 +165,8 @@ async function mount() {
 }
 
 async function clickNewInProject() {
-  const before = inspectProject.mock.calls.length;
   await act(async () => el('project-new-btn').click());
   await act(async () => undefined);
-  const creationOrder = createCodeSession.mock.invocationCallOrder.at(-1);
-  if (creationOrder === undefined) throw new Error('No Code session was created.');
-  // The new session's workspace setup also inspects its folder after creation. Only
-  // inspections before createCodeSession can decide whether to request a worktree.
-  return inspectProject.mock.invocationCallOrder.slice(before).filter(order => order < creationOrder).length;
 }
 
 describe("starting a new session from a project group's header", () => {
@@ -162,18 +174,42 @@ describe("starting a new session from a project group's header", () => {
     setWorktreeByDefault(true);
     await mount();
 
-    expect(await clickNewInProject()).toBe(1);
+    await clickNewInProject();
 
     expect(inspectProject).toHaveBeenCalledWith(PROJECT.directory);
-    expect(createCodeSession).toHaveBeenCalledWith({ directory: PROJECT.directory, workspace: true });
-    expect(el('chat-session-title').textContent).toBe('Fresh thread');
+    expect(createCodeSession).not.toHaveBeenCalled();
+    expect(el('chat-code-workspace-setup').textContent).toContain(PROJECT.name);
   });
 
-  it('creates without inspecting git or requesting a worktree when the preference is off', async () => {
+  it('opens a project draft without persisting when the preference is off', async () => {
     await mount();
 
-    expect(await clickNewInProject()).toBe(0);
+    await clickNewInProject();
 
-    expect(createCodeSession).toHaveBeenCalledWith({ directory: PROJECT.directory });
+    expect(createCodeSession).not.toHaveBeenCalled();
+    expect(el('chat-code-workspace-setup').textContent).toContain(PROJECT.name);
+  });
+  it('enables orchestration on a bound Code draft and saves it before the first send', async () => {
+    await mount();
+    await clickNewInProject();
+    expect(createCodeSession).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(2);
+    await act(async () => el('composer-orchestrate-toggle').click());
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(setSessionOrchestrate).not.toHaveBeenCalled();
+    await act(async () => el('orchestrator-example-quest-1').click());
+    await act(async () => el('chat-send-btn').click());
+    expect(createCodeSession).toHaveBeenCalledOnce();
+    expect(setSessionOrchestrate).toHaveBeenCalledExactlyOnceWith(FRESH.id, true);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(setSessionOrchestrate.mock.invocationCallOrder[0]).toBeLessThan(sendMessage.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps orchestration unavailable on a draft whose model cannot use tools', async () => {
+    supportsTools = false;
+    await mount();
+    await clickNewInProject();
+    expect(document.querySelector('[data-testid="composer-orchestrate-toggle"]')).toBeNull();
+    expect(createCodeSession).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   feedbackTexts: [] as unknown[],
 }));
 
+// Keep routed-comment/date tests isolated from the unrelated triage provider graph.
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,

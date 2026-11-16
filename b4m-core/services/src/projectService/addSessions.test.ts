@@ -255,7 +255,10 @@ describe('projectService - addSessions', () => {
     expect(result).toEqual(mockSessions);
     expect(mockProjectRepo.shareable.findUpdateAccessById).toHaveBeenCalledWith(mockUser, projectId);
     expect(mockSessionRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(1);
-    expect(mockSessionRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(mockUser, sessionIds);
+    expect(mockSessionRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: mockUser.id }),
+      sessionIds
+    );
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).toHaveBeenCalledTimes(1);
     expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0]).toStrictEqual([
@@ -381,7 +384,10 @@ describe('projectService - addSessions', () => {
     ]);
     expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(1);
-    expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(mockUser, knowledgeFileIds);
+    expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: mockUser.id }),
+      knowledgeFileIds
+    );
     expect(mockSessionRepo.shareable.updateUserShares).toHaveBeenCalledTimes(1);
     expect(sessionWrites()[0]).toStrictEqual([sessionIds[0], { add: [ownerGrant] }]);
     expect(mockFabFileRepo.shareable.updateUserShares).toHaveBeenCalledTimes(knowledgeFileIds.length);

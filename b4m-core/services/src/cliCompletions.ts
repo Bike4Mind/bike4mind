@@ -53,6 +53,8 @@ import {
   providerSummarizesReasoning,
   withholdsReasoning,
   type ICacheRepository,
+  type CompletionRunAttribution,
+  isOrgServiceAccountOf,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -82,6 +84,7 @@ import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
@@ -97,6 +100,7 @@ import {
 } from './llm/shadowTier';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { conservativeRoundInputUsd } from './llm/chatCreditCap';
 import {
   MIN_AFFORDABLE_OUTPUT_TOKENS,
   affordableRoundBudget,
@@ -111,6 +115,18 @@ export type CompletionCreditHolds = {
   reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
   refund(refund: () => Promise<void>): Promise<boolean>;
   settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+};
+
+/** How a completion's credit settlement ended, reported once through `onSettled`. */
+export type CompletionSettlement = {
+  /** The id the ledger row and usage event carry. */
+  requestId: string;
+  /** True only when the ledger row was written and its transaction committed. */
+  committed: boolean;
+  /** What the ledger recorded; can be below the computed cost when the balance capped it. 0 unless committed. */
+  creditsCharged: number;
+  /** The provider cost the credits were priced from (the terminal content event's `credits.usdCost`). */
+  usdCost?: number;
 };
 
 export interface CompletionParams {
@@ -217,6 +233,11 @@ export interface CompletionParams {
    */
   sessionId?: string;
   /**
+   * The run this completion belongs to, already verified by the caller as created by this user and
+   * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
+   */
+  run?: CompletionRunAttribution;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -241,6 +262,12 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /**
+   * Called once after settlement, before the function returns or rethrows an abort. Not called when
+   * the completion failed before settlement or credits were not enforced. A throw is logged and
+   * swallowed.
+   */
+  onSettled?: (settlement: CompletionSettlement) => void;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
   /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
@@ -314,8 +341,8 @@ export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHono
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
  * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
- * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
- * caching never lowers a hold.
+ * below discounts a Claude read only on Anthropic and only for `cache` flags (client-sent, or the
+ * first-round breakpoints withFirstRoundCacheBreakpoints adds, which only raise the hold).
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -365,6 +392,25 @@ function buildClaudeCacheStrategy(
   };
 }
 
+/**
+ * A first round's messages with the breakpoints the server's Claude cache strategy will place
+ * (system prompt, history anchor; see AnthropicCachingAdapter) marked as if the client had flagged
+ * them, so the hold prices that round's cache write. Only for a round with no assistant message:
+ * nothing is cached yet, so every breakpoint can only write. Later rounds keep pricing the client's
+ * own flags, and the per-round cap prices a cache miss on any round.
+ */
+function withFirstRoundCacheBreakpoints(messages: IMessage[], strategy: ICacheStrategy | undefined): IMessage[] {
+  if (!strategy?.enableCaching || messages.some(m => m.role === 'assistant')) return messages;
+  // Must stay in sync with the history-anchor rule in AnthropicCachingAdapter, or the hold under-prices the write.
+  let anchorIndex = strategy.cacheConversationHistory
+    ? messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0)
+    : -1;
+  while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
+  return messages.map((m, index) =>
+    index === anchorIndex || (strategy.cacheSystemPrompt && m.role === 'system') ? { ...m, cache: true } : m
+  );
+}
+
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
 const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
 
@@ -383,9 +429,11 @@ const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
  * last assistant message included); the rest is plain input. Auto-caching backends read the
  * system messages that precede the last assistant message (they preserve message order, so a later
  * one is new content) and the conversation up to the message before the last assistant, and bill
- * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
- * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
- * actual usage.
+ * the rest plain. A conversation with no assistant message yet has nothing cached: an auto-caching
+ * backend bills it plain, and on Anthropic every breakpoint writes its whole prefix (the hoisted system
+ * messages included), so that prefix is held at cache_write and the tail plain. If the provider misses
+ * (cache TTL lapsed) the real cost is higher; settlement charges actual usage, and the per-round cap
+ * (conservativeRoundInputUsd) prices that miss so it cannot overdraw.
  *
  * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
  * client-claimed or lapsed cache cannot shrink the hold below it.
@@ -402,7 +450,9 @@ function estimateReservationUsd(
   cacheTtl: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
-  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+  const hasAssistant = messages.some(m => m.role === 'assistant');
+  // A first-round Claude on Bedrock is held plain; the per-round cap prices its cache write.
+  if (!hasAssistant && modelInfo.backend !== ModelBackend.Anthropic) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   const conversation = messages.filter(m => m.role !== 'system');
@@ -432,13 +482,15 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  // Priced plain: tool schemas carry no flag here, so no discount is assumed. On a first round the
+  // server's cacheTools writes them, so the hold runs ~0.25x of tool tokens short; the cap covers it.
   let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
     if (m.role === 'system') {
-      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      if (hoistsSystem && !hasAssistant) writeTokens += tokens;
+      else if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
       else plainTokens += tokens;
       return;
     }
@@ -538,7 +590,7 @@ export function withholdReasoningFromFrame(
 }
 
 /**
- * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
+ * Shared LLM completion logic for the SSE and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -557,6 +609,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // One id per request: the usage event and the credit transaction share it so the admin ledger can
   // point at the usage record.
   const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
+  // The caller's session id lives under run, not top-level: top-level UsageEvent.sessionId is an ownership-probe input.
+  const runLineage = params.run && { ...params.run, sessionId: params.sessionId };
   const completionStartTime = Date.now();
 
   if (!hasEffectiveConversationMessage(messages)) {
@@ -599,10 +653,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
     // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
     // so without this arm such a key would fail on its very first call, not merely after someone
-    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    // left. The org's own service account (an org-owned key's holder) is likewise never on the
+    // roster. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
-      if (!actor?.isAdmin) {
+      if (!actor?.isAdmin && !isOrgServiceAccountOf(actor, organization.id)) {
         logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
           userId,
           organizationId: organization.id,
@@ -903,8 +958,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
-  // Prices a round's input the way the hold does and returns the output budget `availableCredits`
-  // can pay for on top of it; see completionCreditBudget. Set only when credits are enforced.
+  // Prices a round's input at the dearest rate the provider can bill it (a cold cache writes the whole
+  // prefix) and returns the output budget `availableCredits` can pay for on top of it; see
+  // completionCreditBudget. Set only when credits are enforced.
   let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
   const refundReservation = async () => {
     const refund = async () => {
@@ -939,7 +995,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
     const estimatedUsdCost = estimateReservationUsd(
       chargedModelInfo!,
-      messages,
+      withFirstRoundCacheBreakpoints(messages, cacheStrategy),
       estimatedInputTokens,
       estimatedOutputTokens,
       estimatedToolTokens,
@@ -970,6 +1026,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
         await recordRefusal('member_cap', capCheckCredits);
+        await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization!.id, userId, refused: true });
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
     }
@@ -1018,7 +1075,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
       return affordableRoundBudget({
         modelInfo: chargedModelInfo!,
-        inputUsd: estimateReservationUsd(chargedModelInfo!, roundMessages, inputTokens, 0, toolTokens),
+        // Not estimateReservationUsd: the hold assumes a warm cache; see the cap note above.
+        inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
         inputTokens,
         availableCredits,
         minimumOutputTokens,
@@ -1242,6 +1300,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1260,6 +1319,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1376,6 +1436,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         userId,
         ownerId: holderId,
         ownerType: holderType,
+        run: runLineage,
         feature: 'completion_api',
         provider: requestedModelInfo!.backend,
         model,
@@ -1466,11 +1527,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
             // the positional $inc in updateUserDetails cannot create the row it positions on, so without
             // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-            // pays the extra read/write when the row is actually absent.
+            // pays the extra read/write when the row is actually absent. The org's service account is
+            // not a member and gets no row (deductCreditsWithOrgSupport does the same), so the $inc
+            // below is a no-op for it.
             const member = organization!.userDetails?.find(u => u.id === userId);
             if (!member) {
               const actingUser = await db.users.findById(userId);
-              if (actingUser) {
+              if (actingUser && !isOrgServiceAccountOf(actingUser, holderId)) {
                 await db.organizations!.ensureUserDetails(holderId, {
                   id: userId,
                   email: actingUser.email ?? actingUser.username,
@@ -1483,6 +1546,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               creditsDelta: actualCredits,
               lastCreditUsedAt: new Date(),
             });
+            await notifyOrgEvent({ type: 'member_cap_check', organizationId: holderId, userId });
           }
 
           Logger.globalInstance.debug('Credit usage:', actualCredits);
@@ -1521,6 +1585,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 reservedCredits,
                 creditDifference,
                 ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
+                ...(runLineage && { run: runLineage }),
               },
             },
             {
@@ -1564,6 +1629,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         error: error instanceof Error ? error.message : String(error),
       });
       // Don't throw - completion already happened, but ensure this is tracked
+    }
+  }
+
+  // Outside the settlement try, so a throwing callback cannot read as a failed ledger adjustment.
+  // Guarded so a throwing callback cannot skip the embed metering and per-key spend below.
+  if (enforceCredits && modelInfo) {
+    try {
+      params.onSettled?.({
+        requestId,
+        committed: settlementCommitted,
+        creditsCharged: settlementCommitted ? chargedCredits : 0,
+        usdCost: chargedUsdCost,
+      });
+    } catch (error) {
+      logger?.warn?.('[CLI_CREDITS] onSettled callback threw', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

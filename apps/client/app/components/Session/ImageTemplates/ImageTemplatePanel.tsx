@@ -10,6 +10,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { useImageTemplates, useCreateImageTemplate, useDeleteImageTemplate } from '../../../hooks/data/imageTemplates';
 import { findMatchingTemplate } from './settingsSnapshot';
 import { useImageSettingsSnapshot } from './useImageSettingsSnapshot';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 /**
  * The single home for image settings templates: renders below the image settings
@@ -92,6 +93,7 @@ export const ImageTemplatePanel: FC = () => {
       </Box>
 
       {/* Inline save of the current settings. */}
+      <OrganizationLibraryPicker kind="template" />
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         <Input
           size="sm"

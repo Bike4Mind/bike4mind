@@ -11,6 +11,10 @@ describe('AdminSettings read ability for a non-admin', () => {
     expect(defineAbilitiesFor(member).can('read', setting('modelListRevision'))).toBe(true);
   });
 
+  it('reads the model access revision, which wakes an open model picker after an access change', () => {
+    expect(defineAbilitiesFor(member).can('read', setting('modelAccessRevision'))).toBe(true);
+  });
+
   it('still cannot read a setting outside the allowlist', () => {
     expect(defineAbilitiesFor(member).can('read', setting('enforceCredits'))).toBe(false);
   });

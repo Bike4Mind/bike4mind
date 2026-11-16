@@ -1,10 +1,8 @@
 import { z } from 'zod';
 import { MAX_VIDEO_OUTPUT_BYTES, type ValidatedVideoRequest } from '@bike4mind/common';
-import { readJson } from '../../generationProviders/http';
+import { downloadDeliveryUrl, readJson } from '../../generationProviders/http';
 import {
-  ProviderOutputUnavailableError,
   ProviderSubmitError,
-  readBoundedResponse,
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
@@ -152,10 +150,6 @@ const toPollResult = (body: PollBody, ctx: VideoProviderContext): ProviderPollRe
   }
 };
 
-const assertHttps = (url: URL): void => {
-  if (url.protocol !== 'https:') throw new Error('xai_untrusted_output_url');
-};
-
 /** xAI Grok Imagine over the REST videos API. Every method is one bounded call; the engine owns waiting. */
 export class XaiVideoProvider implements VideoProvider {
   readonly mode = 'async' as const;
@@ -236,21 +230,7 @@ export class XaiVideoProvider implements VideoProvider {
   // The URL is a pre-signed third-party link: the API key must never be sent to it.
   async fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
     if (output.kind !== 'url') throw new Error('xai_unexpected_inline_output');
-    const url = new URL(output.url);
-    assertHttps(url);
-    let response = await fetch(url, { redirect: 'manual', signal: ctx.signal });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (!location) throw new Error('xai_redirect_without_location');
-      const target = new URL(location, url);
-      assertHttps(target);
-      await response.body?.cancel();
-      response = await fetch(target, { redirect: 'error', signal: ctx.signal });
-    }
-    // An expired pre-signed link answers 403; a purged object 404 or 410.
-    if ([403, 404, 410].includes(response.status)) throw new ProviderOutputUnavailableError(response.status);
-    if (!response.ok) throw new Error(`xai_download_http_${response.status}`);
-    return readBoundedResponse(response, MAX_VIDEO_OUTPUT_BYTES);
+    return downloadDeliveryUrl(output.url, MAX_VIDEO_OUTPUT_BYTES, ctx.signal);
   }
 
   // No cancel: xAI documents none, and the engine skips a provider without one.

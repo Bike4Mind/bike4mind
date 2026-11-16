@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, Typography } from '@mui/joy';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { isCompSubscription, type AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
-import { MAX_INVOICES, type AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
+import { MAX_INVOICES, invoiceAmount, type AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
 import { DataTable, Dash, EmptyState, StatusChip, formatMoney, type DataColumn } from '../../../shared';
 import { formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
 import { formatDate } from '../subscriptionDetailModel';
@@ -11,10 +11,6 @@ import { StripeSection, invoiceStatusTone } from '../stripeSections';
 const fetchedTime = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
 const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
-
-// What the customer was charged once paid; what Stripe asked for otherwise (open, void, uncollectible).
-const invoiceAmount = (invoice: AdminStripeInvoice) =>
-  invoice.status === 'paid' ? invoice.amountPaid : invoice.amountDue;
 
 const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
   { id: 'number', label: 'Number', render: invoice => invoice.number ?? invoice.id },

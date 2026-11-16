@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository, userRepository } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
-import { assertOwnerCanFundWake, isInsufficientCredits } from '@server/deepAgent/wakeMetering';
+import { assertOwnerCanFundWake, isInsufficientCredits } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/server-utils/deepAgent/missions';
 import { canCreateMissions } from '@bike4mind/server-utils/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { runMissionFirstWake } from '@server/deepAgent/firstWake';
+import { runMissionFirstWake } from '@bike4mind/server-utils/deepAgent/firstWake';
 
 /**
  * /api/agents/[id]/missions - Missions of an existing B4M Agent.

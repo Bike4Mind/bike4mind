@@ -120,4 +120,40 @@ describe('LoopScheduler', () => {
     expect(scheduler.get('s')).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('starts no run at or after its end time and ends with a notice instead of a timer', async () => {
+    const changed = vi.fn();
+    scheduler = new LoopScheduler(() => busy, changed);
+    const run = vi.fn(async () => ({ ok: true as const, reply: 'done' }));
+    scheduler.start({ ...state(), until: Date.now() + 45_000 }, run);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(run).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(scheduler.get('s')).toMatchObject({
+      phase: 'ended',
+      nextRunAt: null,
+      notice: expect.stringContaining('end time'),
+    });
+    expect(changed).toHaveBeenLastCalledWith('s', expect.objectContaining({ phase: 'ended' }));
+    expect(vi.getTimerCount()).toBe(0);
+    scheduler.stop('s');
+    expect(scheduler.get('s')).toBeNull();
+  });
+
+  it('ends a loop still waiting for a busy session once the end time has passed', async () => {
+    busy = true;
+    const run = vi.fn();
+    scheduler.start({ ...state(), until: Date.now() + 60_000 }, run);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.get('s')?.phase).toBe('waiting');
+    await vi.advanceTimersByTimeAsync(60_000);
+    busy = false;
+    scheduler.idle('s');
+    expect(scheduler.get('s')?.phase).toBe('ended');
+    scheduler.pauseWaiting('s');
+    expect(scheduler.get('s')?.phase).toBe('ended');
+    expect(run).not.toHaveBeenCalled();
+  });
 });

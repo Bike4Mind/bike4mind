@@ -49,7 +49,7 @@ export async function resolveOwnedGeneratedImageUrl(
 
 /**
  * The ownership rule documented on resolveOwnedGeneratedImageUrl, as a boolean for a caller that needs the bytes
- * rather than a URL (the video job's loadInputImage in apps/client/server/generationJobs/wiring.ts). False for
+ * rather than a URL (the video job's loadInputImage in packages/server-utils/src/generationJobs/wiring.ts). False for
  * a malformed, unknown or foreign key and for an unwired lookup alike.
  */
 export async function callerOwnsGeneratedImage(

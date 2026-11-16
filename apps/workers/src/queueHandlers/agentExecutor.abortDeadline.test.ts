@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
   resolveThinkingVisibility: vi.fn(async () => 'raw'),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
 }));
 import type { Context } from 'aws-lambda';

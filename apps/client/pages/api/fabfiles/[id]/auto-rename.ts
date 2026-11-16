@@ -8,7 +8,7 @@ import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = baseApi()

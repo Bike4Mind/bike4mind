@@ -48,7 +48,7 @@ import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { coreTutorialTurns } from '@server/tutorials/chatTurns';
+import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -57,14 +57,17 @@ import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-util
 import { publishLiveActivityUpdate } from '@server/utils/liveActivityPush';
 import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import {
+  getSharedTokenizer,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
@@ -77,10 +80,10 @@ import {
   getCreateVideoJobDeps,
   getMusicJobDeps,
   getVideoJobDeps,
-} from '@server/generationJobs/wiring';
+} from '@bike4mind/server-utils/generationJobs/wiring';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import {
   checkFreeTierDailySpendCap,
   isFreeTierDailyCapError,

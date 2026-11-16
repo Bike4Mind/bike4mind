@@ -156,13 +156,14 @@ describe('ShadowDetectionsTab', () => {
   });
 
   describe('AI advisory suggestion', () => {
-    const advise = (detectionId = DETECTION_ID) => {
+    const advise = (detectionId = DETECTION_ID, assessmentId: string | null = 'assessment-1') => {
       m.advisory = {
         data: {
           advisories: [
             {
               userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
               detectionId,
+              ...(assessmentId ? { assessmentId } : {}),
               detector: 'signupNetworkBurst',
               abuseProbability: 0.9,
               assessedAt: '2026-10-30T11:00:00.000Z',
@@ -230,16 +231,134 @@ describe('ShadowDetectionsTab', () => {
 
     it('fills the verdict and the reason when the dialog suggestion is accepted', async () => {
       assessed();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
       renderTab();
       fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
       const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
       const reason = within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input');
       expect(reason).toHaveValue('');
       fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-accept-btn'));
-      expect(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
-      expect(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
+      const currentDialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
         'Accepted AI suggestion'
       );
+      fireEvent.click(within(currentDialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ verdict: 'confirmed_abuse', reason: 'Accepted AI suggestion' })
+        )
+      );
+    });
+
+    const confirmGrade = async (dialog: HTMLElement) => {
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+    };
+
+    it('names the assessment when the dialog suggestion is accepted', async () => {
+      assessed();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-accept-btn'));
+      const currentDialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+      expect(within(currentDialog).getByTestId('shadow-detection-verdict-dialog-reason-input')).toHaveValue(
+        'Accepted AI suggestion'
+      );
+      const confirm = within(currentDialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn');
+      expect(confirm).toBeInTheDocument();
+      expect(confirm).toBeEnabled();
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ verdict: 'confirmed_abuse', aiDecision: { assessmentId: 'assessment-1' } })
+        )
+      );
+    });
+
+    it('sends the why-wrong pick as the override reason', async () => {
+      assessed();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'legitimate_automation' }) });
+      renderTab();
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-override-btn'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-why-1'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-assessment-suggestion-override-continue-btn'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_automation'));
+      await confirmGrade(dialog);
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            verdict: 'legitimate_automation',
+            aiDecision: { assessmentId: 'assessment-1', overrideReason: 'Missing context' },
+          })
+        )
+      );
+    });
+
+    it('names the assessment for a row-shortcut accept', async () => {
+      advise();
+      assessed();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ aiDecision: { assessmentId: 'assessment-1' } })
+        )
+      );
+    });
+
+    it('names the advisory assessment for a row-shortcut accept before the assessments load', async () => {
+      advise();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ aiDecision: { assessmentId: 'assessment-1' } })
+        )
+      );
+    });
+
+    it('opens the plain dialog, without an AI accept, when the advisory has no assessment id', async () => {
+      advise(DETECTION_ID, null);
+      renderTab();
+      fireEvent.keyDown(row(), { key: 'a' });
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      expect(m.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('sends no aiDecision when there is no assessment', async () => {
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse'));
+      await confirmGrade(dialog);
+      await waitFor(() => expect(m.mutateAsync).toHaveBeenCalledTimes(1));
+      expect(m.mutateAsync.mock.calls[0][0]).not.toHaveProperty('aiDecision');
+    });
+
+    it('sends no aiDecision when the admin grades without using the assessment', async () => {
+      assessed();
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: detection({ verdict: 'confirmed_abuse' }) });
+      renderTab();
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+      const dialog = await screen.findByTestId('shadow-detection-verdict-dialog');
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse'));
+      await confirmGrade(dialog);
+      await waitFor(() => expect(m.mutateAsync).toHaveBeenCalledTimes(1));
+      expect(m.mutateAsync.mock.calls[0][0]).not.toHaveProperty('aiDecision');
     });
 
     it('opens the why-wrong picker in the dialog on O', async () => {
@@ -529,7 +648,7 @@ describe('ShadowDetectionsTab', () => {
   it('opens the verdict dialog from a row click and labels the review action', async () => {
     m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
     renderTab();
-    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toHaveTextContent('Review evidence');
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toHaveAccessibleName('Review evidence');
     fireEvent.click(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText(detection().summary));
     expect(await screen.findByTestId('shadow-detection-signals')).toBeTruthy();
   });

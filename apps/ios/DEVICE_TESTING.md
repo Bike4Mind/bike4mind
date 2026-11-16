@@ -80,6 +80,68 @@ runs on an unsigned simulator build. Needs the staging deploy to have seeded tha
 - [ ] Camera, microphone and photo-library permission prompts show the usage strings and denial is handled with a clear message.
 - [ ] Voice note records, transcribes and drops text into the composer.
 
+### Document scanner and point-and-ask
+
+Both entry points are in Capture on Chat home and the notebook list. Scans use the system VisionKit scanner and enter the
+existing destination picker/upload queue as one PDF. Point and Ask opens the camera, then the same composer with a photo
+preview and the question field focused. The last destination is preserved, including a lake; choose a notebook to ask in chat.
+No message is sent until Send is tapped. Android scanner parity is not part of this iOS implementation.
+
+Automated simulator coverage checks three-page PDF order and dimensions, PDF classification, empty/invalid scan rejection,
+PDF queue persistence and resume after relaunch, and image/question submission with an offline remembered destination.
+This does not validate physical camera capture, edge detection, cropping, legibility, keyboard presentation after the real
+camera dismisses, or the time needed to capture and ask. The scanner is disabled on unsupported devices; the simulator has
+no physical camera and is not evidence for those checks.
+
+- [ ] On a signed physical iPhone build, Capture > Scan Document: scan three pages (include portrait and landscape), adjust
+      corners/reorder/retake in the system UI, then save. The composer lists exactly one PDF; send it to a notebook and check
+      all pages arrive in order, cropped and legible. Repeat with a lake destination.
+- [ ] Cancel the scanner or camera: no composer or queued item appears. Deny camera permission, then allow it in Settings and retry.
+- [ ] From cold signed-in launch, Capture > Point and Ask > take photo: one composer shows the captured image, remembered
+      destination and focused question field with keyboard. Type and send; a notebook receives image and question together.
+      Record whether this takes under approximately ten seconds of user effort. Repeat with large Dynamic Type and VoiceOver.
+- [ ] Remember a notebook, enable airplane mode, scan and send; repeat Point and Ask with a question. Both appear queued in
+      uploads. Kill and relaunch, restore connectivity, and confirm exactly one PDF and one image/question arrive, with no
+      duplicate jobs. Confirm the destination remains selected on the next capture.
+
+Physical-device checks above were not run during the 2026-11-16 implementation; simulator build/unit results do not replace them.
+
+## Hands-free voice conversation
+
+Voice chat is a full-screen mode opened from the composer (waveform button), the drawer (Voice chat) and any notebook. It
+listens with on-device speech recognition, sends each utterance as a normal chat turn, speaks the reply sentence by sentence
+with the system voice, and listens again. Speech recognition and the speech engine are limited in the Simulator, so everything
+below the line needs a signed build on a real iPhone.
+
+What v1 supports: multi-turn conversation; barge-in by talking over the reply (two or more words) or tapping the orb or Stop;
+mute; pause on calls and when the audio device disconnects, with a Resume button; speaker by default, AirPods and other
+Bluetooth headsets; ducking other audio while the mode is open and restoring it after; background audio (the `audio`
+background mode) so the conversation continues with the screen locked. The credits used per turn show on screen and are never
+spoken. Out of scope for v1: server-side voices, an Action Button or Control Center entry, wake-free start.
+
+Simulator (fixture run, `B4M_UI_FIXTURES=1`, scripted utterance, no microphone):
+
+- [ ] The waveform button on Chat home and in a notebook, and the Voice chat drawer row, each open the screen.
+- [ ] The orb cycles Listening, Sending, Thinking, Speaking and back; Done closes it; a new conversation lands in its notebook.
+- [ ] Against a real server (Debug > Server switcher, signed in), launch a Debug build with `B4M_VOICE_SCRIPTED_SPEECH=1`: the
+  scripted utterance goes through the real send and the streamed reply is spoken.
+
+Device only:
+
+- [ ] First start shows the speech recognition and then the microphone prompts; denying either shows the Open Settings message.
+- [ ] Ask a question without touching the screen, hear the whole reply, follow up twice; the transcript shows normal turns.
+- [ ] Talk over a long reply: speech stops within about a second and your new question is the next turn. On the loudspeaker
+      with no headset, confirm the reply does not interrupt itself (echo); if it does, note the model and volume.
+- [ ] AirPods: start, lock the phone and put it in a pocket, hold a three-turn exchange. Take one AirPod out mid-reply: playback
+      pauses (it must not jump to the speaker) and Resume continues.
+- [ ] Receive a phone call mid-reply: the mode pauses and resumes when the call ends.
+- [ ] Music playing before start is ducked while listening and speaking and comes back after Done.
+- [ ] Background the app and lock the screen mid-conversation: listening and speaking continue; the orange microphone indicator
+      stays on and clears after Done.
+- [ ] VoiceOver: the state label, Stop, microphone and Done are reachable; paused and failed states are announced.
+- [ ] Airplane mode: a send fails with a spoken message and listening resumes.
+- [ ] Credits line shows after a reply and is not read aloud.
+
 ## Studio gallery, AirPlay and Siri
 
 - [ ] Video and audio play from the Studio gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.

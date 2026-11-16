@@ -51,7 +51,9 @@ describe('formatPercent', () => {
 
 describe('StatusSummary', () => {
   it('shows each product with its E2E and latency figures and a row per suite and trigger', () => {
-    render(<StatusSummary summary={SUMMARY} rangeDays={7} branch="main" />, { wrapper: QaTestWrapper });
+    render(<StatusSummary summary={SUMMARY} range={{ from: '2026-11-10', to: '2026-11-16' }} branch="main" />, {
+      wrapper: QaTestWrapper,
+    });
     const [card, empty] = screen.getAllByTestId('qa-summary-card');
     expect(card).toHaveTextContent('product-a');
     expect(screen.getByTestId('qa-summary-e2e')).toHaveTextContent('E2E98.8%7 of 13 runs with no failures');
@@ -62,20 +64,20 @@ describe('StatusSummary', () => {
       'AI LatencyScheduled100.0% within limit . 1 of 1 run passed',
     ]);
     expect(empty).toHaveTextContent('product-b');
-    expect(screen.getByTestId('qa-summary')).toHaveTextContent('branch main . all envs');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent('7 days (Nov 10 - Nov 16) . branch main . all envs');
   });
 
   it('names the env filter, warns when truncated, and says when the range is empty', () => {
     render(
       <StatusSummary
         summary={{ ...SUMMARY, products: [], truncated: true }}
-        rangeDays={30}
+        range={{ from: '2026-11-16', to: '2026-11-16' }}
         branch="main"
         env="staging"
       />,
       { wrapper: QaTestWrapper }
     );
-    expect(screen.getByTestId('qa-summary')).toHaveTextContent('Last 30 days');
+    expect(screen.getByTestId('qa-summary')).toHaveTextContent('1 day (Nov 16) . branch main');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('staging . all products');
     expect(screen.getByTestId('qa-summary')).toHaveTextContent('oldest were left out');
     expect(screen.getByTestId('qa-summary-empty')).toBeInTheDocument();

@@ -3,6 +3,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertNotOrgServiceAccount } from '@server/auth/assertNotOrgServiceAccount';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
@@ -32,6 +33,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).get(async (req,
     throw new BadRequestError('agentId is required');
   }
 
+  assertNotOrgServiceAccount(req.user);
   const callerId = req.user!.id;
   const [agent, administeredOrgIds] = await Promise.all([
     agentRepository.findById(id),

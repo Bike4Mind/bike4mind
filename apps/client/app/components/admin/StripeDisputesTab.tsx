@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Alert, Button, Stack, Tooltip, Typography } from '@mui/joy';
+import { Alert, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
+import UndoIcon from '@mui/icons-material/Undo';
 import { Link } from '@tanstack/react-router';
 import {
   STRIPE_DISPUTE_LIST_LIMIT,
@@ -339,32 +341,36 @@ export const StripeDisputesTab: React.FC = () => {
       {isStripeDisputeAdminResolvable(row) && (
         <AdminPermissionAction requirement="users:moderate">
           {disabled => (
-            <Button
+            <IconButton
               size="sm"
               variant="plain"
               color="neutral"
               disabled={disabled}
+              aria-label="Resolve"
+              title="Resolve"
               data-testid={`stripe-dispute-resolve-btn-${row.id}`}
               onClick={() => setActive({ kind: 'resolve', row })}
             >
-              Resolve
-            </Button>
+              <TaskAltIcon />
+            </IconButton>
           )}
         </AdminPermissionAction>
       )}
       {canUndoContain(row) && (
         <AdminPermissionAction requirement={{ allOf: ['credits:adjust', 'users:moderate'] }}>
           {disabled => (
-            <Button
+            <IconButton
               size="sm"
               variant="plain"
               color="neutral"
               disabled={disabled}
+              aria-label="Undo contain"
+              title="Undo contain"
               data-testid={`stripe-dispute-undo-btn-${row.id}`}
               onClick={() => setActive({ kind: 'undo', row })}
             >
-              Undo contain
-            </Button>
+              <UndoIcon />
+            </IconButton>
           )}
         </AdminPermissionAction>
       )}
@@ -422,7 +428,9 @@ export const StripeDisputesTab: React.FC = () => {
         error={disputes.error ? "Couldn't load disputes." : undefined}
         onRetry={() => void disputes.refetch()}
         rowActions={rowActions}
-        minWidth="76rem"
+        // Resolve and Undo contain can both apply to one row.
+        actionsWidth="5.75rem"
+        minWidth="78.25rem"
         empty={
           <EmptyState
             title={filtered ? 'No disputes match these filters' : 'No disputes'}

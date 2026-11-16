@@ -48,7 +48,7 @@ import {
   resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+} from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 const rewriteStorageDb = {
   fabFiles: fabFileRepository,

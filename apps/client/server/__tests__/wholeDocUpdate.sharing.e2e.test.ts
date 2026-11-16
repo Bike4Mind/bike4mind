@@ -57,7 +57,7 @@ async function seed() {
 }
 
 describe('sharing: projectService.addFiles', () => {
-  it('keeps a share pushed onto project.users after its read', async () => {
+  it('keeps a share added to project.users after its read', async () => {
     const { projectId, fileId } = await seed();
 
     await projectService.addFiles(
@@ -67,10 +67,9 @@ describe('sharing: projectService.addFiles', () => {
         db: {
           fabFiles: fabFileRepository,
           projects: projectsWithWindow(() =>
-            Project.updateOne(
-              { _id: projectId },
-              { $push: { users: { userId: 'sharee', permissions: [Permission.read] } } }
-            )
+            projectRepository.shareable.updateUserShares(projectId, {
+              add: [{ userId: 'sharee', permissions: [Permission.read] }],
+            })
           ),
         },
       }

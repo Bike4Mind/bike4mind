@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   audit: vi.fn(),
   denySelf: vi.fn(),
+  policy: vi.fn(),
+  append: vi.fn(),
   logger: { error: vi.fn() },
   adapters: { grant: {} },
 }));
@@ -37,6 +39,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
     if (!reason) throw new Error('reason required');
     return reason;
   },
+  loadCreditGrantPolicy: () => h.policy(),
   recordAdminActionFromRequest: h.audit,
 }));
 await import('../release-held-signup-grant');
@@ -145,5 +148,58 @@ describe('admin release held signup grant', () => {
     h.findById.mockResolvedValue({ id: 'user-1', isAdmin: true });
     await h.handler!(request(), { json: vi.fn() });
     expect(h.release).toHaveBeenCalledOnce();
+  });
+});
+
+describe('large-grant threshold on the audit entry', () => {
+  const THRESHOLD = 100;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findById.mockReset().mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
+    h.audit.mockReset();
+  });
+  const entryFor = async (credits: number) => {
+    h.append.mockClear();
+    h.policy.mockResolvedValue({
+      singleGrantCredits: THRESHOLD,
+      dailyTotalCredits: 1_000_000,
+      sumCreditsGranted: vi.fn().mockResolvedValue(0),
+    });
+    const { adminAuditService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    h.audit.mockImplementation(
+      async (_req: unknown, input: Parameters<typeof adminAuditService.recordAdminAction>[0]) =>
+        adminAuditService.recordAdminAction(
+          { ...input, actor: { kind: 'user', scope: 'platform', userId: 'admin-1' }, context: {} } as never,
+          { db: { adminAuditLog: { append: h.append } }, creditGrantPolicy: await h.policy() }
+        )
+    );
+    h.release.mockResolvedValue({ outcome: 'applied', credits });
+    await h.handler!(request(), { json: vi.fn() });
+    return h.append.mock.calls[0][0];
+  };
+
+  it.each([
+    ['above', THRESHOLD + 1, 'critical'],
+    ['at', THRESHOLD, 'notice'],
+  ])('records the reason and the severity for a grant %s the threshold', async (_label, credits, severity) => {
+    const entry = await entryFor(credits as number);
+    expect(entry.reason).toBe('Support approved request');
+    expect(entry.severity).toBe(severity);
+    expect(entry.details.credits).toBe(credits);
+    if (severity === 'critical')
+      expect(entry.details.grantThresholdExceeded).toEqual({ kind: 'singleGrant', limitCredits: THRESHOLD });
+    else expect(entry.details.grantThresholdExceeded).toBeUndefined();
+  });
+
+  it.each([
+    ['above', THRESHOLD + 1],
+    ['below', THRESHOLD - 1],
+  ])('still rejects a grant %s the threshold with no reason, and pays nothing', async (_label, credits) => {
+    h.release.mockResolvedValue({ outcome: 'applied', credits });
+    const req = request({ body: {} });
+    await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('reason required');
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
   });
 });

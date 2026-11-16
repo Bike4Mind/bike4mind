@@ -3,7 +3,7 @@ import { Connection, questRepository } from '@bike4mind/database';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
 import { publishImageQuestReadyPush } from './generationPush';
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
-import { getImageEdit } from '@server/imageGenerations/imageEdit';
+import { getImageEdit } from '@bike4mind/server-utils/imageGenerations/imageEdit';
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   logger.debug('Starting image edit dispatch', {

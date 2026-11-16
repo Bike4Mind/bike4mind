@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.testHelper';
 import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
@@ -356,6 +357,31 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     });
     await plain.instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
     expect(unsealed.contents).toBeNull();
+  });
+
+  it("re-seals a router's key from an older cipher format when it takes the router back", async () => {
+    const file = memoryFile(
+      JSON.stringify({ version: 1, servers: [{ ...ROUTER, sealedKey: sealedAs('old', 'k-zz') }] })
+    );
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe, { cipher: versionedCipher('new') });
+
+    await instance.adopt(() => true);
+
+    expect(instance.headers('a')).toEqual({ authorization: 'Bearer k-zz' });
+    expect(openedAs(listed(file)[0].sealedKey)).toBe('new:k-zz');
+  });
+
+  it("leaves the list alone when every router's key is already in the current format", async () => {
+    const file = memoryFile(
+      JSON.stringify({ version: 1, servers: [{ ...ROUTER, sealedKey: sealedAs('new', 'k-zz') }] })
+    );
+    const write = vi.spyOn(file, 'write');
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe, { cipher: versionedCipher('new') });
+
+    await instance.adopt(() => true);
+
+    expect(instance.headers('a')).toEqual({ authorization: 'Bearer k-zz' });
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('does not take back a router whose key cannot be decrypted, and deletes its record', async () => {

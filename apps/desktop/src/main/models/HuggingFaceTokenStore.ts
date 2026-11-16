@@ -8,6 +8,8 @@ type TokenCipher = SecretCipher & { getSelectedStorageBackend?: () => string };
 export class HuggingFaceTokenStore {
   #ready: Promise<void> | null = null;
   #token: string | null = null;
+  /** The token on disk was read from a blob the cipher reports as an older format. */
+  #resealPending = false;
 
   constructor(
     private readonly cipher: TokenCipher,
@@ -43,6 +45,15 @@ export class HuggingFaceTokenStore {
     this.#token = token;
   }
 
+  /** Re-saves a token read from an older cipher format; one that could not be read stays on disk. */
+  async reencrypt(): Promise<void> {
+    if (!this.cipher.needsReencrypt) return;
+    await this.#ensureLoaded();
+    if (!this.#resealPending || this.#token === null || !this.persisted()) return;
+    await this.set(this.#token);
+    this.#resealPending = false;
+  }
+
   async clear(): Promise<void> {
     await this.#ensureLoaded();
     await this.file.write(JSON.stringify({ version: 1 }));
@@ -61,8 +72,12 @@ export class HuggingFaceTokenStore {
     try {
       const stored = tokenDocumentSchema.parse(JSON.parse(raw));
       if (!stored.token) return;
-      const token = this.cipher.decryptString(Buffer.from(stored.token, 'base64')).trim();
-      if (token) this.#token = token;
+      const sealed = Buffer.from(stored.token, 'base64');
+      const token = this.cipher.decryptString(sealed).trim();
+      if (token) {
+        this.#token = token;
+        this.#resealPending = this.cipher.needsReencrypt?.(sealed) === true;
+      }
     } catch (err) {
       this.logger.warn('Models: could not read the stored Hugging Face token');
       this.logger.debug(`Models: token read failed: ${err instanceof Error ? err.name : 'unknown'}`);

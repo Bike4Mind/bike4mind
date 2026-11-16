@@ -14,3 +14,9 @@ export type ProviderOutput =
 // whether to keep re-reading the job for a url. Must stay in sync with signOutputUrl in apps/client.
 export const GENERATION_OUTPUT_AVAILABILITIES = ['ready', 'pending_scan', 'unavailable'] as const;
 export type GenerationOutputAvailability = (typeof GENERATION_OUTPUT_AVAILABILITIES)[number];
+
+/**
+ * How Studio introduces a model on its card: a one-line strength and the provider's display name. The data lives in
+ * {image,video,music}/profiles.ts; the v1 model lists publish it as `blurb` / `provider_label`.
+ */
+export type ModelProfile = { blurb: string; providerLabel: string };

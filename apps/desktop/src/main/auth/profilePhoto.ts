@@ -7,8 +7,8 @@ import { isSupportedMediaType, mediaUrl, type MediaStore } from '../chat/media/M
  * The media folder the signed-in user's picture lives in.
  *
  * MediaStore partitions by conversation id and SessionStore mints those with randomUUID, so a
- * fixed non-UUID name can never collide with a conversation's folder - and `forgetSession` on
- * this name is therefore safe to call on sign-out.
+ * fixed non-UUID name can never collide with a conversation's folder; cache cleanup of
+ * this name is therefore separate from conversation deletion.
  */
 export const PROFILE_PHOTO_BUCKET = 'profile-photo';
 
@@ -78,6 +78,8 @@ export function resolveProfilePhotoUrl(source: string, cdnUrl: string): string |
  * MediaStore names its files with a uuid, which is no use as a cache key on its own.
  */
 export class ProfilePhotoCache {
+  private generation = 0;
+  private pending = Promise.resolve();
   constructor(
     private readonly media: MediaStore,
     private readonly file: PhotoRecordFile
@@ -85,26 +87,58 @@ export class ProfilePhotoCache {
 
   /** The stored URL for this key, or null when nothing matching is on disk. */
   async lookup(key: string): Promise<string | null> {
-    const record = await this.read();
-    if (!record || record.key !== key) return null;
-    // Confirm the bytes survived: userData can be cleared underneath us, and a url whose file
-    // is gone renders as a broken image rather than falling back to initials.
-    const stored = await this.media.read(PROFILE_PHOTO_BUCKET, record.name);
-    return stored ? mediaUrl(PROFILE_PHOTO_BUCKET, record.name) : null;
+    const generation = this.generation;
+    return this.serialize(async () => {
+      const record = await this.read();
+      if (!record || record.key !== key) return null;
+      const stored = await this.media.read(PROFILE_PHOTO_BUCKET, record.name);
+      return stored && generation === this.generation ? mediaUrl(PROFILE_PHOTO_BUCKET, record.name) : null;
+    });
   }
 
-  /** Replace whatever is stored with these bytes. Returns the `b4m-media://` URL. */
-  async store(key: string, bytes: Buffer, mimeType: string): Promise<string> {
-    await this.media.forgetSession(PROFILE_PHOTO_BUCKET);
-    const stored = await this.media.save(PROFILE_PHOTO_BUCKET, bytes, mimeType);
-    await this.file.write(JSON.stringify({ key, name: stored.name } satisfies CacheRecord));
-    return stored.url;
+  /** Replace the cached photo. A sign-out invalidates queued and in-flight stores synchronously. */
+  async store(key: string, bytes: Buffer, mimeType: string, isCurrent?: () => boolean): Promise<string> {
+    const generation = this.generation;
+    const current = () => generation === this.generation && (!isCurrent || isCurrent());
+    const assertCurrent = () => {
+      if (!current()) throw new Error('The profile photo request expired.');
+    };
+    return this.serialize(async () => {
+      assertCurrent();
+      await this.media.clearReusableBucket(PROFILE_PHOTO_BUCKET);
+      assertCurrent();
+      const stored = await this.media.save(PROFILE_PHOTO_BUCKET, bytes, mimeType);
+      if (current()) await this.file.write(JSON.stringify({ key, name: stored.name } satisfies CacheRecord));
+      if (!current()) {
+        await this.media.clearReusableBucket(PROFILE_PHOTO_BUCKET);
+        await this.file.remove();
+        assertCurrent();
+      }
+      return stored.url;
+    });
   }
 
-  /** Drop the picture and the record of it. Called on sign-out. */
+  /** Wait for older writes, then remove both bytes and sidecar before sign-out completes. */
   async clear(): Promise<void> {
-    await this.media.forgetSession(PROFILE_PHOTO_BUCKET);
-    await this.file.remove();
+    this.generation++;
+    return this.serialize(async () => {
+      await this.media.clearReusableBucket(PROFILE_PHOTO_BUCKET);
+      await this.file.remove();
+    });
+  }
+
+  private async serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.pending;
+    let release!: () => void;
+    this.pending = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   private async read(): Promise<CacheRecord | null> {
@@ -164,7 +198,7 @@ export async function fetchProfilePhoto(request: ProfilePhotoRequest): Promise<s
     const mimeType = contentType.split(';')[0].trim().toLowerCase();
     if (!mimeType.startsWith('image/') || !isSupportedMediaType(mimeType)) return null;
     if (isCurrent && !isCurrent()) return null;
-    return await cache.store(key, bytes, mimeType);
+    return await cache.store(key, bytes, mimeType, isCurrent);
   } catch (err) {
     logger.warn(`AUTH: profile photo unavailable: ${err instanceof Error ? err.message : 'unknown'}`);
     return null;

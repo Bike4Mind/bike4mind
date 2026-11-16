@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Request, Response } from 'express';
 
 // ---- Mocks (must come before the handler import) ----
 
@@ -81,12 +82,13 @@ vi.mock('sst', () => ({
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
-    post: (h: (...args: unknown[]) => unknown) => h,
+    use: (guard: (req: Request, res: Response, next: () => void) => void) => ({
+      post: (h: (req: Request, res: Response) => unknown) => async (req: Request, res: Response) => {
+        guard(req, res, () => {});
+        return h(req, res);
+      },
+    }),
   }),
-}));
-
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
 }));
 
 // ---- Import handler after mocks ----
@@ -106,6 +108,7 @@ const makeRes = () => {
 };
 
 const makeReq = (body: Record<string, unknown>, id = 'inc-1') => ({
+  method: 'POST',
   user: { isAdmin: true, id: 'admin-1' },
   query: { id },
   body,
@@ -140,6 +143,42 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
     audit.inTransaction = [];
   });
+
+  it('admits a moderation delegate and attributes its verdict', async () => {
+    mockMarkNoAction.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'no_action' });
+    const req = {
+      ...makeReq({ verdict: 'no_action' }),
+      user: { id: 'delegate', adminPermissions: ['users:moderate'] },
+    };
+    const res = makeRes();
+    await runHandler(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(mockMarkNoAction).toHaveBeenCalledWith('inc-1', 'delegate');
+    expect(audit.record.mock.calls[0][0]).toBe(req);
+  });
+
+  it.each([undefined, { id: 'u', isAdmin: false }, { id: 'u', adminPermissions: ['support:read'] }])(
+    'refuses an unauthorized caller %j before side effects',
+    async user => {
+      await expect(runHandler({ ...makeReq({ verdict: 'no_action' }), user }, makeRes())).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      for (const mock of [
+        mockMarkNoAction,
+        mockFindById,
+        mockClaimForNcmecSubmission,
+        mockUpdateReviewStatus,
+        mockResolveConfirmedCsam,
+        mockSetNcmecReportId,
+        mockRecordManualReport,
+        mockSubmitNcmecReport,
+        mockFinishNcmecReport,
+        audit.record,
+      ]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   // ------------------------------------------------------------------ confirmed_csam -- success
   describe('verdict: confirmed_csam', () => {

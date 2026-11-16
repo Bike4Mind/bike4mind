@@ -6,11 +6,19 @@ import Observation
 public enum StudioSubmitError: Error, Equatable, Sendable {
   /// The server refused it with a reason the person can act on (credits, model, content).
   case refused(GenerationFailure)
+  /// The server refused a value with its own reason (an `unsupported_*` or validation code). The reason is shown as
+  /// sent, so the wording matches the web app.
+  case rejected(code: String?, message: String)
   case api(APIError)
 
   init(_ error: any Error) {
     switch error {
-    case let refusal as StudioRequestError: self = .refused(refusal.failure)
+    case let refusal as StudioRequestError:
+      if case .other = refusal.failure, let message = refusal.serverMessage, !message.isEmpty {
+        self = .rejected(code: refusal.code, message: message)
+      } else {
+        self = .refused(refusal.failure)
+      }
     case let api as APIError: self = .api(api)
     default: self = .api(.malformedResponse)
     }
@@ -24,12 +32,19 @@ public final class StudioCreateViewModel {
   /// The video and music routes cap prompts at this length; the image routes accept the same.
   public static let maximumPromptLength = 4000
 
-  public var kind: GenerationKind = .image
+  public var kind: GenerationKind = .image {
+    didSet { paramsNote = nil }
+  }
   public var prompt = ""
-  public var instrumental = false
   public private(set) var models: [GenerationKind: [GenerationModel]] = [:]
+  /// Changed values per kind, kept while switching kinds so nothing is lost.
+  public private(set) var paramsByKind: [GenerationKind: GenerationParams] = [:]
+  /// Names the values a model switch had to drop; cleared on the next change.
+  public private(set) var paramsNote: String?
   public private(set) var isSubmitting = false
   public var error: StudioSubmitError?
+  /// Images attached as video frames, reference or style. Shown and sent only while the kind is video.
+  public private(set) var inputs: [StudioInput] = []
 
   @ObservationIgnored private var selectedModelIDs: [GenerationKind: String] = [:]
   @ObservationIgnored private let api: any StudioAPI
@@ -40,22 +55,143 @@ public final class StudioCreateViewModel {
     self.tracker = tracker
   }
 
-  public var availableModels: [GenerationModel] { models[kind] ?? [] }
+  /// The models for the kind. Video narrows to what the request needs: text-to-video models while nothing is
+  /// attached, and models that accept every attached role (and that many files of it) otherwise.
+  public var availableModels: [GenerationModel] {
+    let list = models[kind] ?? []
+    guard kind == .video else { return list }
+    return list.filter { Self.accepts($0, inputs: videoInputs) }
+  }
+
+  public var videoInputs: [StudioInput] { kind == .video ? inputs : [] }
+
+  static func accepts(_ model: GenerationModel, inputs: [StudioInput]) -> Bool {
+    guard case .video(let capabilities)? = model.capabilities else { return inputs.isEmpty }
+    if inputs.isEmpty { return capabilities.modes.contains("text_to_video") }
+    guard capabilities.modes.contains("image_to_video") else { return false }
+    return VideoInputRole.allCases.allSatisfy { role in
+      let count = inputs.filter { $0.role == role }.count
+      return count == 0 || (capabilities.inputRoles[role.rawValue] ?? 0) >= count
+    }
+  }
+
+  /// Why the attached images cannot be sent yet, or nil when they can.
+  public var inputIssue: String? {
+    let attached = videoInputs
+    guard !attached.isEmpty else { return nil }
+    if !attached.contains(where: { $0.role == .firstFrame }) {
+      return "Add a start frame: the video needs an image to begin from."
+    }
+    if availableModels.isEmpty {
+      return "No video model accepts this combination of images. Remove one to continue."
+    }
+    return nil
+  }
+
+  /// Applies "Turn into...": switches kind, attaches the material and prefills the prompt. A prompt the person
+  /// already typed is kept unless the seed brings one.
+  public func apply(_ seed: StudioSeed) async {
+    kind = seed.kind
+    inputs = seed.inputs
+    await loadModels()
+    if !seed.prompt.isEmpty { prompt = seed.prompt }
+    if !seed.params.isEmpty { paramsByKind[kind] = seed.params }
+    reconcileModelWithInputs()
+  }
+
+  public func remove(input: StudioInput) {
+    inputs.removeAll { $0.id == input.id }
+    reconcileModelWithInputs()
+  }
+
+  /// A selection that no longer fits the attachments falls back to the first model that does, naming the change.
+  private func reconcileModelWithInputs() {
+    guard kind == .video, let previous = selectedModelIDs[kind] else { return }
+    let list = availableModels
+    guard !list.contains(where: { $0.id == previous }), let first = list.first else { return }
+    select(model: first)
+    let name = first.name
+    paramsNote = [paramsNote, "Switched to \(name), which takes these images."].compactMap { $0 }.joined(separator: " ")
+  }
 
   public var selectedModel: GenerationModel? {
     let list = availableModels
     return list.first { $0.id == selectedModelIDs[kind] } ?? list.first
   }
 
+  /// Switches model, keeping the values the new one also takes and naming the ones it doesn't.
   public func select(model: GenerationModel) {
+    let previousControls = controls
+    let (kept, dropped) = params.carried(to: model.capabilities)
     selectedModelIDs[kind] = model.id
+    paramsByKind[kind] = kept
+    let names = dropped.compactMap { key in previousControls.first { $0.key == key }?.title }
+    paramsNote = names.isEmpty ? nil : "\(model.name) doesn't take \(Self.list(names)), so it was reset."
+  }
+
+  public var params: GenerationParams { paramsByKind[kind] ?? GenerationParams() }
+
+  /// The panel's controls for the selected model, in display order.
+  public var controls: [ParamControl] {
+    ParamControls.controls(for: selectedModel?.capabilities, params: params)
+  }
+
+  public func value(for control: ParamControl) -> ParamValue? { params.value(for: control) }
+
+  public func set(_ value: ParamValue?, for control: ParamControl) {
+    var updated = params
+    updated.set(value, for: control)
+    if control.key == .instrumental, value?.flag == true { updated[.lyrics] = nil }
+    paramsByKind[kind] = updated
+    paramsNote = nil
+  }
+
+  public func resetParams() {
+    paramsByKind[kind] = nil
+    paramsNote = nil
+  }
+
+  /// The summary chip: the changed values, or nil when everything is the model default.
+  public var paramsSummary: String? { params.summary(controls: controls) }
+
+  /// Credits the selected settings should cost, when the model list prices them.
+  public var estimatedCredits: Int? { CreditEstimate.credits(for: selectedModel?.capabilities, params: params) }
+
+  /// "Use these settings" from a finished item: its kind, model and values, with the same carry-over rules as a
+  /// model switch so a model since removed falls back cleanly. Its prompt fills the bar only when nothing is typed.
+  public func use(settingsOf handle: GenerationHandle) async {
+    kind = handle.kind
+    await loadModels()
+    let original = handle.modelID.flatMap { id in availableModels.first { $0.id == id } }
+    if let original { selectedModelIDs[kind] = original.id }
+    let (kept, dropped) = (handle.params ?? GenerationParams()).carried(to: selectedModel?.capabilities)
+    paramsByKind[kind] = kept
+    let current = selectedModel?.name ?? "this model"
+    var notes: [String] = []
+    if original == nil { notes.append("The original model isn't available, so this uses \(current).") }
+    if !dropped.isEmpty { notes.append("Some settings aren't available on \(current).") }
+    paramsNote = notes.isEmpty ? nil : notes.joined(separator: " ")
+    if trimmedPrompt.isEmpty { prompt = handle.prompt }
+  }
+
+  /// What a generation was made with, for its tile: the changed values against its model's controls.
+  public func summary(of handle: GenerationHandle) -> String? {
+    guard let params = handle.params, !params.isEmpty else { return nil }
+    let capabilities = models[handle.kind]?.first { $0.id == handle.modelID }?.capabilities
+    return params.summary(controls: ParamControls.controls(for: capabilities, params: params))
+  }
+
+  static func list(_ names: [String]) -> String {
+    let lowered = names.map { $0.lowercased() }
+    guard lowered.count > 1, let last = lowered.last else { return lowered.first ?? "" }
+    return lowered.dropLast().joined(separator: ", ") + " or " + last
   }
 
   private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   public var canSubmit: Bool {
     !isSubmitting && selectedModel != nil && !trimmedPrompt.isEmpty
-      && trimmedPrompt.count <= Self.maximumPromptLength
+      && trimmedPrompt.count <= Self.maximumPromptLength && inputIssue == nil
   }
 
   /// Loads the model list for the current kind once. A failed load falls back to a known model where one exists,
@@ -80,9 +216,12 @@ public final class StudioCreateViewModel {
     defer { isSubmitting = false }
     do {
       let handle = try await api.generate(
-        GenerationRequest(kind: kind, prompt: trimmedPrompt, modelID: model.id, instrumental: instrumental))
+        GenerationRequest(
+          kind: kind, prompt: trimmedPrompt, modelID: model.id, params: params,
+          inputs: videoInputs.map { GenerationInput(role: $0.role.rawValue, fileID: $0.item.id) }))
       tracker.track(handle)
       prompt = ""
+      if kind == .video { inputs = [] }
       return true
     } catch {
       self.error = StudioSubmitError(error)

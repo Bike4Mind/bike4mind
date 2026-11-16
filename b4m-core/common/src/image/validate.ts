@@ -29,6 +29,8 @@ export type ImageCapabilityRequest = {
   count?: number;
   transparentBackground?: boolean;
   seed?: number;
+  // Only the count matters here; the region shapes are the request schema's to check.
+  editRegions?: ReadonlyArray<unknown>;
 };
 
 export type ImageRequestField = keyof ImageCapabilityRequest;
@@ -47,6 +49,7 @@ export const IMAGE_VALIDATION_ERROR_CODES = [
   'unsupported_output_count',
   'unsupported_transparent_background',
   'unsupported_seed',
+  'unsupported_edit_regions',
 ] as const;
 export type ImageValidationErrorCode = (typeof IMAGE_VALIDATION_ERROR_CODES)[number];
 
@@ -247,7 +250,20 @@ function checkModeOutput(
       )
     );
   }
+  failures.push(...checkEditRegions(request, modeCaps));
   return failures;
+}
+
+function checkEditRegions(request: ImageCapabilityRequest, modeCaps: ImageModeCapabilities): ImageValidationFailure[] {
+  const requested = request.editRegions?.length ?? 0;
+  if (requested === 0) return [];
+  const max = modeCaps.editRegions?.max ?? 0;
+  if (requested <= max) return [];
+  const message =
+    max === 0
+      ? `edit regions are not supported for ${request.mode}`
+      : `${requested} edit regions is more than ${request.mode} allows (max: ${max})`;
+  return [failure({ code: 'unsupported_edit_regions', mode: request.mode, requested, max }, 'editRegions', message)];
 }
 
 function checkModelParams(request: ImageCapabilityRequest, caps: ImageModelCatalogEntry): ImageValidationFailure[] {

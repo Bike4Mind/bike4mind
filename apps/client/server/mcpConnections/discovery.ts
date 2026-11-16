@@ -16,7 +16,7 @@ import {
   mergeDiscoveredTools,
 } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { invokeRemoteMcp, type InvokeRemoteMcpOptions } from './invokeRemoteMcp';
+import { invokeRemoteMcp, type InvokeRemoteMcpOptions } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 
 /** Compare-and-set attempts before giving up; each loss means a concurrent review or discovery. */
 export const DISCOVERY_MAX_ATTEMPTS = 3;

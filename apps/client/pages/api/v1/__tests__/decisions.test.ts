@@ -58,7 +58,9 @@ vi.mock('@bike4mind/utils', async importActual => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: vi.fn(() => true),
 }));
-vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: (...a: unknown[]) => reserve(...a) }));
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: (...a: unknown[]) => reserve(...a),
+}));
 // The real TestDecisionProvider behind a spy, so the route runs the real retry policy and normalizer.
 vi.mock('@bike4mind/server-utils/decisions/providers', async () => {
   const { TestDecisionProvider } = await import('@bike4mind/utils/decisionProviders');
@@ -77,7 +79,9 @@ vi.mock('@bike4mind/server-utils/decisions/providers', async () => {
     resolveDecisionProviderKey: (...a: unknown[]) => resolveKey(...a),
   };
 });
-vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: (...a: unknown[]) => loadFile(...a) }));
+vi.mock('@bike4mind/server-utils/files/loadAccessibleFabFile', () => ({
+  loadAccessibleFabFile: (...a: unknown[]) => loadFile(...a),
+}));
 // Real resizing needs a decodable image; the dimension gate has its own tests.
 vi.mock('@bike4mind/utils/imageResize', () => ({
   ensureImageWithinDimensionLimit: (...a: unknown[]) => resize(...a),

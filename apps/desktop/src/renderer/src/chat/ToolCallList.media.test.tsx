@@ -98,3 +98,58 @@ describe('naming a saved tool image', () => {
     expect(imageAction).toHaveBeenCalledWith({ source: 'media', url: MEDIA.url, nameHint: 'image' }, 'save');
   });
 });
+
+describe('an image file_read read', () => {
+  const read = (id: string, media: ChatMedia): ChatToolCall => ({
+    id,
+    name: 'file_read',
+    input: { path: '/tmp/shot.png' },
+    status: 'done',
+    preview: '/tmp/shot.png is a PNG image (149.1 KB), 2560x1664.',
+    media: [media],
+  });
+  const SIZED: ChatMedia = { ...MEDIA, width: 1568, height: 1019 };
+
+  // jsdom does not toggle <details> on a summary click, so open it the way the browser would.
+  async function openDetails(element: Element | undefined) {
+    if (!element) throw new Error('nothing to open');
+    await act(async () => {
+      (element as HTMLDetailsElement).open = true;
+      element.dispatchEvent(new Event('toggle'));
+    });
+  }
+  const openRow = () => openDetails(document.querySelector('[data-testid="chat-tool-row"]') ?? undefined);
+
+  it('draws the image in the row body once the row is open, not under the closed row', async () => {
+    await render(<ToolCallList calls={[read('call-1', SIZED)]} onRespond={() => {}} />);
+    expect(byTestId('chat-media-thumbnail')).toBeNull();
+    expect(byTestId('chat-media-image')).toBeNull();
+
+    await openRow();
+
+    const detail = byTestId('chat-tool-detail');
+    const thumbnail = detail?.querySelector<HTMLImageElement>('[data-testid="chat-media-thumbnail"] img');
+    expect(thumbnail?.getAttribute('src')).toBe(MEDIA.url);
+    expect(thumbnail?.getAttribute('loading')).toBe('lazy');
+    expect(byTestId('chat-tool-detail-result')?.textContent).toContain('is a PNG image');
+  });
+
+  it('opens the image full size on click', async () => {
+    await render(<ToolCallList calls={[read('call-1', SIZED)]} onRespond={() => {}} />);
+    await openRow();
+    await act(async () => byTestId('chat-media-view-btn')?.click());
+    expect(document.querySelector(`img[src="${MEDIA.url}"][alt="${MEDIA.caption}"]`)).not.toBeNull();
+    expect(document.querySelectorAll(`img[src="${MEDIA.url}"]`).length).toBeGreaterThan(1);
+  });
+
+  it('shows each read in a group of reads under its own entry', async () => {
+    const other: ChatMedia = { ...MEDIA, url: 'b4m-media://media/s1/11111111-1111-4111-8111-111111111111.png' };
+    await render(<ToolCallList calls={[read('call-1', MEDIA), read('call-2', other)]} onRespond={() => {}} />);
+    await openRow();
+    expect(byTestId('chat-media-thumbnail')).toBeNull();
+
+    await openDetails(document.querySelectorAll('[data-testid="chat-tool-entry"]')[1]);
+    const shown = [...document.querySelectorAll<HTMLImageElement>('[data-testid="chat-media-thumbnail"] img')];
+    expect(shown.map(image => image.getAttribute('src'))).toEqual([other.url]);
+  });
+});

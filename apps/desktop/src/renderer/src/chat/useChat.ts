@@ -108,17 +108,24 @@ export function useSessions(): SessionsController {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const latestReload = useRef(0);
+  const latestListing = useRef<Promise<void>>(Promise.resolve());
   const localEdits = useRef(0);
   // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
   // would put back the rows it read before them. Import syncs re-list often enough to hit this.
-  const reload = useCallback(async (): Promise<void> => {
+  // An overtaken reload still resolves only once the newer listing is applied: a caller that
+  // selects a session it just created (useSessionDraft) relies on the list holding it by then.
+  const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
-    const next = await window.b4m.chat.listSessions();
-    if (ticket !== latestReload.current) return;
-    if (editsBefore !== localEdits.current) return reload();
-    setSessions(next);
-    setLoading(false);
+    const listing = (async (): Promise<void> => {
+      const next = await window.b4m.chat.listSessions();
+      if (ticket !== latestReload.current) return latestListing.current;
+      if (editsBefore !== localEdits.current) return reload();
+      setSessions(next);
+      setLoading(false);
+    })();
+    latestListing.current = listing;
+    return listing;
   }, []);
   const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
     localEdits.current++;
@@ -521,7 +528,8 @@ export interface ConversationController {
   notice: string | null;
   dismissNotice: () => void;
   /** False when main refused the turn; the text is already back in the composer. */
-  send: (text: string, attachments?: readonly ChatAttachment[]) => Promise<boolean>;
+  /** `notes` reach the model with this turn and are never drawn; see SendMessageRequest.notes. */
+  send: (text: string, attachments?: readonly ChatAttachment[], notes?: readonly string[]) => Promise<boolean>;
   /** Device-local: move a conversation whose model is not installed to the one a send would use. */
   settleLocalModel: () => Promise<void>;
   stop: () => void;
@@ -1030,7 +1038,11 @@ export function useConversation(
 
   const sessionProject = session?.project;
   const send = useCallback(
-    async (text: string, attachments: readonly ChatAttachment[] = []): Promise<boolean> => {
+    async (
+      text: string,
+      attachments: readonly ChatAttachment[] = [],
+      notes: readonly string[] = []
+    ): Promise<boolean> => {
       if (!sessionId) return true;
       const prompt = text.trim();
       // An attachment on its own is a turn; only a turn with neither is not.
@@ -1059,6 +1071,7 @@ export function useConversation(
             content: prompt,
             createdAt: new Date().toISOString(),
             ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+            ...(notes.length > 0 ? { notes: [...notes] } : {}),
           }
         : null;
       if (optimistic) setMessages(current => [...current, optimistic]);
@@ -1073,6 +1086,7 @@ export function useConversation(
           sessionId,
           text: prompt,
           ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+          ...(notes.length > 0 ? { notes: [...notes] } : {}),
         })
         .finally(() => {
           if (!goingOut) return;

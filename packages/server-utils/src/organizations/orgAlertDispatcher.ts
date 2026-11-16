@@ -1,0 +1,243 @@
+import {
+  InboxType,
+  orgAlertPeriodKey,
+  resolveOrgAlertOptIn,
+  type OrgAlertKind,
+  type OrgAlertRecipientRole,
+} from '@bike4mind/common';
+import {
+  inboxRepository,
+  Inbox,
+  mongoose,
+  orgAdminNotificationPrefRepository,
+  orgAlertNotificationRepository,
+  organizationRepository,
+  runAfterCommit,
+  userRepository,
+  withTransaction,
+  lockLiveOrgAlertUser,
+} from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import type { OrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
+import { EmailEvents } from '../utils/eventBus';
+import { buildOrgAlertEmailBody, toOrgAlertSubject } from '../utils/mailer/orgAlertEmails';
+
+// Built on first use: baseApi imports this module on every route, and route tests often mock
+// @bike4mind/observability without a Logger.
+let cachedLogger: Logger | null = null;
+const log = (): Logger => (cachedLogger ??= new Logger({ metadata: { component: 'orgAlertDispatcher' } }));
+
+export interface DispatchOrgAlertInput {
+  organizationId: string;
+  kind: OrgAlertKind;
+  /** Dedup scope within the period, e.g. `pct:80` or `user:<id>` (see IOrgAlertNotification). */
+  scope: string;
+  periodKey?: string;
+  subjectUserId?: string | null;
+  /** Short heading used as the email subject and Inbox title; the org name is appended. */
+  title: string;
+  /** Plain-text body shared by the email and the Inbox entry. */
+  message: string;
+  /** Stored Inbox text when it must differ from `message`, e.g. to keep a member's identity out of it. */
+  inboxMessage?: string;
+  /** The owner still gets the Inbox entry but no email, e.g. paymentFailureNotice already emailed them. */
+  excludeOwnerEmail?: boolean;
+  /** Never notified, e.g. the member who just joined and the admin who added them. */
+  excludeRecipientUserIds?: readonly string[];
+}
+
+export interface DispatchOrgAlertResult {
+  claimed: boolean;
+  recipientUserIds: string[];
+  delivered: number;
+}
+
+interface Recipient {
+  userId: string;
+  role: OrgAlertRecipientRole;
+}
+
+/**
+ * Send one org alert to the owner and opted-in current managers, at most once per
+ * (org, kind, scope, period). Never throws: a failed send must not fail the debit, roster change
+ * or webhook that raised it. The claim is released only when no delivery attempt succeeded, so a
+ * later event can retry; a claim with nobody to notify is kept.
+ */
+export async function dispatchOrgAlert(input: DispatchOrgAlertInput): Promise<DispatchOrgAlertResult> {
+  const none: DispatchOrgAlertResult = { claimed: false, recipientUserIds: [], delivered: 0 };
+  let claimId: string | undefined;
+  try {
+    const org = await organizationRepository.findById(input.organizationId);
+    if (!org || org.personal || !org.userId) return none;
+
+    const claim = await orgAlertNotificationRepository.claim({
+      organizationId: org.id,
+      kind: input.kind,
+      scope: input.scope,
+      periodKey: input.periodKey ?? orgAlertPeriodKey(),
+      subjectUserId: input.subjectUserId,
+    });
+    if (!claim.claimed) return none;
+    claimId = claim.id;
+
+    const memberIds = new Set((org.users ?? []).map(member => member.userId));
+    // Same "current admin" rule as isOrgOwnerOrCurrentAdmin: an appointment without a member row confers nothing.
+    const candidates: Recipient[] = [
+      { userId: org.userId, role: 'owner' },
+      ...[...new Set(org.adminUserIds ?? [])]
+        .filter(id => id !== org.userId && memberIds.has(id))
+        .map(userId => ({ userId, role: 'manager' as const })),
+    ];
+    const prefs = await orgAdminNotificationPrefRepository.getForOrg(org.id);
+    const prefByUser = new Map(prefs.map(row => [row.userId, row]));
+    const excluded = new Set(input.excludeRecipientUserIds ?? []);
+    const recipients = candidates.filter(
+      r => !excluded.has(r.userId) && resolveOrgAlertOptIn(r.role, prefByUser.get(r.userId), input.kind)
+    );
+    if (recipients.length === 0) return { claimed: true, recipientUserIds: [], delivered: 0 };
+
+    const title = toOrgAlertSubject(`${input.title} - ${org.name}`);
+    const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, '');
+    const body = buildOrgAlertEmailBody({
+      organizationName: org.name,
+      heading: input.title,
+      message: input.message,
+      settingsUrl: appUrl ? `${appUrl}/organizations/${org.id}?tab=members` : undefined,
+    });
+    const skipEmail = new Set<string>(input.excludeOwnerEmail ? [org.userId] : []);
+
+    await Inbox.init();
+    let delivered = 0;
+    let attempted = 0;
+    for (const { userId } of recipients) {
+      attempted++;
+      try {
+        const written = await withTransaction(async session => {
+          const canonicalUserId = await lockLiveOrgAlertUser(userId, session);
+          if (!canonicalUserId) return false;
+          await inboxRepository.createInboxMessage({
+            userId: 'SYSTEM',
+            receiverId: canonicalUserId,
+            type: InboxType.COMMON,
+            organizationAlert: true,
+            title,
+            message: input.inboxMessage ?? input.message,
+          });
+          return true;
+        });
+        if (written) delivered++;
+      } catch (error) {
+        log().warn('Org alert inbox write failed', { organizationId: input.organizationId, kind: input.kind, error });
+      }
+      if (skipEmail.has(userId)) continue;
+      attempted++;
+      try {
+        const user = await userRepository.findById(userId);
+        if (!user?.email || user.deletion?.purgeStartedAt) continue;
+        await EmailEvents.Send.publish({ to: user.email, subject: title, body });
+        delivered++;
+      } catch (error) {
+        log().warn('Org alert email failed', { organizationId: input.organizationId, kind: input.kind, error });
+      }
+    }
+
+    if (delivered === 0 && attempted > 0) await releaseQuietly(claimId);
+    return { claimed: true, recipientUserIds: recipients.map(r => r.userId), delivered };
+  } catch (error) {
+    log().error('Org alert dispatch failed', { organizationId: input.organizationId, kind: input.kind, error });
+    if (claimId) await releaseQuietly(claimId);
+    return none;
+  }
+}
+
+async function releaseQuietly(id: string | undefined): Promise<void> {
+  if (!id) return;
+  try {
+    await orgAlertNotificationRepository.release(id);
+  } catch (error) {
+    log().warn('Could not release org alert claim; it will not retry this period', { error });
+  }
+}
+
+type TransactionStorage = {
+  exit<R>(callback: () => R): R;
+  getStore(): { session?: mongoose.mongo.ClientSession } | undefined;
+};
+
+/** Refusals report a write the transaction is about to abort, so they must not wait for its commit. */
+const firesOnAbort = (event: OrgEvent): boolean =>
+  event.type === 'seat_limit' || (event.type === 'member_cap_check' && event.refused === true);
+
+/**
+ * Maps an org event to its alert, always outside any ambient transaction (joining it would roll back
+ * the claim and Inbox write on abort while the email still went out). A refusal is routed at once;
+ * any other event raised inside a transaction is queued on db-core's withTransaction, which awaits it
+ * after commit, so the evaluators read the committed write and nothing is sent for a rolled-back one.
+ */
+export function handleOrgEvent(event: OrgEvent): Promise<void> {
+  const storage = (mongoose as unknown as { transactionAsyncLocalStorage?: TransactionStorage })
+    .transactionAsyncLocalStorage;
+  if (!storage) return routeOrgEvent(event);
+  const session = storage.getStore()?.session;
+  if (session?.inTransaction() && !firesOnAbort(event)) {
+    // Latest wins per subject: one transaction can raise the same event more than once.
+    const subject = 'userId' in event ? event.userId : '';
+    const queued = runAfterCommit(session, `orgAlert|${event.type}|${event.organizationId}|${subject}`, () =>
+      storage
+        .exit(() => routeOrgEvent(event))
+        .catch(error => {
+          log().warn('Deferred org alert failed', { organizationId: event.organizationId, error });
+        })
+    );
+    if (queued) return Promise.resolve();
+  }
+  return storage.exit(() => routeOrgEvent(event));
+}
+
+/** Threshold kinds are evaluated by their own modules, which dispatch. */
+async function routeOrgEvent(event: OrgEvent): Promise<void> {
+  switch (event.type) {
+    case 'seat_limit':
+      await dispatchOrgAlert({
+        organizationId: event.organizationId,
+        kind: 'seat_limit',
+        scope: `seats:${event.seats}`,
+        title: 'Seat limit reached',
+        message: `Someone could not join because all ${event.seats} seats are in use. The owner can add seats from the Billing tab to let more people in.`,
+      });
+      return;
+    case 'member_joined':
+      await dispatchOrgAlert({
+        organizationId: event.organizationId,
+        kind: 'member_joined',
+        scope: `user:${event.userId}`,
+        // Not month-scoped: a retried accept or a re-add within the claim's retention never repeats it.
+        periodKey: 'once',
+        subjectUserId: event.userId,
+        excludeRecipientUserIds: [event.userId, ...(event.actorUserId ? [event.actorUserId] : [])],
+        title: 'New member joined',
+        message: 'A new member joined your organization. Review the roster from the Members tab.',
+      });
+      return;
+    case 'payment_failed':
+      await dispatchOrgAlert({
+        organizationId: event.organizationId,
+        kind: 'payment_failed',
+        scope: `invoice:${event.invoiceId}`,
+        excludeOwnerEmail: true,
+        title: 'Subscription payment failed',
+        message: 'A renewal payment for your organization failed. The owner can update the card from the Billing tab.',
+      });
+      return;
+    case 'credit_debit': {
+      const { evaluateOrgBudget } = await import('./evaluateOrgBudget');
+      await evaluateOrgBudget(event);
+      return;
+    }
+    case 'member_cap_check': {
+      const { evaluateMemberCap } = await import('./evaluateMemberCap');
+      await evaluateMemberCap(event);
+      return;
+    }
+  }
+}

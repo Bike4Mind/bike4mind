@@ -3,7 +3,7 @@ import { Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { IGrantPackageDocument } from '@bike4mind/common';
+import { isGrantPackageExpired, type IGrantPackageDocument } from '@bike4mind/common';
 import {
   AdminPageHeader,
   DataTable,
@@ -98,11 +98,21 @@ const columns: DataColumn<GrantPackageRow>[] = [
       ),
   },
   {
+    id: 'expiresAt',
+    label: 'Expires',
+    width: '8rem',
+    render: row => (
+      <span data-testid={`grant-package-expires-${row.id}`}>
+        {row.expiresAt ? new Date(row.expiresAt).toLocaleDateString('en-US', { timeZone: 'UTC' }) : 'Never'}
+      </span>
+    ),
+  },
+  {
     id: 'nextCodeExpiry',
     label: 'Next code expiry',
     width: '9rem',
     render: row => (
-      <Tooltip title="Packages do not expire; this is the soonest expiry among linked active codes">
+      <Tooltip title="The soonest expiry among linked active codes">
         <span data-testid={`grant-package-next-expiry-${row.id}`}>
           {row.usage?.nextCodeExpiry ? new Date(row.usage.nextCodeExpiry).toLocaleDateString('en-US') : '-'}
         </span>
@@ -118,6 +128,9 @@ const columns: DataColumn<GrantPackageRow>[] = [
       return (
         <Stack direction="row" gap={0.5} flexWrap="wrap">
           <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />
+          {isGrantPackageExpired(row) && (
+            <StatusChip tone="warn" label="Expired" data-testid={`grant-package-expired-${row.id}`} />
+          )}
           {cap && (
             <StatusChip
               tone="warn"

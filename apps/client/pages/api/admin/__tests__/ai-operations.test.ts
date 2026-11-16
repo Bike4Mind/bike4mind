@@ -8,11 +8,11 @@ const h = vi.hoisted(() => ({
   write: vi.fn(),
   audit: vi.fn(),
   validate: vi.fn(),
-  options: [] as unknown[],
+  options: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
-    h.options.push(options);
+    h.options(options);
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
@@ -55,8 +55,10 @@ beforeEach(() => {
   h.read.mockResolvedValue({ ok: true });
 });
 describe('AI operations authorization and audited controls', () => {
-  it('declares JWT-only authentication for the operations console', () => {
-    expect(h.options[0]).toMatchObject({ auth: 'jwtOnly' });
+  it('uses JWT-only authentication for the unversioned operations route', async () => {
+    vi.resetModules();
+    await import('../ai-operations');
+    expect(h.options).toHaveBeenCalledWith(expect.objectContaining({ auth: 'jwtOnly' }));
   });
   it.each(['GET', 'PUT', 'POST'] as const)('denies %s before any work without settings permission', async method => {
     await expect(call(method, { isAdmin: false })).rejects.toThrow(/missing permission/i);

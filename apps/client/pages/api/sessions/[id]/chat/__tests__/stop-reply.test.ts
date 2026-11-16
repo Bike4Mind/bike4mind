@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const stopReply = vi.hoisted(() => vi.fn());
-vi.mock('@server/managers/sessionManager', () => ({ stopReply }));
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({ stopReply }));
 
 const dispatchQuestCallback = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({ dispatchQuestCallback }));

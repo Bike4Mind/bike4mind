@@ -118,9 +118,7 @@ export const usePendingBulkRun = () => {
       userIds: readonly string[];
       reason: string;
     }): Promise<PendingBulkOutcome> => {
-      // The release route takes no reason; its audit entries name the batch instead.
-      const body = kind === 'release' ? { userIds } : { userIds, reason };
-      const response = await api.post<ReleaseResult | BulkResult>(PATH[kind], body);
+      const response = await api.post<ReleaseResult | BulkResult>(PATH[kind], { userIds, reason });
       return bulkOutcome(kind, response.data);
     },
     onSettled: (_data, _error, { userIds }) => invalidatePending(queryClient, userIds),

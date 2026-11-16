@@ -140,6 +140,7 @@ export async function applyEmailVerifiedGrants(params: {
     tagsApplied: [],
     subscriptionCreditsGranted: 0,
     subscriptionGranted: false,
+    packageRefusal: null,
   };
   try {
     domainGrant = await applySignupDomainGrant({ userId: user.id, email: verifiedEmail, trigger, logger });

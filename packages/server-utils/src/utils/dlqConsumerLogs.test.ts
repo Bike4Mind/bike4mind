@@ -66,6 +66,35 @@ describe('resolveConsumerLogs', () => {
     expect((await resolveConsumerLogs(QUEUE_URL))?.logGroups).toEqual(['/aws/lambda/app-dev-webhook']);
   });
 
+  it('retains deployment facts only for an unambiguous unqualified consumer', async () => {
+    mappings(fnArn('a'));
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+      FunctionName: 'a',
+      LastModified: '2026-01-02T00:00:00.000+0000',
+      Version: '$LATEST',
+      LastUpdateStatus: 'Successful',
+    });
+    expect(await resolveConsumerLogs(QUEUE_URL)).toMatchObject({
+      consumerDeployedAt: '2026-01-02T00:00:00.000Z',
+      consumerVersion: '$LATEST',
+    });
+    for (const targets of [[fnArn('a', 'live')], [fnArn('a'), fnArn('b')]]) {
+      resetConsumerLogsCacheForTests();
+      mappings(...targets);
+      expect(await resolveConsumerLogs(QUEUE_URL)).not.toHaveProperty('consumerDeployedAt');
+    }
+    for (const LastUpdateStatus of ['InProgress', 'Failed'] as const) {
+      resetConsumerLogsCacheForTests();
+      mappings(fnArn('a'));
+      lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+        FunctionName: 'a',
+        LastModified: '2026-01-02T00:00:00.000+0000',
+        LastUpdateStatus,
+      });
+      expect(await resolveConsumerLogs(QUEUE_URL)).not.toHaveProperty('consumerDeployedAt');
+    }
+  });
+
   it('returns null when no mapping consumes the queue', async () => {
     mappings();
     expect(await resolveConsumerLogs(QUEUE_URL)).toBeNull();

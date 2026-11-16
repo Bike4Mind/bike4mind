@@ -4,7 +4,15 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import type { RevenueTrendPoint } from '@bike4mind/server-utils/app/utils/adminRevenue';
 import { MRR_CURRENCY } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { formatMoney } from '../shared/formatMoney';
-import { ACCENT, AXIS_TICK, BORDER, COMPARISON_OPACITY, ChartLegend, ChartTooltipBox, INK_MUTED } from './chartParts';
+import {
+  ACCENT,
+  AXIS_TICK,
+  BORDER,
+  COMPARISON_OPACITY,
+  ChartLegend,
+  ChartTooltipBox,
+  INK_MUTED,
+} from '../shared/chartParts';
 import { formatTrendDay } from './revenueFormat';
 
 const TREND_TEST_ID = 'admin-revenue-chart';

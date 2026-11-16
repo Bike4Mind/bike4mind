@@ -250,6 +250,7 @@ export const publicVersionView = (v: ISkillListingVersion, authorUserId: string)
   honestSummary: v.honestSummary,
   riskTier: v.riskTier,
   selfApproved: isSelfApproved(v, authorUserId),
+  reviewStatus: v.reviewStatus,
   createdAt: v.createdAt,
 });
 

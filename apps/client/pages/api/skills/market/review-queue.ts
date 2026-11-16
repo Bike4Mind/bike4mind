@@ -45,13 +45,19 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
 
   if (filter === 'reports') {
     const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds);
-    const grouped = await SkillListingReport.aggregate<{ _id: string; count: number; reports: unknown[] }>([
+    const grouped = await SkillListingReport.aggregate<{
+      _id: string;
+      count: number;
+      countingCount: number;
+      reports: unknown[];
+    }>([
       { $match: { status: 'open', ...(scopedListingIds ? { listingId: { $in: scopedListingIds } } : {}) } },
       { $sort: { createdAt: -1 } },
       {
         $group: {
           _id: '$listingId',
           count: { $sum: 1 },
+          countingCount: { $sum: { $cond: [{ $ne: ['$countsTowardHide', false] }, 1, 0] } },
           reports: { $push: { reason: '$reason', details: '$details', createdAt: '$createdAt' } },
         },
       },
@@ -69,6 +75,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
               {
                 listing: serializeListing(listing, { privileged: true }),
                 count: g.count,
+                countingCount: g.countingCount,
                 reports: g.reports.slice(0, 20),
               },
             ]

@@ -16,9 +16,11 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => (rateLimitOptions.push(options), () => undefined),
 }));
 const mockDeps = vi.fn(() => ({ deps: true }));
-vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkExecuteDeps: (...a: unknown[]) => mockDeps(...a) }));
+vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
+  usersBulkExecuteDeps: (...a: unknown[]) => mockDeps(...a),
+}));
 const mockExecute = vi.fn();
-vi.mock('@server/admin/usersBulk/execute', () => ({
+vi.mock('@bike4mind/server-utils/admin/usersBulk/execute', () => ({
   executeAdminUsersBulk: (...a: unknown[]) => mockExecute(...a),
 }));
 const mockGate = vi.fn();

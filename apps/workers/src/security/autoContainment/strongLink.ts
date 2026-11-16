@@ -2,8 +2,8 @@ import type { RecordShadowDetectionInput, UserSignupLinkFacts } from '@bike4mind
 import { cacheRepository, shadowDetectionRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { findLinkedAccounts, type LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
-import { assessShadowDetection } from '@server/security/abuseAssessment/abuseAssessment';
-import { linkedAccountGroupEvidence } from '@server/security/abuseAssessment/linkedAccountEvidence';
+import { assessShadowDetection } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
 import { applyAutoContainment, liveAutoContainmentDeps, loadAutoContainmentConfig } from './executor';
 
 /**
