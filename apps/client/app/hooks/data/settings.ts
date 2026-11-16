@@ -31,7 +31,7 @@ import {
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 import { isMfaEnrollmentRequired } from '@client/app/utils/mfaEnrollmentInterceptor';
-import { useClientConfig } from './clientConfig';
+import { clientConfigQuery } from './clientConfig';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
@@ -262,7 +262,11 @@ export function useLogoSettings() {
 
 export function usePublicConfig() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
-  const bootstrap = useClientConfig();
+  const bootstrap = useQuery({
+    ...clientConfigQuery,
+    enabled: isFullyAuthenticated,
+    select: config => config.public_config && toPublicConfig(config.public_config),
+  });
   const publicConfig = useQuery({
     queryKey: ['server-config-public'],
     queryFn: async () => {
@@ -273,9 +277,7 @@ export function usePublicConfig() {
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: false,
   });
-  return isFullyAuthenticated
-    ? { ...bootstrap, data: bootstrap.data?.public_config && toPublicConfig(bootstrap.data.public_config) }
-    : publicConfig;
+  return isFullyAuthenticated ? bootstrap : publicConfig;
 }
 
 function toPublicConfig(config: ClientConfigPublic): ServerConfigPublic {
@@ -324,7 +326,12 @@ export function useConfig() {
 
 export function useServerStatus() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
-  const bootstrap = useClientConfig();
+  const bootstrap = useQuery({
+    ...clientConfigQuery,
+    enabled: isFullyAuthenticated,
+    refetchOnWindowFocus: true,
+    select: config => ({ serverStatus: config.server.status as ServerStatusEnum }),
+  });
   const publicStatus = useQuery({
     queryKey: ['server-status'],
     queryFn: async () => {
@@ -336,10 +343,5 @@ export function useServerStatus() {
     refetchOnWindowFocus: true,
     enabled: !isFullyAuthenticated,
   });
-  return isFullyAuthenticated
-    ? {
-        ...bootstrap,
-        data: bootstrap.data && { serverStatus: bootstrap.data.server.status as ServerStatusEnum },
-      }
-    : publicStatus;
+  return isFullyAuthenticated ? bootstrap : publicStatus;
 }

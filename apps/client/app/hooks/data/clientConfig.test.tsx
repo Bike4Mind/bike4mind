@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PropsWithChildren } from 'react';
 import { useClientConfig, clientConfigQuery } from './clientConfig';
@@ -86,6 +86,18 @@ describe('web client bootstrap', () => {
     const { wrapper, client } = setup();
     renderHook(() => useClientConfig(), { wrapper });
     expect(state.get).not.toHaveBeenCalled();
+    client.clear();
+  });
+
+  it('preserves the projected data shape when callers explicitly refetch', async () => {
+    state.get.mockResolvedValue({ data: { public_config: publicConfig, server: { status: 'live' } } });
+    const { wrapper, client } = setup();
+    const { result } = renderHook(() => ({ config: usePublicConfig(), status: useServerStatus() }), { wrapper });
+    await waitFor(() => expect(result.current.config.isSuccess).toBe(true));
+    await act(async () => {
+      expect((await result.current.config.refetch()).data?.apiUrl).toBe('https://example.test');
+      expect((await result.current.status.refetch()).data).toEqual({ serverStatus: 'live' });
+    });
     client.clear();
   });
 
