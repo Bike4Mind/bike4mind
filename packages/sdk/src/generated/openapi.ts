@@ -325,9 +325,29 @@ export interface paths {
     };
     /**
      * Get client configuration
-     * @description Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.
+     * @description Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. The optional catalog preserves picker order, disabled entries, locked cards and revision/fallback signals; it never includes internal pricing or dispatch configuration. Transport URLs require authentication. Pre-login clients use `GET /api/v1/client-config/public`, which returns only public login configuration. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.
      */
     get: operations['getClientConfig'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/client-config/public': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get pre-login client configuration
+     * @description Public login and registration configuration only. Empty strings preserve unconfigured values. No caller models, transport URLs, credentials or admin configuration are returned. Responses are never cacheable.
+     */
+    get: operations['getPublicClientConfig'];
     put?: never;
     post?: never;
     delete?: never;
@@ -4005,6 +4025,372 @@ export interface components {
           } | null;
         }[];
       };
+      public_config?: {
+        api_url: string;
+        default_theme: string;
+        allow_open_registration: boolean;
+        pyodide_base_url: string;
+        allow_trusted_devices: boolean;
+        turnstile_site_key: string;
+        apple_sign_in_enabled: boolean;
+        support_email: string;
+      };
+      transport?: {
+        websocket_url: string;
+        sse_completions_url: string;
+      };
+      catalog?: {
+        models: {
+          /** @description Pass as `model` on the generation endpoints. */
+          id: string;
+          name: string;
+          /** @enum {string} */
+          type: 'text' | 'image' | 'speech-to-text' | 'video';
+          /**
+           * @description The provider that serves the model.
+           * @enum {string}
+           */
+          backend:
+            | 'openai'
+            | 'bedrock'
+            | 'anthropic'
+            | 'gemini'
+            | 'ollama'
+            | 'openai-compatible'
+            | 'bfl'
+            | 'xai'
+            | 'kimi'
+            | 'deepseek'
+            | 'voyageai'
+            | 'aws'
+            | 'local-image';
+          description: string | null;
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+          blurb: string | null;
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+          provider_label: string | null;
+          /** @description Input context, in tokens. */
+          context_window: number;
+          max_output_tokens: number;
+          supports_streaming: boolean;
+          supports_thinking: boolean;
+          /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+          reasons_within_output_budget: boolean;
+          /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+          reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
+          supports_tools: boolean;
+          /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
+          supports_tool_search: boolean;
+          /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
+          supports_tool_changes: boolean;
+          /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+          supports_assistant_prefill: boolean;
+          supports_vision: boolean;
+          /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+          deprecation_date: string | null;
+          /** @description The id of the recommended successor, when there is one. */
+          replaced_by: string | null;
+          /** @description Size rules and supported parameters. Present on image models only; null for every other type. */
+          image: {
+            sizing:
+              | {
+                  /** @enum {string} */
+                  kind: 'presets';
+                  /** @description Accepted `size` values, as `WxH`. */
+                  presets: string[];
+                  default_size: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'constrained';
+                  /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+                  presets: string[];
+                  default_size: string;
+                  /** @description The `size` value that lets the provider choose. */
+                  auto_size: string;
+                  constraints: {
+                    max_edge: number;
+                    min_total_pixels: number;
+                    max_total_pixels: number;
+                    /** @description Both edges must be a multiple of this. */
+                    edge_multiple: number;
+                    /** @description Longest edge divided by shortest edge. */
+                    max_aspect_ratio: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'dimensions';
+                  presets: string[];
+                  default_size: string;
+                  min_width: number;
+                  max_width: number;
+                  min_height: number;
+                  max_height: number;
+                  /** @description `width` and `height` are rounded to the nearest multiple of this. */
+                  step: number;
+                }
+              | {
+                  /**
+                   * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+                   * @enum {string}
+                   */
+                  kind: 'aspect_ratio';
+                }
+              | {
+                  /**
+                   * @description Sized by the input image; takes no `size`.
+                   * @enum {string}
+                   */
+                  kind: 'input_image';
+                  /** @description Whether an `aspect_ratio` override is honoured. */
+                  aspect_ratio: boolean;
+                }
+              | {
+                  /**
+                   * @description The provider takes no size at all.
+                   * @enum {string}
+                   */
+                  kind: 'fixed';
+                };
+            supports: {
+              /** @description `background: 'transparent'` yields real alpha. */
+              transparent_background: boolean;
+              seed: boolean;
+              /** @description Accepted `quality` tiers; empty when none is taken. */
+              qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+              /** @description Most images one request may ask for via `n`. */
+              max_images: number;
+              /** @description Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot. */
+              max_reference_images: number;
+              /** @description Accepted by `POST /api/v1/image-edits`. */
+              edit: boolean;
+              requires_input_image: boolean;
+            };
+          } | null;
+          /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+          credits_per_1m_tokens: {
+            /** @description Credits per 1M input tokens. */
+            input: number;
+            /** @description Credits per 1M output tokens. */
+            output: number;
+            /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+            cached_input: number | null;
+          } | null;
+          max_output_tokens_derived?: boolean;
+          /** @enum {string} */
+          thinking_style?: 'legacy' | 'adaptive';
+          /** @enum {boolean} */
+          thinking_always_on?: true;
+          /** @enum {boolean} */
+          openai_reasoning_effort?: true;
+          effort_incompatible_with_tools?: boolean;
+          supports_image_variation: boolean;
+          supports_safety_tolerance?: boolean;
+          training_cutoff?: string;
+          release_date?: string;
+          is_superseded?: boolean;
+          is_slow_model?: boolean;
+          disabled?: boolean;
+          disabled_reason?: string;
+          access?: {
+            /** @enum {boolean} */
+            locked: true;
+            /** @enum {string} */
+            reason: 'requires_paid_plan';
+          };
+        }[];
+        locked_models: {
+          /** @description Pass as `model` on the generation endpoints. */
+          id: string;
+          name: string;
+          /** @enum {string} */
+          type: 'text' | 'image' | 'speech-to-text' | 'video';
+          /**
+           * @description The provider that serves the model.
+           * @enum {string}
+           */
+          backend:
+            | 'openai'
+            | 'bedrock'
+            | 'anthropic'
+            | 'gemini'
+            | 'ollama'
+            | 'openai-compatible'
+            | 'bfl'
+            | 'xai'
+            | 'kimi'
+            | 'deepseek'
+            | 'voyageai'
+            | 'aws'
+            | 'local-image';
+          description: string | null;
+          /** @description How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Set on catalog image models; null otherwise. */
+          blurb: string | null;
+          /** @description The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. Set on catalog image models; null otherwise. */
+          provider_label: string | null;
+          /** @description Input context, in tokens. */
+          context_window: number;
+          max_output_tokens: number;
+          supports_streaming: boolean;
+          supports_thinking: boolean;
+          /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+          reasons_within_output_budget: boolean;
+          /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+          reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
+          supports_tools: boolean;
+          /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
+          supports_tool_search: boolean;
+          /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
+          supports_tool_changes: boolean;
+          /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+          supports_assistant_prefill: boolean;
+          supports_vision: boolean;
+          /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+          deprecation_date: string | null;
+          /** @description The id of the recommended successor, when there is one. */
+          replaced_by: string | null;
+          /** @description Size rules and supported parameters. Present on image models only; null for every other type. */
+          image: {
+            sizing:
+              | {
+                  /** @enum {string} */
+                  kind: 'presets';
+                  /** @description Accepted `size` values, as `WxH`. */
+                  presets: string[];
+                  default_size: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'constrained';
+                  /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+                  presets: string[];
+                  default_size: string;
+                  /** @description The `size` value that lets the provider choose. */
+                  auto_size: string;
+                  constraints: {
+                    max_edge: number;
+                    min_total_pixels: number;
+                    max_total_pixels: number;
+                    /** @description Both edges must be a multiple of this. */
+                    edge_multiple: number;
+                    /** @description Longest edge divided by shortest edge. */
+                    max_aspect_ratio: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'dimensions';
+                  presets: string[];
+                  default_size: string;
+                  min_width: number;
+                  max_width: number;
+                  min_height: number;
+                  max_height: number;
+                  /** @description `width` and `height` are rounded to the nearest multiple of this. */
+                  step: number;
+                }
+              | {
+                  /**
+                   * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+                   * @enum {string}
+                   */
+                  kind: 'aspect_ratio';
+                }
+              | {
+                  /**
+                   * @description Sized by the input image; takes no `size`.
+                   * @enum {string}
+                   */
+                  kind: 'input_image';
+                  /** @description Whether an `aspect_ratio` override is honoured. */
+                  aspect_ratio: boolean;
+                }
+              | {
+                  /**
+                   * @description The provider takes no size at all.
+                   * @enum {string}
+                   */
+                  kind: 'fixed';
+                };
+            supports: {
+              /** @description `background: 'transparent'` yields real alpha. */
+              transparent_background: boolean;
+              seed: boolean;
+              /** @description Accepted `quality` tiers; empty when none is taken. */
+              qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+              /** @description Most images one request may ask for via `n`. */
+              max_images: number;
+              /** @description Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot. */
+              max_reference_images: number;
+              /** @description Accepted by `POST /api/v1/image-edits`. */
+              edit: boolean;
+              requires_input_image: boolean;
+            };
+          } | null;
+          /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+          credits_per_1m_tokens: {
+            /** @description Credits per 1M input tokens. */
+            input: number;
+            /** @description Credits per 1M output tokens. */
+            output: number;
+            /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+            cached_input: number | null;
+          } | null;
+          max_output_tokens_derived?: boolean;
+          /** @enum {string} */
+          thinking_style?: 'legacy' | 'adaptive';
+          /** @enum {boolean} */
+          thinking_always_on?: true;
+          /** @enum {boolean} */
+          openai_reasoning_effort?: true;
+          effort_incompatible_with_tools?: boolean;
+          supports_image_variation: boolean;
+          supports_safety_tolerance?: boolean;
+          training_cutoff?: string;
+          release_date?: string;
+          is_superseded?: boolean;
+          is_slow_model?: boolean;
+          disabled?: boolean;
+          disabled_reason?: string;
+          access?: {
+            /** @enum {boolean} */
+            locked: true;
+            /** @enum {string} */
+            reason: 'requires_paid_plan';
+          };
+        }[];
+        superseded_models: {
+          id: string;
+          name: string;
+          replacement_id: string;
+          replacement_name: string;
+        }[];
+        model_list_revision: string | null;
+        catalog_unavailable: boolean;
+      };
+    };
+    /**
+     * @example {
+     *       "api_url": "https://app.example.com",
+     *       "default_theme": "bike4mind",
+     *       "allow_open_registration": false,
+     *       "pyodide_base_url": "",
+     *       "allow_trusted_devices": true,
+     *       "turnstile_site_key": "",
+     *       "apple_sign_in_enabled": false,
+     *       "support_email": ""
+     *     }
+     */
+    getPublicClientConfigResponse200: {
+      api_url: string;
+      default_theme: string;
+      allow_open_registration: boolean;
+      pyodide_base_url: string;
+      allow_trusted_devices: boolean;
+      turnstile_site_key: string;
+      apple_sign_in_enabled: boolean;
+      support_email: string;
     };
     approvePendingActionResponse200: {
       /** @description False when the action was approved but the tool reported a failure. */
@@ -13175,6 +13561,52 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPublicClientConfig: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The public login configuration. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getPublicClientConfigResponse200'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
         };
       };
     };
