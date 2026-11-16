@@ -13,7 +13,14 @@ import {
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, downloadImageAsBuffer, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import {
+  aiImageService,
+  downloadImageAsBuffer,
+  getSettingsMap,
+  getSettingsValue,
+  OpenaiModerationsService,
+} from '@bike4mind/utils';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { estimateImageCredits } from '../imageCost';
 import { ImageEditBodySchema, ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
@@ -695,6 +702,31 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.status).toBe('done');
       expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
       expect(quest.creditHolds.release).not.toHaveBeenCalled();
+    });
+
+    it('moderates the prompt with the shared admin key, not the user own OpenAI key', async () => {
+      vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ openai: 'user-key' } as never);
+      vi.mocked(getSettingsValue).mockImplementation((name => {
+        if (name === 'enforceCredits' || name === 'ModerationEnabled') return true;
+        if (name === 'openaiDemoKey') return 'shared-key';
+        return undefined;
+      }) as typeof getSettingsValue);
+      const usedKeys: string[] = [];
+      const checkPrompt = vi
+        .spyOn(OpenaiModerationsService.prototype, 'checkPrompt')
+        .mockImplementation(async function (this: { openai: { apiKey: string } }) {
+          usedKeys.push(this.openai.apiKey);
+        });
+
+      try {
+        const quest = await runCharged(vi.fn(async () => undefined));
+
+        expect(quest.status).toBe('done');
+        expect(checkPrompt).toHaveBeenCalledTimes(1);
+        expect(usedKeys).toEqual(['shared-key']);
+      } finally {
+        checkPrompt.mockRestore();
+      }
     });
 
     describe('final debit rounding', () => {

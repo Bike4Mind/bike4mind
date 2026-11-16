@@ -15262,7 +15262,15 @@ describe('prompt moderation', () => {
     sessionId: 'sess1',
   };
 
-  function wireModMocks({ openaiKey, guardrailId }: { openaiKey: string | null; guardrailId: string | null }) {
+  function wireModMocks({
+    openaiKey,
+    guardrailId,
+    sharedOpenaiKey = '',
+  }: {
+    openaiKey: string | null;
+    guardrailId: string | null;
+    sharedOpenaiKey?: string;
+  }) {
     mockedGetLlmByModel.mockReturnValue({
       complete: vi
         .fn()
@@ -15297,6 +15305,7 @@ describe('prompt moderation', () => {
     mockedGetSettingsValue.mockImplementation(((key: string) => {
       if (key === 'BedrockGuardrailId') return guardrailId ?? '';
       if (key === 'BedrockGuardrailVersion') return 'DRAFT';
+      if (key === 'openaiDemoKey') return sharedOpenaiKey;
       return undefined;
     }) as any);
   }
@@ -15468,6 +15477,36 @@ describe('prompt moderation', () => {
 
   it('skips moderation when no OpenAI key and no guardrail configured', async () => {
     wireModMocks({ openaiKey: null, guardrailId: null });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+    expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  it('moderates with the shared admin key even when the user has their own OpenAI key', async () => {
+    wireModMocks({ openaiKey: 'user-key', guardrailId: null, sharedOpenaiKey: 'shared-key' });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).toHaveBeenCalledTimes(1);
+    expect(OpenaiModerationsService).toHaveBeenCalledWith('shared-key', expect.anything());
+  });
+
+  it('falls through to the guardrail instead of calling OpenAI with an expired user key', async () => {
+    wireModMocks({ openaiKey: 'expired', guardrailId: 'my-guardrail' });
+    enableAdminFlags('ModerationEnabled');
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(OpenaiModerationsService).not.toHaveBeenCalled();
+    expect(BedrockGuardrailsService).toHaveBeenCalledWith('my-guardrail', 'DRAFT', expect.anything());
+  });
+
+  it('never calls OpenAI moderation with the expired sentinel when nothing else is configured', async () => {
+    wireModMocks({ openaiKey: 'expired', guardrailId: null });
     enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });

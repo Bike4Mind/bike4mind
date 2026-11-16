@@ -240,6 +240,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -3078,10 +3079,13 @@ export class ChatCompletionProcess {
 
       if (adminModerationEnabled) {
         const moderationStartTime = Date.now();
-        // Only run OpenAI moderation if we have an OpenAI key available
-        if (apiKeyTable?.openai) {
+        const moderationOpenaiKey = resolveModerationOpenaiKey(
+          apiKeyTable?.openai,
+          getSettingsValue('openaiDemoKey', defaultAdminSettings)
+        );
+        if (moderationOpenaiKey) {
           try {
-            await new OpenaiModerationsService(apiKeyTable.openai, logger).checkPrompt(message);
+            await new OpenaiModerationsService(moderationOpenaiKey, logger).checkPrompt(message);
           } catch (moderationError) {
             // On a flag, record a per-user moderation hit and auto-escalate (throttle to
             // suspend_pending) BEFORE rethrowing to block this prompt. Recording
