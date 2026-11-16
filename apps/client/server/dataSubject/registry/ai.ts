@@ -1,5 +1,5 @@
 import type { DataHolderRegistry } from '../types';
-import { CATALOG_PUBLICATION } from './retention';
+import { CATALOG_PUBLICATION, ERASURE_FENCE } from './retention';
 
 export const aiHolders = {
   ActiveCodeAgent: {
@@ -243,9 +243,18 @@ export const aiHolders = {
   },
   MemoryPrincipalKey: {
     kind: 'holder',
+    // A live key goes; the tombstone `destroy` leaves (no `dek`) is the fence and stays.
     references: [
       { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'principalId', matchBy: 'userId', action: 'deleteDocument', where: { principalKind: 'user' } },
+      { path: 'ownerUserId', matchBy: 'userId', action: 'retain', ...ERASURE_FENCE, where: { dek: null } },
+      {
+        path: 'principalId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ERASURE_FENCE,
+        where: { principalKind: 'user', dek: null },
+      },
     ],
     secretPaths: ['dek'],
   },

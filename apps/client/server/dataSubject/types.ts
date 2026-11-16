@@ -101,8 +101,11 @@ export type UserReference = ErasureAction & {
    * in some other mixed case is not found.
    */
   matchBy: 'userId' | 'email';
-  /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
-  where?: Readonly<Record<string, string>>;
+  /**
+   * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id.
+   * `null` matches a path that is null or absent, as in a Mongo filter.
+   */
+  where?: Readonly<Record<string, string | null>>;
   /**
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of

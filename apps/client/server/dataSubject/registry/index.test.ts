@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels, mergeRegistries } from './index';
 import { holderExportScope } from '../exportScope';
+import { SubjectMatcher } from '../subjectMatcher';
 import type { DataHolderRegistry } from '../types';
 
 const noData = { kind: 'noUserData', note: 'test' } as const;
@@ -102,5 +103,32 @@ describe('private feedback note export policy', () => {
       scope: 'wholeDocument',
     });
     expect(holder.secretPaths).toContain('body');
+  });
+});
+
+describe('account purge reconciliation', () => {
+  const userId = '0123456789abcdef01234567';
+  const matched = (model: string, document: Record<string, unknown>) => {
+    const holder = DATA_HOLDER_REGISTRY[model];
+    if (holder.kind !== 'holder') throw new Error(`${model} must be a holder`);
+    const matcher = new SubjectMatcher({ userId, email: null });
+    return holder.references.filter(reference => matcher.matches(document, reference)).map(({ action }) => action);
+  };
+
+  it('deletes a live memory key but keeps the tombstone the purge leaves as a fence', () => {
+    const key = { ownerUserId: userId, principalKind: 'user', principalId: userId };
+    expect(matched('MemoryPrincipalKey', { ...key, dek: 'wrapped' })).toEqual(['deleteDocument', 'deleteDocument']);
+    expect(matched('MemoryPrincipalKey', key)).toContain('retain');
+    expect(matched('MemoryPrincipalKey', { ...key, dek: null })).toContain('retain');
+  });
+
+  it('deletes only a personal project and anonymizes the owner of an organization one', () => {
+    const holder = DATA_HOLDER_REGISTRY.Project;
+    if (holder.kind !== 'holder') throw new Error('Project must be a holder');
+    const owner = holder.references.filter(reference => reference.path === 'userId');
+    expect(owner).toEqual([
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
+    ]);
   });
 });

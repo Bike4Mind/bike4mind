@@ -69,9 +69,11 @@ export class SubjectMatcher {
 
   matches(document: LeanDocument, reference: UserReference): boolean {
     if (!valuesAt(document, reference.path).some(this.isSubject(reference))) return false;
-    return Object.entries(reference.where ?? {}).every(([path, wanted]) =>
-      valuesAt(document, path).some(value => String(value) === wanted)
-    );
+    return Object.entries(reference.where ?? {}).every(([path, wanted]) => {
+      const values = valuesAt(document, path);
+      if (wanted === null) return values.every(value => value == null);
+      return values.some(value => String(value) === wanted);
+    });
   }
 
   isSubject(reference: UserReference): (value: unknown) => boolean {

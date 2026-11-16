@@ -41,12 +41,10 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 const KNOWN_RESIDUAL: { model: string; deleted: number; anonymized: number }[] = [
   // The message the person sent: the purge deletes only what they received.
   { model: 'Inbox', deleted: 0, anonymized: 1 },
-  // The tombstone memoryPrincipalKeyRepository.destroy keeps as a fence; the registry deletes the row.
-  { model: 'MemoryPrincipalKey', deleted: 1, anonymized: 0 },
   // The tombstoned organization they owned keeps its userId and billingContact.
   { model: 'Organization', deleted: 0, anonymized: 1 },
-  // The organization-owned project, which the registry deletes and the purge leaves.
-  { model: 'Project', deleted: 1, anonymized: 0 },
+  // The organization-owned project: it stays with the organization, but the purge leaves its userId.
+  { model: 'Project', deleted: 0, anonymized: 1 },
   // Another account's referredByUserId, throttle.changedBy and signupLanding.notebookOwnerId.
   { model: 'User', deleted: 0, anonymized: 1 },
 ];

@@ -242,8 +242,15 @@ describe('data holder registry', () => {
       )
     )
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
-    const enumValues = (mongoose.model(modelName).schema.path(key) as { enumValues?: unknown[] } | undefined)
-      ?.enumValues;
+    const schemaPath = mongoose.model(modelName).schema.path(key) as
+      { enumValues?: unknown[]; isRequired?: boolean } | undefined;
+    if (value === null) {
+      // Matching an absent field is only meaningful on a declared path that may be absent.
+      expect(schemaPath, `${modelName}.${key} is not a schema path`).toBeDefined();
+      expect(schemaPath?.isRequired).not.toBe(true);
+      return;
+    }
+    const enumValues = schemaPath?.enumValues;
     if (!enumValues?.length) {
       expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
         `${modelName}.${key}`

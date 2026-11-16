@@ -113,8 +113,10 @@ export const contentHolders = {
   },
   Project: {
     kind: 'holder',
+    // As the account purge does: a personal project goes, an organization's stays with the organization.
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'userId', matchBy: 'userId', action: 'anonymize' },
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
     ],
   },
