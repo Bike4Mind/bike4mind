@@ -76,6 +76,9 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:imp
       }
     );
 
+    // Before the approval is redeemed and the session minted, so a role lookup failure leaves nothing to undo.
+    await resolveRoleAdminPermissions(targetUser);
+
     const needsApproval = policy.enabled && (initialNeedsApproval || canAccessAdmin(targetUser));
     const requestOnly = needsApproval && typeof approvalId !== 'string';
     if (requestOnly) {
