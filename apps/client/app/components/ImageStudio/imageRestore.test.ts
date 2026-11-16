@@ -69,11 +69,9 @@ describe('restoreImageForm', () => {
       `${ImageModels.GPT_IMAGE_1_5} is no longer one of your image models, so the default model is picked.`,
     ]);
 
-    const unavailable = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
-    expect(unavailable.value.modelId).toBeUndefined();
-    expect(unavailable.notices).toEqual([
-      'FLUX Ultra cannot run in Create (Temporarily unavailable in Studio.), so the default model is picked.',
-    ]);
+    const flux = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
+    expect(flux.value.modelId).toBe(ImageModels.FLUX_PRO_ULTRA);
+    expect(flux.notices).toEqual([]);
 
     expect(restoreImageForm(restoreOf({ prompt: 'x' }), MODELS).notices).toEqual([
       'The take did not record its model, so the default model is picked.',
