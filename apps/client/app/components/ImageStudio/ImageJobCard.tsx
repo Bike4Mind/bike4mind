@@ -95,7 +95,10 @@ const ImageJobCard = ({ job, onRestore }: ImageJobCardProps) => {
   return (
     <Card variant="outlined" data-testid={`image-job-card-${job.id}`} data-state={job.state}>
       <AspectRatio ratio="1" objectFit="cover" variant="soft">
-        <JobBody job={job} />
+        {/* AspectRatio centers, and covers an img in, only the DOM element that receives its data-first-child prop. */}
+        <div>
+          <JobBody job={job} />
+        </div>
       </AspectRatio>
       <CardContent>
         <Typography

@@ -65,6 +65,17 @@ describe('ImageJobCard preview', () => {
     expect(screen.getByTestId('image-job-image')).toHaveAttribute('src', 'https://files.example/fox.png');
   });
 
+  it('puts the card body in the element AspectRatio centers and sizes', () => {
+    // Joy's centering and img cover styles target [data-first-child] and its direct img child.
+    h.file = { data: { moderationStatus: 'scanning' } };
+    const { rerender } = renderCard();
+    expect(screen.getByTestId('image-job-image-loading').parentElement).toHaveAttribute('data-first-child');
+
+    h.file = { data: { moderationStatus: 'clean', fileUrl: 'https://files.example/fox.png' } };
+    rerender(<ImageJobCard job={savedJob} />);
+    expect(screen.getByTestId('image-job-image').parentElement).toHaveAttribute('data-first-child');
+  });
+
   it('settles on a blocked image instead of spinning', () => {
     h.file = { data: { moderationStatus: 'blocked' } };
     renderCard();
