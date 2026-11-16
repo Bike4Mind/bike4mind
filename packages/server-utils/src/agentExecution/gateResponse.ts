@@ -14,8 +14,8 @@ import {
 } from '../utils/dispatchAgentExecution';
 
 // The `agent_execute` WebSocket route (apps/client/server/websocket/agentExecute.ts) dispatches
-// `gate_response` messages here. Its GateResponseSchema must stay assignable to GateResponseCommand
-// (pinned by a compile-time check in that file).
+// `gate_response` messages here; passing its parsed GateResponseSchema value to handleGateResponse is
+// what keeps that schema assignable to GateResponseCommand at compile time.
 
 /** Fields `handleGateResponse` reads from the validated `gate_response` WebSocket message. */
 export type GateResponseCommand = {
@@ -168,7 +168,7 @@ export async function handleGateResponse(
   await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
 
   // Note: checkpointDepth is not carried here - same limitation as the permission_response
-  // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
+  // path in apps/client/server/websocket/agentExecute.ts. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
   // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
   try {
     await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);

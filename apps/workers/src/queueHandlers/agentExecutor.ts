@@ -3756,7 +3756,7 @@ async function runExecution(
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
     // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
     // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
-    // apps/client/server/websocket/agentExecute.ts).
+    // packages/server-utils/src/agentExecution/gateResponse.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';

@@ -267,7 +267,7 @@ describe('confidence gate, end to end', () => {
 
     // The user answers the card: the real WS handler clears the gate and re-dispatches.
     await handleGateResponse(
-      { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision: 'continue' },
+      { executionId, decision: 'continue' },
       userId,
       'conn-1',
       'https://ws.test/stage',
@@ -326,13 +326,7 @@ describe('confidence gate, end to end', () => {
 
     const respond = async (executionId: string, userId: string, decision: 'stop' | 'continue') => {
       const { handleGateResponse } = await import('@bike4mind/server-utils/agentExecution/gateResponse');
-      await handleGateResponse(
-        { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision },
-        userId,
-        'conn-1',
-        'https://ws.test/stage',
-        logger as never
-      );
+      await handleGateResponse({ executionId, decision }, userId, 'conn-1', 'https://ws.test/stage', logger as never);
     };
     const finalAnswerSteps = (execution: { checkpoint?: unknown } | null | undefined) =>
       ((execution?.checkpoint as { steps: Array<{ type: string }> } | undefined)?.steps ?? []).filter(
@@ -593,9 +587,6 @@ describe('confidence gate, end to end', () => {
 
         await handleGateResponse(
           {
-            accessToken: 'unused',
-            action: 'agent_execute',
-            command: 'gate_response',
             executionId,
             decision: 'continue',
           },

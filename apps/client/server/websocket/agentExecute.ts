@@ -47,11 +47,7 @@ import {
   PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import {
-  handleGateResponse,
-  sendAgentEvent,
-  type GateResponseCommand,
-} from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { handleGateResponse, sendAgentEvent } from '@bike4mind/server-utils/agentExecution/gateResponse';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -176,9 +172,6 @@ const GateResponseSchema = BaseMessageSchema.extend({
   executionId: z.string(),
   decision: z.enum(['continue', 'stop']),
 });
-
-// Compile-time pin: the shared gate handler reads GateResponseCommand, so the schema must stay assignable to it.
-export const _gateCmdFits = (c: z.infer<typeof GateResponseSchema>): GateResponseCommand => c;
 
 const ReconnectCommandSchema = BaseMessageSchema.extend({
   command: z.literal('reconnect'),
