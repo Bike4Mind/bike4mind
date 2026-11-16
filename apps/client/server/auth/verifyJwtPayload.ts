@@ -2,6 +2,7 @@ import { User, authSessionRepository } from '@bike4mind/database';
 import { isAuthSessionActive } from '@bike4mind/common';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 
 export interface JwtPayloadClaims {
   id: string;
@@ -92,6 +93,8 @@ export async function verifyJwtPayload(
           aud: jwt_payload.aud,
         };
       }
+      // Per request, so a role or membership change applies on the next request.
+      await resolveRoleAdminPermissions(user);
       return done(null, user);
     } else {
       return done(null, false);

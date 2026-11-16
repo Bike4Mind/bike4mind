@@ -3,12 +3,14 @@ import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '../utils/config';
 import { registerToolGearObserver } from '../services/gears/toolGearObserver';
+import { registerOrgAlertObserver } from '../organizations/registerOrgAlertObserver';
 import { contextToLogs } from '../utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
 import { recordFinalDlqFailures } from './dlqFailure';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
+registerOrgAlertObserver();
 
 /**
  * Wraps an SQS queue handler with structured logging and DB connection.

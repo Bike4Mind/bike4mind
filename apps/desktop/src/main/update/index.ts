@@ -3,6 +3,7 @@ import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { UpdateBusyReport, UpdateState } from '@shared/update';
+import { currentVersion } from '../appVersion';
 import { DismissedUpdatePreference } from './DismissedUpdatePreference';
 import { releasePageUrl, resolveFeedUrl } from './feed';
 import { parseUpdatePublicKeys } from './manifestSignature';
@@ -118,7 +119,7 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
   }
 
   const service = new UpdateService({
-    currentVersion: app.getVersion(),
+    currentVersion: currentVersion(),
     updater: port,
     busy: deps.busy,
     prepareQuit: deps.prepareQuit,

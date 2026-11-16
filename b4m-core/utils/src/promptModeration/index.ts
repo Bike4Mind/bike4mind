@@ -122,7 +122,7 @@ export class OpenaiModerationsService implements ModerationService {
    */
   async checkPrompt(prompt: string): Promise<void> {
     const moderation = await this.openai.moderations.create({
-      model: 'text-moderation-latest',
+      model: 'omni-moderation-latest',
       input: prompt,
     });
 

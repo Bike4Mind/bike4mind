@@ -40,6 +40,7 @@ const BULK_USER_PROJECTION = {
   username: 1,
   isAdmin: 1,
   adminPermissions: 1,
+  adminRoleIds: 1,
   isBanned: 1,
   isModerated: 1,
   tags: 1,
@@ -55,6 +56,7 @@ type BulkUserRow = {
   username?: string | null;
   isAdmin?: boolean | null;
   adminPermissions?: string[] | null;
+  adminRoleIds?: unknown[] | null;
   isBanned?: boolean | null;
   isModerated?: boolean | null;
   tags?: string[] | null;
@@ -70,6 +72,7 @@ const toBulkUser = (row: BulkUserRow): BulkUser => ({
   username: row.username ?? null,
   isAdmin: row.isAdmin === true,
   adminPermissions: row.adminPermissions ?? [],
+  adminRoleIds: (row.adminRoleIds ?? []).map(String),
   isBanned: row.isBanned === true,
   isModerated: row.isModerated === true,
   tags: row.tags ?? [],

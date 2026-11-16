@@ -19,20 +19,23 @@ import {
   Typography,
 } from '@mui/joy';
 import type {
-  IDataLakeResearchConfigDocument,
+  IDataLakeResearchConfigResponse,
   IDataLakeResearchRunDocument,
   ResearchPreset,
   ResearchPresetId,
   ResearchRunTotals,
+  ResearchSource,
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
   ResearchScheduleSkipReason,
   ResearchUnlistedSources,
 } from '@bike4mind/common';
 import {
+  feedLabel,
   isResearchRunInFlight,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
+  RESEARCH_FEED_URL_MAX_CHARS,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
@@ -56,7 +59,7 @@ import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
 import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
 
 export interface DataLakeResearchPanelProps {
-  configs: IDataLakeResearchConfigDocument[] | undefined;
+  configs: IDataLakeResearchConfigResponse[] | undefined;
   runs: IDataLakeResearchRunDocument[] | undefined;
   isLoading: boolean;
   error: unknown;
@@ -86,6 +89,8 @@ export interface DataLakeResearchPanelProps {
 /** Every field a string, because that is what a form holds; conversion happens once, at submit. */
 interface ConfigDraft {
   name: string;
+  source: ResearchSource;
+  feedUrl: string;
   query: string;
   model: string;
   maxResults: string;
@@ -130,6 +135,8 @@ const pluralize = (count: number, singular: string, plural = `${singular}s`): st
 
 const emptyDraft = (): ConfigDraft => ({
   name: '',
+  source: 'search',
+  feedUrl: '',
   query: '',
   model: '',
   // Seeded from the shared constants rather than hardcoded, so the form's idea of a default and the
@@ -150,13 +157,15 @@ const emptyDraft = (): ConfigDraft => ({
   reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
-const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => {
+const draftFromConfig = (config: IDataLakeResearchConfigResponse): ConfigDraft => {
   // A response from a server that predates the tiers carries only `allowedDomains`; the upgrader
   // applies the same mapping the migration does, so the form shows the restriction that is in force.
   const { trustedDomains, reviewDomains, unlistedSources, autoAdmitTrusted, maxAutoAdmits } =
     upgradeLegacyResearchLevers(config);
   return {
     name: config.name,
+    source: config.source ?? 'search',
+    feedUrl: config.feedUrl ?? '',
     query: config.query,
     model: config.model ?? '',
     maxResults: String(config.maxResults),
@@ -227,8 +236,22 @@ const rangeError = (
 
 const costCeilingLimitUsd = RESEARCH_COST_CEILING_MICRO_USD_LIMIT / 1_000_000;
 
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const validateDraft = (draft: ConfigDraft): DraftErrors => {
   const errors: DraftErrors = {
+    // A blank address is a missing field (see `missingRequired`), not an error shown on a fresh form.
+    feedUrl:
+      draft.source === 'feed' && draft.feedUrl.trim() && !isHttpUrl(draft.feedUrl.trim())
+        ? 'Enter a full address starting with http:// or https://.'
+        : undefined,
     maxResults: rangeError(draft.maxResults, {
       min: 1,
       max: RESEARCH_MAX_RESULTS_LIMIT,
@@ -310,6 +333,8 @@ const autoAdmitTimingNotice = (before: ConfigDraft, after: ResearchConfigInput):
 
 const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   name: draft.name.trim(),
+  source: draft.source,
+  feedUrl: draft.source === 'feed' ? draft.feedUrl.trim() : null,
   query: draft.query.trim(),
   model: draft.model.trim() || null,
   maxResults: parseNumber(draft.maxResults, RESEARCH_MAX_RESULTS_DEFAULT),
@@ -434,13 +459,14 @@ const presetSummary = (
   id: ResearchPresetId,
   offered: ReadonlyMap<string, string>,
   modelsLoading: boolean,
-  defaultModelLabel: string
+  defaultModelLabel: string,
+  source: ResearchSource
 ): string => {
   const preset = RESEARCH_PRESETS[id];
   const model = presetDraftModel(preset, offered, modelsLoading);
   return (
     `${model ? (offered.get(model) ?? model) : defaultModelLabel} judge \u00b7 up to ` +
-    `${pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
+    `${source === 'feed' ? pluralize(preset.maxResults, 'feed item') : pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
     `per run \u00b7 ${formatCeiling(preset.costCeilingMicroUsd)} ceiling`
   );
 };
@@ -466,6 +492,11 @@ const STOP_REASON_LABEL = {
   time_budget: 'Stopped at the time budget',
   judge_unavailable: 'Stopped: the relevance judge was unavailable',
 } as const;
+
+const isFeedRun = (run: IDataLakeResearchRunDocument): boolean => run.levers.source === 'feed';
+
+const stopReasonLabel = (run: IDataLakeResearchRunDocument, reason: keyof typeof STOP_REASON_LABEL): string =>
+  reason === 'exhausted' && isFeedRun(run) ? 'Reviewed every new feed item' : STOP_REASON_LABEL[reason];
 
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
 const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
@@ -501,8 +532,8 @@ const SCHEDULE_CADENCE_LABEL: Record<Exclude<ResearchScheduleCadence, 'off'>, st
 };
 
 /** A config saved before this feature carries neither field on the wire. */
-const configCadence = (config: IDataLakeResearchConfigDocument): ResearchScheduleCadence => config.cadence ?? 'off';
-const configReviewBacklogLimit = (config: IDataLakeResearchConfigDocument): number =>
+const configCadence = (config: IDataLakeResearchConfigResponse): ResearchScheduleCadence => config.cadence ?? 'off';
+const configReviewBacklogLimit = (config: IDataLakeResearchConfigResponse): number =>
   config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT;
 
 /** Why the scheduler skipped a tick, in the manager's terms. No entry for `review_backlog` - the
@@ -587,7 +618,7 @@ const DROP_REASON_LABEL: Record<
  */
 const runConfigLabel = (
   run: IDataLakeResearchRunDocument,
-  configById: Map<string, IDataLakeResearchConfigDocument>
+  configById: Map<string, IDataLakeResearchConfigResponse>
 ): string => configById.get(run.configId)?.name || run.levers.query || 'Deleted configuration';
 
 /**
@@ -597,7 +628,11 @@ const runConfigLabel = (
  */
 const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   const { totals } = run;
-  const parts: string[] = [`${totals.searchHits} found`, `${totals.proposed} proposed`];
+  const feedRun = isFeedRun(run);
+  const parts: string[] = [
+    feedRun ? pluralize(totals.searchHits, 'new item') : `${totals.searchHits} found`,
+    `${totals.proposed} proposed`,
+  ];
   // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
   if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
   if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted, not added automatically`);
@@ -605,6 +640,8 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
     const count = totals[key as keyof ResearchRunTotals];
     if (count > 0) parts.push(`${count} ${label}`);
   }
+  // Not a totals bucket: a waiting item has had no outcome yet.
+  if (feedRun && (run.feedBacklog ?? 0) > 0) parts.push(`${run.feedBacklog} waiting`);
   return parts.join(' \u00b7 ');
 };
 
@@ -707,7 +744,7 @@ export function DataLakeResearchPanel({
   const setField = (field: keyof ConfigDraft) => (value: string) => {
     setDraft(prev => ({ ...prev, [field]: value }));
     // Only advanced fields are validated; pinning the section open stops it folding the moment an error is fixed.
-    if (field !== 'name' && field !== 'query') setAdvancedOpen(true);
+    if (field !== 'name' && field !== 'query' && field !== 'source' && field !== 'feedUrl') setAdvancedOpen(true);
   };
 
   const openCreate = () => {
@@ -718,7 +755,7 @@ export function DataLakeResearchPanel({
     setEditingId('');
     formSession.current += 1;
   };
-  const openEdit = (config: IDataLakeResearchConfigDocument) => {
+  const openEdit = (config: IDataLakeResearchConfigResponse) => {
     setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
@@ -767,7 +804,8 @@ export function DataLakeResearchPanel({
   const formOpen = editingId !== null;
   const saveBusy = editingId ? savingConfigId === editingId : !!isCreating;
   const errors = validateDraft(draft);
-  const missingRequired = !draft.name.trim() || !draft.query.trim();
+  const missingRequired =
+    !draft.name.trim() || !draft.query.trim() || (draft.source === 'feed' && !draft.feedUrl.trim());
   const canSave = !missingRequired && Object.keys(errors).length === 0;
   const editedConfig = editingId ? configById.get(editingId) : undefined;
   // A run reads the SAVED config, so running mid-edit would run something other than what is on screen.
@@ -777,11 +815,11 @@ export function DataLakeResearchPanel({
   const orphanModelId = draft.model && !modelLabelById.has(draft.model) ? draft.model : null;
   const activePreset = matchingPreset(draft, modelLabelById, modelsLoading);
   // Every validated field lives in the advanced section, so an error must never be folded out of sight.
-  const hasErrors = Object.keys(errors).length > 0;
+  const hasErrors = Object.keys(errors).some(key => key !== 'feedUrl');
   // An orphan is only a verdict once the catalog has loaded; before that it would unfold and then refold.
   const showAdvanced = advancedOpen || hasErrors || (!!orphanModelId && !modelsLoading);
   const presetSummaryText = activePreset
-    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel)
+    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel, draft.source)
     : 'Custom settings. Adjust them under Advanced settings.';
 
   return (
@@ -792,9 +830,9 @@ export function DataLakeResearchPanel({
         </Alert>
       )}
       <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-help">
-        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Results
-        wait there for your approval, unless a site you list as trusted is set to be added automatically. Nothing is
-        ever added because of a relevance score.
+        A research run searches the web, or reads a feed, with the settings below and puts what it finds in the
+        Proposals queue. Results wait there for your approval, unless a site you list as trusted is set to be added
+        automatically. Nothing is ever added because of a relevance score.
       </Typography>
 
       {!configs?.length && !formOpen && (
@@ -830,6 +868,11 @@ export function DataLakeResearchPanel({
                   {`Up to ${pluralize(config.maxProposals, 'proposal')} \u00b7 ${formatCeiling(config.costCeilingMicroUsd)} ceiling`}
                 </Chip>
               </Stack>
+              {config.source === 'feed' && config.feedUrl && (
+                <Typography level="body-xs" sx={{ wordBreak: 'break-all' }} data-testid="datalake-research-config-feed">
+                  {`Feed: ${feedLabel(config.feedUrl)}`}
+                </Typography>
+              )}
               <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }} data-testid="datalake-research-config-query">
                 {config.query}
               </Typography>
@@ -854,6 +897,15 @@ export function DataLakeResearchPanel({
                     </Chip>
                   ))}
                 </Stack>
+              )}
+              {config.source === 'feed' && config.feedStatus?.current && config.feedStatus.newestPublishedAt && (
+                <Typography
+                  level="body-xs"
+                  textColor="text.tertiary"
+                  data-testid="datalake-research-config-feed-newest"
+                >
+                  {`Newest item seen ${formatWhen(config.feedStatus.newestPublishedAt)}`}
+                </Typography>
               )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-last-run">
                 {`Last run ${formatWhen(lastRunAtByConfig.get(config.id) ?? config.lastRunAt)}`}
@@ -953,8 +1005,40 @@ export function DataLakeResearchPanel({
               </FormHelperText>
             </FormControl>
 
+            <FormControl size="sm">
+              <FormLabel>Source</FormLabel>
+              <Select
+                value={draft.source}
+                onChange={(_, value) => value && setField('source')(value)}
+                slotProps={{ button: { 'data-testid': 'datalake-research-source-select' } }}
+              >
+                <Option value="search">Web search</Option>
+                <Option value="feed">Feed</Option>
+              </Select>
+            </FormControl>
+
+            {draft.source === 'feed' && (
+              <FormControl size="sm" required error={!!errors.feedUrl}>
+                <FormLabel>Feed address</FormLabel>
+                <Input
+                  value={draft.feedUrl}
+                  onChange={e => setField('feedUrl')(e.target.value)}
+                  placeholder="https://example.com/feed.xml"
+                  slotProps={{
+                    input: {
+                      'data-testid': 'datalake-research-feed-url-input',
+                      maxLength: RESEARCH_FEED_URL_MAX_CHARS,
+                    },
+                  }}
+                />
+                <FormHelperText data-testid="datalake-research-feed-url-help">
+                  {errors.feedUrl ?? 'An RSS or Atom feed. Each run looks only at items it has not seen before.'}
+                </FormHelperText>
+              </FormControl>
+            )}
+
             <FormControl size="sm" required>
-              <FormLabel>What to look for</FormLabel>
+              <FormLabel>{draft.source === 'feed' ? 'Topic' : 'What to look for'}</FormLabel>
               <Textarea
                 minRows={2}
                 value={draft.query}
@@ -967,7 +1051,7 @@ export function DataLakeResearchPanel({
                 }}
               />
               <FormHelperText data-testid="datalake-research-query-count">
-                {`Used both as the web search and as the question each result is judged against. ${draft.query.length}/${RESEARCH_CONFIG_QUERY_MAX_CHARS}`}
+                {`${draft.source === 'feed' ? 'Each new feed item is judged against this.' : 'Used both as the web search and as the question each result is judged against.'} ${draft.query.length}/${RESEARCH_CONFIG_QUERY_MAX_CHARS}`}
               </FormHelperText>
             </FormControl>
 
@@ -1066,8 +1150,11 @@ export function DataLakeResearchPanel({
                   ))}
                 </Select>
                 <FormHelperText>
-                  Judges each search result before it is fetched. Models are listed in recommended order, not by price.
-                  A cheaper model costs less per run and reads less carefully.
+                  {draft.source === 'feed'
+                    ? 'Judges each new feed item.'
+                    : 'Judges each search result before it is fetched.'}{' '}
+                  Models are listed in recommended order, not by price. A cheaper model costs less per run and reads
+                  less carefully.
                 </FormHelperText>
               </FormControl>
 
@@ -1097,7 +1184,7 @@ export function DataLakeResearchPanel({
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                 <FormControl size="sm" error={!!errors.maxResults} sx={{ flex: 1 }}>
-                  <FormLabel>Search results</FormLabel>
+                  <FormLabel>{draft.source === 'feed' ? 'Feed items per run' : 'Search results'}</FormLabel>
                   <Input
                     type="number"
                     value={draft.maxResults}
@@ -1390,7 +1477,7 @@ export function DataLakeResearchPanel({
                 )}
                 {run.stopReason && (
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-stop-reason">
-                    {STOP_REASON_LABEL[run.stopReason]}
+                    {stopReasonLabel(run, run.stopReason)}
                   </Typography>
                 )}
               </Stack>

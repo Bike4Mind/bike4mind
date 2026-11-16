@@ -5,10 +5,13 @@ import {
   IOrganizationRepository,
   IProjectRepository,
   ISessionRepository,
+  ISpaceRepository,
   IUserDocument,
   isOrgMember,
+  isSpaceManager,
+  isSpaceMember,
 } from '@bike4mind/common';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 
 export interface InviteTypeAuthAdapters {
@@ -17,12 +20,13 @@ export interface InviteTypeAuthAdapters {
   projects: Pick<IProjectRepository, 'shareable'>;
   organizations: Pick<IOrganizationRepository, 'findById'>;
   groups: { findById: (id: string) => Promise<IGroupDocument | null> };
+  spaces: Pick<ISpaceRepository, 'findLiveById'>;
 }
 
 export interface AuthorizeByInviteTypeOptions {
   /**
    * When true, Organization and Group arms additionally call assertCanManageOrgGroups after the
-   * membership check. Use for mutation paths (cancelInviteById, refuseWholeInvite non-recipient
+   * membership check, and the Space arm requires a Space manager. Use for mutation paths (cancelInviteById, refuseWholeInvite non-recipient
    * branch); omit for read-only paths (listInvitesForDocument) where bare membership suffices.
    */
   requireManageGroups?: boolean;
@@ -65,6 +69,14 @@ export const authorizeByInviteType = async (
         if (options?.requireManageGroups) assertCanManageOrgGroups(user, org);
         authorized = org;
       }
+    }
+  } else if (type === InviteType.Space) {
+    const space = await db.spaces.findLiveById(documentId);
+    if (space && isSpaceMember(user.id, space)) {
+      if (options?.requireManageGroups && !isSpaceManager(user.id, space)) {
+        throw new ForbiddenError('Only a Space admin can manage invites');
+      }
+      authorized = space;
     }
   }
 

@@ -22,6 +22,8 @@ const state = vi.hoisted(() => ({
   teamSubscriptionsError: false,
   teamRefetch: vi.fn(),
   teamQueryOwner: undefined as { ownerId: string; enabled?: boolean } | undefined,
+  seatPlan: null as null | { organizationId: string; organizationName: string; planName: string },
+  seatPlanLoading: false,
 }));
 const logEvent = vi.hoisted(() => vi.fn());
 const trackUpsell = vi.hoisted(() => vi.fn());
@@ -36,6 +38,10 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSeatPlan: () => ({
+    data: state.seatPlanLoading ? undefined : state.seatPlan,
+    isLoading: state.seatPlanLoading,
+  }),
   useGetSubscriptions: () => ({
     data: state.subscriptionsError ? undefined : state.subscriptions,
     isPending: state.subscriptionsPending,
@@ -132,6 +138,8 @@ const sectionOrder = () =>
 describe('BillingModal', () => {
   beforeEach(() => {
     state.subscriptions = [];
+    state.seatPlan = null;
+    state.seatPlanLoading = false;
     state.subscriptionsPending = false;
     state.subscriptionsError = false;
     state.plansLoading = false;
@@ -323,6 +331,44 @@ describe('BillingModal', () => {
     const icon = screen.getByTestId('billing-balance-icon');
     expect(screen.getByTestId('billing-balance')).toContainElement(icon);
     expect(icon).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  describe('Team seat plan', () => {
+    it('shows the team plan instead of Free and offers no plans to upgrade to', () => {
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('Included with your seat in Acme');
+      expect(sectionOrder()).toEqual(['billing-section-credits', 'billing-section-plans']);
+      expect(screen.getByTestId('billing-seat-plan-notice')).toBeInTheDocument();
+      expect(screen.queryByTestId('plans-section-body')).not.toBeInTheDocument();
+      expect(trackUpsell).not.toHaveBeenCalledWith('impression', expect.anything());
+    });
+
+    it('points a low balance at a top-up and the team account, not at a plan', () => {
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      state.credits = 10;
+      renderModal();
+      expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('Acme account');
+      expect(screen.getByTestId('billing-low-balance-action')).toHaveTextContent('Top up');
+    });
+
+    it('keeps a personal plan in charge when the user also holds a seat', () => {
+      state.subscriptions = [subRow({ status: 'past_due' })];
+      state.seatPlan = { organizationId: 'org-1', organizationName: 'Acme', planName: 'Team' };
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Payment failed');
+      expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+      expect(screen.getByTestId('plans-section-body')).toBeInTheDocument();
+      expect(screen.queryByTestId('billing-seat-plan-notice')).not.toBeInTheDocument();
+    });
+
+    it('holds the frame until the seat plan is known, so Free never flashes', () => {
+      state.seatPlanLoading = true;
+      renderModal();
+      expect(screen.queryByTestId('billing-current-plan-name')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('plans-section-body')).not.toBeInTheDocument();
+    });
   });
 
   it('leads with credit top-ups when the user has a plan in good standing', () => {

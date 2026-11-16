@@ -1,5 +1,6 @@
 import type { IOrganizationDocument } from '../types/entities/OrganizationTypes';
-import { isOrgOwnerOrCurrentAdmin } from '../constants/organization';
+import { canAdministerOrganization } from '../constants/organization';
+import { Permission } from '../types/entities/ShareableDocumentTypes';
 
 /**
  * Response-boundary serializer for organization documents.
@@ -9,16 +10,19 @@ import { isOrgOwnerOrCurrentAdmin } from '../constants/organization';
  * credit accounting) need the full record, so a model-level strip would break them.
  * Every handler that returns an organization to a client MUST route it through here.
  *
- * What it does (kept deliberately minimal to avoid regressing in-org features):
- * - `stripeCustomerId` is dropped for EVERY caller -- no client consumer reads it;
- *   server-side billing uses the repository directly.
- * - `billingContact` is kept only for the org OWNER or a site admin.
- * - Per-member credit fields in `userDetails` are kept for owners, current managers and site
- *   admins; other viewers keep only their own row's credit fields.
- * - Everything else (name/description/seats/systemPrompt/userDetails identity/currentCredits/
- *   model config/logo) is preserved: the single-org GET is access-gated to members
- *   and roster administrators, and the list routes scope non-admins to their own
- *   memberships or manager appointments, so those fields never cross a tenant boundary.
+ * Shape by viewer:
+ * - Everyone loses ORGANIZATION_SECRET_FIELDS.
+ * - Owners, current managers (`canAdministerOrganization`) and site admins get every other field;
+ *   `billingContact` stays with the owner and site admins.
+ * - A member whose `users[]` row holds `update` may edit the team profile (canEditOrgProfile in
+ *   the client's orgTabAccess.ts), so they also get the settings fields, but not `budgetAlerts` or
+ *   colleagues' credit fields.
+ * - Any other viewer gets only ORGANIZATION_MEMBER_VISIBLE_FIELDS.
+ * - Outside the full view, only the viewer's own `userDetails` row keeps its credit fields.
+ *
+ * The websocket data-subscribe projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts)
+ * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS for every subscriber who is not the owner, a
+ * manager or a site admin; keep the lists and that projection in sync.
  *
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
@@ -37,6 +41,67 @@ export const ORGANIZATION_MEMBER_CREDIT_FIELDS = [
   'userDetails.periodStart',
 ] as const;
 
+type OrganizationField = keyof IOrganizationDocument;
+
+/**
+ * What a plain member receives. The client computes owner, manager and membership checks from
+ * `userId`, `adminUserIds` and `users`, so those stay; the rest backs the Overview, Members tab,
+ * account switcher and the member's own budget notice.
+ */
+export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
+  'id',
+  'createdAt',
+  'updatedAt',
+  'name',
+  'description',
+  'personal',
+  'logo',
+  'logoFileId',
+  'userId',
+  'users',
+  'adminUserIds',
+  'userDetails',
+  'seats',
+  'currentCredits',
+  'maxCreditsPerMember',
+  'mfaPolicy',
+  'retentionPolicy',
+] as const satisfies readonly OrganizationField[];
+
+/** Withheld from plain members; the websocket projection excludes these by name. */
+export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
+  'allowedGroupTypes',
+  'systemPrompt',
+  'storageLimit',
+  'currentStorageSize',
+  'serviceAccountUserId',
+  'redactPushContent',
+  'sharingPolicy',
+  'budgetAlerts',
+  'retentionVersion',
+  'lastCreditsPurchasedAt',
+  'preferredModel',
+  'preferredImageModel',
+  'temperature',
+  'maxTokens',
+  'isGlobalRead',
+  'isGlobalWrite',
+  'groups',
+] as const satisfies readonly OrganizationField[];
+
+// Fails to compile when an organization field is added without deciding who may read it.
+type UnclassifiedOrganizationField = Exclude<
+  OrganizationField,
+  | (typeof ORGANIZATION_MEMBER_VISIBLE_FIELDS)[number]
+  | (typeof ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS)[number]
+  | (typeof ORGANIZATION_SECRET_FIELDS)[number]
+  | (typeof ORGANIZATION_OWNER_ONLY_FIELDS)[number]
+>;
+const organizationFieldsAreClassified: [UnclassifiedOrganizationField] extends [never] ? true : never = true;
+void organizationFieldsAreClassified;
+
+const MEMBER_VISIBLE_FIELD_SET: ReadonlySet<string> = new Set([...ORGANIZATION_MEMBER_VISIBLE_FIELDS, '_id']);
+
 export type OrgViewer = { userId?: string | null; isAdmin?: boolean | null };
 
 type OrgLike = (Partial<IOrganizationDocument> & { _id?: unknown; toJSON?: () => unknown }) | null | undefined;
@@ -48,24 +113,32 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
     typeof (org as { toJSON?: unknown }).toJSON === 'function'
       ? (org as { toJSON: () => Partial<IOrganizationDocument> }).toJSON()
       : (org as Partial<IOrganizationDocument>);
-  const o: Record<string, unknown> = { ...plain };
-
-  for (const f of ORGANIZATION_SECRET_FIELDS) delete o[f];
-
+  const isSiteAdmin = !!viewer?.isAdmin;
   const isOwner = viewer?.userId != null && plain.userId === viewer.userId;
-  const privileged = isOwner || !!viewer?.isAdmin;
-  if (!privileged) {
-    delete o.billingContact;
-  }
-  const canViewMemberCredits =
-    !!viewer?.isAdmin ||
+  const administers =
+    isSiteAdmin ||
     (viewer?.userId != null &&
       plain.userId != null &&
-      isOrgOwnerOrCurrentAdmin(
+      canAdministerOrganization(
         { id: viewer.userId },
         { userId: plain.userId, adminUserIds: plain.adminUserIds, users: plain.users }
       ));
-  if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
+
+  const editsProfile =
+    viewer?.userId != null &&
+    (plain.users ?? []).some(row => row.userId === viewer.userId && row.permissions?.includes(Permission.update));
+
+  const o: Record<string, unknown> =
+    administers || editsProfile
+      ? { ...plain }
+      : Object.fromEntries(Object.entries(plain).filter(([field]) => MEMBER_VISIBLE_FIELD_SET.has(field)));
+
+  for (const f of ORGANIZATION_SECRET_FIELDS) delete o[f];
+  if (!isOwner && !isSiteAdmin) {
+    for (const f of ORGANIZATION_OWNER_ONLY_FIELDS) delete o[f];
+  }
+  if (!administers) delete o.budgetAlerts;
+  if (!administers && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.
       if (viewer?.userId != null && String(details.id) === viewer.userId) return details;

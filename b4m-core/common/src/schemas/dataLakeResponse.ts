@@ -190,7 +190,7 @@ export const lakeProposalApproveResponseSchema = z.object({
   fabFile: z.object({ id: z.string(), fileName: z.string() }),
 });
 
-// Held to IDataLakeResearchConfigDocument.
+// Held to IDataLakeResearchConfigDocument minus `feedCursor`, which never leaves the server; `feedStatus` goes out in its place.
 const RESEARCH_CONFIG_RESPONSE_FIELDS = {
   id: true,
   createdAt: true,
@@ -206,6 +206,8 @@ const RESEARCH_CONFIG_RESPONSE_FIELDS = {
   createdByUserId: true,
   lastUpdatedByUserId: true,
   lastRunAt: true,
+  source: true,
+  feedUrl: true,
   query: true,
   model: true,
   maxResults: true,
@@ -221,10 +223,13 @@ const RESEARCH_CONFIG_RESPONSE_FIELDS = {
   minRelevance: true,
   costCeilingMicroUsd: true,
   proposedTags: true,
-} as const satisfies Record<keyof IDataLakeResearchConfigDocument, true>;
+} as const satisfies Record<Exclude<keyof IDataLakeResearchConfigDocument, 'feedCursor'>, true>;
 
 /** One saved research configuration. */
-export const researchConfigResponseSchema = z.object(passthroughShape(RESEARCH_CONFIG_RESPONSE_FIELDS));
+export const researchConfigResponseSchema = z.object({
+  ...passthroughShape(RESEARCH_CONFIG_RESPONSE_FIELDS),
+  feedStatus: passthroughField,
+});
 
 /** GET /api/data-lakes/:id/research/configs: the configs plus the lake's live pending-proposal count. */
 export const researchConfigListResponseSchema = z.object({
@@ -251,6 +256,7 @@ const RESEARCH_RUN_RESPONSE_FIELDS = {
   stopReason: true,
   spentMicroUsd: true,
   totals: true,
+  feedBacklog: true,
   judgeModel: true,
   error: true,
 } as const satisfies Record<keyof IDataLakeResearchRunDocument, true>;

@@ -41,6 +41,9 @@ import {
   runSignupDomainHoldAssessments,
 } from '@workers/security/signupDomainHoldAssessment/signupDomainHoldAssessment';
 import { runSignupDomainAgeRecheck } from './signupDomainAgeRecheck';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 const logger = new Logger({ metadata: { service: 'signupDomainHoldTriage' } });
 

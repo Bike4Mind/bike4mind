@@ -6,6 +6,8 @@ import type { MusicModelCapabilities } from './types';
 const withPricing = (pricing: MusicModelCapabilities['pricing']): MusicModelCapabilities => ({
   provider: 'test',
   displayName: 'Model',
+  tier: 'standard',
+  releasedAt: '2026-01-01',
   vocals: 'optional',
   lyrics: null,
   duration: { control: 'exact', min: 1, max: 300, default: 60 },

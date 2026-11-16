@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -31,7 +32,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
       },
       reason,
       validators: {
-        admin: async () => hasAdminPermission(await userRepository.findById(actorId), 'credits:adjust'),
+        admin: async () => {
+          const actor = await userRepository.findById(actorId);
+          return !!actor && hasAdminPermission(await resolveRoleAdminPermissions(actor), 'credits:adjust');
+        },
       },
       audit: async ({ credits, creditTransactionId }) => {
         await recordAdminActionFromRequest(req, {

@@ -138,6 +138,11 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     checkedAt,
   } as unknown as ISecurityDashboardSnapshotDocument);
 
+  // Auto-close in the triage worker is only safe when the alert list matches the reported counts.
+  const findingsComplete =
+    Array.isArray(alerts) &&
+    alerts.length === safeCounts.critical + safeCounts.high + safeCounts.medium + safeCounts.low;
+
   // Always fan out full payload (with instances) to SecOps Triage queue.
   // The triage Lambda reads secopsTriageConfig from AdminSettings and decides whether to act.
   try {
@@ -149,6 +154,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
           scanSource: 'web-owasp' as const,
           snapshotId: snapshot.id,
           targetUrl,
+          findingsComplete,
           findings: (alerts || []).map(alert => ({
             id: alert.id,
             title: alert.title,

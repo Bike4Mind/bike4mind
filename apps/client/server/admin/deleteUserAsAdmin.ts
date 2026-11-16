@@ -1,3 +1,4 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { adminSettingsRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
@@ -88,6 +89,7 @@ export async function deleteUserAsAdmin(
             adminSettings: adminSettingsRepository,
             realtimeConnections: realtimeConnectionRepository,
           },
+          resolveAdminRoles: resolveRoleAdminPermissions,
           notify: {
             // postMessageToSlack reports whether it delivered; the adapter contract returns void.
             send: async (message: string) => {

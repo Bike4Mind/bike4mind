@@ -453,6 +453,7 @@ describe('LLM spend dashboard', () => {
       'Estimated USD per 5 min by model',
       'Sign-in code sends and API key creations per 5 min',
       'WAF: sign-in code requests with hosting or bot signals per 5 min',
+      'Signup network caps skipped (failed open) per 5 min',
     ]);
     const byTitle = (title: string) => widgets.find(w => w.properties.title === title)!.properties;
 
@@ -486,6 +487,9 @@ describe('LLM spend dashboard', () => {
       region: 'us-east-1',
       metrics: [['test-app/production/Signup', 'OtcEdgeSignalRequests', expect.any(Object)]],
     });
+    expect(byTitle('Signup network caps skipped (failed open) per 5 min').metrics).toEqual([
+      ['test-app/production/Signup', 'SignupLimitFailOpen', expect.any(Object)],
+    ]);
   });
 });
 

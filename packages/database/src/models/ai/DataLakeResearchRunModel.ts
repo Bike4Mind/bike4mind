@@ -12,6 +12,7 @@ import {
   RESEARCH_RUN_STATUSES,
   RESEARCH_RUN_STOP_REASONS,
   RESEARCH_RUN_TRIGGERS,
+  RESEARCH_SOURCES,
   RESEARCH_UNLISTED_SOURCES,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -22,6 +23,9 @@ interface IDataLakeResearchRunModel extends Model<IDataLakeResearchRunDocument> 
 
 /** The levers as executed. Mirrors `ResearchRunLevers`; see DataLakeResearchTypes.ts. */
 const ResearchRunLeversSchema = {
+  // No default on the snapshot: one taken before feeds has neither, and the executor upgrades it.
+  source: { type: String, enum: RESEARCH_SOURCES },
+  feedUrl: { type: String },
   query: { type: String, required: true },
   model: { type: String },
   maxResults: { type: Number, required: true },
@@ -75,6 +79,8 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
     stopReason: { type: String, enum: RESEARCH_RUN_STOP_REASONS, default: null },
     spentMicroUsd: { type: Number, default: 0 },
     totals: { type: ResearchRunTotalsSchema, default: () => emptyResearchRunTotals() },
+    // Beside the totals, not in them: a waiting item is not an outcome bucket.
+    feedBacklog: { type: Number, default: null },
     judgeModel: { type: String, default: null },
     error: { type: String, default: null },
   },
@@ -153,13 +159,14 @@ class DataLakeResearchRunRepository
 
   /** The `$set` body shared by every settle variant below - only the status filter differs. */
   private settleFields(input: SettleResearchRunInput) {
-    const { status, completedAt, stopReason, spentMicroUsd, totals, judgeModel, error } = input;
+    const { status, completedAt, stopReason, spentMicroUsd, totals, feedBacklog, judgeModel, error } = input;
     return {
       status,
       completedAt,
       stopReason: stopReason ?? null,
       spentMicroUsd,
       totals,
+      feedBacklog: feedBacklog ?? null,
       judgeModel: judgeModel ?? null,
       error: error ?? null,
     };

@@ -37,7 +37,7 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window. `previousKey`
-  // is stored encrypted at rest (see secret-rotations/renewed.ts); decrypt before
+  // is stored encrypted at rest (encryptAtRest); decrypt before
   // verifying. Legacy plaintext rows pass through unchanged.
   if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
     previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;

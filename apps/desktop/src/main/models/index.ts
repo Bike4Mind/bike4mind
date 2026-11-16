@@ -19,6 +19,7 @@ import {
 } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { CuratedList, CuratedListSettings, CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
+import { currentVersion } from '../appVersion';
 import { localHardware } from '../chat/localContextSizing';
 import { createMainLogger } from '../logger';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
@@ -102,7 +103,7 @@ function curatedSource(onChange: () => void): CuratedListSource {
   const allowLoopbackHttp = !app.isPackaged;
   // A constant false in release builds, so the test key and its module are not in the bundle at all.
   const dev = __B4M_CURATED_DEV_KEYS__ ? curatedDevOverrides(app.isPackaged, process.env) : null;
-  const desktopVersion = app.getVersion();
+  const desktopVersion = currentVersion();
   return new CuratedListSource({
     url: resolveCuratedUrl(dev?.url ?? process.env.B4M_CURATED_MANIFEST_URL, allowLoopbackHttp),
     keys: [...PRODUCTION_CURATED_KEYS, ...(dev?.keys ?? [])],

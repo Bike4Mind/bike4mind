@@ -35,12 +35,8 @@ describe('GET /api/slack/oauth/authorize', () => {
     mockCreateInstallProvider.mockResolvedValue({ generateInstallUrl: async () => 'https://slack.com/oauth?state=s' });
   });
 
-  it('refuses a non-admin before minting any state or cookie', async () => {
-    const res = await call(false);
-    expect(res._getStatusCode()).toBe(403);
-    expect(setCookies(res)).toEqual([]);
-    expect(mockCreateInstallProvider).not.toHaveBeenCalled();
-  });
+  // The settings:manage gate runs in adminApi's use() middleware, which this stub skips; the refusal
+  // cases live in pages/api/slack/oauth/__tests__/authorize.test.ts.
 
   it('rejects a missing workspaceId with 400 and sets no cookie', async () => {
     const res = await call(true, {});

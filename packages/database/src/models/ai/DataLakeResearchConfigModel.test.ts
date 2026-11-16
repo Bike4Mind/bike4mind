@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CreateDataLakeResearchConfigInput } from '@bike4mind/common';
+import type { ResearchFeedCursor } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT } from '@bike4mind/common';
 import { DataLakeResearchConfigModel, dataLakeResearchConfigRepository as repo } from './DataLakeResearchConfigModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -14,6 +15,8 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   reviewBacklogLimit: 25,
   nextRunAt: null,
   createdByUserId: 'user-1',
+  source: 'search',
+  feedUrl: null,
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
@@ -305,6 +308,80 @@ describe('DataLakeResearchConfigRepository', () => {
       const hydrated = await DataLakeResearchConfigModel.findById(insertedId);
       expect(hydrated?.toJSON()).toHaveProperty('somethingUndeclared');
       expect(await repo.findByIdInLake(String(insertedId), LAKE)).toMatchObject({ unlistedSources: 'review' });
+    });
+  });
+  describe('feed source and cursor', () => {
+    const FEED = 'https://example.com/feed.xml';
+    const cursor = (overrides: Partial<ResearchFeedCursor> = {}): ResearchFeedCursor => ({
+      fingerprint: 'fp-1',
+      newestPublishedAt: new Date('2026-11-01T00:00:00Z'),
+      seenKeys: ['example.com/a', 'example.com/b'],
+      retries: [{ key: 'example.com/c', attempts: 2 }],
+      ...overrides,
+    });
+
+    it('round-trips source and feedUrl, and reads a stored search config as search with no feed', async () => {
+      const feed = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+      expect(feed).toMatchObject({ source: 'feed', feedUrl: FEED, feedCursor: null });
+
+      const { id } = await repo.createConfig(input({ name: 'old' }));
+      await DataLakeResearchConfigModel.collection.updateOne(
+        { name: 'old' },
+        { $unset: { source: '', feedUrl: '', feedCursor: '' } }
+      );
+      expect(await repo.findByIdInLake(id, LAKE)).toMatchObject({ source: 'search', feedUrl: null });
+    });
+
+    it('writes the cursor when the feed url matches and reports the match', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+
+      expect(await repo.recordFeedCursor(id, FEED, cursor())).toBe(true);
+
+      const reread = await repo.findByIdInLake(id, LAKE);
+      expect(reread?.feedCursor).toMatchObject({
+        fingerprint: 'fp-1',
+        newestPublishedAt: new Date('2026-11-01T00:00:00Z'),
+        seenKeys: ['example.com/a', 'example.com/b'],
+        retries: [{ key: 'example.com/c', attempts: 2 }],
+      });
+    });
+
+    it('round-trips the feed address key', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+
+      await repo.recordFeedCursor(id, FEED, cursor({ feedUrlKey: 'url-key-1' }));
+
+      expect((await repo.findByIdInLake(id, LAKE))?.feedCursor?.feedUrlKey).toBe('url-key-1');
+    });
+
+    it('drops a cursor from a run of a feed the config has since left', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+      await repo.updateConfig(id, LAKE, { feedUrl: 'https://example.com/other.xml' });
+
+      expect(await repo.recordFeedCursor(id, FEED, cursor())).toBe(false);
+      expect((await repo.findByIdInLake(id, LAKE))?.feedCursor).toBeNull();
+    });
+
+    it('replaces a cursor written under an older fingerprint', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+      await repo.recordFeedCursor(id, FEED, cursor());
+
+      await repo.recordFeedCursor(id, FEED, cursor({ fingerprint: 'fp-2', seenKeys: ['example.com/z'], retries: [] }));
+
+      expect((await repo.findByIdInLake(id, LAKE))?.feedCursor).toMatchObject({
+        fingerprint: 'fp-2',
+        seenKeys: ['example.com/z'],
+        retries: [],
+      });
+    });
+
+    it('does not let a config update through the lever path touch the cursor', async () => {
+      const { id } = await repo.createConfig(input({ source: 'feed', feedUrl: FEED }));
+      await repo.recordFeedCursor(id, FEED, cursor());
+
+      await repo.updateConfig(id, LAKE, { query: 'new topic' });
+
+      expect((await repo.findByIdInLake(id, LAKE))?.feedCursor).toMatchObject({ fingerprint: 'fp-1' });
     });
   });
 });

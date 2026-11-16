@@ -69,12 +69,61 @@ export const ClientConfigModelsSchema = z.object({
   available: z.array(PublicModelSchema),
 });
 
+export const ClientConfigPublicSchema = z.object({
+  api_url: z.string(),
+  default_theme: z.string(),
+  allow_open_registration: z.boolean(),
+  pyodide_base_url: z.string(),
+  allow_trusted_devices: z.boolean(),
+  turnstile_site_key: z.string(),
+  apple_sign_in_enabled: z.boolean(),
+  support_email: z.string(),
+});
+
+export const ClientConfigPickerModelSchema = PublicModelSchema.extend({
+  max_output_tokens_derived: z.boolean().optional(),
+  thinking_style: z.enum(['legacy', 'adaptive']).optional(),
+  thinking_always_on: z.literal(true).optional(),
+  openai_reasoning_effort: z.literal(true).optional(),
+  effort_incompatible_with_tools: z.boolean().optional(),
+  supports_image_variation: z.boolean(),
+  supports_safety_tolerance: z.boolean().optional(),
+  training_cutoff: z.string().optional(),
+  release_date: z.string().optional(),
+  is_superseded: z.boolean().optional(),
+  is_slow_model: z.boolean().optional(),
+  disabled: z.boolean().optional(),
+  disabled_reason: z.string().optional(),
+  access: z.object({ locked: z.literal(true), reason: z.literal('requires_paid_plan') }).optional(),
+});
+
+export const ClientConfigCatalogSchema = z.object({
+  /** Includes disabled and speech-to-text entries, in legacy picker order. */
+  models: z.array(ClientConfigPickerModelSchema),
+  locked_models: z.array(ClientConfigPickerModelSchema),
+  superseded_models: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      replacement_id: z.string(),
+      replacement_name: z.string(),
+    })
+  ),
+  model_list_revision: z.string().nullable(),
+  catalog_unavailable: z.boolean(),
+});
+
 export const ClientConfigResponseSchema = z.object({
   server: ClientConfigServerSchema,
   features: ClientConfigFeaturesSchema,
   limits: ClientConfigLimitsSchema,
   models: ClientConfigModelsSchema,
+  public_config: ClientConfigPublicSchema.optional(),
+  transport: z.object({ websocket_url: z.string(), sse_completions_url: z.string() }).optional(),
+  catalog: ClientConfigCatalogSchema.optional(),
 });
 
+export type ClientConfigPublic = z.infer<typeof ClientConfigPublicSchema>;
+export type ClientConfigPickerModel = z.infer<typeof ClientConfigPickerModelSchema>;
 export type ClientConfigFeatures = z.infer<typeof ClientConfigFeaturesSchema>;
 export type ClientConfigResponse = z.infer<typeof ClientConfigResponseSchema>;

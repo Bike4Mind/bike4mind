@@ -50,6 +50,8 @@ const SecopsTriagePayloadSchema = z.object({
         .default([]),
     })
   ),
+  findingsComplete: z.boolean().default(true),
+  unverifiedFindingIds: z.array(z.string()).default([]),
 });
 
 async function getSlackBotToken(logger: Logger, workspaceId?: string): Promise<string | null> {

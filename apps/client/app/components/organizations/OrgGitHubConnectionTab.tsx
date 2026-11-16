@@ -56,6 +56,7 @@ import {
 import { useOrgGitHubRepositories } from '@client/app/hooks/data/useGitHubRepositories';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { sanitizeErrorMessage } from '@client/app/utils/error';
+import OrgFormSaveBar from './OrgFormSaveBar';
 
 interface OrgGitHubConnectionTabProps {
   orgId: string;
@@ -281,6 +282,12 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
     });
   };
 
+  const savedRepos = connection?.allowedRepositories ?? [];
+  const repoChangeCount = editingRepos
+    ? allowedRepos.filter(r => !savedRepos.includes(r)).length +
+      savedRepos.filter(r => !allowedRepos.includes(r)).length
+    : 0;
+
   const handleSaveRepos = () => {
     updateConnection.mutate(
       { orgId, data: { allowedRepositories: allowedRepos } },
@@ -335,8 +342,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
       {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Stack direction="row" alignItems="center" spacing={1.5}>
-          <GitHubIcon sx={{ fontSize: 28 }} />
-          <Typography level="h3">GitHub API</Typography>
           <ContextHelpButton helpId="organizations/github-connection" tooltipText="GitHub Connection Help" />
           <Chip
             size="sm"
@@ -362,12 +367,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
         </Button>
       </Stack>
 
-      {/* Description */}
-      <Typography level="body-sm" sx={{ mb: 3, color: 'text.secondary' }}>
-        Configure your team&apos;s GitHub API connection for features like PR summaries, code context retrieval, and
-        repository integration. Every member of this team will benefit from this connection.
-      </Typography>
-
       {/* Not Connected State */}
       {!connected && (
         <Box
@@ -381,7 +380,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
           }}
         >
           <GitHubIcon sx={{ fontSize: 48, opacity: 0.5, mb: 2 }} />
-          <Typography level="h4" sx={{ mb: 1 }}>
+          <Typography level="title-md" sx={{ mb: 1 }}>
             No GitHub connection configured
           </Typography>
           <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 3 }}>
@@ -577,7 +576,7 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
             <Stack spacing={2} sx={{ p: 2 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography level="title-md">Allowed Repositories</Typography>
-                {!editingRepos && (
+                {!editingRepos ? (
                   <Button
                     size="sm"
                     variant="outlined"
@@ -586,6 +585,22 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                   >
                     Edit
                   </Button>
+                ) : (
+                  // With unsaved picks the save bar's Discard closes the editor instead.
+                  repoChangeCount === 0 && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => {
+                        setEditingRepos(false);
+                        setRepoSearchQuery('');
+                      }}
+                      data-testid="org-github-close-repos-btn"
+                    >
+                      Close
+                    </Button>
+                  )
                 )}
               </Stack>
 
@@ -738,28 +753,6 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
                       No repositories found. The GitHub App may not have access to any repositories.
                     </Typography>
                   )}
-
-                  <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 2 }}>
-                    <Button
-                      variant="plain"
-                      color="neutral"
-                      onClick={() => {
-                        setEditingRepos(false);
-                        setAllowedRepos(connection.allowedRepositories || []);
-                        setRepoSearchQuery('');
-                      }}
-                      data-testid="org-github-cancel-repos-btn"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleSaveRepos}
-                      loading={updateConnection.isPending}
-                      data-testid="org-github-save-repos-btn"
-                    >
-                      Save
-                    </Button>
-                  </Stack>
                 </Stack>
               ) : allowedRepos.length > 0 ? (
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
@@ -776,6 +769,17 @@ const OrgGitHubConnectionTab: React.FC<OrgGitHubConnectionTabProps> = ({ orgId }
               )}
             </Stack>
           </Card>
+
+          <OrgFormSaveBar
+            count={repoChangeCount}
+            pending={updateConnection.isPending}
+            onSave={handleSaveRepos}
+            onDiscard={() => {
+              setEditingRepos(false);
+              setAllowedRepos(connection.allowedRepositories || []);
+              setRepoSearchQuery('');
+            }}
+          />
 
           {/* Health & Test Connection */}
           <Card variant="outlined">

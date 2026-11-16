@@ -30,7 +30,7 @@ const orgQuery = vi.hoisted(() => ({
     error: undefined as unknown,
   },
 }));
-const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string } }));
+const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string; section?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
 
@@ -66,6 +66,11 @@ vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () =
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
 // A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
@@ -108,8 +113,8 @@ const renderThroughLoad = () => {
 
 /** Feeds the last navigate() back in as the new URL and rerenders, which is all the router does. */
 const applyNavigation = (rerender: (ui: ReactNode) => void) => {
-  const last = navigateSpy.mock.calls.at(-1)?.[0] as { search?: { tab?: string } } | undefined;
-  searchParams.current = { tab: last?.search?.tab };
+  const last = navigateSpy.mock.calls.at(-1)?.[0] as { search?: { tab?: string; section?: string } } | undefined;
+  searchParams.current = { ...last?.search };
   rerender(wrapper(<OrganizationPage />));
 };
 
@@ -326,19 +331,33 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     expect(selectedTabName()).toBe('Members');
   });
 
-  it('writes ?tab=settings when the header Team Settings button is clicked', () => {
+  it('writes ?tab=settings when the header Settings button is clicked', () => {
     renderThroughLoad();
 
-    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
+    fireEvent.click(screen.getByTestId('organization-header-settings-btn'));
 
     expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
-  it('honors the header settings click for a platform policy administrator', () => {
+  // The header and the rail read one canManageOrg, so a caller who sees the button always reaches
+  // the tab it opens. A platform admin who is not a member gets both, as the update route allows.
+  it('gives a platform admin both the header button and the Settings tab', () => {
     user.current = { id: 'admin9', isAdmin: true };
+
+    const rerender = renderThroughLoad();
+    fireEvent.click(screen.getByTestId('organization-header-settings-btn'));
+    applyNavigation(rerender);
+
+    expect(selectedTabName()).toBe('Settings');
+  });
+
+  it('shows neither the header button nor the Settings tab to a non-member', () => {
+    user.current = { id: 'stranger9' };
+
     renderThroughLoad();
-    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
-    expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
+
+    expect(screen.queryByTestId('organization-header-settings-btn')).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
   });
 
   // Rewriting ?tab=usage to ?tab=overview for a caller who may not see Usage destroys the link for
@@ -361,5 +380,178 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization detail page - Integrations tab', () => {
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'owner1' };
+    navigateSpy.mockClear();
+  });
+
+  it.each([
+    ['github', 'github'],
+    ['webhooks', 'webhooks'],
+    ['connectors', 'connectors'],
+  ])('redirects the old ?tab=%s link to its Integrations section', (tab, section) => {
+    searchParams.current = { tab };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Integrations');
+    expect(screen.getByTestId(`organization-integration-section-${section}`)).toBeTruthy();
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: '/organizations/$id',
+      params: { id: 'org1' },
+      search: { tab: OrganizationTabs.Integrations, section },
+      replace: true,
+    });
+  });
+
+  describe.each([
+    ['github', 'github'],
+    ['webhooks', 'webhooks'],
+  ])('a manager opening the old ?tab=%s link', tab => {
+    const MANAGER_ORG = {
+      ...ORG,
+      adminUserIds: ['mgr3'],
+      users: [...(ORG.users ?? []), { userId: 'mgr3', permissions: [Permission.read] }],
+    } as unknown as IOrganizationDocument;
+
+    const renderAsManager = () => {
+      searchParams.current = { tab };
+      user.current = { id: 'mgr3' };
+      orgQuery.current = { data: undefined, isLoading: true };
+      const { rerender } = render(wrapper(<OrganizationPage />));
+      orgQuery.current = { data: MANAGER_ORG, isLoading: false };
+      rerender(wrapper(<OrganizationPage />));
+      return rerender;
+    };
+
+    it('lands on Connectors, the only section a manager sees', () => {
+      renderAsManager();
+
+      expect(selectedTabName()).toBe('Integrations');
+      expect(screen.getByTestId('organization-integration-section-connectors')).toBeTruthy();
+      expect(screen.queryByTestId(`organization-integration-section-${tab}`)).toBeNull();
+    });
+
+    it('rewrites the URL to the resolved section once the legacy rewrite has settled', () => {
+      const rerender = renderAsManager();
+      applyNavigation(rerender);
+
+      expect(navigateSpy).toHaveBeenLastCalledWith({
+        to: '/organizations/$id',
+        params: { id: 'org1' },
+        search: { tab: OrganizationTabs.Integrations, section: 'connectors' },
+        replace: true,
+      });
+
+      const calls = navigateSpy.mock.calls.length;
+      applyNavigation(rerender);
+      expect(navigateSpy).toHaveBeenCalledTimes(calls);
+    });
+  });
+
+  it('does not rewrite before the user and organization have loaded', () => {
+    searchParams.current = { tab: 'integrations', section: 'github' };
+    orgQuery.current = { data: undefined, isLoading: true };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite a section the caller can see, or an Integrations link with no section', () => {
+    searchParams.current = { tab: 'integrations', section: 'webhooks' };
+    renderThroughLoad();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  // A bare ?tab=integrations meant the Slack panel before the merge, and the Slack OAuth callback
+  // still returns there, so it must keep opening Slack.
+  it('opens Slack when no section is named, as the pre-merge link and the Slack OAuth return did', () => {
+    searchParams.current = { tab: 'integrations', slack_connected: 'true' } as { tab: string };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-integration-section-slack')).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the picked section to the URL', () => {
+    searchParams.current = { tab: 'integrations' };
+
+    const rerender = renderThroughLoad();
+    fireEvent.click(screen.getByTestId('organization-integration-sections-webhooks'));
+    applyNavigation(rerender);
+
+    expect(screen.getByTestId('organization-integration-section-webhooks')).toBeTruthy();
+  });
+
+  it('hides Integrations from a member who may manage the org but is neither owner nor manager', () => {
+    searchParams.current = { tab: 'github' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Integrations' })).toBeNull();
+    expect(screen.queryByTestId('organization-tab-group-integrations')).toBeNull();
+  });
+});
+
+describe('organization detail page - grouped rail and tab headers', () => {
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'owner1' };
+    navigateSpy.mockClear();
+  });
+
+  it('groups the owner rail into Team, Insights, Integrations and Admin', () => {
+    renderThroughLoad();
+
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      'Overview',
+      'Members',
+      'Library',
+      'Groups',
+      'Usage',
+      'Analysis',
+      'Integrations',
+      'Domains',
+      'Billing',
+      'API keys',
+      'Audit',
+      'Settings',
+    ]);
+    for (const group of ['team', 'insights', 'integrations', 'admin']) {
+      expect(screen.getByTestId(`organization-tab-group-${group}`)).toBeTruthy();
+    }
+  });
+
+  it.each([
+    'overview',
+    'members',
+    'library',
+    'groups',
+    'usage',
+    'analysis',
+    'integrations',
+    'billing',
+    'api-keys',
+    'audit',
+    'settings',
+  ])('gives the %s tab the shared header with a description', tab => {
+    searchParams.current = { tab };
+
+    renderThroughLoad();
+
+    const header = screen.getByTestId('admin-page-header');
+    expect(header.querySelector('h2')?.textContent).toMatch(
+      new RegExp(`^${en.organization.tabs[tab as keyof typeof en.organization.tabs]}`)
+    );
+    expect(header.querySelector('p')?.textContent).toBeTruthy();
   });
 });

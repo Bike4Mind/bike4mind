@@ -41,6 +41,7 @@ const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptio
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   projectRepository: {
     shareable: { findShareAccessById: vi.fn(async (_user: unknown, id: string) => ({ id: id.toLowerCase() })) },

@@ -6,32 +6,30 @@ import { BasePage } from './BasePage';
 export type TeamTab =
   | 'Overview'
   | 'Members'
+  | 'Library'
   | 'Groups'
   | 'Usage'
   | 'Analysis'
-  | 'Billing'
   | 'Integrations'
-  | 'GitHub API'
-  | 'Webhooks'
-  | 'Connectors'
-  | 'API Keys'
-  | 'Settings'
-  | 'Audit';
+  | 'Domains'
+  | 'Billing'
+  | 'API keys'
+  | 'Audit'
+  | 'Settings';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
   'Members',
+  'Library',
   'Groups',
   'Usage',
   'Analysis',
-  'Billing',
   'Integrations',
-  'GitHub API',
-  'Webhooks',
-  'Connectors',
-  'API Keys',
-  'Settings',
+  'Domains',
+  'Billing',
+  'API keys',
   'Audit',
+  'Settings',
 ];
 
 /**
@@ -112,6 +110,18 @@ export class TeamsPage extends BasePage {
     await expect(confirmBtn).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await confirmBtn.click();
     await expect(this.page.getByTestId('confirmation-modal')).toBeHidden({ timeout: TIMEOUTS.MODAL });
+  }
+
+  deleteTeamDialog(): Locator {
+    return this.page.getByTestId('delete-organization-modal');
+  }
+
+  deleteTeamNameInput(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-name-input');
+  }
+
+  deleteTeamConfirm(): Locator {
+    return this.deleteTeamDialog().getByTestId('delete-organization-confirm-btn');
   }
 
   /**

@@ -215,18 +215,13 @@ extension QuestTurn {
   }
 }
 
-/// Where a turn's tool approval stands.
-///
-/// The app shows a pending approval but cannot answer it yet: the web client answers through
-/// `POST /api/mcp/confirm`, an internal route that is not part of the public OpenAPI contract the app
-/// is generated from. Until it is contracted, approve/deny happens on the web.
+/// Where a turn's tool approval stands. The app answers it through the pending-action routes (see
+/// `PendingActionAPI`); `ApprovalCardState` tracks an answer given from this screen.
 public enum ApprovalState: Hashable, Sendable {
   case none
   case awaiting(PendingAction)
   /// Approval requests lapse after `PendingAction.lifetime`; the server refuses a late answer.
   case lapsed(PendingAction)
-
-  public static let canRespondInApp = false
 
   public init(turn: QuestTurn, at date: Date) {
     self.init(pendingAction: turn.pendingAction, status: turn.status, at: date)

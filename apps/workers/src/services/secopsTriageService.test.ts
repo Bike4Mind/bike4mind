@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -70,7 +71,12 @@ vi.mock('@bike4mind/database', async importOriginal => {
   };
 });
 
-import { createSecopsTriageService, type SecopsTriageFinding, type SecopsTriagePayload } from './secopsTriageService';
+import {
+  createSecopsTriageService,
+  issueStage,
+  type SecopsTriageFinding,
+  type SecopsTriagePayload,
+} from './secopsTriageService';
 import type { SecopsTriageConfig } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
@@ -101,8 +107,19 @@ const makePayload = (findings: SecopsTriageFinding[], stage = 'dev'): SecopsTria
   findings,
 });
 
-// Builds a fake issue body containing the fingerprint comment
-const makeFakeIssueBody = (fp: string) => `<!-- secops-fingerprint: ${fp} -->`;
+// Builds a fake issue body with the metadata table (stage row omitted when stage is null) and fingerprint comment
+const makeFakeIssueBody = (fp: string, stage: string | null = 'dev') =>
+  [
+    '| Field | Value |',
+    '|-------|-------|',
+    ...(stage === null ? [] : [`| Stage | ${stage} |`]),
+    '| Target | https://example.com |',
+    '',
+    `<!-- secops-fingerprint: ${fp} -->`,
+  ].join('\n');
+
+const fingerprintFor = (id: string, stage = 'dev') =>
+  createHash('sha1').update(`secops-owasp-zap:${id}:${stage}`).digest('hex');
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -204,6 +221,166 @@ describe('createSecopsTriageService', () => {
     expect(mockGitHubService.closeIssue).not.toHaveBeenCalled();
     expect(result.issuesClosed).toBe(0);
     expect(result.skippedRateLimit).toBe(1);
+  });
+
+  it('does NOT auto-close or comment on an open issue that belongs to a different stage', async () => {
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 55,
+        title: '[SecOps OWASP ZAP][P1] Prod Finding',
+        body: makeFakeIssueBody(fingerprintFor('prod-finding', 'prod'), 'prod'),
+      },
+    ]);
+
+    const result = await service.run(
+      makePayload([makeHighFinding('new-finding')], 'dev'),
+      mockGitHubService as never,
+      baseConfig
+    );
+
+    expect(mockGitHubService.closeIssue).not.toHaveBeenCalled();
+    expect(mockGitHubService.addIssueComment).not.toHaveBeenCalled();
+    expect(result.issuesClosed).toBe(0);
+  });
+
+  it('does NOT auto-close an open issue whose body has no stage row', async () => {
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 56,
+        title: '[SecOps OWASP ZAP][P1] Legacy Finding',
+        body: makeFakeIssueBody(fingerprintFor('legacy-finding'), null),
+      },
+    ]);
+
+    const result = await service.run(
+      makePayload([makeHighFinding('new-finding')]),
+      mockGitHubService as never,
+      baseConfig
+    );
+
+    expect(mockGitHubService.closeIssue).not.toHaveBeenCalled();
+    expect(mockGitHubService.addIssueComment).not.toHaveBeenCalled();
+    expect(result.issuesClosed).toBe(0);
+  });
+
+  it('closes only the same-stage issue when open issues exist for several stages', async () => {
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 60,
+        title: '[SecOps OWASP ZAP][P1] Gone dev',
+        body: makeFakeIssueBody(fingerprintFor('gone', 'dev'), 'dev'),
+      },
+      {
+        number: 61,
+        title: '[SecOps OWASP ZAP][P1] Gone prod',
+        body: makeFakeIssueBody(fingerprintFor('gone', 'prod'), 'prod'),
+      },
+    ]);
+
+    const result = await service.run(makePayload([], 'dev'), mockGitHubService as never, baseConfig);
+
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledTimes(1);
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledWith('test-org/test-repo', 60);
+    expect(result.issuesClosed).toBe(1);
+  });
+
+  it('writes a stage row that issueStage parses back out of the created issue body', async () => {
+    await service.run(makePayload([makeHighFinding('xss-1')], 'staging-1'), mockGitHubService as never, baseConfig);
+
+    const [, issueArgs] = mockGitHubService.createIssue.mock.calls[0];
+    expect(issueStage(issueArgs.body)).toBe('staging-1');
+  });
+
+  it('issueStage reads the stage from a body with CRLF line endings', () => {
+    expect(issueStage('| Field | Value |\r\n| Stage | staging-1 |\r\n| Target | x |\r\n')).toBe('staging-1');
+  });
+
+  it('issueStage returns null when the body is empty or has no stage row', () => {
+    expect(issueStage(undefined)).toBeNull();
+    expect(issueStage(null)).toBeNull();
+    expect(issueStage('')).toBeNull();
+    expect(issueStage('| Field | Value |\n| Target | https://example.com |')).toBeNull();
+    expect(issueStage('text | Stage | dev | inline')).toBeNull();
+  });
+
+  it('does NOT auto-close an issue whose finding is still reported below the severity threshold', async () => {
+    const config: SecopsTriageConfig = { ...baseConfig, severityThreshold: 'critical' };
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 70,
+        title: '[SecOps OWASP ZAP][P1] Finding high-1',
+        body: makeFakeIssueBody(fingerprintFor('high-1')),
+      },
+      {
+        number: 71,
+        title: '[SecOps OWASP ZAP][P1] Finding gone-1',
+        body: makeFakeIssueBody(fingerprintFor('gone-1')),
+      },
+    ]);
+    const findings = [makeHighFinding('high-1'), makeHighFinding('critical-1', { severity: 'critical' })];
+
+    const result = await service.run(makePayload(findings), mockGitHubService as never, config);
+
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledTimes(1);
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledWith('test-org/test-repo', 71);
+    expect(mockGitHubService.addIssueComment).toHaveBeenCalledTimes(1);
+    expect(result.skippedBelowThreshold).toBe(1);
+    expect(result.issuesCreated).toBe(1);
+  });
+
+  it('skips auto-close entirely when the scan reports an incomplete findings list', async () => {
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 80,
+        title: '[SecOps OWASP ZAP][P1] Gone Finding',
+        body: makeFakeIssueBody(fingerprintFor('gone-finding')),
+      },
+    ]);
+
+    const result = await service.run(
+      { ...makePayload([makeHighFinding('new-finding')]), findingsComplete: false },
+      mockGitHubService as never,
+      baseConfig
+    );
+
+    expect(mockGitHubService.closeIssue).not.toHaveBeenCalled();
+    expect(mockGitHubService.addIssueComment).not.toHaveBeenCalled();
+    expect(result.issuesClosed).toBe(0);
+    expect(result.issuesCreated).toBe(1);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('Skipping auto-close'),
+      expect.objectContaining({ stage: 'dev' })
+    );
+  });
+
+  it('keeps issues for unverified finding ids open without processing them as findings', async () => {
+    mockGitHubService.searchIssues.mockResolvedValue([
+      {
+        number: 90,
+        title: '[SecOps OWASP ZAP][P1] Unverified Finding',
+        body: makeFakeIssueBody(fingerprintFor('unverified-1')),
+      },
+      {
+        number: 91,
+        title: '[SecOps OWASP ZAP][P1] Gone Finding',
+        body: makeFakeIssueBody(fingerprintFor('gone-1')),
+      },
+    ]);
+
+    const result = await service.run(
+      { ...makePayload([makeHighFinding('new-finding')]), unverifiedFindingIds: ['unverified-1', 'no-issue-yet'] },
+      mockGitHubService as never,
+      baseConfig
+    );
+
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledTimes(1);
+    expect(mockGitHubService.closeIssue).toHaveBeenCalledWith('test-org/test-repo', 91);
+    expect(mockGitHubService.addIssueComment.mock.calls.map(([, issueNumber]) => issueNumber)).toEqual([91]);
+    expect(mockGitHubService.createIssue).toHaveBeenCalledTimes(1);
+    expect(mockGitHubService.createIssue.mock.calls[0][1].title).toContain('new-finding');
+    expect(result.issuesCreated).toBe(1);
+    expect(result.issuesUpdated).toBe(0);
+    expect(result.issuesClosed).toBe(1);
   });
 
   // ── Severity threshold filtering ────────────────────────────────────────────

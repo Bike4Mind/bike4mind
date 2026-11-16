@@ -129,4 +129,10 @@ describe('renderTemplate variable substitution', () => {
     expect(html).not.toContain('{{userName}}');
     expect(html).toContain('A$&amp;B');
   });
+
+  it('puts the unsubscribe token in the URL fragment, not the query string', () => {
+    const { html } = renderTemplate(template('hi', '<a href="{{unsubscribeUrl}}">Unsubscribe</a>'), {}, 'tok-123');
+    expect(html).toContain('href="https://app.example.com/email/unsubscribe#token=tok-123"');
+    expect(html).not.toContain('unsubscribe?token=');
+  });
 });

@@ -101,7 +101,10 @@ export type SaveAbuseAssessmentInput = Omit<AbuseAssessmentItem, 'id' | 'attempt
 
 type LeanAbuseAssessment = Omit<IAbuseAssessmentDocument, keyof Document> & { _id: Types.ObjectId };
 
-export type LatestJudgedAssessment = Pick<AbuseAssessmentItem, 'detectionId' | 'result' | 'confidence' | 'assessedAt'>;
+export type LatestJudgedAssessment = Pick<
+  AbuseAssessmentItem,
+  'id' | 'detectionId' | 'result' | 'confidence' | 'assessedAt'
+>;
 
 /**
  * Drops undefined-valued keys at any depth. The driver stores an undefined key as null, which the
@@ -158,6 +161,12 @@ export class AbuseAssessmentRepository {
     return toItem(doc as unknown as LeanAbuseAssessment);
   }
 
+  async findById(id: string): Promise<AbuseAssessmentItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AbuseAssessmentModel.findById(id).lean<LeanAbuseAssessment>();
+    return doc ? toItem(doc) : null;
+  }
+
   async listForDetection(detectionId: string, limit = 20): Promise<AbuseAssessmentItem[]> {
     const docs = await AbuseAssessmentModel.find({ detectionId })
       .sort({ assessedAt: -1, _id: -1 })
@@ -169,14 +178,16 @@ export class AbuseAssessmentRepository {
   /** The newest judged (not unknown) assessment of each detection; detections with none are absent. */
   async findLatestJudgedForDetections(detectionIds: string[]): Promise<LatestJudgedAssessment[]> {
     if (detectionIds.length === 0) return [];
-    const rows = await AbuseAssessmentModel.aggregate<{ doc: LatestJudgedAssessment }>([
+    const rows = await AbuseAssessmentModel.aggregate<{
+      doc: Omit<LatestJudgedAssessment, 'id'> & { _id: Types.ObjectId };
+    }>([
       { $match: { detectionId: { $in: detectionIds }, result: { $ne: 'unknown' } } },
       // Only these fields are read; the feature summary can carry many accounts.
       { $project: { detectionId: 1, result: 1, confidence: 1, assessedAt: 1 } },
       { $sort: { detectionId: 1, assessedAt: -1, _id: -1 } },
       { $group: { _id: '$detectionId', doc: { $first: '$$ROOT' } } },
     ]);
-    return rows.map(row => row.doc);
+    return rows.map(({ doc: { _id, ...doc } }) => ({ ...doc, id: _id.toString() }));
   }
 }
 

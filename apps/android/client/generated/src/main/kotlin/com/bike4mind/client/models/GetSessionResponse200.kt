@@ -36,6 +36,7 @@ import kotlinx.serialization.Contextual
  * @param firstCreated
  * @param lastUpdated
  * @param underscoreId
+ * @param organizationId
  * @param knowledgeIds
  * @param artifactIds
  * @param tags
@@ -67,6 +68,9 @@ data class GetSessionResponse200 (
 
     @SerialName(value = "_id")
     val underscoreId: kotlin.String? = null,
+
+    @SerialName(value = "organizationId")
+    val organizationId: kotlin.String? = null,
 
     @SerialName(value = "knowledgeIds")
     val knowledgeIds: kotlin.collections.List<kotlin.String>? = null,

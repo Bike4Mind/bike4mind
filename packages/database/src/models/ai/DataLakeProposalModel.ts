@@ -42,6 +42,7 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
       producer: { type: String, required: true },
       runId: { type: String },
       query: { type: String },
+      feedUrl: { type: String, default: null },
       retrievedAt: { type: Date, required: true },
       sourceTier: { type: String, enum: ['trusted', 'review'] },
     },

@@ -276,7 +276,7 @@ if (isMonitoredStage) {
    */
   new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
     name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
-    alarmDescription: "What's New generation Lambda has errors",
+    alarmDescription: "What's New Lambda (release notes and highlights) has errors",
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'Errors',

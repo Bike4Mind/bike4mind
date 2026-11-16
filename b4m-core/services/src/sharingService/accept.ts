@@ -10,6 +10,7 @@ import {
   IProjectRepository,
   ISessionRepository,
   IShareableDocument,
+  ISpaceRepository,
   IUserDocument,
   Permission,
   ShareableAccessShape,
@@ -18,6 +19,8 @@ import {
   isOrgMember,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
+  isSpaceManager,
+  isSpaceMember,
   roleForPermissions,
 } from '@bike4mind/common';
 import {
@@ -30,7 +33,9 @@ import {
 import { z } from 'zod';
 import { pendingOrgInviteRecipients } from './orgSeatReservations';
 import { resolveRedeemableInvite } from './resolveRedeemableInvite';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { assertContentInvitePolicy } from './organizationPolicy';
+import { grantCap } from '../projectService/addFiles';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -57,7 +62,9 @@ interface AcceptInviteAdapters {
       findById: (id: string) => Promise<IUserDocument | null>;
       update: (data: Partial<IUserDocument>) => Promise<unknown>;
     };
+    spaces: Pick<ISpaceRepository, 'findLiveById' | 'addMember'>;
   };
+  limits: { spaceMaxMembers: number; spacesEnabled: boolean };
 }
 
 // Invite types a non-owner can mint, so their accept re-checks the inviter's current access.
@@ -83,7 +90,7 @@ export type AcceptInviteOutcome = 'accepted' | 'already-member';
 export const acceptInvite = async (
   userId: string,
   params: AcceptInviteParameters,
-  { db }: AcceptInviteAdapters
+  { db, limits }: AcceptInviteAdapters
 ): Promise<{ invite: IInvite; outcome: AcceptInviteOutcome }> => {
   const { id } = secureParameters(params, acceptInviteSchema);
 
@@ -115,6 +122,15 @@ export const acceptInvite = async (
       throw new ConflictError('You are already a member of this organization');
   }
 
+  // A Space link is reusable by the same address (a leaver may rejoin), so only current membership refuses a re-click.
+  const isSpaceLink = invite.type === InviteType.Space && isLinkOnlyInvite(invite);
+  if (isSpaceLink) {
+    const space = await db.spaces.findLiveById(invite.documentId);
+    if (space && isSpaceMember(user.id, space)) {
+      throw new ConflictError('You are already a member of this space');
+    }
+  }
+
   if (invite.remaining <= 0) {
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
@@ -123,7 +139,7 @@ export const acceptInvite = async (
   // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
   // pending, checking membership first would misreport a re-accept as "not sent to your
   // account" instead of "already accepted".
-  if ((invite.recipients?.accepted || []).some(email => email.toLowerCase() === acceptedEmail)) {
+  if (!isSpaceLink && (invite.recipients?.accepted || []).some(email => email.toLowerCase() === acceptedEmail)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
@@ -271,14 +287,33 @@ export const acceptInvite = async (
     case InviteType.Project:
       await acceptProject(user, inviteWithPermissions, inviter, { db });
       break;
+    case InviteType.Space:
+      outcome = await acceptSpace(
+        user,
+        { spaceId: invite.documentId, isLink: isLinkOnlyInvite(invite), inviterId: invite.inviterId },
+        { db, limits }
+      );
+      break;
     default:
       throw new Error('Invalid invite type');
   }
 
   // Written after the grant so a refused accept (e.g. the inviter lost share) leaves the slot unspent
   // even without the route's transaction.
-  const accepted = await db.invites.acceptRecipient(invite.id, user.email);
+  const accepted = isSpaceLink
+    ? await db.invites.acceptRecipient(invite.id, user.email, { allowRepeat: true })
+    : await db.invites.acceptRecipient(invite.id, user.email);
   if (!accepted) throw new UnprocessableEntityError('Invite has no remaining users');
+
+  // After the last write of the join, so an accept refused above announces nothing.
+  if (invite.type === InviteType.Organization && outcome === 'accepted') {
+    await notifyOrgEvent({
+      type: 'member_joined',
+      organizationId: invite.documentId,
+      userId: user.id,
+      ...(isLinkOnlyInvite(invite) ? {} : invite.inviterId ? { actorUserId: invite.inviterId } : {}),
+    });
+  }
 
   return { invite: accepted, outcome };
 };
@@ -296,7 +331,7 @@ const isMemberOf = (organization: IOrganizationDocument, userId: string) =>
 const acceptOrganization = async (
   user: IUserDocument,
   params: AcceptOrganizationParameters,
-  { db }: AcceptInviteAdapters
+  { db }: Pick<AcceptInviteAdapters, 'db'>
 ): Promise<AcceptInviteOutcome> => {
   const { organizationId, permissions, isLink } = params;
   const organization = await db.organization.findById(organizationId);
@@ -359,6 +394,7 @@ const acceptOrganization = async (
       }
       return 'already-member';
     }
+    await notifyOrgEvent({ type: 'seat_limit', organizationId, seats: current.seats });
     throw new ForbiddenError('Organization is full');
   }
 
@@ -390,11 +426,69 @@ const acceptOrganization = async (
   return 'accepted';
 };
 
+interface AcceptSpaceParameters {
+  spaceId: string;
+  isLink: boolean;
+  inviterId?: string;
+}
+
+const acceptSpace = async (
+  user: IUserDocument,
+  { spaceId, isLink, inviterId }: AcceptSpaceParameters,
+  { db, limits }: AcceptInviteAdapters
+): Promise<AcceptInviteOutcome> => {
+  if (!limits.spacesEnabled) throw new ForbiddenError('Feature not available');
+  const space = await db.spaces.findLiveById(spaceId);
+  if (!space) throw new NotFoundError('Space not found');
+
+  // A named invite to an existing member is still consumed by the caller's acceptRecipient; only a link join reports the 409.
+  if (isSpaceMember(user.id, space)) {
+    if (isLink) throw new ConflictError('You are already a member of this space');
+    return 'already-member';
+  }
+
+  if (isLink) {
+    if (space.removedUserIds.includes(user.id)) throw new ForbiddenError('You cannot join this space');
+  }
+  // Named or link, the invite is only as good as its inviter's current standing.
+  const minter = inviterId ? await db.users.findById(inviterId) : null;
+  if (!minter || !isSpaceManager(minter.id, space)) {
+    throw new ForbiddenError('The inviter can no longer grant access to this space');
+  }
+
+  const added = await db.spaces.addMember(
+    spaceId,
+    { userId: user.id, role: 'member', joinedVia: isLink ? 'link' : 'invite', joinedAt: new Date() },
+    { cap: limits.spaceMaxMembers, clearRemoved: !isLink }
+  );
+  if (!added) {
+    const current = await db.spaces.findLiveById(spaceId);
+    if (!current) throw new NotFoundError('Space not found');
+    if (isSpaceMember(user.id, current)) {
+      if (isLink) throw new ConflictError('You are already a member of this space');
+      return 'already-member';
+    }
+    throw new ForbiddenError('This space is full');
+  }
+
+  // A named invite addressed to someone who joined by link is spent by the join; leaving it pending
+  // would let a later removal be undone by accepting it. Inside the caller's transaction.
+  const ownEmail = (user.email ?? '').trim().toLowerCase();
+  if (isLink && ownEmail) {
+    const invites = await db.invites.findAllByDocumentId(spaceId);
+    for (const invite of invites) {
+      const pending = (invite.recipients?.pending ?? []).some(address => address.trim().toLowerCase() === ownEmail);
+      if (pending && !invite.revokedAt) await db.invites.cancelPendingRecipient(invite.id, ownEmail);
+    }
+  }
+  return 'accepted';
+};
+
 const acceptProject = async (
   user: IUserDocument,
   invite: IInvite & { permissions: Permission[] },
   inviter: Inviter,
-  adapters: AcceptInviteAdapters
+  adapters: Pick<AcceptInviteAdapters, 'db'>
 ) => {
   const projectId = invite.documentId;
   const { db } = adapters;
@@ -404,6 +498,10 @@ const acceptProject = async (
   if (!project) {
     throw new NotFoundError('Project not found');
   }
+
+  // An invite minted before the inviter was recorded has nobody to cap its grants against, so it is
+  // refused with the expired-invite message the client already explains, and has to be re-sent.
+  if (!invite.inviterId) throw new UnprocessableEntityError('Invite has expired');
 
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
   await assertContentInvitePolicy(project, [user], db.organization);
@@ -416,9 +514,21 @@ const acceptProject = async (
   ]);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
-  const grant = { add: [{ userId: user.id, permissions, projectId }] };
-  for (const file of files) await db.fabFiles.shareable.updateUserShares(file.id, grant);
-  for (const session of sessions) await db.sessions.shareable.updateUserShares(session.id, grant);
+  // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
+  const grantOn = (item: IShareableDocument & { userId: string }) => {
+    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+    return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
+  };
+
+  for (const file of files) {
+    const grant = grantOn(file);
+    if (grant) await db.fabFiles.shareable.updateUserShares(file.id, grant);
+  }
+  for (const session of sessions) {
+    const grant = grantOn(session);
+    if (grant) await db.sessions.shareable.updateUserShares(session.id, grant);
+  }
 };
 
 /**

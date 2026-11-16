@@ -1,8 +1,7 @@
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { issueStateNonce, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { createInstallProvider, getInstallUrlOptionsForWorkspace } from '@bike4mind/slack';
 
@@ -11,13 +10,12 @@ import { createInstallProvider, getInstallUrlOptionsForWorkspace } from '@bike4m
  *
  * Generates the Slack OAuth URL with CSRF protection (state parameter).
  * Uses @slack/oauth for secure state generation.
- * Admin only. The state is bound to the initiating browser via a nonce cookie.
+ * Needs settings:manage. The state is bound to the initiating browser via a nonce cookie.
  *
  * GET /api/slack/oauth/authorize?workspaceId=<workspace_id>
  * Returns: { authUrl: string }
  */
-const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  ensureAdmin(req.user.isAdmin);
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'settings:manage' } }).get(async (req, res) => {
   const { workspaceId } = req.query;
 
   if (!workspaceId || typeof workspaceId !== 'string') {

@@ -2,11 +2,12 @@
  * Real-Mongo coverage for org-domain auto-join and suggest-join: the seat guard and the users[]/userDetails[] writes
  * live in Mongo update pipelines, so a mock cannot show them. Integration lane only.
  */
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Organization, OrgDomainClaim, PartnerSignupRule, User } from '@bike4mind/database';
+import { setOrgEventObserver, type OrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 import {
   addDomainClaim,
   applyOrgDomainMembership,
@@ -17,6 +18,11 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;
+const observeOrgEvent = vi.fn<(event: OrgEvent) => Promise<void> | void>();
+beforeEach(() => {
+  observeOrgEvent.mockReset();
+  setOrgEventObserver(observeOrgEvent);
+});
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
@@ -28,6 +34,7 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 afterEach(async () => {
+  setOrgEventObserver(null);
   await Promise.all([
     Organization.deleteMany({}, { hardDelete: true }),
     User.deleteMany({}, { hardDelete: true }),
@@ -82,6 +89,11 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
     const outcome = await applyOrgDomainMembership(user.id, 'dee@EXAMPLE.com');
 
     expect(outcome).toEqual({ joined: true, organizationId: org.id });
+    expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'member_joined',
+      organizationId: org.id,
+      userId: user.id,
+    });
     const after = await reload(org.id);
     expect(after.users).toEqual([expect.objectContaining({ userId: user.id, permissions: ['read'] })]);
     expect(after.userDetails?.map(d => d.id)).toEqual([user.id]);
@@ -99,6 +111,11 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
 
     expect(second).toEqual({ joined: false, reason: 'already-member' });
     expect((await reload(org.id)).users).toHaveLength(1);
+    expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'member_joined',
+      organizationId: org.id,
+      userId: user.id,
+    });
   });
 
   it('completes a half-finished join on retry: sets the org pointer and seeds userDetails', async () => {
@@ -109,6 +126,7 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
       reason: 'already-member',
     });
     await expectRepaired(org.id, user.id);
+    expect(observeOrgEvent).not.toHaveBeenCalled();
   });
 
   it('never adds a users[] row for the owner', async () => {
@@ -131,6 +149,11 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
     const outcome = await applyOrgDomainMembership(user.id, 'dee@example.com');
 
     expect(outcome).toMatchObject({ joined: false, reason: 'at-capacity', organizationId: org.id, seats: 1 });
+    expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'seat_limit',
+      organizationId: org.id,
+      seats: 1,
+    });
     const after = await reload(org.id);
     expect(after.users).toEqual([]);
     expect(after.seats).toBe(1);
@@ -152,6 +175,7 @@ describe('applyOrgDomainMembership (real Mongo)', () => {
     const user = await makeUser(email, verified);
 
     expect(await applyOrgDomainMembership(user.id, email)).toEqual({ joined: false, reason });
+    expect(observeOrgEvent).not.toHaveBeenCalled();
     expect((await reload(org.id)).users).toEqual([]);
   });
 });
@@ -175,6 +199,11 @@ describe('suggest-join for an existing user (real Mongo)', () => {
     expect((await joinOrgViaDomain(user.id, org.id)).joined).toBe(false);
     expect((await reload(org.id)).users).toHaveLength(1);
     expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
+    expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'member_joined',
+      organizationId: org.id,
+      userId: user.id,
+    });
   });
 
   it('completes a half-finished join when the user asks to join again', async () => {
@@ -182,6 +211,7 @@ describe('suggest-join for an existing user (real Mongo)', () => {
 
     expect((await joinOrgViaDomain(user.id, org.id)).joined).toBe(false);
     await expectRepaired(org.id, user.id);
+    expect(observeOrgEvent).not.toHaveBeenCalled();
   });
 
   it('never adds a users[] row for the owner', async () => {
@@ -215,6 +245,11 @@ describe('suggest-join for an existing user (real Mongo)', () => {
 
     expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
     await expect(joinOrgViaDomain(user.id, org.id)).rejects.toThrow('Organization is at full capacity');
+    expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'seat_limit',
+      organizationId: org.id,
+      seats: 1,
+    });
     const after = await reload(org.id);
     expect(after.users).toEqual([]);
     expect(after.seats).toBe(1);
@@ -231,6 +266,7 @@ describe('suggest-join for an existing user (real Mongo)', () => {
 
     expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
     await expect(joinOrgViaDomain(user.id, org.id)).rejects.toThrow(/Verify your email|does not grant/);
+    expect(observeOrgEvent).not.toHaveBeenCalled();
     expect((await reload(org.id)).users).toEqual([]);
   });
 });
@@ -289,4 +325,42 @@ it('rejects a duplicate pending domain stored under a legacy organization alias'
     statusCode: 409,
   });
   expect(await OrgDomainClaim.countDocuments({ domain: 'legacy.example' })).toBe(1);
+});
+
+// The observer sees the completed membership and cannot fail a successful join.
+it.each(['auto-join', 'suggest'] as const)('keeps a %s join successful when its alert fails', async policy => {
+  const org = await makeOrg(5);
+  await makeClaim(org.id, { policy });
+  const user = await makeUser('observer@example.com');
+  const membershipAtNotification: Array<{ memberIds: string[]; detailIds: string[]; organizationId: string }> = [];
+  observeOrgEvent.mockImplementation(async () => {
+    const organization = await reload(org.id);
+    const savedUser = await User.findById(user.id).lean();
+    membershipAtNotification.push({
+      memberIds: organization.users.map(member => member.userId),
+      detailIds: (organization.userDetails ?? []).map(detail => detail.id),
+      organizationId: String(savedUser?.organizationId),
+    });
+    throw new Error('alert transport unavailable');
+  });
+
+  const result =
+    policy === 'auto-join'
+      ? await applyOrgDomainMembership(user.id, user.email!)
+      : await joinOrgViaDomain(user.id, org.id);
+
+  expect(result.joined).toBe(true);
+  expect(observeOrgEvent).toHaveBeenCalledExactlyOnceWith({
+    type: 'member_joined',
+    organizationId: org.id,
+    userId: user.id,
+  });
+  expect(membershipAtNotification).toEqual([
+    {
+      memberIds: [user.id],
+      detailIds: [user.id],
+      organizationId: org.id,
+    },
+  ]);
+  await expectRepaired(org.id, user.id);
 });

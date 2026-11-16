@@ -19,6 +19,7 @@ import {
   lakeConfigChangeEventRepository,
   organizationRepository,
   groupRepository,
+  userApiKeyRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -50,6 +51,7 @@ const adapters = {
     organizations: organizationRepository,
     groups: groupRepository,
     users: userRepository,
+    userApiKeys: userApiKeyRepository,
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
     lakeConfigChangeEvents: lakeConfigChangeEventRepository,

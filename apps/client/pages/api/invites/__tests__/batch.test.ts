@@ -39,6 +39,8 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
   sendInviteNotificationEmails: mocks.sendInviteNotificationEmails,
 }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   cacheRepository: {
     tryAddWithinLimitFixedWindow: mocks.tryAddWithinLimitFixedWindow,
     decrementCounter: mocks.decrementCounter,

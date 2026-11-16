@@ -56,6 +56,7 @@ describe('every EventBridge subscription dead-letters its failures', () => {
         'session-summarize',
         'session-tag',
         'slack-completion-start',
+        'slack-quick-ask',
         'spider-start',
         'stripe-customer-subscription-updated',
         'stripe-invoice-payment-succeeded',

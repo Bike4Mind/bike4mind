@@ -69,6 +69,7 @@ function makePayload(overrides: Record<string, unknown> = {}) {
       state: 'changes_requested',
       body: 'Please fix the null check',
       user: { login: 'reviewer-user' },
+      author_association: 'MEMBER',
     },
     pull_request: {
       number: 42,
@@ -255,12 +256,60 @@ describe('dispatchReviewToSreRevision', () => {
           state: 'changes_requested',
           body: 'Fix the edge case',
           user: { login: 'reviewer' },
+          author_association: 'MEMBER',
         },
       })
     );
 
     expect(mockUpdateStatus).toHaveBeenCalledWith('track-1', 'revision_requested', {
       reviewerFeedback: 'Fix the edge case',
+    });
+  });
+
+  describe('reviewer trust gate', () => {
+    function makeReviewPayload(authorAssociation: string | undefined) {
+      const review: Record<string, unknown> = {
+        state: 'changes_requested',
+        body: 'Please fix the null check',
+        user: { login: 'reviewer-user' },
+      };
+      if (authorAssociation !== undefined) review.author_association = authorAssociation;
+      return makePayload({ review });
+    }
+
+    it.each([['NONE'], ['CONTRIBUTOR'], ['FIRST_TIME_CONTRIBUTOR'], ['FIRST_TIMER'], ['MANNEQUIN'], [''], ['member']])(
+      'denies a review with author_association %j before any side effect',
+      async association => {
+        const result = await dispatchReviewToSreRevision(makeReviewPayload(association));
+
+        expect(result).toEqual({ dispatched: false, reason: 'untrusted-reviewer' });
+        expect(mockIncrementCounterConditional).not.toHaveBeenCalled();
+        expect(mockGetSettingsValue).not.toHaveBeenCalled();
+        expect(mockClaimRevision).not.toHaveBeenCalled();
+        expect(mockSendToQueue).not.toHaveBeenCalled();
+      }
+    );
+
+    it('denies a review with no author_association field', async () => {
+      const result = await dispatchReviewToSreRevision(makeReviewPayload(undefined));
+
+      expect(result).toEqual({ dispatched: false, reason: 'untrusted-reviewer' });
+      expect(mockIncrementCounterConditional).not.toHaveBeenCalled();
+      expect(mockClaimRevision).not.toHaveBeenCalled();
+      expect(mockSendToQueue).not.toHaveBeenCalled();
+    });
+
+    it.each([['OWNER'], ['MEMBER'], ['COLLABORATOR']])('dispatches a review from %s', async association => {
+      const tracking = makeTrackingDoc();
+      mockFindByPrNumber.mockResolvedValue(tracking);
+      mockClaimRevision.mockResolvedValue({ ...tracking, revisionCount: 1 });
+
+      const result = await dispatchReviewToSreRevision(makeReviewPayload(association));
+
+      expect(result.dispatched).toBe(true);
+      expect(mockIncrementCounterConditional).toHaveBeenCalledTimes(1);
+      expect(mockClaimRevision).toHaveBeenCalledWith('track-1', 'owner/repo', 2);
+      expect(mockSendToQueue).toHaveBeenCalledTimes(1);
     });
   });
 });

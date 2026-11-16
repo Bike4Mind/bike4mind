@@ -148,3 +148,22 @@ describe('upgradeLegacyResearchLevers auto-admit defaults', () => {
     });
   });
 });
+
+describe('upgradeLegacyResearchLevers - feed source', () => {
+  it('reads an absent source as search and an absent feedUrl as null', () => {
+    const upgraded = upgradeLegacyResearchLevers(base);
+    expect(upgraded.source).toBe('search');
+    expect(upgraded.feedUrl).toBeNull();
+  });
+
+  it('keeps a feed source and its url', () => {
+    const upgraded = upgradeLegacyResearchLevers({ ...base, source: 'feed', feedUrl: 'https://example.com/f.xml' });
+    expect(upgraded.source).toBe('feed');
+    expect(upgraded.feedUrl).toBe('https://example.com/f.xml');
+  });
+
+  it('reads an unknown source as search', () => {
+    const upgraded = upgradeLegacyResearchLevers({ ...base, source: 'rss' as never });
+    expect(upgraded.source).toBe('search');
+  });
+});

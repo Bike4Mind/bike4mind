@@ -10,7 +10,8 @@ struct SessionDetailView: View {
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
-      agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
+      agentRuns: services.agentRuns, pendingActions: services.pendingActions,
+      firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
   }
 }
 
@@ -27,14 +28,14 @@ private struct ChatScreen: View {
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
-    agentRuns: any AgentRunStarting, firstTurn: QuestTurn?
+    agentRuns: any AgentRunStarting, pendingActions: any PendingActionAPI, firstTurn: QuestTurn?
   ) {
     self.session = session
     _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
-        agentRuns: agentRuns, firstTurn: firstTurn))
+        agentRuns: agentRuns, pendingActions: pendingActions, firstTurn: firstTurn))
   }
 
   var body: some View {
@@ -45,6 +46,7 @@ private struct ChatScreen: View {
       .safeAreaInset(edge: .bottom) { composer }
       .inAppSafari(url: $linkedPage)
       .environment(\.openWebPage, { linkedPage = $0 })
+      .environment(\.approvalActions, approvalActions)
       .sheet(isPresented: $isRecordingVoice) {
         VoiceRecorderPanel(
           onTranscript: { text in
@@ -68,6 +70,15 @@ private struct ChatScreen: View {
       .sensoryFeedback(trigger: model.hapticTrigger) { _, trigger in
         trigger.map(Self.feedback(for:))
       }
+  }
+
+  private var approvalActions: ApprovalActions? {
+    guard model.canAnswerApprovals else { return nil }
+    return ApprovalActions(
+      state: { [model] action, questID in model.approvalState(for: action, questID: questID) },
+      respond: { [model] action, questID, decision in
+        Task { await model.respond(to: action, questID: questID, decision: decision) }
+      })
   }
 
   /// Live turns that reached a terminal state; each one spent credits, so the Credits widget re-reads the balance.

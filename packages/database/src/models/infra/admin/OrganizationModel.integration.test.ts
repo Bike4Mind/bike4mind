@@ -295,3 +295,18 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
     expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
   });
 });
+
+describe('OrganizationModel - touchIfLive', () => {
+  it('stamps a live org and refuses a soft-deleted or missing one', async () => {
+    const org = await Organization.create({ name: 'Live', userId: 'owner', personal: false });
+    const before = (await Organization.findById(org.id).lean())!.updatedAt as Date;
+
+    expect(await organizationRepository.touchIfLive(org.id)).toBe(true);
+    const after = (await Organization.findById(org.id).lean())!.updatedAt as Date;
+    expect(after.getTime()).toBeGreaterThanOrEqual(before.getTime());
+
+    await organizationRepository.delete(org.id);
+    expect(await organizationRepository.touchIfLive(org.id)).toBe(false);
+    expect(await organizationRepository.touchIfLive(new mongoose.Types.ObjectId().toString())).toBe(false);
+  });
+});

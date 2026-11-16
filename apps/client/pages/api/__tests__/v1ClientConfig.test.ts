@@ -47,6 +47,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
+vi.mock('sst', () => ({ Resource: { websocket: { url: 'wss://example.com/ws' } } }));
+vi.mock('@server/utils/publicClientConfig', () => ({
+  resolvePublicClientConfig: vi.fn(async () => ({
+    api_url: 'https://example.com',
+    default_theme: 'bike4mind',
+    allow_open_registration: false,
+    pyodide_base_url: '',
+    allow_trusted_devices: true,
+    turnstile_site_key: '',
+    apple_sign_in_enabled: false,
+    support_email: '',
+  })),
+}));
 vi.mock('@server/auth/blockedSignIn', () => ({ configuredSupportEmail }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -54,7 +67,8 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap,
 }));
 
-const { default: handler } = await import('@pages/api/v1/client-config');
+const { default: handler, config: routeConfig } = await import('@pages/api/v1/client-config');
+const { default: publicHandler } = await import('@pages/api/v1/client-config/public');
 const { CLIENT_CONFIG_FEATURE_SETTINGS } = await import('@server/utils/clientConfigFeatures');
 
 const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -118,11 +132,36 @@ beforeEach(() => {
       textModel('transcribe', { type: 'speech-to-text', backend: ModelBackend.AWS }),
     ],
     supersededModels: [],
+    lockedModels: [textModel('paid', { access: { locked: true, reason: 'requires_paid_plan' } })],
+    modelListRevision: 'revision-1',
+    catalogUnavailable: false,
   });
 });
 
 describe('GET /api/v1/client-config', () => {
+  it('serves only the separate public projection before login', async () => {
+    expect(baseApiOptions[1]).toMatchObject({ auth: false });
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, { logger });
+    await (publicHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(Object.keys(res._getJSONData()).sort()).toEqual([
+      'allow_open_registration',
+      'allow_trusted_devices',
+      'api_url',
+      'apple_sign_in_enabled',
+      'default_theme',
+      'pyodide_base_url',
+      'support_email',
+      'turnstile_site_key',
+    ]);
+    expect(getCallerModelList).not.toHaveBeenCalled();
+    expect(getSettingsMap).not.toHaveBeenCalled();
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
   it('requires authentication and admits me:read, ai:chat or ai:generate keys', () => {
+    expect(routeConfig.bind).toContain('websocketApi');
     expect(baseApiOptions[0]).toMatchObject({
       auth: true,
       requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -210,7 +249,15 @@ describe('GET /api/v1/client-config', () => {
     const body = res._getJSONData();
 
     // Exact key sets: a new field is a deliberate schema change, never a pass-through.
-    expect(Object.keys(body).sort()).toEqual(['features', 'limits', 'models', 'server']);
+    expect(Object.keys(body).sort()).toEqual([
+      'catalog',
+      'features',
+      'limits',
+      'models',
+      'public_config',
+      'server',
+      'transport',
+    ]);
     expect(Object.keys(body.limits).sort()).toEqual([
       'credits_enforced',
       'low_credits_threshold',
@@ -236,5 +283,44 @@ describe('GET /api/v1/client-config', () => {
     const { req, res } = get();
     await run(req, res);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('preserves picker availability, locks and revision without internal fields', async () => {
+    const { req, res } = get();
+    await run(req, res);
+    const body = res._getJSONData();
+    expect(body.catalog.models.map((model: { id: string }) => model.id)).toEqual([
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'retired',
+      'transcribe',
+    ]);
+    expect(body.catalog.models[2]).toMatchObject({ disabled: true });
+    expect(body.catalog.locked_models[0].access).toEqual({ locked: true, reason: 'requires_paid_plan' });
+    expect(body.catalog.model_list_revision).toBe('revision-1');
+    expect(body.catalog.catalog_unavailable).toBe(false);
+    expect(body.transport).toEqual({ websocket_url: 'wss://example.com/ws', sse_completions_url: '' });
+    for (const model of [...body.catalog.models, ...body.catalog.locked_models]) {
+      expect(model).not.toHaveProperty('pricing');
+      expect(model).not.toHaveProperty('adapterFamily');
+      expect(model).not.toHaveProperty('rank');
+    }
+  });
+
+  it('preserves catalog fallback and superseded pins', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [],
+      lockedModels: [],
+      modelListRevision: null,
+      catalogUnavailable: true,
+      supersededModels: [{ id: 'old', name: 'Old', replacementId: 'new', replacementName: 'New' }],
+    });
+    const { req, res } = get();
+    await run(req, res);
+    expect(res._getJSONData().catalog).toMatchObject({
+      model_list_revision: null,
+      catalog_unavailable: true,
+      superseded_models: [{ id: 'old', name: 'Old', replacement_id: 'new', replacement_name: 'New' }],
+    });
   });
 });

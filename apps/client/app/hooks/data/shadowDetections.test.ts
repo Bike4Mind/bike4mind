@@ -56,6 +56,16 @@ const submit = async () => {
 };
 
 describe('useShadowDetectionVerdict', () => {
+  it('posts the aiDecision beside the verdict', async () => {
+    post.mockResolvedValue({ data: row() });
+    const { result } = renderHook(() => useShadowDetectionVerdict(), { wrapper: createWrapper() });
+    const aiDecision = { assessmentId: 'b'.repeat(24), overrideReason: 'Missing context' };
+    await act(async () => {
+      await result.current.mutateAsync({ ...REQUEST, aiDecision });
+    });
+    expect(post).toHaveBeenCalledWith('/api/admin/shadow-detections/verdict', { ...REQUEST, aiDecision });
+  });
+
   it('recovers a stale synchronized observation including serialized scan timestamps', async () => {
     const current = row({
       detector: 'completionSynchrony',

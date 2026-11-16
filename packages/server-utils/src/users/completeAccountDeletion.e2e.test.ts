@@ -10,12 +10,14 @@ import {
   orgDomainClaimRepository,
   PartnerSignupRule,
   User,
+  userRepository,
+  userApiKeyRepository,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '../lib/subscriptions/types';
 import { Subscription } from '../models/Subscription';
-import { organizationService } from '@bike4mind/services';
+import { organizationService, userApiKeyService, authSessionService } from '@bike4mind/services';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -28,9 +30,9 @@ vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.s
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
-    adminAuditService: actual.adminAuditService,
+    ...actual,
     organizationService: { ...actual.organizationService },
-    authSessionService: { endRealtimeConnections: vi.fn() },
+    authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() },
   };
 });
 vi.mock('../services/hardDeleteUser', async () => {
@@ -367,4 +369,65 @@ describe('domain claims share organization deletion transactions', () => {
       })
     ).resolves.toBeTruthy();
   });
+});
+
+it('rolls sole-owner org key retirement back with failed domain cleanup, then tears down only after commit', async () => {
+  const userId = await seedUser();
+  const org = await Organization.create({ name: 'Solo key rollback', userId, personal: false });
+  const organizationId = String(org.id);
+  const serviceAccount = await userApiKeyService.getOrCreateOrgServiceAccount(
+    { id: organizationId, name: org.name },
+    { db: { users: userRepository, organizations: organizationRepository } }
+  );
+  const created = await userApiKeyService.createUserApiKey(
+    serviceAccount.id,
+    {
+      name: 'Solo service',
+      scopes: [ApiKeyScope.AI_CHAT],
+      metadata: { createdFrom: 'dashboard' },
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId,
+      orgOwned: { createdByUserId: userId },
+    },
+    { db: { userApiKeys: userApiKeyRepository, agents: { findById: async () => null } }, trust: { status: 'trusted' } }
+  );
+  await OrgDomainClaim.create({
+    organizationId,
+    domain: 'solo-key-rollback.example.test',
+    status: 'pending',
+    verificationToken: 'local-test',
+    policy: 'off',
+    createdBy: userId,
+  });
+  const { deleteSoleOwnedOrganizations } = await import('./ownedOrganizations');
+  const deleteClaims = orgDomainClaimRepository.deleteByOrganization.bind(orgDomainClaimRepository);
+  const failure = vi.spyOn(orgDomainClaimRepository, 'deleteByOrganization').mockImplementationOnce(async id => {
+    await deleteClaims(id);
+    throw new Error('key claim cleanup interrupted');
+  });
+  const deletionLogger = new Logger({ metadata: { service: 'solo-key-deletion-test' } });
+  try {
+    await expect(deleteSoleOwnedOrganizations(userId, { logger: deletionLogger })).rejects.toThrow(
+      'key claim cleanup interrupted'
+    );
+    expect(await Organization.exists({ _id: org.id })).not.toBeNull();
+    expect(
+      (await userApiKeyService.validateUserApiKey(created.key, { db: { userApiKeys: userApiKeyRepository } })).isValid
+    ).toBe(true);
+    expect((await userRepository.findById(serviceAccount.id))?.serviceAccountRetiredAt).toBeUndefined();
+    expect(await OrgDomainClaim.countDocuments({ organizationId })).toBe(1);
+    expect(authSessionService.endRealtimeConnections).not.toHaveBeenCalled();
+  } finally {
+    failure.mockRestore();
+  }
+  await deleteSoleOwnedOrganizations(userId, { logger: deletionLogger });
+  expect(
+    (await userApiKeyService.validateUserApiKey(created.key, { db: { userApiKeys: userApiKeyRepository } })).isValid
+  ).toBe(false);
+  expect((await userRepository.findById(serviceAccount.id))?.serviceAccountRetiredAt).toBeInstanceOf(Date);
+  expect(await OrgDomainClaim.countDocuments({ organizationId })).toBe(0);
+  expect(authSessionService.endRealtimeConnections).toHaveBeenCalledWith(
+    { apiKeyId: created.id },
+    expect.objectContaining({ db: expect.anything() })
+  );
 });

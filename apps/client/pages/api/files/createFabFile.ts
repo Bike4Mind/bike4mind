@@ -217,6 +217,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
               getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
                 ContentLength: options?.ContentLength,
+                // Create-only for the SPA, whose uploader (uploadFileToUrl) sends `If-None-Match: *`.
+                // API-key callers are not yet required to send it, so their PUT stays unconditional.
+                ...(mode === 'put' && !req.apiKeyInfo && { IfNoneMatch: '*' as const }),
               }),
           },
           // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the

@@ -1,58 +1,16 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ApiKeyScope, UrlBlockedError } from '@bike4mind/common';
+import { ApiKeyScope, WebFetchToolRequestSchema } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
-import { runAuditedTool } from '@server/cli/runAuditedTool';
-import { billedWebFetch } from '@bike4mind/server-utils/billing/billedWebTools';
-import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
-import { RefusedFetchTargetError, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
-import { z } from 'zod';
+import { runWebFetchTool } from '@server/tools/webToolRoutes';
 
-const WebFetchBodySchema = z.object({
-  url: z.url().refine(val => /^https?:\/\//i.test(val), {
-    error: 'URL must use http or https protocol',
-  }),
-  offset: z.coerce.number().int().min(0).optional(),
-});
-
-// One hourly budget shared across the three /api/tools/* routes (see toolRoutesRateLimit). Embed
-// (confined) keys hold neither scope, so they are refused. Each fetch is billed per call
-// (billedWebFetch): a 422 insufficient_credits before the provider is called when the payer is out.
+// The SPA-internal door (voice modal, desktop app). Its public twin is POST /api/v1/tools/web-fetch; both
+// share runWebFetchTool, this scope gate and one hourly budget (see toolRoutesRateLimit). Embed (confined) keys
+// hold neither scope, so they are refused. Each fetch is billed per call.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
   .use(toolRoutesRateLimit())
   .post(outboundActionGate(), async (req, res) =>
-    runAuditedTool('web_fetch', req.user!.id, req.logger, async () => {
-      const { url, offset } = WebFetchBodySchema.parse(req.body);
-
-      // Host only: never the path or query, which can carry secrets.
-      const host = new URL(url).hostname;
-      const logOutcome = (outcome: 'ok' | 'refused' | 'error') =>
-        req.logger.withMetadata({ host, outcome }).info('web-fetch');
-
-      // Frontend Lambda has a 60s timeout. Cap Firecrawl below it AND reserve headroom for the
-      // llms.txt probe (up to LLMS_TXT_PROBE_TIMEOUT_MS, awaited after the scrape on a truncated
-      // first read) plus response serialization, so a slow-but-successful fetch cannot tip over 60s.
-      const result = await billedWebFetch(
-        { caller: req, source: resolveRequestUsageSource(req) },
-        { url, offset, maxTimeoutMs: 52_000 }
-      ).catch((error: unknown) => {
-        // A refused target is the caller's input, not a server fault: 400 (logged at warn).
-        if (error instanceof RefusedFetchTargetError) {
-          logOutcome('refused');
-          throw new UrlBlockedError(error.message);
-        }
-        logOutcome('error');
-        throw error;
-      });
-
-      logOutcome('ok');
-      const body = webFetchBody(result);
-      const formattedResult = result.title ? `# ${result.title}\n\n${body}` : body;
-
-      return res.json({
-        result: formattedResult,
-      });
-    })
+    res.json(await runWebFetchTool(req, WebFetchToolRequestSchema.parse(req.body)))
   );
 
 export default handler;

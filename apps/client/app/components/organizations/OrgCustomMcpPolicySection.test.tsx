@@ -34,6 +34,7 @@ vi.mock('@client/app/hooks/data/useOrgCustomMcpPolicy', () => ({
   useSaveOrgCustomMcpPolicy: () => ({ mutate: state.save, isPending: false }),
   useResetOrgCustomMcpPolicy: () => ({ mutate: state.reset, isPending: false }),
 }));
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: [{ id: 'u1', name: 'Ada' }] }),
 }));
@@ -57,7 +58,7 @@ const viewOf = (overrides: Partial<OrgCustomMcpPolicyView> = {}, policy = {}): O
 });
 
 const toggle = (testId: string) => fireEvent.click(within(screen.getByTestId(testId)).getByRole('switch'));
-const saveButton = () => screen.getByTestId('org-custom-mcp-save-btn') as HTMLButtonElement;
+const saveButton = () => screen.getByTestId('admin-save-confirm-btn') as HTMLButtonElement;
 
 describe('OrgCustomMcpPolicySection', () => {
   beforeEach(() => {
@@ -74,7 +75,7 @@ describe('OrgCustomMcpPolicySection', () => {
 
   it('saves mode off when the kill switch is turned off, keeping the rest of the policy', () => {
     renderSection();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
 
     toggle('org-custom-mcp-enabled-switch');
     fireEvent.click(saveButton());
@@ -132,7 +133,7 @@ describe('OrgCustomMcpPolicySection', () => {
     rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
 
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
     expect(
       (within(screen.getByTestId('org-custom-mcp-require-approval-switch')).getByRole('switch') as HTMLInputElement)
         .checked
@@ -190,7 +191,7 @@ describe('OrgCustomMcpPolicySection', () => {
 
     fireEvent.click(screen.getByText('Load latest'));
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
   it('takes a newer policy as is when there are no unsaved edits, and after its own save', () => {
@@ -203,7 +204,7 @@ describe('OrgCustomMcpPolicySection', () => {
     state.view = viewOf({}, { mode: 'any', requireApprovalForAll: true });
     rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
     expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
-    expect(saveButton().disabled).toBe(true);
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
   });
 
   it('lists member connections by member name with their policy status', () => {
@@ -240,5 +241,64 @@ describe('OrgCustomMcpPolicySection', () => {
     expect(within(table).getByText('Connector 1')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('OrgCustomMcpPolicySection save bar', () => {
+  const switchChecked = (testId: string) =>
+    (within(screen.getByTestId(testId)).getByRole('switch') as HTMLInputElement).checked;
+
+  beforeEach(() => {
+    state.view = viewOf();
+    state.connections = [];
+    state.policyError = false;
+    state.save.mockReset();
+  });
+
+  it('counts each edited field and drops back to zero when an edit is undone', () => {
+    renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+
+    toggle('org-custom-mcp-write-tools-switch');
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('2 unsaved changes');
+
+    toggle('org-custom-mcp-write-tools-switch');
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+  });
+
+  it('still counts an invalid draft as unsaved and blocks Save', () => {
+    renderSection();
+    fireEvent.change(within(screen.getByTestId('org-custom-mcp-max-connections')).getByRole('spinbutton'), {
+      target: { value: '500' },
+    });
+
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(saveButton());
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it('Discard restores the stored policy', () => {
+    renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+    expect(switchChecked('org-custom-mcp-require-approval-switch')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(switchChecked('org-custom-mcp-require-approval-switch')).toBe(false);
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it('Save sends the edited policy once', () => {
+    renderSection();
+    toggle('org-custom-mcp-write-tools-switch');
+    fireEvent.click(saveButton());
+    expect(state.save).toHaveBeenCalledTimes(1);
+    expect(state.save).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'allowlist', allowedHostPatterns: ['mcp.example.com'] })
+    );
   });
 });

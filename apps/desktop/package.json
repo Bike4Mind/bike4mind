@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/desktop",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "description": "Bike4Mind Electron desktop client",
   "author": "Bike4Mind",
@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "typecheck:native": "tsgo --noEmit -p tsconfig.node.json && tsgo --noEmit -p tsconfig.web.json",
     "typecheck:fast": "pnpm typecheck:native || pnpm typecheck",
-    "test": "node --test scripts/test_package_local.cjs && vitest run",
+    "test": "node --test scripts/test_package_local.cjs scripts/test_dev_version.cjs && vitest run",
     "test:watch": "vitest",
     "check:curated": "vitest run --config vitest.curated.config.ts",
     "lint": "eslint .",

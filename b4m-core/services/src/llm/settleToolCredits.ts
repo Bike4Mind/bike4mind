@@ -19,9 +19,9 @@ export type SettleableFunctionCall = { name?: string; creditsUsed?: number };
  *
  * Per-call attribution is best-effort: charges are dequeued in reservation (completion)
  * order while functionCalls is in issue order, so under parallel tool execution two
- * same-name calls can swap which per-call creditsUsed they carry. Only the total is read
- * for billing (ChatCompletionProcess sums functionCalls[].creditsUsed), so the swap is
- * cosmetic; removing it entirely would mean keying reservations by the tool-call id,
+ * same-name calls can swap which per-call creditsUsed they carry. Billing sums the
+ * reservation queues (toolCreditsMap) directly, so the swap only affects the per-call
+ * breakdown and is cosmetic; removing it entirely would mean keying reservations by the tool-call id,
  * which is not threaded through the onToolStart/onToolFinish surface today.
  */
 export function settleToolCallCredits<T extends SettleableFunctionCall>(

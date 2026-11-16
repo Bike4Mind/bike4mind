@@ -1,5 +1,5 @@
 import { FC, useMemo, useState } from 'react';
-import { Autocomplete, Box, Button, Card, FormControl, FormHelperText, FormLabel, Stack, Typography } from '@mui/joy';
+import { Autocomplete, Card, FormControl, FormHelperText, FormLabel, Stack, Typography } from '@mui/joy';
 import { IOrganizationDocument, IUserDocument, WithId, orgAclRowConfersMembership } from '@bike4mind/common';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -7,6 +7,7 @@ import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
 import { setOrganizationAdmins } from '@client/app/utils/groupsAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { OrganizationGroupsList } from './OrganizationGroupsList';
+import OrgFormSaveBar from './OrgFormSaveBar';
 
 interface OrganizationGroupsProps {
   organization: WithId<IOrganizationDocument>;
@@ -93,7 +94,9 @@ const OrgAdminsEditor: FC<{
     setSelected(current);
   }
 
-  const isDirty = selected.length !== current.length || selected.some(id => !current.includes(id));
+  // Appointments added plus appointments removed: the number the save bar reports.
+  const changeCount =
+    selected.filter(id => !current.includes(id)).length + current.filter(id => !selected.includes(id)).length;
   // Eligibility narrows the OPTIONS only; the chips resolve against the full roster. Narrowing both
   // would turn a display filter into a write: an admin appointed before the eligibility rule existed
   // stays in `selected` but renders no chip, so the next unrelated edit rebuilds `selected` from the
@@ -106,39 +109,36 @@ const OrgAdminsEditor: FC<{
   ];
 
   return (
-    <Card variant="outlined" sx={{ p: 2 }} data-testid="org-admins-card">
-      <Stack spacing={1.5}>
-        <Typography level="title-md">Team Managers</Typography>
-        <FormControl>
-          <FormLabel>Managers</FormLabel>
-          <Autocomplete
-            multiple
-            options={options}
-            value={selectedMembers}
-            getOptionLabel={member => member.name || member.email || member.id}
-            isOptionEqualToValue={(option, value) => option.id === value.id}
-            onChange={(_event, value) => setSelected(value.map(member => member.id))}
-            placeholder={selectedMembers.length ? '' : 'Add managers'}
-            data-testid="org-admins-input"
-          />
-          <FormHelperText>
-            Managers manage groups and members and connect GitHub and Drive sources to team data lakes. Billing, credit
-            spend reports and integration secrets stay with the billing owner.
-          </FormHelperText>
-        </FormControl>
-        <Box>
-          <Button
-            size="sm"
-            onClick={() => adminsMutation.mutate(selected)}
-            loading={adminsMutation.isPending}
-            disabled={!isDirty}
-            data-testid="org-admins-save-btn"
-          >
-            Save managers
-          </Button>
-        </Box>
-      </Stack>
-    </Card>
+    <>
+      <Card variant="outlined" sx={{ p: 2 }} data-testid="org-admins-card">
+        <Stack spacing={1.5}>
+          <Typography level="title-md">Team Managers</Typography>
+          <FormControl>
+            <FormLabel>Managers</FormLabel>
+            <Autocomplete
+              multiple
+              options={options}
+              value={selectedMembers}
+              getOptionLabel={member => member.name || member.email || member.id}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+              onChange={(_event, value) => setSelected(value.map(member => member.id))}
+              placeholder={selectedMembers.length ? '' : 'Add managers'}
+              data-testid="org-admins-input"
+            />
+            <FormHelperText>
+              Managers manage groups and members and connect GitHub and Drive sources to team data lakes. Billing,
+              credit spend reports and integration secrets stay with the billing owner.
+            </FormHelperText>
+          </FormControl>
+        </Stack>
+      </Card>
+      <OrgFormSaveBar
+        count={changeCount}
+        pending={adminsMutation.isPending}
+        onSave={() => adminsMutation.mutate(selected)}
+        onDiscard={() => setSelected(current)}
+      />
+    </>
   );
 };
 

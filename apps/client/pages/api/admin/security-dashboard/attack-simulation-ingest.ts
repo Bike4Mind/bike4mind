@@ -229,6 +229,13 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   // persisted to MongoDB; a missed SQS publish only loses the GitHub-issue side effect.
   if (persistedFindings.length > 0) {
     try {
+      // Runs after markMissingAsResolved, so what is still active is what Mongo considers unresolved.
+      // Findings of probes that did not run this time are reported so their issues stay open.
+      const reportedFingerprints = new Set(persistedFindings.map(f => f.fingerprint));
+      const unverifiedFindingIds = (await securityFindingRepository.findActiveByStage(stage))
+        .map(f => f.fingerprint)
+        .filter(fingerprint => !reportedFingerprints.has(fingerprint));
+
       await sqsClient.send(
         new SendMessageCommand({
           QueueUrl: getSourceQueueUrl('secopsTriageQueue'),
@@ -237,6 +244,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
             scanSource: 'active-defense' as const,
             snapshotId: runId,
             targetUrl,
+            unverifiedFindingIds,
             findings: persistedFindings.map(f => ({
               id: f.fingerprint,
               title: f.title,

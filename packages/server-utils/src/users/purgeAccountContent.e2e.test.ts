@@ -118,6 +118,9 @@ describe('permanent personal-content purge', () => {
     const notebookId = new mongoose.Types.ObjectId();
     const fileId = new mongoose.Types.ObjectId();
     const storedObjects = new Set(['private-upload', 'private-generated']);
+    await collection('OrgAdminNotificationPref').insertOne({ userId: ownerId, organizationId: 'team', kinds: {} });
+    await collection('OrgAlertNotification').insertOne({ subjectUserId: ownerId, organizationId: 'team' });
+    await collection('Inbox').insertOne({ receiverId: ownerId, organizationAlert: true });
     const completionSnapshots: { remainingRows: number[]; remainingObjects: number }[] = [];
     await collection('User').insertOne({
       _id: new mongoose.Types.ObjectId(ownerId),
@@ -157,6 +160,9 @@ describe('permanent personal-content purge', () => {
           collection('Quest').countDocuments({ sessionId: String(notebookId) }),
           collection('FabFile').countDocuments({ _id: fileId }),
           collection('FabFileChunk').countDocuments({ fabFileId: String(fileId) }),
+          collection('OrgAdminNotificationPref').countDocuments({ userId: ownerId }),
+          collection('OrgAlertNotification').countDocuments({ subjectUserId: ownerId }),
+          collection('Inbox').countDocuments({ receiverId: ownerId, organizationAlert: true }),
         ]),
         remainingObjects: storedObjects.size,
       });
@@ -167,7 +173,7 @@ describe('permanent personal-content purge', () => {
       reason: 'not_found',
     });
     expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('purge@example.test');
-    expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0], remainingObjects: 0 }]);
+    expect(completionSnapshots).toEqual([{ remainingRows: [0, 0, 0, 0, 0, 0, 0, 0], remainingObjects: 0 }]);
   });
   it('hard-deletes notebooks, messages and personal content including tombstones, preserving other owners and org content', async () => {
     const notebookId = new mongoose.Types.ObjectId();

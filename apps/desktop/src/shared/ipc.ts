@@ -584,6 +584,8 @@ export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export interface AppInfo {
   appVersion: string;
+  /** How an unpackaged run's `appVersion` was derived; absent for a packaged build. */
+  versionBasis?: string;
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;

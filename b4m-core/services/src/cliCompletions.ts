@@ -84,6 +84,7 @@ import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
@@ -1025,6 +1026,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
         await recordRefusal('member_cap', capCheckCredits);
+        await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization!.id, userId, refused: true });
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
     }
@@ -1544,6 +1546,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               creditsDelta: actualCredits,
               lastCreditUsedAt: new Date(),
             });
+            await notifyOrgEvent({ type: 'member_cap_check', organizationId: holderId, userId });
           }
 
           Logger.globalInstance.debug('Credit usage:', actualCredits);

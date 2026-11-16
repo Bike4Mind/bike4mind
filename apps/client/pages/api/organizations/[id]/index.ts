@@ -12,11 +12,13 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
 import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
+import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
 import {
   CreditHolderType,
@@ -93,6 +95,20 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
   });
 };
 
+const AUDITED_SETTINGS_FIELDS = [
+  'name',
+  'description',
+  'billingContact',
+  'systemPrompt',
+  'redactPushContent',
+  'maxCreditsPerMember',
+  'storageLimit',
+] as const;
+
+// The system prompt can run to 10,000 characters, so the entry records its length, not its text.
+const settingsAuditValue = (field: (typeof AUDITED_SETTINGS_FIELDS)[number], value: unknown) =>
+  field === 'systemPrompt' ? { characters: typeof value === 'string' ? value.length : 0 } : (value ?? null);
+
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -134,6 +150,9 @@ const handler = baseApi()
           }
         );
 
+      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
+      const before = auditedFields.length > 0 ? await organizationRepository.findById(orgId) : null;
+
       const updatedOrganization =
         profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
@@ -150,6 +169,25 @@ const handler = baseApi()
               return updated;
             })
           : await updateProfile();
+
+      const changes = before
+        ? auditedFields
+            .filter(field => (before[field] ?? null) !== (updatedOrganization[field] ?? null))
+            .map(field => ({
+              field,
+              before: settingsAuditValue(field, before[field]),
+              after: settingsAuditValue(field, updatedOrganization[field]),
+            }))
+        : [];
+      if (changes.length > 0) {
+        await recordAdminActionFromRequest(req, {
+          action: 'org.settings.updated',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: updatedOrganization.id, displayName: updatedOrganization.name },
+          summary: `updated team settings (${changes.map(change => change.field).join(', ')})`,
+          changes,
+        });
+      }
 
       const [safeOrganization] = await attachOrganizationLogos([
         toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),
@@ -171,8 +209,9 @@ const handler = baseApi()
     // must commit together, or a partial failure leaves dangling group or lake access or an org that
     // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(async () => {
-      await organizationService.deleteOrganization(
+    const { revokedApiKeyIds } = await withTransaction(async () => {
+      const organization = await organizationRepository.findById(id);
+      const result = await organizationService.deleteOrganization(
         req.user!,
         { id },
         {
@@ -180,6 +219,7 @@ const handler = baseApi()
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            userApiKeys: userApiKeyRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             ...lakeConfigAuditDb,
@@ -201,9 +241,28 @@ const handler = baseApi()
         }
       );
       await orgDomainClaimRepository.deleteByOrganization(id);
+      await recordAdminActionFromRequest(req, {
+        action: 'org.deleted',
+        actorScope: 'organization',
+        target: { kind: 'organization', id, displayName: organization?.name ?? id },
+        summary: 'deleted the team',
+        details: { revokedApiKeyCount: result.revokedApiKeyIds.length },
+      });
+      return result;
     });
 
     await clearDeletedOrganizationReferences(id, req.logger);
+    // The delete has committed, so a failed teardown is logged rather than turned into an error response.
+    const teardowns = await Promise.allSettled(
+      revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger))
+    );
+    teardowns.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        req.logger.warn(
+          `Failed to end realtime connections for revoked key ${revokedApiKeyIds[i]}: ${String(outcome.reason)}`
+        );
+      }
+    });
 
     return res.json({ id });
   });

@@ -119,6 +119,7 @@ describe('@bike4mind/services barrel closure', () => {
    */
   it.each([
     ['llm/toolFinishObserver.ts', 'apps/client baseApi middleware, via toolGearObserver'],
+    ['organizationService/orgEventObserver.ts', 'apps/client baseApi middleware, via registerOrgAlertObserver'],
     ['llm/questStartBody.ts', 'server-utils utils/eventBus.ts'],
     ['llm/historyBudgetConstants.ts', 'leaf budget constants shared by Process and Features'],
     ['llm/ChatCompletionFeatures.ts', 'apps/client queue handlers and slack; clean only after the cycle fix'],

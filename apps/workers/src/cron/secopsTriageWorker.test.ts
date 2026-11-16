@@ -125,4 +125,36 @@ describe('secopsTriageWorker handler', () => {
       expect.anything()
     );
   });
+
+  describe('auto-close scope fields', () => {
+    beforeEach(() => {
+      mockForSystem.mockResolvedValue({});
+      mockServiceRun.mockResolvedValue({
+        issuesCreated: 0,
+        issuesUpdated: 0,
+        issuesClosed: 0,
+        issuesDeduplicated: 0,
+      });
+    });
+
+    it('defaults findingsComplete to true and unverifiedFindingIds to an empty list', async () => {
+      await handler(makeSqsEvent(validPayload), mockContext, mockLogger);
+
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      const [payload] = mockServiceRun.mock.calls[0];
+      expect(payload).toMatchObject({ findingsComplete: true, unverifiedFindingIds: [] });
+    });
+
+    it('passes explicit findingsComplete and unverifiedFindingIds through to the service', async () => {
+      await handler(
+        makeSqsEvent({ ...validPayload, findingsComplete: false, unverifiedFindingIds: ['probe-a', 'probe-b'] }),
+        mockContext,
+        mockLogger
+      );
+
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      const [payload] = mockServiceRun.mock.calls[0];
+      expect(payload).toMatchObject({ findingsComplete: false, unverifiedFindingIds: ['probe-a', 'probe-b'] });
+    });
+  });
 });

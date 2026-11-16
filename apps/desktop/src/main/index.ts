@@ -7,6 +7,7 @@ import { describeBusy, isBusy, type UpdateBusyReport } from '@shared/update';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
+import { currentVersion, currentVersionBasis } from './appVersion';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
@@ -38,12 +39,14 @@ registerArtifactScheme();
 registerModelScheme();
 
 function buildAppInfo(): AppInfo {
+  const versionBasis = currentVersionBasis();
   return {
-    appVersion: app.getVersion(),
+    appVersion: currentVersion(),
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     chromeVersion: process.versions.chrome,
     homeDirectory: app.getPath('home'),
+    ...(versionBasis ? { versionBasis } : {}),
   };
 }
 

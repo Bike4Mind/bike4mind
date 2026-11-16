@@ -11,6 +11,7 @@ import { KnownBlock, WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
 import { IChatHistoryItemDocument, ISessionDocument, IUserDocument, requireEnv } from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from '../di/registry';
+import { NOTEBOOK_DM_BUDGET_MS, NOTEBOOK_DM_CLIENT_OPTIONS } from './notebookNotification';
 
 /** Payload structure for global shortcut events */
 export interface GlobalShortcutPayload {
@@ -552,6 +553,7 @@ export interface ViewSubmissionPayload {
     name?: string;
   };
   view: {
+    id?: string;
     callback_id: string;
     private_metadata?: string;
     state: {
@@ -574,6 +576,7 @@ export async function handleCreateNotebookSubmission(
   payload: ViewSubmissionPayload,
   botToken?: string
 ): Promise<ViewSubmissionResponse> {
+  const notificationDeadline = Date.now() + NOTEBOOK_DM_BUDGET_MS;
   const { view, user: slackUser } = payload;
 
   // Parse private_metadata to get userId
@@ -651,11 +654,9 @@ export async function handleCreateNotebookSubmission(
       name: finalName,
     });
 
-    // DM the user with the notebook link (async, don't wait)
+    // Awaited: Lambda freezes un-awaited work once the response is sent. Errors are caught inside.
     if (botToken && slackUser?.id) {
-      sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken).catch(error => {
-        logger.error('[Slack Shortcut] Failed to send notebook DM', { error, userId });
-      });
+      await sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken, notificationDeadline);
     }
 
     // Modal closes automatically on success (empty response)
@@ -678,13 +679,25 @@ async function sendNotebookCreatedDM(
   slackUserId: string,
   sessionId: string,
   notebookName: string,
-  botToken: string
+  botToken: string,
+  deadline: number
 ): Promise<void> {
-  const client = new WebClient(botToken);
+  const clientForRemainingBudget = () => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
+    return new WebClient(botToken, {
+      ...NOTEBOOK_DM_CLIENT_OPTIONS,
+      timeout: Math.min(remainingMs, NOTEBOOK_DM_CLIENT_OPTIONS.timeout),
+    });
+  };
 
   try {
-    // Open DM channel
-    const dmResult = await client.conversations.open({
+    const openingClient = clientForRemainingBudget();
+    if (!openingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook DM after its acknowledgement budget elapsed');
+      return;
+    }
+    const dmResult = await openingClient.conversations.open({
       users: slackUserId,
     });
 
@@ -701,8 +714,12 @@ async function sendNotebookCreatedDM(
     const brand = process.env.APP_NAME || '';
     const openLinkLabel = brand ? `Open in ${brand}` : 'Open Notebook';
 
-    // Send the notebook link
-    await client.chat.postMessage({
+    const postingClient = clientForRemainingBudget();
+    if (!postingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook link after its acknowledgement budget elapsed');
+      return;
+    }
+    await postingClient.chat.postMessage({
       channel: dmResult.channel.id,
       text: `✅ Notebook "${escapeSlackMrkdwn(notebookName)}" created!\n\n<${notebookUrl}|${openLinkLabel}>`,
       blocks: [
@@ -748,7 +765,8 @@ async function sendNotebookCreatedDM(
 
 /**
  * Handle Quick Ask modal submission
- * Opens a DM with the user, posts the question, and processes it like a normal DM conversation
+ * Validates and publishes a quick ask request; the DM and completion run in a worker
+ * (see processQuickAskInDM) because background work does not survive the API response.
  */
 export async function handleQuickAskSubmission(
   payload: ViewSubmissionPayload,
@@ -799,11 +817,32 @@ export async function handleQuickAskSubmission(
     };
   }
 
-  // Close the modal immediately and process in the background
-  // We need to respond within 3 seconds, so we kick off async processing
-  processQuickAskInDM(user.id, userId, question, botToken, workspaceId).catch(error => {
-    logger.error('[Slack Shortcut] Background quick ask processing failed', { error, userId });
-  });
+  if (!workspaceId) {
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Unable to identify workspace. Please try again.',
+      },
+    };
+  }
+
+  try {
+    await getSlackDeps().eventBus.SlackEvents.QuickAskRequested.publish({
+      slackUserId: user.id,
+      b4mUserId: userId,
+      question,
+      workspaceId,
+      ...(view.id ? { requestId: view.id, requestedAt: new Date().toISOString() } : {}),
+    });
+  } catch (error) {
+    logger.error('[Slack Shortcut] Failed to publish quick ask request', { error, userId });
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Failed to submit your question. Please try again.',
+      },
+    };
+  }
 
   // Modal closes automatically on success
   return {};
@@ -813,7 +852,7 @@ export async function handleQuickAskSubmission(
  * Process quick ask by opening a DM and sending the question there
  * Uses async notification so Quest Processor can update the message with AI response
  */
-async function processQuickAskInDM(
+export async function processQuickAskInDM(
   slackUserId: string,
   b4mUserId: string,
   question: string,

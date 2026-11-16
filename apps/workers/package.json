@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "private": true,
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
@@ -15,6 +15,7 @@
     "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
+    "@aws-sdk/client-secrets-manager": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
     "@aws-sdk/client-ssm": "^3.1150.0",
     "@aws-sdk/s3-request-presigner": "^3.1150.0",
