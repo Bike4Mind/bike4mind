@@ -48,6 +48,8 @@ async function renderWith(appInfo: AppInfo): Promise<HTMLElement> {
 
 afterEach(() => {
   act(() => root?.unmount());
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(navigator, 'clipboard');
   host?.remove();
   root = undefined;
   host = undefined;
@@ -95,6 +97,5 @@ describe('RuntimeInfo', () => {
 
     expect(value?.dataset.copyState).toBe('failed');
     expect(consoleError).toHaveBeenCalled();
-    consoleError.mockRestore();
   });
 });
