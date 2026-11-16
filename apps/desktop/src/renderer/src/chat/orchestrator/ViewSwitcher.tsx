@@ -19,6 +19,8 @@ interface ViewInfo {
   description: string;
   group: ViewGroup;
   icon: ReactNode;
+  /** Settles into a quiet scene when idle (ambient.ts), so the menu offers "Quiet when idle". */
+  ambient: boolean;
 }
 
 /** Every view's menu entry; typed by id so adding a view to ORCHESTRATOR_VIEWS fails until it has one. */
@@ -28,9 +30,22 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Agents as characters around the inn',
     group: 'scene',
     icon: <TavernIcon />,
+    ambient: true,
   },
-  board: { label: 'Board', description: 'Columns by state, like a kanban', group: 'layout', icon: <BoardIcon /> },
-  table: { label: 'Table', description: 'Every agent in sortable rows', group: 'layout', icon: <TableIcon /> },
+  board: {
+    label: 'Board',
+    description: 'Columns by state, like a kanban',
+    group: 'layout',
+    icon: <BoardIcon />,
+    ambient: false,
+  },
+  table: {
+    label: 'Table',
+    description: 'Every agent in sortable rows',
+    group: 'layout',
+    icon: <TableIcon />,
+    ambient: false,
+  },
 };
 
 const GROUP_LABEL: Record<ViewGroup, string> = { scene: 'Scenes', layout: 'Layouts' };
@@ -51,26 +66,47 @@ export function viewStepFor(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | '
   return null;
 }
 
+/** Mod+Shift+F, matched by `code` like the view step. */
+export function isFocusToggle(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'code'>) {
+  const mod = isMac ? event.metaKey : event.ctrlKey;
+  return mod && event.shiftKey && !event.altKey && event.code === 'KeyF';
+}
+
 const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
+const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
+
+interface Toggle {
+  on: boolean;
+  onToggle(on: boolean): void;
+}
 
 export function ViewSwitcher({
   view,
   onViewChange,
   ambient,
+  focus,
 }: {
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
-  /** The Tavern's quiet-when-idle switch; listed only while the Tavern is the view. */
-  ambient?: { on: boolean; onToggle(on: boolean): void };
+  /** The quiet-when-idle switch; listed only while the view is one that settles. */
+  ambient?: Toggle;
+  /** Focus mode, on top of whichever view is chosen; also toggled with Mod+Shift+F. */
+  focus?: Toggle;
 }) {
   const current = ORCHESTRATOR_VIEW_INFO[view];
 
   // On the window, as the sidebar's own shortcuts are: the user is usually typing in the composer.
-  const latest = useRef({ view, onViewChange });
-  latest.current = { view, onViewChange };
+  const latest = useRef({ view, onViewChange, focus });
+  latest.current = { view, onViewChange, focus };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      const { focus: currentFocus } = latest.current;
+      if (currentFocus && isFocusToggle(event)) {
+        event.preventDefault();
+        currentFocus.onToggle(!currentFocus.on);
+        return;
+      }
       const step = viewStepFor(event);
       if (step === null) return;
       event.preventDefault();
@@ -88,11 +124,12 @@ export function ViewSwitcher({
         color="neutral"
         startDecorator={current.icon}
         endDecorator={<CaretDownIcon />}
-        aria-label={`View: ${current.label}`}
+        aria-label={`View: ${current.label}${focus?.on ? ', focused' : ''}`}
         data-testid="orchestrator-view-menu-btn"
         data-view={view}
+        data-focus={focus?.on ? 'on' : 'off'}
       >
-        {current.label}
+        {focus?.on ? `${current.label} \u00B7 Focus` : current.label}
       </MenuButton>
       <Menu size="sm" placement="bottom-start" sx={{ minWidth: 260 }} data-testid="orchestrator-view-menu">
         {GROUP_ORDER.map((group, groupIndex) => (
@@ -124,7 +161,26 @@ export function ViewSwitcher({
             })}
           </Fragment>
         ))}
-        {ambient && view === 'tavern' && (
+        {focus && (
+          <>
+            <ListDivider />
+            <MenuItem
+              role="menuitemcheckbox"
+              aria-checked={focus.on}
+              onClick={() => focus.onToggle(!focus.on)}
+              data-testid="orchestrator-focus-toggle"
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="body-sm">Focus</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  {`Show only what needs you (${FOCUS_SHORTCUT})`}
+                </Typography>
+              </Box>
+              {focus.on && <CheckIcon />}
+            </MenuItem>
+          </>
+        )}
+        {ambient && current.ambient && (
           <>
             <ListDivider />
             <MenuItem
