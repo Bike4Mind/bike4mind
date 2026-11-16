@@ -127,6 +127,26 @@ describe('approveDataLakeProposal', () => {
     expect(provenance.sourceMetadata.approvedAt).toBeInstanceOf(Date);
   });
 
+  it('leaves the feed url out of the admitted file metadata, since a private feed address can carry a token', async () => {
+    const { deps, admitSource } = adapters({
+      proposal: proposal({
+        provenance: {
+          producer: 'research_run',
+          runId: 'run-7',
+          query: 'quarterly filings',
+          feedUrl: 'https://example.com/feed.xml?token=secret',
+          retrievedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+      }),
+    });
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    const { sourceMetadata } = admitSource.mock.calls[0][1].provenance;
+    expect(sourceMetadata).not.toHaveProperty('feedUrl');
+    expect(JSON.stringify(sourceMetadata)).not.toContain('secret');
+  });
+
   it('never stamps producer-proposed tags onto the file - they are advisory only', async () => {
     const { deps, admitSource } = adapters();
 

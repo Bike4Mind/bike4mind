@@ -48,6 +48,11 @@ to one to three integers; anything else sends neither header.
   the generator. CI regenerates from the snapshot and fails on any diff.
 - **Snapshot.** `client/openapi.json` is a copy of `apps/client/public/openapi.json` with overlay-only enum values
   stripped (`scripts/strip_overlay_literals.py`). Refresh it with `make generate-client SPEC_REF=origin/main`.
+- **Drift signal.** The snapshot is not refreshed by server changes. `native-openapi-drift.yml` compares it (after the
+  overlay-literal stripping above) with `apps/client/public/openapi.json` on every PR that touches the spec or a
+  snapshot, and keeps one PR comment up to date with the per-client difference. It **warns and never blocks**: the
+  check stays green so an API change does not have to regenerate Swift and Kotlin in the same PR. Additive changes
+  still decode; regenerate before shipping a removed, renamed or retyped field.
 - **Open enums.** `scripts/open_enums.py` drops every string `enum` before generation, so a value the server adds later
   decodes as a plain string instead of failing the whole response on every installed build. A test guards it.
 - **Filter.** `client/operations.txt` lists the operations the app uses; `scripts/filter_operations.py` prunes the rest

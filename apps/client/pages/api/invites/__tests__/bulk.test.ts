@@ -30,7 +30,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/services', () => ({
   sharingService: { acceptInvite: mocks.acceptInvite, refuseWholeInvite: mocks.refuseWholeInvite },
 }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => false) }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: () => 1000,
+}));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   inviteRepository: {},
   Organization: {},
   organizationRepository: {},

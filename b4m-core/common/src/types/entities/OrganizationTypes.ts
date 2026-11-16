@@ -5,6 +5,7 @@ import { IModelConfig } from './ModelConfigTypes';
 import type { AssignableOrgRole } from '../../constants/orgRoles';
 import type { OrganizationRetentionPolicy } from './OrganizationRetention';
 import type { OrganizationSharingPolicy } from '../../organizationSharingPolicy';
+import type { IOrgBudgetAlerts } from './OrgAlertTypes';
 
 export interface IUserDetails {
   id: string;
@@ -95,6 +96,9 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
     required: boolean;
     graceEndsAt: Date | null;
   };
+
+  /** Pool budget and balance alerting for the org's owner and opted-in managers (OrgAlertTypes.ts). */
+  budgetAlerts?: IOrgBudgetAlerts | null;
   retentionPolicy?: OrganizationRetentionPolicy;
   retentionVersion?: number;
 }

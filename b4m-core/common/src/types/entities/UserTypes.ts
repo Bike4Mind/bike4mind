@@ -523,6 +523,8 @@ export interface IUser extends ICreditHolder {
    * org's `users[]` roster, so it takes no seat and is not listed as a member.
    */
   serviceAccountOrganizationId?: string;
+  /** Set on a service account when its organization is deleted; getOrCreateOrgServiceAccount refuses a retired account. */
+  serviceAccountRetiredAt?: Date;
   subscribedUntil: string | null;
   photoUrl: string | null;
 
@@ -1066,6 +1068,8 @@ export interface IUserRepository
   removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
   /** Null `organizationId` on EVERY user pointing at the org (used when the org is deleted). */
   clearOrganizationPointer: (organizationId: string) => Promise<void>;
+  /** Stamp `serviceAccountRetiredAt` on the org's service account (used when the org is deleted). */
+  retireOrgServiceAccount: (userId: string, organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */

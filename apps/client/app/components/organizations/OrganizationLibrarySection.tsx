@@ -40,10 +40,6 @@ export default function OrganizationLibrarySection({
   });
   return (
     <Stack spacing={2} data-testid="organization-library-section">
-      <Typography level="title-lg">Library</Typography>
-      <Typography level="body-sm">
-        Published definitions belong to the organization and remain available when their author leaves.
-      </Typography>
       <OrganizationLibraryPicker organizationId={organizationId} />
       {canManage && (
         <Card variant="outlined">

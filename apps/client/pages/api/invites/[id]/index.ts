@@ -8,6 +8,7 @@ import {
   projectRepository,
   organizationRepository,
   Group,
+  spaceRepository,
 } from '@bike4mind/database';
 import {
   canViewInvite,
@@ -86,6 +87,7 @@ const handler = baseApi()
             projects: projectRepository,
             organizations: organizationRepository,
             groups: Group,
+            spaces: spaceRepository,
           },
         }
       );

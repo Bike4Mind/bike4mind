@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { app, ipcMain, shell } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { currentVersion } from '../appVersion';
 import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
 import { appSecretCipher } from '../secrets';
@@ -91,7 +92,7 @@ export function registerAuth(): AuthService {
     logger,
     openExternal: url => shell.openExternal(url),
     devFallback: !app.isPackaged,
-    userAgent: `b4m-desktop/${app.getVersion()}`,
+    userAgent: `b4m-desktop/${currentVersion()}`,
     profilePhotos,
     onStateChanged: state => {
       for (const window of appWindows()) {

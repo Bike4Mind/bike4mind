@@ -2,6 +2,7 @@ import {
   activityRepository,
   fabFileRepository,
   Group,
+  spaceRepository,
   inviteRepository,
   organizationRepository,
   Project,
@@ -180,6 +181,7 @@ export async function createProjectInvite(ctx: Ctx, requestedProjectId: string, 
           projects: projectRepository,
           organizations: organizationRepository,
           groups: Group,
+          spaces: spaceRepository,
         },
       }
     )
