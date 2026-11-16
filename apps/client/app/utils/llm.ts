@@ -424,7 +424,9 @@ export type ModelCatalog = {
 /** `organizationId`: the active account-switcher org, whose model policy the server applies. */
 export const getModelCatalog = async (organizationId?: string | null): Promise<ModelCatalog> => {
   try {
-    const response = await api.get('/api/models', organizationId ? { params: { organizationId } } : undefined);
+    const response = organizationId
+      ? await api.get('/api/models', { params: { organizationId } })
+      : await api.get('/api/models');
     const listed: ModelInfo[] = response.data.models;
     return {
       // Backstop: the server never sends a locked model in `models`.
