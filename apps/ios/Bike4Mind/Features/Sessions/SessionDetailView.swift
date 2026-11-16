@@ -11,16 +11,17 @@ struct SessionDetailView: View {
   var body: some View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
-      agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id))
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Open on another device", systemImage: "arrow.up.forward.app") { showingHandoff = true }
-            .accessibilityIdentifier("session-handoff-open-btn")
-        }
+      agentRuns: services.agentRuns, firstTurn: services.navigator.takeOpeningTurn(forSession: session.id)
+    )
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Open on another device", systemImage: "arrow.up.forward.app") { showingHandoff = true }
+          .accessibilityIdentifier("session-handoff-open-btn")
       }
-      .sheet(isPresented: $showingHandoff) {
-        SessionHandoffPicker(sessionID: session.id, client: services.sessionHandoff)
-      }
+    }
+    .sheet(isPresented: $showingHandoff) {
+      SessionHandoffPicker(sessionID: session.id, client: services.sessionHandoff)
+    }
   }
 }
 

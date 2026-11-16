@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import B4MKit
 
 final class SessionHandoffClientTests: XCTestCase {
@@ -17,7 +18,8 @@ final class SessionHandoffClientTests: XCTestCase {
   }
 
   func testInactiveDestinationSurfaces409() async {
-    let client = SessionHandoffClient(baseURL: base, tokens: FakeTokens(), transport: FakeTransport { _ in (409, Data()) })
+    let client = SessionHandoffClient(
+      baseURL: base, tokens: FakeTokens(), transport: FakeTransport { _ in (409, Data()) })
     do {
       try await client.send(sessionID: "0123456789abcdef01234567", deviceID: "live:one")
       XCTFail("Expected inactive destination")

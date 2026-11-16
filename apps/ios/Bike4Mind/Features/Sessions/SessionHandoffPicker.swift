@@ -13,8 +13,10 @@ struct SessionHandoffPicker: View {
     NavigationStack {
       List {
         Section {
-          Text("Web and desktop server conversations must stay open and signed in. iPhone/iPad notifications must be enabled. Local desktop chats stay on that device.")
-            .font(.footnote)
+          Text(
+            "Web and desktop server conversations must stay open and signed in. iPhone/iPad notifications must be enabled. Local desktop chats stay on that device."
+          )
+          .font(.footnote)
         }
         ForEach(devices) { device in
           Button {
@@ -35,8 +37,7 @@ struct SessionHandoffPicker: View {
       .navigationTitle("Open on another device")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
       .task {
-        do { devices = try await client.devices() }
-        catch { feedback = "Could not load devices. Try again." }
+        do { devices = try await client.devices() } catch { feedback = "Could not load devices. Try again." }
         busy = false
       }
     }
