@@ -1,3 +1,5 @@
+import { TooManyRequestsError } from '@bike4mind/common';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
@@ -126,6 +128,16 @@ describe('reserveInviteSendBudget', () => {
     );
     expect(reserveRecipientSendBudget).toHaveBeenCalledWith(['a@example.com', 'b@example.com']);
     expect(decrementCounter).toHaveBeenCalledTimes(3 + 2);
+  });
+
+  it('keeps the recipient retry delay in the actual HTTP error response', async () => {
+    reserveRecipientSendBudget.mockResolvedValueOnce({ retryAfter: 73 });
+    const error: unknown = await reserveInviteSendBudget('u1', MIXED_RECIPIENTS, { chargeTypedAddresses: true }).catch(
+      error => error
+    );
+    expect(error).toBeInstanceOf(TooManyRequestsError);
+    if (!(error instanceof TooManyRequestsError)) throw new Error('Expected a quota refusal');
+    expect(httpErrorToResponse(error, undefined).headers['Retry-After']).toBe('73');
   });
 
   it('does not apply the per-recipient limit to types that mail no typed address', async () => {

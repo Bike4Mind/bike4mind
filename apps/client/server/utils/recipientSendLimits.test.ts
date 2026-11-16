@@ -4,6 +4,7 @@ const counters = new Map<string, { count: number; expiresAt: Date }>();
 const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryAddWithinLimitFixedWindow },
+  withTransaction: async (work: () => Promise<unknown>) => work(),
   adminSettingsRepository: {},
   userRepository: {},
 }));

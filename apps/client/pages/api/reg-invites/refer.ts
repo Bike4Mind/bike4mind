@@ -109,7 +109,7 @@ const handler = baseApi()
         user.regInvites = [];
       }
 
-      const recipientRefused = await reserveRecipientSendBudget(friendEmail.filter(t => !existingAccountEmails.has(t)));
+      const recipientRefused = await reserveRecipientSendBudget(friendEmail);
       if (recipientRefused) {
         res.setHeader('Retry-After', recipientRefused.retryAfter);
         throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${recipientRefused.retryAfter} seconds.`);

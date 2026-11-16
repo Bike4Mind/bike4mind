@@ -6,6 +6,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
+import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -25,12 +26,13 @@ import {
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
-import type { IUserDocument } from '@bike4mind/common';
+import { readOrgModelPolicy, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
+import { resolveRequestBillingOrgId } from '../billing/resolveRequestBillingOrgId';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
 
 /**
@@ -76,14 +78,18 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
     // time, which is `toolDeps.userId` = ownerUserId below - so resolving as 'system' here would
     // gate on keys the tools never use. Fail-closed: a deep agent runs headless, with nobody to
     // add a missing key mid-wake. Never rejects, so it is safe in this Promise.all.
-    const [models, toolAvailability] = await Promise.all([
+    // Wakes bill the owner's org seat (missionWakeMeter), so that org's tool policy governs the toolbelt.
+    const billingOrgId = resolveRequestBillingOrgId({ user: owner });
+    const [models, toolAvailability, billingOrg] = await Promise.all([
       getAvailableModels(apiKeyTable as ApiKeyTable),
       resolveToolAvailability(
         ownerUserId,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
         { onLookupError: 'unavailable', logger: config.logger }
       ),
+      billingOrgId ? organizationRepository.findById(billingOrgId) : null,
     ]);
+    const orgToolPolicy = readOrgModelPolicy(billingOrg?.modelPolicy);
 
     // No organizationId: a charter carries only its owner, so lake tools here stay personal. Inferring an
     // org from a linked agent would let a background mission write into an org the owner never chose.
@@ -139,7 +145,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
 
     // deep_research is gated behind a config flag in generateTools; enable it so
     // it materializes when a profile requests it.
-    return (
+    const tools =
       buildSharedTools(toolDeps, toolCallbacks, {
         enabledTools: enabledToolNames,
         config: {
@@ -147,7 +153,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
           web_search: { imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value },
         },
         toolAvailability,
-      }) ?? []
-    );
+        orgToolPolicy,
+      }) ?? [];
+    return applyOrgToolPolicy(tools, orgToolPolicy).tools;
   };
 }

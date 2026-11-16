@@ -99,7 +99,9 @@ export async function reserveInviteSendBudget(
   const perRecipient = await reserveRecipientSendBudget(recipientList.filter(recipient => recipient.includes('@')));
   if (perRecipient) {
     await release();
-    throw new TooManyRequestsError('Too many email invitations to this address. Try again later.');
+    throw new TooManyRequestsError('Too many email invitations to this address. Try again later.', {
+      retryAfter: perRecipient.retryAfter,
+    });
   }
   return { release };
 }

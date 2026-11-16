@@ -1,3 +1,4 @@
+import { User } from '@bike4mind/database';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -557,6 +558,20 @@ describe('/api/reg-invites/refer - per-recipient limit', () => {
 
     expect(mockReserveRecipientSendBudget).toHaveBeenCalledWith(['friend@example.com']);
     expect(res.getHeader('Retry-After')).toBe(90);
+    expect(mockReserveReferrals).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('applies the same mailbox refusal when an existing account is %s', async existing => {
+    vi.mocked(User.find).mockReturnValueOnce({
+      select: () => ({ lean: async () => (existing ? [{ email: 'friend@example.com' }] : []) }),
+    } as unknown as ReturnType<typeof User.find>);
+    mockReserveRecipientSendBudget.mockImplementationOnce(async recipients =>
+      Array.isArray(recipients) && recipients.includes('friend@example.com') ? { retryAfter: 90 } : undefined
+    );
+    const { req, res } = makeReqRes(verified);
+    await expect(invokeHandler(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(mockReserveRecipientSendBudget).toHaveBeenCalledWith(['friend@example.com']);
     expect(mockReserveReferrals).not.toHaveBeenCalled();
     expect(mockEmailPublish).not.toHaveBeenCalled();
   });

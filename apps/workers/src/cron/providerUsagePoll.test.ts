@@ -3,6 +3,7 @@ import type { Context } from 'aws-lambda';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async (_command: unknown) => undefined),
+  secretSend: vi.fn(async (_command: unknown): Promise<{ SecretString?: string }> => ({})),
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
   priceProviderUsage: vi.fn(),
@@ -20,6 +21,14 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
     send = mocks.send;
   },
   PutMetricDataCommand: class {
+    constructor(public readonly input: unknown) {}
+  },
+}));
+vi.mock('@aws-sdk/client-secrets-manager', () => ({
+  SecretsManagerClient: class {
+    send = mocks.secretSend;
+  },
+  GetSecretValueCommand: class {
     constructor(public readonly input: unknown) {}
   },
 }));
@@ -82,6 +91,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -196,5 +206,62 @@ describe('providerUsagePoll handler', () => {
     const metrics = published().MetricData;
     expect(metrics).toHaveLength(3);
     expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
+  });
+
+  describe('with the admin key secret store', () => {
+    const storedKeys: Record<string, string | Error> = {};
+    const secretIds = { anthropic: 'anthropic-secret-arn', openai: 'openai-secret-arn' };
+
+    beforeEach(() => {
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_ANTHROPIC', secretIds.anthropic);
+      vi.stubEnv('PROVIDER_ADMIN_KEY_SECRET_OPENAI', secretIds.openai);
+      storedKeys[secretIds.anthropic] = 'stored-anthropic-key';
+      storedKeys[secretIds.openai] = 'stored-openai-key';
+      mocks.secretSend.mockImplementation(async command => {
+        const value = storedKeys[(command as { input: { SecretId: string } }).input.SecretId];
+        if (value instanceof Error) throw value;
+        return { SecretString: value };
+      });
+    });
+
+    it('reads each key from its secret and never from Config', async () => {
+      await handler({}, context);
+
+      expect(mocks.fetchAnthropicHourlyUsage).toHaveBeenCalledWith(
+        'stored-anthropic-key',
+        expect.any(String),
+        expect.any(String)
+      );
+      expect(mocks.fetchOpenAIHourlyUsage).toHaveBeenCalledWith(
+        'stored-openai-key',
+        expect.any(Number),
+        expect.any(Number)
+      );
+    });
+
+    it('skips a provider whose secret has no value yet, with the usual skipped datum', async () => {
+      storedKeys[secretIds.openai] = Object.assign(new Error('no current value'), {
+        name: 'ResourceNotFoundException',
+      });
+
+      expect(await handler({}, context)).toEqual({ published: 1, skipped: 1 });
+      expect(mocks.warn).toHaveBeenCalledWith('[ProviderUsagePoll] openai: admin key not configured, skipping');
+      expect(published().MetricData.filter(d => d.MetricName === 'ProviderUsagePollSkipped')).toEqual([
+        skippedDatum('openai'),
+      ]);
+    });
+
+    it('counts a failed key lookup as a failed provider and still publishes the other one', async () => {
+      storedKeys[secretIds.anthropic] = Object.assign(new Error('not authorized'), { name: 'AccessDeniedException' });
+
+      await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
+
+      expect(mocks.fetchAnthropicHourlyUsage).not.toHaveBeenCalled();
+      expect(mocks.error).toHaveBeenCalledTimes(1);
+      expect(mocks.warn).not.toHaveBeenCalledWith('[ProviderUsagePoll] anthropic: admin key not configured, skipping');
+      const metrics = published().MetricData;
+      expect(metrics).toHaveLength(3);
+      expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
+    });
   });
 });

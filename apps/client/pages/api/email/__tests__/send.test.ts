@@ -29,6 +29,7 @@ const mockTryAdd = vi.fn(async (key: string, amount: number, limit: number, ttlM
   return { success: true, count: live.count, expiresAt: live.expiresAt };
 });
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (work: () => Promise<unknown>) => work(),
   organizationRepository: { findById: (...args: unknown[]) => mockFindOrganization(...args) },
   userRepository: { findOne: (...args: unknown[]) => mockFindRecipient(...args) },
   cacheRepository: { tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a) },
