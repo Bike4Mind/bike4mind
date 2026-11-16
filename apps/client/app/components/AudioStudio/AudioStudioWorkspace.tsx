@@ -50,19 +50,25 @@ const AudioStudioForm = ({ mode, testId, speechProviders }: AudioStudioFormProps
   const setText = useAudioStudioDraft(state => state.setText);
   const ttsProvider = useAudioGenSettings(state => state.ttsProvider);
   const applySettings = useAudioGenSettings(state => state.applySettings);
-  const [restoreNotices, setRestoreNotices] = useState<string[]>([]);
+  // Kept with the provider they describe, so picking another provider clears them, like a model pick in the other forms.
+  const [restored, setRestored] = useState<{ notices: string[]; provider: VoiceGenerationVendor } | null>(null);
   const applyRestore = useCallback(
     (restore: StudioRestore) => {
-      const restored = restoreAudioForm(restore, mode, speechProviders);
-      applySettings(restored.value.settings);
-      setText(mode, restored.value.text);
-      setRestoreNotices(restored.notices);
+      const result = restoreAudioForm(restore, mode, speechProviders);
+      applySettings(result.value.settings);
+      setText(mode, result.value.text);
+      setRestored({
+        notices: result.notices,
+        provider: result.value.settings.ttsProvider ?? useAudioGenSettings.getState().ttsProvider,
+      });
     },
     [mode, speechProviders, applySettings, setText]
   );
   useConsumeStudioRestore(MODE_MEDIUM[mode], applyRestore);
   const { generate, isGenerating, result } = useGenerateAudio(mode);
   const estimatedCredits = useEstimatedCredits(mode, text.length);
+
+  const restoreNotices = restored && restored.provider === ttsProvider ? restored.notices : [];
 
   const maxChars = mode === 'tts' ? TTS_MAX_INPUT_CHARS[ttsProvider] : SOUND_EFFECTS_MAX_INPUT_CHARS;
   const overLimit = text.length > maxChars;
