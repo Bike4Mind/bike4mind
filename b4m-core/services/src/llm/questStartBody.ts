@@ -73,11 +73,6 @@ export const QuestStartBodySchema = z
      */
     apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
     /**
-     * The organization whose spend freeze this turn is checked against, when it is not `organizationId` (voice
-     * bills the user personally). Server-set; `null` means no organization, absent means `organizationId`.
-     */
-    spendFreezeOrganizationId: z.string().nullable().optional(),
-    /**
      * The authenticating key lacks the admin scope, so the worker withholds the owner's admin role
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */

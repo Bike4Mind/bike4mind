@@ -3079,13 +3079,11 @@ export class ChatCompletionProcess {
       }
 
       // Before any credit gate and whether or not credits are enforced: a frozen subject spends nothing new.
+      // The org is the loaded `organization` the reservation below holds against, so the two cannot diverge.
       await assertSpendNotFrozen(
         spendFreezeSubjectForHold({
           userId: this.user.id,
-          organizationId:
-            parsedBody.spendFreezeOrganizationId !== undefined
-              ? parsedBody.spendFreezeOrganizationId
-              : (organizationId ?? null),
+          organizationId: organization?.id ?? null,
           apiKeyId: this.turnApiKeyId,
           apiKeyBillingOwnerType: parsedBody.apiKeyBillingOwnerType,
         }),

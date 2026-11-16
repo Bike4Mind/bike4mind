@@ -6354,6 +6354,57 @@ describe('ChatCompletionProcess', () => {
         });
       });
 
+      // A JWT voice turn carries the caller's home org as `organizationId` and reserves against it, so the
+      // freeze subject must be that org, never a separately computed one.
+      const frozenOnlyFor = (frozenOrgId: string) =>
+        mockDb.spendFreezes.findActiveForSubject.mockImplementation(
+          async ({ organizationId }: { organizationId: string | null }) =>
+            organizationId === frozenOrgId ? freezeRecord('Organization') : null
+        );
+
+      it('refuses a turn billed to a frozen home org with spend_frozen, before any hold', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockDb.spendFreezes.findActiveForSubject).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
+        );
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+        expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      });
+
+      it('lets the turn through when only an unrelated org is frozen', async () => {
+        const { complete } = reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('other-org');
+
+        await service.process({ body: reservationBody(), logger: mockLogger });
+
+        expect(mockQuest.errorCode).toBeUndefined();
+        expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+      });
+
+      it('checks the billed org even when a queued body still carries the retired spendFreezeOrganizationId', async () => {
+        reservationOrgSetup();
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        frozenOnlyFor('org1');
+
+        await service.process({
+          body: { ...reservationBody(), spendFreezeOrganizationId: null } as ReturnType<typeof reservationBody>,
+          logger: mockLogger,
+        });
+
+        expect(mockQuest.errorCode).toBe('spend_frozen');
+      });
+
       it('propagates a freeze lookup failure instead of treating the subject as unfrozen', async () => {
         const { complete } = reservationOrgSetup();
         fundedOrg();

@@ -243,8 +243,6 @@ async function runFullPipeline(
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
       apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
-      // Voice bills the user personally: null unless an org-billed key, never the user's home org.
-      spendFreezeOrganizationId: sessionCtx.billingOrganizationId ?? null,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,

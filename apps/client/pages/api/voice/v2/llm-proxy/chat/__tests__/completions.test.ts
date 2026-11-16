@@ -272,31 +272,24 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     );
   });
 
-  it("checks the freeze against the token's billed org, and null (never the user's home org) without one", async () => {
-    const base = {
+  // process() checks the freeze against the org the turn reserves against, so the proxy must not send
+  // a separate freeze org: the turn's `organizationId` is the one value both read.
+  it("bills and freeze-checks the turn against the token's home org, with no separate freeze org", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',
       organizationId: 'home-org',
       reasoningModelId: 'test-model',
+      authOrigin: 'session',
       voiceHoldStartedAt: recentHold(),
-    };
-    mockVerifyVoiceSessionToken.mockReturnValueOnce({ ...base, authOrigin: 'session' });
-    await handler(makeReq() as never, makeRes() as never);
-    expect((mockProcess.mock.calls[0][0] as { body: { spendFreezeOrganizationId?: string | null } }).body).toEqual(
-      expect.objectContaining({ spendFreezeOrganizationId: null })
-    );
-
-    mockProcess.mockClear();
-    mockVerifyVoiceSessionToken.mockReturnValueOnce({
-      ...base,
-      authOrigin: 'apiKey',
-      apiKeyId: 'key-1',
-      billingOrganizationId: 'key-org',
     });
+
     await handler(makeReq() as never, makeRes() as never);
-    expect((mockProcess.mock.calls[0][0] as { body: { spendFreezeOrganizationId?: string | null } }).body).toEqual(
-      expect.objectContaining({ spendFreezeOrganizationId: 'key-org' })
-    );
+
+    const processBody = (mockProcess.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+    expect(processBody.organizationId).toBe('home-org');
+    expect(processBody).not.toHaveProperty('spendFreezeOrganizationId');
+    expect((mockInvoke.mock.calls[0][0] as { body: { organizationId?: string } }).body.organizationId).toBe('home-org');
   });
 
   it('leaves the billing owner type unset for a token minted without it', async () => {
