@@ -7076,7 +7076,7 @@ export class ChatCompletionProcess {
         // tool called more than once in a turn settles as the sum of every call, not
         // the count times the last call's cost (see settleToolCallCredits).
         quest.promptMeta!.functionCalls = settleToolCallCredits(
-          quest.promptMeta!.functionCalls || [],
+          this.withReservedToolCalls(quest.promptMeta!.functionCalls || []),
           this.toolCreditsMap
         );
 
@@ -8246,6 +8246,20 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** Adds a placeholder call per reserved charge beyond the recorded calls, so missing tool telemetry cannot drop charged credits from the per-call breakdown. */
+  private withReservedToolCalls<T extends { name?: string }>(
+    functionCalls: T[]
+  ): Array<T | { name: string; parameters: Record<string, never> }> {
+    const calls: Array<T | { name: string; parameters: Record<string, never> }> = [...functionCalls];
+    for (const [name, charges] of this.toolCreditsMap) {
+      const recordedCalls = functionCalls.filter(call => call.name === name).length;
+      for (let index = recordedCalls; index < charges.length; index++) {
+        calls.push({ name, parameters: {} });
+      }
+    }
+    return calls;
+  }
+
   /**
    * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
    * reservation on the answering model, at the larger of the provider-reported counts and the input
@@ -8296,15 +8310,10 @@ export class ChatCompletionProcess {
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
     if (quest.promptMeta) {
-      const calls = [...(quest.promptMeta.functionCalls ?? [])];
-      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
-      for (const [name, charges] of this.toolCreditsMap) {
-        const recordedCalls = calls.filter(call => call.name === name).length;
-        for (let index = recordedCalls; index < charges.length; index++) {
-          calls.push({ name, parameters: {} });
-        }
-      }
-      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+      quest.promptMeta.functionCalls = settleToolCallCredits(
+        this.withReservedToolCalls(quest.promptMeta.functionCalls ?? []),
+        this.toolCreditsMap
+      );
     }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }

@@ -7845,6 +7845,11 @@ describe('ChatCompletionProcess', () => {
         expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - textCharge - toolCharge);
         expect(state.balance).toBe(BALANCE - textCharge - toolCharge);
         expect(mockQuest.creditsUsed).toBe(textCharge + toolCharge);
+        const breakdown = (mockQuest.promptMeta?.functionCalls ?? []).reduce(
+          (sum, call) => sum + (call.creditsUsed ?? 0),
+          0
+        );
+        expect(breakdown).toBe(toolCharge);
         expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledTimes(2);
         expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
           'tool_usage',
