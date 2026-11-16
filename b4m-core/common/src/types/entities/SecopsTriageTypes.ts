@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const GITHUB_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+const MAX_ISSUES_MESSAGE = 'Max issues per scan must be between 1 and 100';
+
 /**
  * Configuration schema for the SecOps Triage feature.
  *
@@ -14,7 +17,7 @@ export const SecopsTriageConfigSchema = z
     enabled: z.boolean().default(false),
 
     /** GitHub repository to create issues in (e.g. 'owner/repo') */
-    githubRepo: z.string().default('MillionOnMars/lumina5'),
+    githubRepo: z.string().default(''),
 
     /** Minimum ZAP severity level that triggers issue creation */
     severityThreshold: z.enum(['critical', 'high']).default('high'),
@@ -28,7 +31,11 @@ export const SecopsTriageConfigSchema = z
       .default({ critical: 'P0', high: 'P1' }),
 
     /** Maximum number of issues to create per scan (sorted by severity, highest first) */
-    maxIssuesPerScan: z.number().min(1).max(100).default(20),
+    maxIssuesPerScan: z
+      .number({ error: MAX_ISSUES_MESSAGE })
+      .min(1, MAX_ISSUES_MESSAGE)
+      .max(100, MAX_ISSUES_MESSAGE)
+      .default(20),
 
     /** Slack workspace ID to use for posting (must match an active workspace in Admin -> Slack Workspaces). Falls back to first active workspace if not set. */
     slackWorkspaceId: z.string().optional(),
@@ -46,8 +53,12 @@ export const SecopsTriageConfigSchema = z
     dryRun: z.boolean().default(false),
   })
   .refine(data => !data.llmEnrichment || !!data.modelId, {
-    message: 'modelId is required when llmEnrichment is enabled',
+    message: 'A model must be selected when LLM enrichment is enabled',
     path: ['modelId'],
+  })
+  .refine(data => !data.enabled || GITHUB_REPO_PATTERN.test(data.githubRepo), {
+    message: 'A repository in owner/name form is required when SecOps triage is enabled',
+    path: ['githubRepo'],
   });
 
 export type SecopsTriageConfig = z.infer<typeof SecopsTriageConfigSchema>;

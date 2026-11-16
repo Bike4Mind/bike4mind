@@ -8437,7 +8437,7 @@ export const settingsMap = {
     name: 'SecOps Triage Config',
     defaultValue: SecopsTriageConfigSchema.parse({}),
     description:
-      'Configuration for SecOps Triage — auto-creates GitHub issues for critical/high OWASP ZAP scan findings via the b4m-prod GitHub App. Disabled by default.',
+      'Configuration for SecOps triage: files a GitHub issue for each critical or high finding reported by a security scan through the system GitHub connection, and closes it when the finding is gone. Disabled by default.',
     category: 'SecOps',
     order: 131,
     schema: SecopsTriageConfigSchema,

@@ -2,6 +2,7 @@
  * SecOps Triage Configuration Tab
  *
  * Dedicated admin UI for configuring the SecOps Triage pipeline:
+ *   - Status of the saved configuration (GitHub connection, repository, recent runs)
  *   - Master controls (enabled, dry-run)
  *   - GitHub issue settings (repo, severity threshold, priority mapping, rate limit)
  *   - Slack notification settings (channel ID)
@@ -20,18 +21,22 @@ import {
   Typography,
 } from '@mui/joy';
 import { useCallback, useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useGetSettingsValue, useSettingsFromServer, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import type { SecopsTriageRunSummary, SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from './shared/adminTabSwitches';
 import {
   AdminPageHeader,
   ErrorState,
+  Fact,
   LoadingState,
+  RelativeTime,
   SaveBar,
+  SectionCard,
   SettingsSection,
   StatusChip,
   UnsavedChangesGuard,
@@ -43,6 +48,162 @@ interface SlackWorkspace {
   name: string;
   slackTeamId: string;
   isActive: boolean;
+}
+
+type RepoCheck = NonNullable<SecopsTriageStatusResponse['github']['check']>;
+type RepoIssue = Extract<RepoCheck, { ok: false }>['reason'];
+
+const STATUS_QUERY_KEY = ['admin', 'secops-triage', 'status'] as const;
+const RECENT_RUNS_SHOWN = 5;
+
+const SCAN_SOURCE_LABELS: Record<string, string> = {
+  'web-owasp': 'Website scan',
+  secrets: 'Secrets scan',
+  packages: 'Package scan',
+  'code-semgrep': 'Code scan',
+  cloud: 'Cloud scan',
+  'active-defense': 'Active defense',
+};
+
+const REPO_ISSUE_LABELS: Record<RepoIssue, string> = {
+  not_configured: 'Not set',
+  not_allowed: "Not in the connection's allowed repositories",
+  not_found: 'Not found',
+  public: 'Public (must be private)',
+  archived: 'Archived (read-only)',
+  issues_disabled: 'Issues disabled',
+};
+
+// Keys are the worker's skip reasons: its own early returns plus every repository check reason.
+const SKIP_REASONS: Record<string, string> = {
+  disabled: 'triage is disabled',
+  invalid_config: 'the saved configuration is invalid',
+  no_github_connection: 'there is no GitHub connection',
+  not_configured: 'no repository is set',
+  not_allowed: "the repository is not in the connection's allowed repositories",
+  not_found: 'the repository was not found',
+  public: 'the repository is public',
+  archived: 'the repository is archived',
+  issues_disabled: 'issues are disabled on the repository',
+};
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+/** One plain line per run, e.g. "1 finding, 1 below threshold, 0 created" or "Skipped: triage is disabled". */
+export function describeTriageRun(run: SecopsTriageRunSummary): string {
+  if (run.status === 'failed') return `Failed: ${run.error || 'no error message was recorded'}`;
+  if (run.status === 'skipped') {
+    return `Skipped: ${(run.reason && SKIP_REASONS[run.reason]) || run.reason || 'no reason was recorded'}`;
+  }
+  const parts = [plural(run.findingCount, 'finding')];
+  const counts = run.counts;
+  if (counts) {
+    parts.push(`${counts.belowThreshold} below threshold`, `${counts.created} created`);
+    if (counts.updated) parts.push(`${counts.updated} updated`);
+    if (counts.reopened) parts.push(`${counts.reopened} reopened`);
+    if (counts.closed) parts.push(`${counts.closed} closed`);
+    if (counts.suppressed) parts.push(`${counts.suppressed} left closed`);
+    if (counts.overCap) parts.push(`${counts.overCap} over the per-scan cap`);
+  }
+  return `${run.dryRun ? 'Dry run: ' : ''}${parts.join(', ')}`;
+}
+
+function connectionChip(github: SecopsTriageStatusResponse['github']) {
+  if (github.connected)
+    return <StatusChip tone="good" label="Connected" data-testid="secops-triage-status-connection-chip" />;
+  if (github.checkError) {
+    return (
+      <StatusChip tone="neutral" label="Could not be checked" data-testid="secops-triage-status-connection-chip" />
+    );
+  }
+  return <StatusChip tone="bad" label="Not connected" data-testid="secops-triage-status-connection-chip" />;
+}
+
+function repoChip(github: SecopsTriageStatusResponse['github']) {
+  const testId = 'secops-triage-status-repo-chip';
+  if (github.check?.ok) return <StatusChip tone="good" label="Ready" data-testid={testId} />;
+  if (github.check) {
+    const tone = github.check.reason === 'not_configured' ? 'neutral' : 'bad';
+    return <StatusChip tone={tone} label={REPO_ISSUE_LABELS[github.check.reason]} data-testid={testId} />;
+  }
+  return <StatusChip tone="neutral" label={github.repo ? 'Could not be checked' : 'Not set'} data-testid={testId} />;
+}
+
+function TriageRunLine({ run }: { run: SecopsTriageRunSummary }) {
+  return (
+    <Stack direction="row" columnGap={1} rowGap={0.25} alignItems="baseline" flexWrap="wrap">
+      <RelativeTime at={run.startedAt} />
+      <Typography level="body-sm" component="span" sx={{ color: 'admin.inkMuted' }}>
+        {SCAN_SOURCE_LABELS[run.scanSource] ?? run.scanSource}
+      </Typography>
+      <Typography level="body-sm" component="span" sx={{ color: 'admin.ink' }} data-testid="secops-triage-run-outcome">
+        {describeTriageRun(run)}
+      </Typography>
+    </Stack>
+  );
+}
+
+// Reads its own endpoint, so a slow or failed status request never holds up the form below it.
+function TriageStatusSection() {
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
+    queryKey: STATUS_QUERY_KEY,
+    queryFn: async () => (await api.get<SecopsTriageStatusResponse>('/api/admin/secops-triage/status')).data,
+  });
+
+  const helper = (
+    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+      Checks the saved settings, not unsaved edits.
+    </Typography>
+  );
+
+  if (!data) {
+    return (
+      <SectionCard title="Status" action={helper} body="custom" data-testid="secops-triage-section-status">
+        {isLoading || !isError ? (
+          <LoadingState label="Loading status" testId="secops-triage-status-loading" />
+        ) : (
+          <ErrorState message="Status could not be loaded." onRetry={() => void refetch()} retrying={isFetching} />
+        )}
+      </SectionCard>
+    );
+  }
+
+  const [lastRun, ...earlierRuns] = data.recentRuns;
+  return (
+    <SectionCard title="Status" action={helper} data-testid="secops-triage-section-status">
+      <Fact label="GitHub connection" data-testid="secops-triage-status-connection">
+        {connectionChip(data.github)}
+      </Fact>
+      <Fact label="Repository" data-testid="secops-triage-status-repo">
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          {repoChip(data.github)}
+          {data.github.repo && (
+            <Typography level="body-sm" component="span" sx={{ fontFamily: 'code', color: 'admin.inkMuted' }}>
+              {data.github.repo}
+            </Typography>
+          )}
+        </Stack>
+      </Fact>
+      <Fact label="Last run" data-testid="secops-triage-status-last-run">
+        {lastRun ? <TriageRunLine run={lastRun} /> : 'No runs recorded yet'}
+      </Fact>
+      {earlierRuns.length > 0 && (
+        <Fact label="Earlier runs">
+          <Box
+            component="ul"
+            sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 0.5 }}
+            data-testid="secops-triage-status-earlier-runs"
+          >
+            {earlierRuns.slice(0, RECENT_RUNS_SHOWN).map((run, index) => (
+              <li key={`${run.startedAt}-${index}`}>
+                <TriageRunLine run={run} />
+              </li>
+            ))}
+          </Box>
+        </Fact>
+      )}
+    </SectionCard>
+  );
 }
 
 // Config Section
@@ -77,6 +238,7 @@ function SecopsTriageConfigPanel() {
   const rawConfig = useGetSettingsValue('secopsTriageConfig');
   const { data: storedSettings, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const updateSettings = useUpdateSettings();
+  const queryClient = useQueryClient();
 
   const [config, setConfig] = useState<SecopsTriageConfig | null>(null);
   const [savedConfig, setSavedConfig] = useState<SecopsTriageConfig | null>(null);
@@ -109,18 +271,20 @@ function SecopsTriageConfigPanel() {
 
   const handleSave = useCallback(async () => {
     if (!config) return;
-    if (config.llmEnrichment && !config.modelId) {
-      toast.error('A model must be selected when LLM Enrichment is enabled.');
+    const validation = SecopsTriageConfigSchema.safeParse(config);
+    if (!validation.success) {
+      toast.error(validation.error.issues[0]?.message ?? 'The settings could not be saved as entered.');
       return;
     }
     try {
       await updateSettings.mutateAsync({ key: 'secopsTriageConfig', value: config });
       setSavedConfig(config);
       toast.success('SecOps Triage configuration saved');
+      void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
     } catch (err) {
       toast.error(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
-  }, [config, updateSettings]);
+  }, [config, updateSettings, queryClient]);
 
   const handleReset = useCallback(() => {
     if (savedConfig) setConfig(savedConfig);
@@ -141,6 +305,8 @@ function SecopsTriageConfigPanel() {
 
   return (
     <Stack spacing={2}>
+      <TriageStatusSection />
+
       {/* Master Controls */}
       <ConfigSection title="Master controls" testId="secops-triage-section-master">
         <Stack spacing={2}>
@@ -166,7 +332,8 @@ function SecopsTriageConfigPanel() {
                 {config.dryRun && <StatusChip tone="warn" label="Active" data-testid="secops-triage-dry-run-chip" />}
               </Stack>
               <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                Logs all actions without creating real GitHub issues or posting to Slack. Enable first when testing.
+                Logs each action without creating, commenting on, reopening or closing GitHub issues. The Slack summary
+                is still posted, marked as a dry run.
               </Typography>
             </Box>
             <Switch
@@ -186,10 +353,13 @@ function SecopsTriageConfigPanel() {
             <Input
               value={config.githubRepo}
               onChange={e => setConfig({ ...config, githubRepo: e.target.value })}
-              placeholder="MillionOnMars/lumina5"
+              placeholder="owner/repo"
               data-testid="secops-triage-github-repo-input"
             />
-            <FormHelperText>GitHub repository where issues will be created (e.g. MillionOnMars/lumina5)</FormHelperText>
+            <FormHelperText>
+              GitHub repository where issues are filed, in owner/repo form. Required while triage is enabled, and it
+              must be a private repository the GitHub connection is allowed to use.
+            </FormHelperText>
           </FormControl>
 
           <FormControl>
@@ -383,7 +553,7 @@ export default function SecopsTriageTab() {
     <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-secops-triage-tab">
       <AdminPageHeader
         title="SecOps triage"
-        description="Creates GitHub issues for critical and high security scan findings (OWASP ZAP, Gitleaks, package CVEs, Semgrep)."
+        description="Files a GitHub issue for each critical or high finding reported by a security scan, and closes it when the finding is gone. A finding seen again reopens its issue, unless the issue was closed as not planned or as a duplicate."
       />
       <SecopsTriageConfigPanel />
     </Stack>
