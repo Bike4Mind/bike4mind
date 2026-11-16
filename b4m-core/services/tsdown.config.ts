@@ -40,6 +40,7 @@ export default defineConfig({
     'src/llm/intentClassifier.ts',
     'src/llm/modelAdmission.ts',
     'src/llm/shadowTier.ts',
+    'src/llm/orgToolPolicy.ts',
     // Pure account-state predicates; route gates import them without the services barrel.
     'src/userService/accountState.ts',
     'src/llm/refineText.ts',

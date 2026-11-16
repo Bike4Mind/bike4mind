@@ -4,6 +4,7 @@ import {
   synthesizeSpeechContract,
   TTS_MAX_INPUT_CHARS,
   TTS_DEFAULT_MODEL,
+  resolveAudioVendorBackend,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
   DEFAULT_TTS_PROVIDER,
@@ -85,8 +86,8 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   // (resolveAudioBillingOrgId 403s any other target).
   const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
-  const admission = await createModelAdmission(req.user!);
-  await admission.assert(model ?? TTS_DEFAULT_MODEL[vendor]);
+  const admission = await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId });
+  await admission.assert(model ?? TTS_DEFAULT_MODEL[vendor], { orgModelBackend: resolveAudioVendorBackend(vendor) });
   const candidateAvailability = await Promise.all(
     ttsCandidates(vendor, text.length).map(async candidate => ({
       vendor: candidate,
@@ -106,7 +107,10 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   for (const candidate of candidateAvailability) {
     if (
       candidate.available &&
-      (candidate.vendor === vendor || (await admission.admits(TTS_DEFAULT_MODEL[candidate.vendor])))
+      (candidate.vendor === vendor ||
+        (await admission.admits(TTS_DEFAULT_MODEL[candidate.vendor], {
+          orgModelBackend: resolveAudioVendorBackend(candidate.vendor),
+        })))
     ) {
       candidates.push(candidate.vendor);
     }

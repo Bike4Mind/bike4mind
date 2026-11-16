@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, ORG_MODEL_NOT_ALLOWED_ERROR_CODE } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import type { ToolContext } from '../base/types';
 import { toolModelRefusal } from './toolModelRefusal';
@@ -34,6 +34,23 @@ describe('toolModelRefusal', () => {
       toolModelRefusal(context, refusingWith(refusal), 'flux-pro-1.1-ultra', 'image_generation')
     ).resolves.toMatch(/^Error: Model "flux-pro-1.1-ultra" requires a paid plan\. .*Do not retry it this turn/);
     expect(context.logger.warn).toHaveBeenCalledWith(expect.stringContaining('[image_generation]'), {
+      modelId: 'flux-pro-1.1-ultra',
+    });
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('returns an org-policy refusal as the tool result, logged at warn', async () => {
+    const context = createContext();
+    const refusal = new ForbiddenError('Model "flux-pro-1.1-ultra" is not allowed by your organization', {
+      errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+    });
+
+    await expect(
+      toolModelRefusal(context, refusingWith(refusal), 'flux-pro-1.1-ultra', 'image_generation')
+    ).resolves.toMatch(
+      /^Error: Model "flux-pro-1\.1-ultra" is not allowed by your organization This .*organization allows/
+    );
+    expect(context.logger.warn).toHaveBeenCalledWith(expect.stringContaining('not allowed by the organization'), {
       modelId: 'flux-pro-1.1-ultra',
     });
     expect(context.logger.error).not.toHaveBeenCalled();
