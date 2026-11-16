@@ -23,7 +23,10 @@ type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
  * Erase an account again after a database restore brought its rows back, repeating what the original
  * path removed (record.initiatedBy): a self-serve or unknown-path erasure also purges files, content and
  * the personal org (completeAccountDeletion.ts); an admin one deletes the row and runs the shared
- * purge (pages/api/users/[id]/delete.ts). Keep in sync with those and with hardDeleteUser.ts.
+ * purge only. An 'admin' record cannot tell an admin delete (server/admin/deleteUserAsAdmin.ts, which
+ * purges no content) from an admin erasure (completeAccountDeletion.ts, which also runs the content
+ * purge and erasureRegistry.erase), so replay does only what both share and does not repeat an admin
+ * erasure's content purge or registry erase. Keep in sync with those and with hardDeleteUser.ts.
  *
  * Sends no notifications or billing calls: no subscription cancel, deletion email, analytics event or
  * Slack/email notification, and `integrationGrants: null` skips the provider revokes. The original
