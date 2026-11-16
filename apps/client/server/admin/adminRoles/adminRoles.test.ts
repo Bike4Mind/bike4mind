@@ -100,9 +100,11 @@ describe('createAdminRole', () => {
   });
 });
 
+const REASON = 'Billing hire starts Monday';
+
 describe('updateAdminRole', () => {
   it('audits before/after permissions and the members it affects, after a step-up for a grant', async () => {
-    await updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'] }, deps);
+    await updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'], reason: REASON }, deps);
 
     expect(deps.requireStepUp).toHaveBeenCalledOnce();
     expect(deps.audit).toHaveBeenCalledWith(
@@ -118,7 +120,12 @@ describe('updateAdminRole', () => {
   it('needs no step-up to revoke or rename, and still audits', async () => {
     deps.roles.findById.mockResolvedValue(role({ permissions: ['support:read', 'credits:adjust'] }));
 
-    await updateAdminRole(ADMIN, ROLE_ID, { name: 'Support desk', permissions: ['support:read'] }, deps);
+    await updateAdminRole(
+      ADMIN,
+      ROLE_ID,
+      { name: 'Support desk', permissions: ['support:read'], reason: REASON },
+      deps
+    );
 
     expect(deps.requireStepUp).not.toHaveBeenCalled();
     expect(deps.audit).toHaveBeenCalledWith(
@@ -135,9 +142,37 @@ describe('updateAdminRole', () => {
   it('refuses the edit without a step-up when it grants', async () => {
     deps.requireStepUp.mockRejectedValue(new ForbiddenError('Re-verify'));
     await expect(
-      updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'users:delete'] }, deps)
+      updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'users:delete'], reason: REASON }, deps)
     ).rejects.toThrow('Re-verify');
     expect(deps.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a permission change that carries no reason, before any step-up or write', async () => {
+    await expect(
+      updateAdminRole(ADMIN, ROLE_ID, { permissions: ['support:read', 'credits:adjust'] }, deps)
+    ).rejects.toThrow('A reason is required to change role permissions');
+    await expect(updateAdminRole(ADMIN, ROLE_ID, { permissions: ['credits:adjust'] }, deps)).rejects.toThrow(
+      'A reason is required'
+    );
+    expect(deps.requireStepUp).not.toHaveBeenCalled();
+    expect(deps.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a rename or description edit through without a reason', async () => {
+    await updateAdminRole(ADMIN, ROLE_ID, { name: 'Support desk', description: 'Front line' }, deps);
+    expect(deps.roles.update).toHaveBeenCalledWith(ROLE_ID, { name: 'Support desk', description: 'Front line' });
+  });
+
+  it('records the reason on the audit entry and keeps it off the stored role', async () => {
+    await updateAdminRole(
+      ADMIN,
+      ROLE_ID,
+      { permissions: ['support:read', 'credits:adjust'], reason: 'Billing hire starts Monday' },
+      deps
+    );
+
+    expect(deps.roles.update).toHaveBeenCalledWith(ROLE_ID, { permissions: ['support:read', 'credits:adjust'] });
+    expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ reason: 'Billing hire starts Monday' }));
   });
 
   it('writes no audit entry for a no-op edit', async () => {
