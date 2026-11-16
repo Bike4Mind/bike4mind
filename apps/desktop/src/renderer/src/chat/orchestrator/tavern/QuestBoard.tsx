@@ -27,6 +27,9 @@ const fadeAway = keyframes`
 
 const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
+const fadeDelay = (finishedAt: number | undefined) =>
+  QUEST_DONE_LINGER_MS - TAKE_DOWN_MS - (finishedAt === undefined ? 0 : Math.max(0, Date.now() - finishedAt));
+
 const noteLabel = (name: string, note: QuestNote) =>
   `${name}: ${questTitle(note.agent)}${note.done ? ' (done)' : ''}; open agent`;
 
@@ -94,7 +97,8 @@ function Note({
         transition: 'opacity 0.4s ease-out',
         ...(done && {
           opacity: 0.6,
-          animation: `${fadeAway} ${TAKE_DOWN_MS}ms ease-in ${QUEST_DONE_LINGER_MS - TAKE_DOWN_MS}ms forwards`,
+          // Delay measured from finishedAt (negative once past), so a note that mounts late still fades on time.
+          animation: `${fadeAway} ${TAKE_DOWN_MS}ms ease-in ${fadeDelay(note.finishedAt)}ms forwards`,
         }),
         [NO_MOTION]: { transition: 'none', animation: 'none' },
         '&:hover': { filter: 'brightness(1.06)' },

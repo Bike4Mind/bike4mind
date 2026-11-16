@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ChildOutcome } from '@shared/agentOutcome';
 import type { AgentState, AgentView } from '../roster';
 
 /** How long (ms) a finished quest stays checked off on the board before it is taken down. */
@@ -7,7 +8,8 @@ export const QUEST_DONE_LINGER_MS = 8000;
 /** States in which an agent's quest is still open and pinned to the board. */
 const OPEN: ReadonlySet<AgentState> = new Set<AgentState>(['working', 'needs-you']);
 
-export type QuestNote = { agent: AgentView; done: boolean };
+/** `finishedAt` (ms) is set on a done note, so its fade keeps the take-down's clock however late it mounts. */
+export type QuestNote = { agent: AgentView; done: boolean; finishedAt?: number };
 
 /**
  * The quest an agent is on, short enough for a note: the first line of its task contract's outcome
@@ -20,27 +22,39 @@ export function questTitle(agent: AgentView): string {
 
 /** What the board remembers between roster updates. */
 export type QuestLedger = {
-  /** Agents seen on an open quest that has not yet ended. */
-  open: ReadonlySet<string>;
+  /** Agents seen on an open quest that has not yet ended, with their record as last seen open. */
+  open: ReadonlyMap<string, OpenSnapshot>;
   /** When each agent seen finishing did so (ms). */
   finished: ReadonlyMap<string, number>;
 };
 
-export const EMPTY_LEDGER: QuestLedger = { open: new Set(), finished: new Map() };
+/** The session record as last seen on an open quest: until it changes, any stored outcome is a previous run's. */
+type OpenSnapshot = { outcome: ChildOutcome | undefined; updatedAt: string };
+
+export const EMPTY_LEDGER: QuestLedger = { open: new Map(), finished: new Map() };
+
+/**
+ * Whether a no-longer-open agent is only between its run ending and that run's outcome being stored.
+ * Its live status clears first, so for a moment it reads as its previous outcome (idle on a first run,
+ * failed or stopped on a re-run). The stored outcome lands with a record update, which ends the bridge.
+ */
+function isAwaitingOutcome(agent: AgentView, snapshot: OpenSnapshot): boolean {
+  if (agent.outcome !== snapshot.outcome) return false;
+  return agent.updatedAt === snapshot.updatedAt || (agent.state === 'idle' && agent.outcome === undefined);
+}
 
 /**
  * Folds a roster update into the ledger. An agent on an open quest that later turns `done` is checked
- * off at `now`, even across an `idle` in between: when a run ends its live status clears before its
- * stored outcome arrives, so it reads idle for a moment. Failing, stopping or ending with no reply
+ * off at `now`, even across the gap before its outcome is stored (see isAwaitingOutcome). Failing, stopping or ending with no reply
  * ends the quest unchecked, and an agent already done when first seen is never added, so a reload
  * does not pin up quests that finished while nobody was looking.
  */
 export function trackQuests(ledger: QuestLedger, agents: readonly AgentView[], now: number): QuestLedger {
-  const open = new Set<string>();
+  const open = new Map<string, OpenSnapshot>();
   const finished = new Map<string, number>();
   for (const agent of agents) {
     if (OPEN.has(agent.state)) {
-      open.add(agent.id);
+      open.set(agent.id, { outcome: agent.outcome, updatedAt: agent.updatedAt });
       continue;
     }
     if (agent.state === 'done') {
@@ -48,8 +62,8 @@ export function trackQuests(ledger: QuestLedger, agents: readonly AgentView[], n
       if (at !== undefined) finished.set(agent.id, at);
       continue;
     }
-    // No stored outcome yet: the run just ended and is on its way to done. A no-reply end has one.
-    if (agent.state === 'idle' && agent.outcome === undefined && ledger.open.has(agent.id)) open.add(agent.id);
+    const snapshot = ledger.open.get(agent.id);
+    if (snapshot && isAwaitingOutcome(agent, snapshot)) open.set(agent.id, snapshot);
   }
   return { open, finished };
 }
@@ -63,7 +77,8 @@ export function takeDown(finished: ReadonlyMap<string, number>, now: number): Ma
 export function questNotes(agents: readonly AgentView[], ledger: QuestLedger): QuestNote[] {
   return agents.flatMap((agent): QuestNote[] => {
     if (ledger.open.has(agent.id)) return [{ agent, done: false }];
-    if (agent.state === 'done' && ledger.finished.has(agent.id)) return [{ agent, done: true }];
+    const finishedAt = ledger.finished.get(agent.id);
+    if (agent.state === 'done' && finishedAt !== undefined) return [{ agent, done: true, finishedAt }];
     return [];
   });
 }

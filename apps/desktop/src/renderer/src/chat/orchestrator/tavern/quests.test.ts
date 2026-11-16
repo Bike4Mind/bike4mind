@@ -16,6 +16,11 @@ const agent = (id: string, state: AgentState, extra: Partial<AgentView> = {}): A
   ...extra,
 });
 
+const LATER = '2026-10-01T00:05:00.000Z';
+/** An agent whose run ended and whose outcome has been stored, which updates its record. */
+const ended = (id: string, state: AgentState, outcome: AgentView['outcome']) =>
+  agent(id, state, { outcome, updatedAt: LATER });
+
 const withOutcome = (outcome: string) => ({ workerTask: { contract: { outcome } } }) as unknown as Partial<AgentView>;
 
 describe('questTitle', () => {
@@ -54,10 +59,29 @@ describe('trackQuests', () => {
     expect(ledger.finished).toEqual(new Map([['a', 200]]));
   });
 
+  it("keeps a re-run open while it still reads as the previous run's outcome", () => {
+    for (const [state, outcome] of [
+      ['failed', 'failed'],
+      ['stopped', 'aborted'],
+    ] as const) {
+      const ledger = track([
+        [agent('a', 'working', { outcome })],
+        [agent('a', state, { outcome })],
+        [ended('a', 'done', 'finished')],
+      ]);
+      expect(ledger.finished).toEqual(new Map([['a', 200]]));
+    }
+  });
+
+  it('ends a re-run that fails again with the same outcome once the record updates', () => {
+    const ledger = track([[agent('a', 'working', { outcome: 'failed' })], [ended('a', 'failed', 'failed')]]);
+    expect(ledger.open.size).toBe(0);
+  });
+
   it('never adds an agent already done, or one whose quest failed or stopped', () => {
     const ledger = track([
       [agent('a', 'done'), agent('b', 'working'), agent('c', 'idle'), agent('d', 'working')],
-      [agent('a', 'done'), agent('b', 'failed'), agent('c', 'done'), agent('d', 'stopped')],
+      [agent('a', 'done'), ended('b', 'failed', 'failed'), agent('c', 'done'), ended('d', 'stopped', 'aborted')],
       [agent('a', 'done'), agent('b', 'done'), agent('c', 'done'), agent('d', 'done')],
     ]);
     expect(ledger.finished.size).toBe(0);
@@ -70,7 +94,7 @@ describe('trackQuests', () => {
       [agent('a', 'done'), agent('b', 'working')],
     ]);
     expect(ledger.finished).toEqual(new Map([['a', 100]]));
-    expect([...ledger.open]).toEqual(['b']);
+    expect([...ledger.open.keys()]).toEqual(['b']);
   });
 });
 
@@ -102,6 +126,7 @@ describe('questNotes', () => {
       ['d', false],
       ['f', true],
     ]);
+    expect(questNotes(after, ledger).find(note => note.done)?.finishedAt).toBe(10);
   });
 
   it('drops a quest whose run ended with no reply', () => {
