@@ -195,7 +195,11 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     this.inviteModel = inviteModel;
   }
 
-  async acceptRecipient(id: string, email: string): Promise<IInviteDocument | null> {
+  async acceptRecipient(
+    id: string,
+    email: string,
+    { allowRepeat = false }: { allowRepeat?: boolean } = {}
+  ): Promise<IInviteDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const lower = { $literal: email.toLowerCase() };
     // Re-checks the service's read-time gates in the write, so a double accept or a cancel that lands
@@ -208,7 +212,8 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
       revokedAt: null,
       $expr: {
         $and: [
-          { $not: [{ $in: [lower, lowercased('accepted')] }] },
+          // A repeatable link spends a slot per use, so the same address may accept it again.
+          ...(allowRepeat ? [] : [{ $not: [{ $in: [lower, lowercased('accepted')] }] }]),
           { $or: [{ $ne: ['$isLinkOnly', false] }, { $in: [lower, lowercased('pending')] }] },
         ],
       },
@@ -225,7 +230,9 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
                   {
                     pending: withoutEmail('pending', email),
                     refused: withoutEmail('refused', email),
-                    accepted: { $concatArrays: [{ $ifNull: ['$recipients.accepted', []] }, [{ $literal: email }]] },
+                    accepted: allowRepeat
+                      ? { $setUnion: [{ $ifNull: ['$recipients.accepted', []] }, [{ $literal: email }]] }
+                      : { $concatArrays: [{ $ifNull: ['$recipients.accepted', []] }, [{ $literal: email }]] },
                   },
                 ],
               },
@@ -288,6 +295,15 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     return this.pipelineUpdate({ _id: id }, [
       { $set: { remaining: 0, revokedAt: { $ifNull: ['$revokedAt', '$$NOW'] }, updatedAt: '$$NOW' } },
     ]);
+  }
+
+  async revokeAllForDocument(documentId: string, type: InviteType): Promise<number> {
+    const query = this.inviteModel.updateMany({ documentId, type, revokedAt: null }, [
+      { $set: { remaining: 0, revokedAt: '$$NOW', updatedAt: '$$NOW' } },
+    ]);
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return result.modifiedCount;
   }
 
   private async updatePendingRecipient(id: string, email: string, stages: Record<string, unknown>[]) {
@@ -380,6 +396,7 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
       { type: InviteType.Organization, collection: 'organizations' },
       { type: InviteType.Group, collection: 'groups' },
       { type: InviteType.Project, collection: 'projects' },
+      { type: InviteType.Space, collection: 'spaces' },
     ];
 
     // Always convert documentId to ObjectId for all lookups. $convert, not $toObjectId: a single
@@ -442,6 +459,7 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
               { case: { $eq: ['$type', InviteType.Organization] }, then: '$organizations.name' },
               { case: { $eq: ['$type', InviteType.Group] }, then: '$groups.name' },
               { case: { $eq: ['$type', InviteType.Project] }, then: '$projects.name' },
+              { case: { $eq: ['$type', InviteType.Space] }, then: '$spaces.name' },
             ],
             default: null,
           },

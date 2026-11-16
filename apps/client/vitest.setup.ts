@@ -80,6 +80,7 @@ vi.mock('sst', () => ({
     APNS_TEAM_ID: { value: 'not-configured' },
     APNS_KEY: { value: 'not-configured' },
     APNS_TOPIC: { value: 'not-configured' },
+    FCM_SERVICE_ACCOUNT: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
     generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' },

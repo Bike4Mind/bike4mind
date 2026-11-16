@@ -19,7 +19,7 @@ describe('canOpenAdminTab', () => {
   it('keeps unmapped tabs full-admin only, whatever the delegate holds', () => {
     const everything = delegate('support:read', 'settings:manage', 'users:moderate', 'credits:adjust');
     expect(canOpenAdminTab(everything, AdminTab.Users)).toBe(false);
-    expect(canOpenAdminTab(everything, AdminTab.SecretsRotation)).toBe(false);
+    expect(canOpenAdminTab(everything, AdminTab.ModelMetrics)).toBe(false);
     expect(canOpenAdminTab(everything, AdminTab.Tutorials)).toBe(false);
   });
 

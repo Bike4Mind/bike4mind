@@ -275,6 +275,22 @@ pnpm sst secret set APNS_TOPIC <bundle-id> --stage <stage>
 
 A wrong key, team, key ID or topic is logged at error level by the delivery handler as a server configuration error; registered device tokens are not deleted because of it.
 
+### Android (FCM)
+
+Android devices are notified through Firebase Cloud Messaging (HTTP v1 API), independently of APNs: either provider alone is enough for push to be on, and a provider left unset only turns off its own platform.
+
+| Secret | Description |
+|--------|-------------|
+| `FCM_SERVICE_ACCOUNT` | The Firebase service account JSON (Project settings -> Service accounts -> Generate new private key), verbatim. Defaults to `not-configured` |
+
+```bash
+pnpm sst secret set FCM_SERVICE_ACCOUNT "$(cat <service-account>.json)" --stage <stage>
+```
+
+The service account needs permission to send FCM messages (the Firebase Admin SDK service account has it; for a custom one, grant the Firebase Cloud Messaging Admin role and enable the Firebase Cloud Messaging API on the project). A malformed JSON value, a wrong project or a rejected credential is logged at error level by the delivery handler as a server configuration error; registered device tokens are deleted only when FCM answers `UNREGISTERED`.
+
+The Android app must be built against the same Firebase project as the service account; its client config is supplied at build time and is not kept in version control.
+
 ---
 
 ## Slack Integration (Optional)

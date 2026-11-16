@@ -2,7 +2,12 @@ import { ApiKeyScope, attachOrgApiKeyReach, orgApiKeyReachOf } from '@bike4mind/
 
 const PERSISTED_ADMIN_ROLE = Symbol('persistedAdminRole');
 
-type AdminFlagged = { isAdmin?: boolean | null; adminPermissions?: readonly string[] | null };
+type AdminFlagged = {
+  isAdmin?: boolean | null;
+  adminPermissions?: readonly string[] | null;
+  roleAdminPermissions?: readonly string[] | null;
+  adminRoleIds?: readonly unknown[] | null;
+};
 
 type ApiKeyRequest = {
   user?: { id: string };
@@ -14,21 +19,37 @@ export function apiKeyGrantsAdmin(scopes: readonly string[] | undefined): boolea
 }
 
 /**
- * Makes `user.isAdmin` read false and `user.adminPermissions` read `[]` for the rest of the request.
- * They are own accessors, so `save()`, `get(...)` and `toJSON()` still see the stored values and
- * nothing is written back. Assign a new array to change permissions; an in-place push is lost.
+ * Makes `user.isAdmin` read false and `user.adminPermissions`, `user.adminRoleIds` and
+ * `user.roleAdminPermissions` read `[]` for the rest of the request, whether or not the admin roles
+ * (auth/adminRoles.ts) were resolved first. They are own accessors, so `save()`, `get(...)` and
+ * `toJSON()` still see the stored values and nothing is written back. Assign a new array to change
+ * permissions; an in-place push is lost.
  */
 export function withholdAdminRole<T extends AdminFlagged>(user: T): T {
-  if (!user.isAdmin && !user.adminPermissions?.length) return user;
+  const holdsAdminAccess =
+    !!user.isAdmin ||
+    !!user.adminPermissions?.length ||
+    !!user.adminRoleIds?.length ||
+    !!user.roleAdminPermissions?.length;
+  if (!holdsAdminAccess) return user;
   Object.defineProperty(user, PERSISTED_ADMIN_ROLE, { value: !!user.isAdmin, configurable: true });
-  Object.defineProperty(user, 'adminPermissions', {
+  for (const path of ['adminPermissions', 'adminRoleIds'] as const) {
+    Object.defineProperty(user, path, {
+      configurable: true,
+      enumerable: true,
+      get: () => [],
+      set: (value: unknown) => {
+        const doc = user as T & { set?: (path: string, value: unknown) => unknown };
+        if (typeof doc.set === 'function') doc.set(path, value);
+      },
+    });
+  }
+  // Derived, never stored: a write (a late role resolution) has nothing to persist and stays hidden.
+  Object.defineProperty(user, 'roleAdminPermissions', {
     configurable: true,
     enumerable: true,
     get: () => [],
-    set: (value: unknown) => {
-      const doc = user as T & { set?: (path: string, value: unknown) => unknown };
-      if (typeof doc.set === 'function') doc.set('adminPermissions', value);
-    },
+    set: () => undefined,
   });
   Object.defineProperty(user, 'isAdmin', {
     configurable: true,

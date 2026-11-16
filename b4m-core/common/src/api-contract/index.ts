@@ -9,6 +9,7 @@ export { sessionGetContract } from './contracts/sessionGet.contract';
 export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
+export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
 export { createCompletionRunContract } from './contracts/completionRuns.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
@@ -32,6 +33,7 @@ export {
   chunkFileContract,
   searchFilesContract,
   getFilesByIdsContract,
+  getFileLineageContract,
   bulkDeleteFilesContract,
 } from './contracts/files.contract';
 export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';

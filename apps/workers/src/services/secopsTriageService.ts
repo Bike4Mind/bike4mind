@@ -9,7 +9,7 @@
  * - Deduplicates via SHA-1 fingerprint (alertId + stage) embedded in issue body
  * - Existing open issue -> adds a rescan comment
  * - New finding -> creates a GitHub issue with full Affected URLs table
- * - Clean findings (not in current scan) -> auto-closes open issues
+ * - Clean findings (not in current scan) -> auto-closes open issues of the same stage
  * - Caps issue creation at maxIssuesPerScan (sorted highest severity first)
  * - Posts a Slack summary if slackChannelId is configured
  * - Supports dryRun mode (logs actions without creating real issues)
@@ -50,6 +50,10 @@ export interface SecopsTriagePayload {
   targetUrl?: string;
   scanSource?: SecopsTriageScanSource;
   findings: SecopsTriageFinding[];
+  /** False when `findings` may omit findings the scan did report; no issues are auto-closed. */
+  findingsComplete?: boolean;
+  /** Ids of known findings this scan did not re-check; their issues are left open. */
+  unverifiedFindingIds?: string[];
 }
 
 export interface SecopsTriageIssueLink {
@@ -540,6 +544,16 @@ function fingerprint(alertId: string, stage: string, scanSource: string): string
   return crypto.createHash('sha1').update(`${scanSource}:${alertId}:${stage}`).digest('hex');
 }
 
+function stageRow(stage: string): string {
+  return `| Stage | ${stage} |`;
+}
+
+export function issueStage(body: string | null | undefined): string | null {
+  // \r?: a body edited in the GitHub web UI comes back with CRLF line endings.
+  const match = body?.match(/^\| Stage \| (.*) \|\r?$/m);
+  return match ? match[1] : null;
+}
+
 function severityEmoji(severity: string): string {
   if (severity === 'critical') return '🔴';
   if (severity === 'high') return '🟠';
@@ -594,7 +608,7 @@ function buildIssueBody(
     `|-------|-------|`,
     `| Severity | ${severityEmoji(finding.severity)} ${severityLabel} |`,
     `| Priority | ${priority} |`,
-    `| Stage | ${stage} |`,
+    stageRow(stage),
     `| Target | ${targetUrl || 'unknown'} |`,
     `| First seen | ${scanDate} |`,
   ].join('\n');
@@ -852,19 +866,22 @@ export function createSecopsTriageService(logger: Logger) {
         );
       }
 
-      // Collect fingerprints from ALL eligible findings (not just toProcess) so that
-      // findings beyond the maxIssuesPerScan cap don't trigger false-positive auto-closes.
+      // Collect fingerprints from ALL findings in the scan (not just toProcess) so that findings
+      // below the threshold or beyond the maxIssuesPerScan cap don't trigger false-positive auto-closes.
       const fingerprintsSeen = new Set<string>();
-      for (const finding of eligible) {
+      for (const finding of findings) {
         fingerprintsSeen.add(fingerprint(finding.id, stage, sourceMeta.issueLabel));
+      }
+      for (const id of payload.unverifiedFindingIds ?? []) {
+        fingerprintsSeen.add(fingerprint(id, stage, sourceMeta.issueLabel));
       }
 
       // Build a map of fingerprint -> issue number for O(1) lookup
-      const openByFingerprint = new Map<string, { number: number; title: string }>();
+      const openByFingerprint = new Map<string, { number: number; title: string; stage: string | null }>();
       for (const issue of openIssues) {
         const match = issue.body?.match(/<!-- secops-fingerprint: ([a-f0-9]+) -->/);
         if (match) {
-          openByFingerprint.set(match[1], { number: issue.number, title: issue.title });
+          openByFingerprint.set(match[1], { number: issue.number, title: issue.title, stage: issueStage(issue.body) });
         }
       }
 
@@ -924,9 +941,13 @@ export function createSecopsTriageService(logger: Logger) {
         }
       }
 
-      // 6. Auto-close open issues whose fingerprint was NOT in this scan
+      // 6. Auto-close open issues of this stage whose fingerprint was NOT in this scan
+      const autoCloseSkipped = payload.findingsComplete === false;
+      if (autoCloseSkipped) {
+        logger.info('[SECOPS-TRIAGE] Skipping auto-close: scan findings list is incomplete', { stage });
+      }
       for (const [fp, issue] of openByFingerprint.entries()) {
-        if (!fingerprintsSeen.has(fp)) {
+        if (!autoCloseSkipped && issue.stage === stage && !fingerprintsSeen.has(fp)) {
           if (dryRun) {
             logger.info(`[SECOPS-TRIAGE] DRY RUN — would auto-close issue #${issue.number}: ${issue.title}`);
           } else {

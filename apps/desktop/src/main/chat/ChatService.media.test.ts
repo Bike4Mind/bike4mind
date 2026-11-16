@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatStreamEvent } from '@shared/chat';
-import { isQuickApproval } from '@shared/watch';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
@@ -183,7 +182,7 @@ describe('ChatService generation tools', () => {
     expect((await service.getSession(id))?.remoteSessionId).toBe('nb1');
   }, 20_000);
 
-  it('keeps the card for a credit-spending image to the app, never a watch quick approval', async () => {
+  it('asks about an image in ask mode like any other tool, answerable away from the app', async () => {
     const approvals = new ApprovalGate();
     await build({ media: true, roots: [], approvals });
     apiGet.mockImplementation((url: string) =>
@@ -194,6 +193,7 @@ describe('ChatService generation tools', () => {
       )
     );
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'draw me a bicycle');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
     streams[0].write(
@@ -209,8 +209,8 @@ describe('ChatService generation tools', () => {
       { timeout: 3000, interval: 5 }
     );
     const call = card.type === 'tool-start' ? card.call : undefined;
-    expect(call).toMatchObject({ name: 'generate_image', approvalInAppOnly: true });
-    expect(call && isQuickApproval(call)).toBe(false);
+    expect(call?.name).toBe('generate_image');
+    expect(call?.approvalInAppOnly).toBeUndefined();
     if (call?.approvalId) approvals.resolve(call.approvalId, { decision: 'deny' });
   });
 });

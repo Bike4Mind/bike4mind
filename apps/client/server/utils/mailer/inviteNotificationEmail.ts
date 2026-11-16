@@ -15,6 +15,8 @@ export const getInviteTypeName = (type: InviteType): string => {
       return 'organization';
     case InviteType.Group:
       return 'group';
+    case InviteType.Space:
+      return 'space';
     default:
       return 'content';
   }
