@@ -73,8 +73,13 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
       // With requireCheckoutTermsConsent on, a terms step comes first; it must not strand the user.
       const termsDialog = page.getByTestId('credits-terms-dialog');
       const paymentModal = page.getByTestId('payment-modal-dialog');
-      await expect(termsDialog.or(paymentModal)).toBeVisible({ timeout: TIMEOUTS.TEST });
-      if (await termsDialog.isVisible()) {
+      // start-payment fires on the click unless the terms step comes first, so whichever shows up
+      // first decides the branch; a failed start-payment then surfaces its body, not a timeout.
+      const firstStep = await Promise.race([
+        termsDialog.waitFor({ timeout: TIMEOUTS.TEST }).then(() => 'terms' as const),
+        startPayment.then(() => 'payment' as const),
+      ]);
+      if (firstStep === 'terms') {
         await expectReachable(termsDialog.getByTestId('credits-terms-checkbox'), 'terms checkbox');
         await termsDialog.getByTestId('credits-terms-checkbox').click();
         const continueBtn = termsDialog.getByTestId('credits-terms-continue-btn');
@@ -84,7 +89,7 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
       }
 
       const started = await startPayment;
-      expect(started.ok(), 'start-payment succeeds').toBe(true);
+      expect(started.ok(), `start-payment succeeds: ${started.status()} ${await started.text()}`).toBe(true);
       const { publishableKey } = (await started.json()) as { publishableKey?: string };
       // Hard stop before any card is entered: only a Stripe test-mode key may ever be paid against.
       expect(publishableKey, 'the stage uses Stripe test mode').toMatch(/^pk_test_/);
