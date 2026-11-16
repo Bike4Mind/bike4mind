@@ -43,6 +43,7 @@ const LIVE_CHROME_ROWS = 10;
 
 /** Shown under the queued-message rows; mirrors the routing in handleSubmit and the ESC handler in index.tsx. */
 const QUEUE_HINT = 'Enter steers this turn \u00B7 Tab queues for next turn \u00B7 Esc cancels and restores to input';
+const PEER_QUEUE_HINT = 'Enter and Tab queue your next turn \u00B7 Peer work does not receive your input';
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -114,17 +115,25 @@ export function App({
   const setIsThinking = useCliStore(state => state.setIsThinking);
   const pendingBackgroundTrigger = useCliStore(state => state.pendingBackgroundTrigger);
   const turnInFlight = useCliStore(state => state.turnInFlight);
+  const peerTurnActive = useCliStore(state => state.peerTurnActive);
   const setPendingBackgroundTrigger = useCliStore(state => state.setPendingBackgroundTrigger);
 
   // Auto-trigger agent when background tasks complete while idle
   useEffect(() => {
-    if (pendingBackgroundTrigger && !isThinking && !turnInFlight && onBackgroundCompletion) {
+    if (pendingBackgroundTrigger && !isThinking && !turnInFlight && !peerTurnActive && onBackgroundCompletion) {
       // Clear the trigger immediately to prevent re-triggering
       setPendingBackgroundTrigger(false);
       // Trigger silent handler to process background results (no user message added)
       onBackgroundCompletion();
     }
-  }, [pendingBackgroundTrigger, isThinking, turnInFlight, setPendingBackgroundTrigger, onBackgroundCompletion]);
+  }, [
+    pendingBackgroundTrigger,
+    isThinking,
+    turnInFlight,
+    peerTurnActive,
+    setPendingBackgroundTrigger,
+    onBackgroundCompletion,
+  ]);
 
   // Interaction mode cycle (normal -> auto-accept -> plan -> normal)
   const cycleInteractionMode = useCliStore(state => state.cycleInteractionMode);
@@ -213,14 +222,12 @@ export function App({
         }
       }
 
-      // Mid-turn input is queued, never run as a parallel turn. Enter steers
-      // the running turn (delivered at its next model request); Tab queues a
-      // follow-up turn. turnInFlight covers the unwind after an eager ESC.
+      // Keep human input out of results automatically returned to a peer.
       // Busy without a turn (a custom command, background results) there is
       // nothing to steer, so the input waits as a follow-up.
       const store = useCliStore.getState();
-      if (store.isThinking || store.turnInFlight) {
-        const kind = options?.followUp || !store.turnInFlight ? 'followUp' : 'steer';
+      if (store.isThinking || store.turnInFlight || store.peerTurnActive) {
+        const kind = options?.followUp || !store.turnInFlight || store.peerTurnActive ? 'followUp' : 'steer';
         store.enqueueMessage(messageToSend, kind, trimmed);
         return;
       }
@@ -384,7 +391,7 @@ export function App({
                   );
                 })}
                 <Text dimColor wrap="truncate-end">
-                  {QUEUE_HINT}
+                  {peerTurnActive ? PEER_QUEUE_HINT : QUEUE_HINT}
                 </Text>
               </Box>
             )}

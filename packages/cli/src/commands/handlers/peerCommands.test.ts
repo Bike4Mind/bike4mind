@@ -21,7 +21,8 @@ describe('/peers', () => {
     };
     const controls = { enable: vi.fn(), disable: vi.fn(), get: () => service as unknown as PeerService };
     await peerCommand.run(['send', 'peer', '/compact', '@secret'], context(controls));
-    expect(service.send).toHaveBeenCalledWith('peer', '/compact @secret');
+    expect(service.send).toHaveBeenCalledWith('peer', '/compact @secret', undefined, undefined, { origin: 'human' });
+    expect(service.resetSendBudget).not.toHaveBeenCalled();
     expect(service.setPolicy).not.toHaveBeenCalled();
     await peerCommand.run(['hold'], context(controls));
     expect(service.setPolicy).toHaveBeenCalledWith('hold');

@@ -2,6 +2,42 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ensurePeerRoot } from './transport.js';
+import { isPeerIdentity } from './protocol.js';
+
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_HISTORY_SCAN = 16_384;
+const MAX_HISTORY_BYTES = 64 * 1024 * 1024;
+
+export function hasLivePeerWriter(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || !('writer' in value) || !value.writer || typeof value.writer !== 'object')
+    return false;
+  const writer = value.writer as Record<string, unknown>;
+  if (!Number.isSafeInteger(writer.processId) || Number(writer.processId) < 1) return false;
+  try {
+    process.kill(Number(writer.processId), 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+  }
+}
+
+export function hasActivePeerWriter(value: unknown): boolean {
+  if (
+    !hasLivePeerWriter(value) ||
+    !value ||
+    typeof value !== 'object' ||
+    !('writer' in value) ||
+    !value.writer ||
+    typeof value.writer !== 'object'
+  )
+    return false;
+  return (
+    ('activeMessageId' in value.writer && typeof value.writer.activeMessageId === 'string') ||
+    ('activeRequests' in value.writer &&
+      typeof value.writer.activeRequests === 'number' &&
+      value.writer.activeRequests > 0)
+  );
+}
 
 export class PeerStorage {
   private filePath = '';
@@ -22,26 +58,44 @@ export class PeerStorage {
 
   async history(now: number): Promise<Array<{ storage: PeerStorage; value: unknown }>> {
     const directory = path.dirname(this.filePath);
-    const candidates: Array<{ incarnation: string; modifiedAt: number }> = [];
-    const files = await fs.readdir(directory);
-    if (files.length > 4096) throw new Error('Peer history directory limit reached');
-    for (const name of files) {
-      if (!/^[a-zA-Z0-9_-]{1,256}\.json$/.test(name) || name === `${this.incarnation}.json`) continue;
+    const candidates: Array<{ storage: PeerStorage; value: unknown; modifiedAt: number }> = [];
+    let scanned = 0;
+    let bytes = 0;
+    const entries = await fs.opendir(directory);
+    for await (const entry of entries) {
+      if (++scanned > MAX_HISTORY_SCAN) break;
+      const name = entry.name;
+      if (name === `${this.incarnation}.json`) continue;
+      const snapshot = /^[a-zA-Z0-9_-]{1,256}\.json$/.test(name);
+      const temporary = /^[a-zA-Z0-9_-]{1,256}\.json\.[a-f0-9-]{36}\.tmp$/.test(name);
+      if (!snapshot && !temporary) continue;
       const candidatePath = path.join(directory, name);
-      const stat = await fs.lstat(candidatePath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
-        continue;
-      if (stat.mtimeMs + 7 * 24 * 60 * 60 * 1000 <= now) await fs.rm(candidatePath);
-      else candidates.push({ incarnation: name.slice(0, -5), modifiedAt: stat.mtimeMs });
+      try {
+        const stat = await fs.lstat(candidatePath);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
+          continue;
+        if (temporary) {
+          if (stat.mtimeMs + RETENTION_MS <= now) await fs.rm(candidatePath);
+          continue;
+        }
+        if (stat.size > 32 * 1024 * 1024 || bytes + stat.size > MAX_HISTORY_BYTES) continue;
+        bytes += stat.size;
+        const storage = new PeerStorage(this.root, name.slice(0, -5));
+        await storage.init();
+        const value = await storage.load();
+        if (!isManagedSnapshot(value)) continue;
+        if (stat.mtimeMs + RETENTION_MS <= now && !hasActivePeerWriter(value)) {
+          await fs.rm(candidatePath);
+          continue;
+        }
+        candidates.push({ storage, value, modifiedAt: stat.mtimeMs });
+        candidates.sort((left, right) => right.modifiedAt - left.modifiedAt);
+        if (candidates.length > 32) candidates.pop();
+      } catch (error) {
+        if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
+      }
     }
-    const result: Array<{ storage: PeerStorage; value: unknown }> = [];
-    for (const candidate of candidates.sort((left, right) => right.modifiedAt - left.modifiedAt).slice(0, 32)) {
-      const storage = new PeerStorage(this.root, candidate.incarnation);
-      await storage.init();
-      const value = await storage.load();
-      if (value !== undefined) result.push({ storage, value });
-    }
-    return result;
+    return candidates.map(({ storage, value }) => ({ storage, value }));
   }
 
   async load(): Promise<unknown | undefined> {
@@ -113,4 +167,19 @@ export class PeerStorage {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function isManagedSnapshot(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'version' in value &&
+    value.version === 1 &&
+    'identity' in value &&
+    isPeerIdentity(value.identity) &&
+    'incoming' in value &&
+    Array.isArray(value.incoming) &&
+    'outgoing' in value &&
+    Array.isArray(value.outgoing)
+  );
 }

@@ -6,6 +6,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from './App';
@@ -17,6 +20,7 @@ class FakeStdout extends EventEmitter {
 }
 
 let fakeStdout: FakeStdout;
+let directories: string[];
 
 vi.mock('ink', async importOriginal => {
   const actual = await importOriginal<typeof import('ink')>();
@@ -58,11 +62,70 @@ async function submit(stdin: { write: (data: string) => void }, text: string, ke
 describe('App mid-turn message queue', () => {
   beforeEach(() => {
     fakeStdout = new FakeStdout();
-    useCliStore.setState({ messageQueue: [], inputValue: '', isThinking: false, turnInFlight: false });
+    directories = [];
+    useCliStore.setState({
+      messageQueue: [],
+      inputValue: '',
+      isThinking: false,
+      turnInFlight: false,
+      peerTurnActive: false,
+    });
   });
 
-  afterEach(() => {
-    useCliStore.setState({ messageQueue: [], inputValue: '', isThinking: false, turnInFlight: false });
+  afterEach(async () => {
+    useCliStore.setState({
+      messageQueue: [],
+      inputValue: '',
+      isThinking: false,
+      turnInFlight: false,
+      peerTurnActive: false,
+    });
+    await Promise.all(directories.map(directory => rm(directory, { recursive: true, force: true })));
+  });
+
+  it.each([false, true])(
+    'keeps expanded human file input in its own turn when peer work is %s',
+    async peerTurnActive => {
+      const directory = await mkdtemp(join(tmpdir(), 'b4m-peer-human-input-'));
+      directories.push(directory);
+      const file = join(directory, 'private.txt');
+      await writeFile(file, 'HUMAN_FILE_MARKER');
+      useCliStore.setState({ isThinking: true, turnInFlight: true, peerTurnActive });
+      const onMessage = vi.fn(asyncNoop);
+      const { stdin, lastFrame, unmount } = renderApp(onMessage);
+      try {
+        await submit(stdin, `explain @${file} `, '\r');
+        await vi.waitFor(() => expect(useCliStore.getState().messageQueue).toHaveLength(1));
+        const queued = useCliStore.getState().messageQueue[0];
+        expect(queued).toMatchObject({ kind: peerTurnActive ? 'followUp' : 'steer', typed: `explain @${file}` });
+        expect(queued.text).toContain('HUMAN_FILE_MARKER');
+        expect(onMessage).not.toHaveBeenCalled();
+        if (peerTurnActive) {
+          await vi.waitFor(() =>
+            expect(stripAnsi(lastFrame() ?? '')).toContain('Peer work does not receive your input')
+          );
+        }
+      } finally {
+        unmount();
+      }
+    }
+  );
+
+  it('queues both Enter and Tab separately from peer work, including cancellation unwind', async () => {
+    useCliStore.setState({ isThinking: false, turnInFlight: true, peerTurnActive: true });
+    const { stdin, unmount } = renderApp();
+    try {
+      await submit(stdin, 'human Enter', '\r');
+      await submit(stdin, 'human Tab', '\t');
+      await vi.waitFor(() =>
+        expect(useCliStore.getState().messageQueue).toEqual([
+          { text: 'human Enter', kind: 'followUp' },
+          { text: 'human Tab', kind: 'followUp' },
+        ])
+      );
+    } finally {
+      unmount();
+    }
   });
 
   it('queues Enter as a steer and Tab as a follow-up while a turn runs, and shows both', async () => {

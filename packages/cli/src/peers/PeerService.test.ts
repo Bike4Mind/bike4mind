@@ -7,6 +7,8 @@ import { PeerService } from './PeerService.js';
 import type { PeerDeliveryResult, PeerServiceOptions } from './PeerService.js';
 import type { PeerIdentity, PeerReceipt } from './protocol.js';
 import { callPeer } from './transport.js';
+import * as transport from './transport.js';
+import { PeerStorage } from './storage.js';
 
 let root: string;
 let services: PeerService[];
@@ -168,18 +170,23 @@ describe('PeerService', () => {
     expect(await receiver.inbox()).toEqual([]);
   });
 
-  it('recovers pending messages held and does not automatically replay them', async () => {
+  it('shows retired pending messages without replay and requires a fresh request for a new incarnation', async () => {
     const sender = await start('sender');
     const deliver = vi.fn(async (): Promise<PeerDeliveryResult> => ({ status: 'completed' }));
     const receiver = await start('receiver', { canDeliver: () => false, deliver });
     await receiver.setPolicy('accept');
     const sent = receipt(await sender.send(receiver.identity.id, 'recover'));
     await receiver.close();
-    const recovered = await start('receiver', { identity: receiver.identity, deliver });
+    const recovered = await start('receiver', {
+      identity: { ...identity('receiver'), threadId: receiver.identity.threadId },
+      deliver,
+    });
     expect(recovered.getPolicy()).toBe('hold');
-    expect((await recovered.inbox())[0]).toMatchObject({ id: sent.id, status: 'held' });
+    expect((await recovered.inbox())[0]).toMatchObject({ id: sent.id, status: 'unknown' });
     expect(deliver).not.toHaveBeenCalled();
-    await recovered.release(sent.id);
+    await expect(recovered.release(sent.id)).rejects.toThrow('Pending received message not found');
+    const fresh = receipt(await sender.send(recovered.identity.id, 'fresh approved request'));
+    await recovered.release(fresh.id);
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
   });
 
@@ -199,10 +206,22 @@ describe('PeerService', () => {
     );
     await receiver.close();
     const deliver = vi.fn();
-    const recovered = await start('receiver', { identity: receiver.identity, deliver });
+    await expect(start('reused', { identity: receiver.identity, deliver })).rejects.toThrow('still owned');
+    const recovered = await start('receiver', {
+      identity: { ...identity('receiver'), threadId: receiver.identity.threadId },
+      deliver,
+    });
     expect((await recovered.inbox())[0]).toMatchObject({ id: sent.id, status: 'unknown' });
     expect(deliver).not.toHaveBeenCalled();
-    finish?.({ status: 'completed' });
+    await expect(recovered.remove(sent.id)).rejects.toThrow('still active');
+    finish?.({ status: 'completed', text: 'known result after transport closed' });
+    await vi.waitFor(async () =>
+      expect((await recovered.inbox())[0]).toMatchObject({
+        id: sent.id,
+        status: 'completed',
+        result: 'known result after transport closed',
+      })
+    );
   });
 
   it('correlates replies and enforces hop limits rather than resetting a peer-origin chain', async () => {
@@ -450,4 +469,275 @@ describe('PeerService', () => {
     });
     expect((await resumed.inbox())[0]).toMatchObject({ id: sent.id, status: 'unknown' });
   });
+
+  it.each(['init', 'load', 'history', 'save'] as const)(
+    'cancels startup during storage %s without publishing a peer',
+    async method => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      let first = true;
+      const pause = async () => {
+        if (!first) return;
+        first = false;
+        entered.resolve();
+        await release.promise;
+      };
+      if (method === 'init') {
+        const original = PeerStorage.prototype.init;
+        vi.spyOn(PeerStorage.prototype, 'init').mockImplementation(async function (this: PeerStorage) {
+          await pause();
+          return original.call(this);
+        });
+      } else if (method === 'load') {
+        const original = PeerStorage.prototype.load;
+        vi.spyOn(PeerStorage.prototype, 'load').mockImplementation(async function (this: PeerStorage) {
+          await pause();
+          return original.call(this);
+        });
+      } else if (method === 'history') {
+        const original = PeerStorage.prototype.history;
+        vi.spyOn(PeerStorage.prototype, 'history').mockImplementation(async function (this: PeerStorage, now) {
+          await pause();
+          return original.call(this, now);
+        });
+      } else {
+        const original = PeerStorage.prototype.save;
+        vi.spyOn(PeerStorage.prototype, 'save').mockImplementation(async function (this: PeerStorage, value) {
+          await pause();
+          return original.call(this, value);
+        });
+      }
+      const service = new PeerService({
+        root,
+        identity: identity('cancelled'),
+        canDeliver: () => true,
+        deliver: vi.fn(),
+      });
+      services.push(service);
+      const starting = service.start();
+      const rejected = expect(starting).rejects.toThrow('cancelled');
+      await entered.promise;
+      const closing = service.close();
+      release.resolve();
+      await Promise.all([rejected, closing]);
+      expect(await transport.discoverPeers(root)).toEqual([]);
+      await expect(service.list()).rejects.toThrow('not enabled');
+    }
+  );
+
+  it('retires a transport created after close and shares concurrent lifecycle calls', async () => {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = transport.startPeerTransport;
+    const created: Array<Awaited<ReturnType<typeof original>>> = [];
+    vi.spyOn(transport, 'startPeerTransport').mockImplementation(async options => {
+      const result = await original(options);
+      created.push(result);
+      entered.resolve();
+      await release.promise;
+      return result;
+    });
+    const service = new PeerService({
+      root,
+      identity: identity('cancelled'),
+      canDeliver: () => true,
+      deliver: vi.fn(),
+    });
+    services.push(service);
+    const starting = service.start();
+    expect(service.start()).toBe(starting);
+    const rejected = expect(starting).rejects.toThrow('cancelled');
+    await entered.promise;
+    const closing = service.close();
+    expect(service.close()).toBe(closing);
+    release.resolve();
+    await Promise.all([rejected, closing]);
+    expect(await transport.discoverPeers(root)).toEqual([]);
+    await expect(fs.stat(created[0]!.manifest.endpoint)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('stops admission on unexpected transport shutdown and notifies the UI once', async () => {
+    const original = transport.startPeerTransport;
+    let shutdown: ((reason: string) => void) | undefined;
+    vi.spyOn(transport, 'startPeerTransport').mockImplementation(async options => {
+      shutdown = options.onClosed;
+      return original(options);
+    });
+    const notify = vi.fn();
+    const onUnavailable = vi.fn();
+    const service = await start('unavailable', { notify, onUnavailable });
+    shutdown?.('registry lost');
+    shutdown?.('registry lost again');
+    await service.close();
+    expect(onUnavailable).toHaveBeenCalledExactlyOnceWith('registry lost');
+    expect(notify).toHaveBeenCalledExactlyOnceWith('Peer messaging is unavailable: registry lost');
+    await expect(service.list()).rejects.toThrow('not enabled');
+    expect(await transport.discoverPeers(root)).toEqual([]);
+  });
+
+  it('persists a late exact result after bounded close without notifying another session', async () => {
+    const finish = deferred<PeerDeliveryResult>();
+    const sender = await start('sender');
+    const notify = vi.fn();
+    const receiver = await start('receiver', { deliver: () => finish.promise, notify });
+    await receiver.setPolicy('accept');
+    const sent = receipt(await sender.send(receiver.identity.id, 'finish after shutdown'));
+    await vi.waitFor(async () => expect((await receiver.inbox())[0]?.status).toBe('delivered'));
+    await receiver.close();
+    const notificationsAtClose = notify.mock.calls.length;
+    const resumed = await start('resumed', {
+      identity: { ...identity('resumed'), threadId: receiver.identity.threadId },
+    });
+    finish.resolve({ status: 'completed', text: 'exact late outcome' });
+    await vi.waitFor(async () =>
+      expect((await resumed.inbox())[0]).toMatchObject({
+        id: sent.id,
+        status: 'completed',
+        result: 'exact late outcome',
+      })
+    );
+    expect(notify).toHaveBeenCalledTimes(notificationsAtClose);
+  });
+
+  it('rejects untrusted result and error fields before they can become a receipt', async () => {
+    const sender = await start('sender');
+    const receiver = await start('receiver');
+    const now = Date.now();
+    const message = {
+      id: randomUUID(),
+      text: 'plain request',
+      hops: 0,
+      createdAt: now,
+      expiresAt: now + 900_000,
+      result: 'x'.repeat(20_000),
+      error: 'forged result metadata',
+    };
+    expect(await callPeer(root, sender.identity, receiver.identity.id, { type: 'send', message })).toMatchObject({
+      ok: false,
+    });
+    expect(await receiver.inbox()).toEqual([]);
+  });
+
+  it('archives offline uncertainty locally and frees active capacity without claiming cancellation', async () => {
+    const own = identity('sender');
+    const offline = identity('offline');
+    const now = Date.now();
+    const records = Array.from({ length: 1024 }, () => ({
+      receipt: {
+        id: randomUUID(),
+        senderId: own.id,
+        recipientId: offline.id,
+        status: 'unknown',
+        text: 'old payload',
+        hops: 0,
+        createdAt: now - 900_000,
+        expiresAt: now - 1,
+      },
+      peer: offline,
+      fingerprint: '0'.repeat(64),
+      updatedAt: now,
+      approved: true,
+    }));
+    const storage = new PeerStorage(root, `${own.id}-${own.generation}`);
+    await storage.init();
+    await storage.save({ version: 1, identity: own, incoming: [], outgoing: records });
+    const sender = await start('sender', { identity: own });
+    const archivedId = records[0]!.receipt.id;
+    await sender.remove(archivedId);
+    expect((await sender.inbox()).find(item => item.id === archivedId)).toMatchObject({
+      status: 'unknown',
+      error: expect.stringContaining('No cancellation'),
+    });
+    expect((await sender.inbox()).find(item => item.id === archivedId)?.text).toBeUndefined();
+    const receiver = await start('receiver', { identity: offline });
+    expect(receipt(await sender.send(receiver.identity.id, 'new request after local archival')).status).toBe('held');
+    const archivedSnapshot = (await storage.load()) as { outgoing: Array<{ archived?: boolean }> };
+    expect(archivedSnapshot.outgoing.filter(item => item.archived)).toHaveLength(1);
+  });
+
+  it('does not charge human sends to the agent budget or adopt a peer-origin chain', async () => {
+    const sender = await start('sender');
+    const receiver = await start('receiver');
+    await sender.send(receiver.identity.id, 'agent one');
+    await sender.send(receiver.identity.id, 'agent two');
+    expect(
+      receipt(await sender.send(receiver.identity.id, 'human input', undefined, undefined, { origin: 'human' })).status
+    ).toBe('held');
+    expect(await sender.send(receiver.identity.id, 'agent still exhausted')).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('limit'),
+    });
+    const context = receiver.captureSendContext();
+    receiver.resetSendBudget();
+    await expect(receiver.prepareSendTarget(sender.identity.id, false, context)).rejects.toThrow('turn changed');
+    expect(
+      await receiver.send(sender.identity.id, 'stale approval', undefined, sender.identity, context)
+    ).toMatchObject({ ok: false, error: expect.stringContaining('turn changed') });
+  });
+  it('preflights peer-agent restrictions while allowing independent human dispatch', async () => {
+    const entered = deferred<void>();
+    const finish = deferred<PeerDeliveryResult>();
+    const sender = await start('sender');
+    const third = await start('third');
+    const receiver = await start('receiver', {
+      deliver: async () => {
+        entered.resolve();
+        return finish.promise;
+      },
+    });
+    const sent = receipt(await sender.send(receiver.identity.id, 'peer-origin request'));
+    await receiver.release(sent.id);
+    await entered.promise;
+    const context = receiver.captureSendContext();
+    await expect(receiver.prepareSendTarget(third.identity.id, false, context)).rejects.toThrow('only reply');
+    const approved = await receiver.prepareSendTarget(third.identity.id, false, { origin: 'human' });
+    const human = receipt(
+      await receiver.send(third.identity.id, 'human directed input', undefined, approved, { origin: 'human' })
+    );
+    expect(human.hops).toBe(0);
+    expect(human.replyTo).toBeUndefined();
+    expect(receiver.captureSendContext()).toEqual(context);
+    const reply = receipt(await receiver.reply(sent.id, 'agent reply', sender.identity, context));
+    expect(reply).toMatchObject({ replyTo: sent.id, hops: 1 });
+    finish.resolve({ status: 'completed' });
+    await vi.waitFor(async () =>
+      expect(receipt(await sender.status(receiver.identity.id, sent.id)).status).toBe('completed')
+    );
+  });
+
+  it('does not clear a queued normal turn context when a peer delivery finishes', async () => {
+    const entered = deferred<void>();
+    const finish = deferred<PeerDeliveryResult>();
+    const sender = await start('sender');
+    const third = await start('third');
+    const receiver = await start('receiver', {
+      deliver: async () => {
+        entered.resolve();
+        return finish.promise;
+      },
+    });
+    const sent = receipt(await sender.send(receiver.identity.id, 'peer request before queued human turn'));
+    await receiver.release(sent.id);
+    await entered.promise;
+    receiver.resetSendBudget();
+    const normalContext = receiver.captureSendContext();
+    expect(normalContext.parentMessageId).toBeUndefined();
+    finish.resolve({ status: 'completed' });
+    await vi.waitFor(async () =>
+      expect(receipt(await sender.status(receiver.identity.id, sent.id)).status).toBe('completed')
+    );
+    expect(receiver.captureSendContext()).toEqual(normalContext);
+    const target = await receiver.prepareSendTarget(third.identity.id, false, normalContext);
+    expect(
+      receipt(await receiver.send(third.identity.id, 'normal turn message', undefined, target, normalContext)).hops
+    ).toBe(0);
+  });
 });
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -1,6 +1,19 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { PeerService } from '../peers/PeerService.js';
 
+export const PEER_TOOL_NAMES = ['peer_list', 'peer_send', 'peer_status'] as const;
+
+export function syncPeerTools(
+  agent: { getTools(): ICompletionOptionTools[] },
+  tools: ICompletionOptionTools[],
+  enabled: boolean
+): void {
+  const current = agent.getTools();
+  const names = new Set<string>(PEER_TOOL_NAMES);
+  const retained = current.filter(tool => !names.has(tool.toolSchema.name));
+  current.splice(0, current.length, ...retained, ...(enabled ? tools : []));
+}
+
 export function createPeerTools(
   getService: () => PeerService | null,
   approveSend: (target: string, text: string) => Promise<boolean>
@@ -46,15 +59,16 @@ export function createPeerTools(
         if (Buffer.byteLength(text) > 8192) throw new Error('Peer messages must be at most 8 KiB.');
         const reply = (args as Record<string, unknown>).reply;
         if (reply !== undefined && typeof reply !== 'boolean') throw new Error('reply must be boolean.');
-        const recipient = await current.prepareSendTarget(target, reply === true);
+        const sendContext = current.captureSendContext();
+        const recipient = await current.prepareSendTarget(target, reply === true, sendContext);
         const approvalTarget = `${JSON.stringify(recipient.name)} (session ${recipient.id}; generation ${recipient.generation}; conversation ${recipient.threadId})${reply ? ` replying to ${target}` : ''}`;
         if (!(await approveSend(approvalTarget, text))) return 'Peer message was not sent: user approval denied.';
         if (getService() !== current)
           throw new Error('Peer session changed while awaiting approval. Message not sent.');
         return JSON.stringify(
           reply
-            ? await current.reply(target, text, recipient)
-            : await current.send(recipient.id, text, undefined, recipient)
+            ? await current.reply(target, text, recipient, sendContext)
+            : await current.send(recipient.id, text, undefined, recipient, sendContext)
         );
       },
     },

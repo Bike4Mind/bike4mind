@@ -45,7 +45,12 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent } from '@bike4mind/agents';
-import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
+import {
+  ToolCatalog,
+  wrapTools,
+  type PermissionPromptKind,
+  type PermissionPromptOptions,
+} from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import { whoamiReport } from './utils/whoami.js';
@@ -231,8 +236,9 @@ import {
 import { settlePendingPrompts } from './session/pendingPrompts.js';
 import { runTurn, runPeerTurn, type TurnContext } from './session/turnController.js';
 import { PeerService } from './peers/PeerService.js';
+import { preparePeerRoot } from './peers/transport.js';
 import { createPeerIdentity, peerAccountId, peerAccountScope } from './peers/scope.js';
-import { createPeerTools } from './tools/peerTools.js';
+import { createPeerTools, PEER_TOOL_NAMES, syncPeerTools } from './tools/peerTools.js';
 import {
   createFreshSession,
   resumeSession,
@@ -392,6 +398,8 @@ function CliApp() {
   const reviewGateStoreRef = useRef(createReviewGateStore());
   const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
   const peerServiceRef = useRef<PeerService | null>(null);
+  const peerConversationEpochRef = useRef(0);
+  const peerToolsBindingRef = useRef<((enabled: boolean) => void) | null>(null);
   const peerStoppingRef = useRef(false);
   const peerReadyRef = useRef<() => boolean>(() => false);
   const peerTurnContextRef = useRef<() => TurnContext>(() => {
@@ -409,15 +417,20 @@ function CliApp() {
   const livePeerScopeRef = useRef(currentPeerScope);
   livePeerScopeRef.current = currentPeerScope;
 
-  const stopPeers = async () => {
+  const stopPeers = async (reason?: string) => {
     const service = peerServiceRef.current;
     peerServiceRef.current = null;
+    peerToolsBindingRef.current?.(false);
+    if (service && reason)
+      console.log(
+        `Peer messaging disabled: ${reason} Pending messages will not replay automatically. Use /peers on to re-enroll.`
+      );
     if (service) await service.close();
   };
 
   useEffect(() => {
     const unsubscribe = useCliStore.subscribe((next, previous) => {
-      if (next.session?.id !== previous.session?.id) void stopPeers().catch(() => {});
+      if (next.session?.id !== previous.session?.id) void stopPeers('the active conversation changed.').catch(() => {});
     });
     return () => {
       unsubscribe();
@@ -427,8 +440,7 @@ function CliApp() {
 
   useEffect(() => {
     if (peerServiceRef.current && peerScopeRef.current !== currentPeerScope) {
-      void stopPeers().catch(() => {});
-      console.log('Peer messaging disabled because the account, model, or granted folders changed.');
+      void stopPeers('the account, model, or granted folders changed.').catch(() => {});
     }
   }, [currentPeerScope]);
 
@@ -689,6 +701,7 @@ function CliApp() {
       // A server that answers after a later init (e.g. /login from a signed-out session) must not
       // overwrite that init's model list.
       const generation = ++initGenerationRef.current;
+      useCliStore.getState().setPeerTurnActive(false);
       const sessionEnded = () => generation !== initGenerationRef.current;
       const backendInput = {
         config,
@@ -1140,6 +1153,20 @@ function CliApp() {
           ? createWorkItemTools(new WorkItemsClient(apiClient))
           : [];
 
+      const peerTools = wrapTools(
+        createPeerTools(
+          () => peerServiceRef.current,
+          async (target, text) => {
+            const response = await reviewGateFn({
+              id: uuidv4(),
+              description: `Send this peer message to ${JSON.stringify(target)}? It may start model usage in the recipient.\n${JSON.stringify(text)}`,
+            });
+            return response.decision === 'approved';
+          }
+        ),
+        cliWrapDeps
+      );
+
       // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
       // Assembled before the feature registry so their names can be reserved against
       // plugin tool-name collisions (a duplicate tool name would 400 every completion).
@@ -1156,16 +1183,6 @@ function CliApp() {
           findDefinitionTool: createFindDefinitionTool(additionalDirectories),
           getFileStructureTool: createGetFileStructureTool(additionalDirectories),
           workItemTools,
-          peerTools: createPeerTools(
-            () => peerServiceRef.current,
-            async (target, text) => {
-              const response = await reviewGateFn({
-                id: uuidv4(),
-                description: `Send this peer message to ${JSON.stringify(target)}? It may start model usage in the recipient.\n${JSON.stringify(text)}`,
-              });
-              return response.decision === 'approved';
-            }
-          ),
           skillTool,
           dynamicAgentTool,
           coordinateTaskTool:
@@ -1194,6 +1211,7 @@ function CliApp() {
           ...[...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name),
           ...deferredToolRegistry.getDirectoryNames(),
           'tool_search',
+          ...PEER_TOOL_NAMES,
         ],
       });
 
@@ -1268,6 +1286,10 @@ function CliApp() {
         additionalDirectories,
         featureModulePrompts: featureRegistry.getSystemPromptSections(),
       });
+      peerToolsBindingRef.current = enabled => {
+        syncPeerTools(agent, peerTools, enabled && !sessionEnded());
+        agentToolsRef.current = agent.getTools();
+      };
 
       // Hot-swap the system prompt when the user cycles into/out of plan mode (Shift+Tab).
       // The subscription self-cancels when the agent is replaced (e.g., on session reset).
@@ -1749,7 +1771,8 @@ function CliApp() {
   // issue #228). Builds a React-free TurnContext from the current render state;
   // all turn logic lives in runTurn so it can be tested without mounting Ink.
   const buildTurnContext = (): TurnContext => ({
-    onTurnStart: () => peerServiceRef.current?.resetSendBudget(),
+    peerSessionEpoch: () => peerConversationEpochRef.current,
+    onTurnStart: peer => peerServiceRef.current?.resetSendBudget(peer?.messageId),
     agent: state.agent,
     sessionStore: state.sessionStore,
     configStore: state.configStore,
@@ -1786,6 +1809,7 @@ function CliApp() {
       peerScopeRef.current === livePeerScopeRef.current &&
       store.interactionMode === 'normal' &&
       !store.turnInFlight &&
+      !store.peerTurnActive &&
       store.sessionHolds === 0 &&
       !store.isThinking &&
       !store.inputValue &&
@@ -1816,6 +1840,8 @@ function CliApp() {
 
   const enablePeers = async (name?: string) => {
     if (!isInitialized || peerStoppingRef.current || !state.config) throw new Error('CLI is not ready.');
+    if (useCliStore.getState().peerTurnActive)
+      throw new Error('Wait for the active peer turn to finish before enabling a new peer session.');
     if (process.platform === 'win32') throw new Error('Local peer messaging currently supports macOS and Linux.');
     await stopPeers();
     const session = useCliStore.getState().session;
@@ -1845,8 +1871,9 @@ function CliApp() {
       throw new Error('Session changed; enable peers again.');
     peerScopeRef.current = scope;
     peerGenerationRef.current = generation;
+    const root = await preparePeerRoot(path.join(homedir(), '.bike4mind', 'peers'));
     const service: PeerService = new PeerService({
-      root: path.join(homedir(), '.bike4mind', 'peers'),
+      root,
       identity,
       canDeliver: () => peerServiceRef.current === service && peerReadyRef.current(),
       deliver: async (text, provenance) => {
@@ -1858,6 +1885,7 @@ function CliApp() {
           state.signedOutLocal
         );
         if (
+          peerServiceRef.current !== service ||
           peerAccountId(account.endpoint, account.userId) !== identity.accountId ||
           useCliStore.getState().session?.id !== identity.threadId ||
           !peerReadyRef.current()
@@ -1866,6 +1894,12 @@ function CliApp() {
         return runPeerTurn(text, provenance, peerTurnContextRef.current());
       },
       notify: text => console.log(`[peers] ${JSON.stringify(text)}`),
+      onUnavailable: () => {
+        if (peerServiceRef.current === service) {
+          peerServiceRef.current = null;
+          peerToolsBindingRef.current?.(false);
+        }
+      },
     });
     peerServiceRef.current = service;
     try {
@@ -1880,6 +1914,7 @@ function CliApp() {
         throw new Error('Session changed while starting peer messaging.');
       }
       console.log(`Peer session: ${identity.id} (${JSON.stringify(identity.name)})`);
+      peerToolsBindingRef.current?.(true);
     } catch (error) {
       if (peerServiceRef.current === service) peerServiceRef.current = null;
       await service.close();
@@ -1902,8 +1937,15 @@ function CliApp() {
     reviewGateStore: reviewGateStoreRef.current,
     todoStore: todoStoreRef.current,
     onSessionReplaced: () => {
+      peerConversationEpochRef.current++;
+      if (useCliStore.getState().peerTurnActive) {
+        useCliStore.getState().setIsThinking(false);
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        setState(prev => ({ ...prev, abortController: null }));
+      }
       usageCache = null;
-      void stopPeers().catch(() => {});
+      void stopPeers('the active conversation was replaced.').catch(() => {});
     },
     drainReviewGatePrompt: dequeueReviewGatePrompt,
   });
@@ -1919,6 +1961,12 @@ function CliApp() {
       if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
         return;
       }
+    }
+
+    const idleStore = useCliStore.getState();
+    if (idleStore.peerTurnActive || idleStore.turnInFlight || idleStore.isThinking || idleStore.sessionHolds > 0) {
+      idleStore.setPendingBackgroundTrigger(true);
+      return;
     }
 
     // Snapshot and hold with no await in between, so nothing appends to the session unseen.
@@ -2279,6 +2327,10 @@ function CliApp() {
     source: 'llm' | 'local-fallback';
   } | null> => {
     if (!state.agent) return null;
+    if (useCliStore.getState().peerTurnActive) {
+      console.log('Wait for the active peer turn to finish before generating a handoff.');
+      return null;
+    }
 
     // buildHandoffPrompt returns '' for short sessions - single source of truth
     // for the threshold check.
@@ -2477,6 +2529,11 @@ function CliApp() {
     // the point that actually executes - one derivation of the reserved set, not two.
     const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
+      if (useCliStore.getState().peerTurnActive) {
+        console.log('Wait for the active peer turn to finish before running a custom command.');
+        return;
+      }
+      const releaseSession = useCliStore.getState().holdSession();
       try {
         // Show that the command is being executed
         const sourceIcon = customCommand.source === 'global' ? '🏠' : '📁';
@@ -2553,6 +2610,8 @@ function CliApp() {
           error instanceof Error ? error.message : String(error)
         );
         return;
+      } finally {
+        releaseSession();
       }
     }
 
@@ -2954,6 +3013,10 @@ function CliApp() {
       }
 
       case 'rewind': {
+        if (useCliStore.getState().peerTurnActive) {
+          console.log('Wait for the active peer turn to finish before rewinding the conversation.');
+          break;
+        }
         const session = useCliStore.getState().session;
         if (!session) {
           console.log('No active session to rewind');
@@ -3376,6 +3439,10 @@ function CliApp() {
       }
 
       case 'compact': {
+        if (useCliStore.getState().peerTurnActive) {
+          console.log('Wait for the active peer turn to finish before compacting the conversation.');
+          break;
+        }
         await compactSession(buildLifecycleContext(), { userInstructions: args.join(' ') || undefined });
         break;
       }
@@ -4023,6 +4090,7 @@ function CliApp() {
           ...baseTools.map(t => t.toolSchema.name),
           ...deferredToolRegistry.getDirectoryNames(),
           'tool_search',
+          ...PEER_TOOL_NAMES,
         ],
       });
       const rebuiltRegistry = rebuilt.registry;
@@ -4392,6 +4460,7 @@ function CliApp() {
             release: async () => {
               // Retires this session's callbacks before its background agents are cancelled.
               initGenerationRef.current++;
+              useCliStore.getState().setPeerTurnActive(false);
               const jobIds = state.backgroundManager?.listJobs().map(job => job.id) ?? [];
               const runIds = Object.keys(useCliStore.getState().liveSubagentUsage);
               settlePendingPrompts();

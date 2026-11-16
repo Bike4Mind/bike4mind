@@ -120,6 +120,8 @@ interface CliStore {
   /** True from the start of runTurn until its last queued follow-up settles, including after an eager ESC. */
   turnInFlight: boolean;
   setTurnInFlight: (inFlight: boolean) => void;
+  peerTurnActive: boolean;
+  setPeerTurnActive: (active: boolean) => void;
 
   // Operations that read the session, await, then write it back from that snapshot (agent turns,
   // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
@@ -346,6 +348,8 @@ export const useCliStore = create<CliStore>(set => ({
   clearMessageQueue: () => set({ messageQueue: [] }),
   turnInFlight: false,
   setTurnInFlight: inFlight => set({ turnInFlight: inFlight }),
+  peerTurnActive: false,
+  setPeerTurnActive: active => set({ peerTurnActive: active }),
 
   // UI state
   isThinking: false,

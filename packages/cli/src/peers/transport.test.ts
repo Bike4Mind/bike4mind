@@ -1,11 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync, fork } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PeerIdentity, PeerRequest } from './protocol.js';
-import { callPeer, discoverPeers, ensurePeerRoot, startPeerTransport } from './transport.js';
+import { isPeerIdentity, isPeerName, isPeerRequest, type PeerIdentity, type PeerRequest } from './protocol.js';
+import { callPeer, discoverPeers, ensurePeerRoot, preparePeerRoot, startPeerTransport } from './transport.js';
 
-const network = vi.hoisted(() => ({ endpoints: new Map<string, unknown>() }));
+const network = vi.hoisted(() => ({ endpoints: new Map<string, unknown>(), home: undefined as string | undefined }));
+
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => network.home ?? actual.homedir() };
+});
 
 vi.mock('node:net', async () => {
   const { EventEmitter } = await import('node:events');
@@ -119,6 +125,7 @@ afterEach(async () => {
   for (const close of cleanup.reverse()) await close();
   cleanup.length = 0;
   network.endpoints.clear();
+  network.home = undefined;
   vi.restoreAllMocks();
 });
 
@@ -149,6 +156,76 @@ async function peer(root: string, value = identity(), handle = vi.fn(async () =>
 }
 
 describe('peer transport', () => {
+  it('secures only the application-owned config and peers directories created under umask 002', async () => {
+    const base = await fixture();
+    network.home = join(base, 'home');
+    await mkdir(network.home, { mode: 0o755 });
+    const config = join(network.home, '.bike4mind');
+    execFileSync(process.execPath, [
+      '-e',
+      'process.umask(2); require("node:fs").mkdirSync(process.argv[1], {recursive:true})',
+      config,
+    ]);
+    const root = join(config, 'peers');
+    expect((await lstat(config)).mode & 0o777).toBe(0o775);
+    await expect(ensurePeerRoot(root)).rejects.toThrow(config);
+    await preparePeerRoot(root);
+    expect((await lstat(config)).mode & 0o777).toBe(0o700);
+    expect((await lstat(root)).mode & 0o777).toBe(0o700);
+    expect((await lstat(network.home)).mode & 0o777).toBe(0o755);
+    await chmod(root, 0o775);
+    await preparePeerRoot(root);
+    expect((await lstat(root)).mode & 0o777).toBe(0o700);
+    const unrelated = join(base, 'unrelated');
+    await mkdir(unrelated);
+    await chmod(unrelated, 0o775);
+    await expect(preparePeerRoot(unrelated)).rejects.toThrow(unrelated);
+    expect((await lstat(unrelated)).mode & 0o777).toBe(0o775);
+    await chmod(network.home, 0o775);
+    await expect(preparePeerRoot(root)).rejects.toThrow(network.home);
+    expect((await lstat(network.home)).mode & 0o777).toBe(0o775);
+    await chmod(network.home, 0o755);
+    await rm(config, { recursive: true });
+    const destination = join(base, 'linked-config');
+    await mkdir(destination, { mode: 0o755 });
+    await symlink(destination, config);
+    await expect(preparePeerRoot(root)).rejects.toThrow(/symbolic links/);
+    expect((await lstat(destination)).mode & 0o777).toBe(0o755);
+  });
+
+  it('rejects unsafe advertised names and unknown request or message keys', () => {
+    for (const name of [
+      '',
+      '  ',
+      'newline\nname',
+      'line\u2028name',
+      'line\u2029name',
+      'hidden\u202ename',
+      'hidden\u061cname',
+      'hidden\u200ename',
+      'hidden\u200fname',
+      'x'.repeat(101),
+    ]) {
+      expect(isPeerName(name)).toBe(false);
+      expect(isPeerIdentity(identity({ name }))).toBe(false);
+    }
+    expect(isPeerName('A valid name')).toBe(true);
+    expect(isPeerRequest({ type: 'presence', prompt: 'extra' })).toBe(false);
+    expect(isPeerRequest({ type: 'status', messageId: 'id', context: 'extra' })).toBe(false);
+    expect(
+      isPeerRequest({
+        type: 'send',
+        message: { id: 'id', text: 'hello', hops: 0, createdAt: 1, expiresAt: 2, environment: 'extra' },
+      })
+    ).toBe(false);
+    expect(
+      isPeerRequest({
+        type: 'send',
+        message: { id: 'id', text: 'hello', hops: 0, createdAt: 1, expiresAt: 2 },
+        model: 'extra',
+      })
+    ).toBe(false);
+  });
   it('discovers scoped identities without publishing capability secrets', async () => {
     const root = await fixture();
     const source = await peer(root);
@@ -310,6 +387,46 @@ describe('peer transport', () => {
     await peer(root, identity({ threadId: source.identity.threadId }));
   });
 
+  it('recovers expired absent endpoints despite reused PIDs or EPERM and fences the old manifest', async () => {
+    const root = await fixture();
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('denied'), { code: 'EPERM' });
+    });
+    for (const [index, processId] of [process.pid, 2147483647].entries()) {
+      const old = identity();
+      const manifest = {
+        ...old,
+        version: 1,
+        processId,
+        token: 'a'.repeat(64),
+        endpoint: join(root, `${old.id}.sock`),
+        updatedAt: Date.now() - 60_000,
+      };
+      const path = join(root, `${old.id}.json`);
+      await writeFile(path, JSON.stringify(manifest), { mode: 0o600 });
+      await peer(root, identity({ threadId: old.threadId, name: `Replacement ${index}` }));
+      await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(process.kill).not.toHaveBeenCalled();
+  });
+
+  it('gives scoped recovery instructions for an uncertain enrollment lock without removing it', async () => {
+    const root = await fixture();
+    const owner = identity();
+    const directory = await ensurePeerRoot(join(root, 'enrollments'));
+    const key = createHash('sha256')
+      .update(JSON.stringify([owner.accountId, owner.projectId, owner.threadId]))
+      .digest('hex');
+    const file = join(directory, `${key}.lock`);
+    const contents = JSON.stringify({ id: 'old', generation: 'uncertain', processId: 2147483647 });
+    await writeFile(file, contents, { mode: 0o600 });
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(6000);
+    const startup = startPeerTransport({ root, identity: owner, handle: async () => ({ ok: true }) });
+    await expect(startup).rejects.toThrow(file);
+    await expect(startup).rejects.toThrow(/verifying no peer enrollment/);
+    expect(await readFile(file, 'utf8')).toBe(contents);
+  });
+
   it('rejects an excessive directory instead of silently omitting live entries after unrelated files', async () => {
     const root = await fixture();
     const source = await peer(root);
@@ -396,6 +513,82 @@ describe('peer transport', () => {
       generation: 'replacement-generation',
       token: replacement.token,
     });
+  });
+
+  it('renews ownership after a backward clock correction while callers reject future leases', async () => {
+    vi.useFakeTimers();
+    const root = await fixture();
+    const onClosed = vi.fn();
+    const target = await startPeerTransport({
+      root,
+      identity: identity(),
+      handle: async () => ({ ok: true }),
+      onClosed,
+    });
+    cleanup.push(target.close);
+    vi.setSystemTime(Date.now() - 60_000);
+    const source = await peer(root);
+    expect((await discoverPeers(root)).some(peer => peer.id === target.manifest.id)).toBe(false);
+    expect(await callPeer(root, source.identity, target.manifest.id, request)).toMatchObject({ ok: false });
+    const resumed = Date.now();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(async () => {
+      const manifest = JSON.parse(await readFile(join(root, `${target.manifest.id}.json`), 'utf8')) as {
+        updatedAt: number;
+      };
+      expect(manifest.updatedAt).toBeGreaterThanOrEqual(resumed);
+      expect(manifest.updatedAt).toBeLessThanOrEqual(Date.now());
+    });
+    expect(await callPeer(root, source.identity, target.manifest.id, request)).toEqual({ ok: true });
+    await target.close();
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it('notifies once on a terminal heartbeat failure but not on normal closure', async () => {
+    vi.useFakeTimers();
+    const root = await fixture();
+    const onClosed = vi.fn();
+    const target = await startPeerTransport({
+      root,
+      identity: identity(),
+      handle: async () => ({ ok: true }),
+      onClosed,
+    });
+    cleanup.push(target.close);
+    const path = join(root, `${target.manifest.id}.json`);
+    await writeFile(path, JSON.stringify({ ...target.manifest, generation: 'replacement' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() => expect(onClosed).toHaveBeenCalledTimes(1));
+    expect(onClosed).toHaveBeenCalledWith(expect.stringContaining('registration changed'));
+    await target.close();
+    expect(onClosed).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects oversized or unknown response fields before exposing a receipt', async () => {
+    const root = await fixture();
+    const source = await peer(root);
+    for (const extra of [{ result: 'x'.repeat(12289) }, { error: 'x'.repeat(1025) }, { context: 'unrequested' }]) {
+      const target = identity();
+      const transport = await startPeerTransport({
+        root,
+        identity: target,
+        handle: async () => ({
+          ok: true,
+          receipt: {
+            id: 'message',
+            senderId: source.identity.id,
+            recipientId: target.id,
+            status: 'completed',
+            createdAt: 1,
+            expiresAt: 2,
+            hops: 0,
+            ...extra,
+          },
+        }),
+      });
+      cleanup.push(transport.close);
+      expect(await callPeer(root, source.identity, target.id, request)).toMatchObject({ ok: false, unknown: true });
+    }
   });
 
   it('exchanges an authenticated request over isolated real Unix sockets', async () => {
@@ -497,5 +690,81 @@ describe('peer transport', () => {
     expect((await lstat(source.manifest.endpoint)).isSocket()).toBe(true);
     expect((await lstat(replacingEndpoint)).isSocket()).toBe(true);
     expect(JSON.parse(await readFile(replacementPath, 'utf8'))).toMatchObject({ generation: 'new-generation' });
+  });
+
+  it('atomically enrolls only one process for the same account, project and saved thread', async () => {
+    const directory = await fixture();
+    const registry = join(directory, 'registry');
+    const protocol = await readFile(new URL('./protocol.ts', import.meta.url), 'utf8');
+    const transport = await readFile(new URL('./transport.ts', import.meta.url), 'utf8');
+    await writeFile(join(directory, 'protocol.ts'), protocol);
+    await writeFile(join(directory, 'transport.ts'), transport.replace("'./protocol.js'", "'./protocol.ts'"));
+    const script = join(directory, 'enroll.mts');
+    await writeFile(
+      script,
+      `
+      import { randomUUID } from 'node:crypto';
+      import { startPeerTransport } from './transport.ts';
+      try {
+        const server = await startPeerTransport({
+          root: process.argv[2],
+          identity: { id: randomUUID(), generation: randomUUID(), threadId: process.argv[3], name: 'Fixture', accountId: 'account', projectId: 'project' },
+          handle: async () => ({ ok: true })
+        });
+        process.once('message', async () => { await server.close(); process.exit(0); });
+        process.send({ status: 'fulfilled' });
+      } catch (error) {
+        process.send({ status: 'rejected', error: error.message }, () => process.exit(0));
+      }
+    `
+    );
+    const threadId = randomUUID();
+    const children = [
+      fork(script, [registry, threadId], { execArgv: [], silent: true }),
+      fork(script, [registry, threadId], { execArgv: [], silent: true }),
+    ];
+    cleanup.push(async () => {
+      await Promise.all(
+        children.map(
+          child =>
+            new Promise<void>(done => {
+              if (child.exitCode !== null || child.signalCode !== null) {
+                done();
+                return;
+              }
+              child.once('exit', () => done());
+              child.kill('SIGTERM');
+            })
+        )
+      );
+    });
+    const results = await Promise.all(
+      children.map(
+        child =>
+          new Promise<{ status: string; error?: string }>((done, reject) => {
+            let received = false;
+            child.once('message', value => {
+              received = true;
+              done(value as { status: string; error?: string });
+            });
+            child.once('error', reject);
+            child.once('exit', code => {
+              if (!received) reject(new Error(`Enrollment fixture exited early: ${code}`));
+            });
+          })
+      )
+    );
+    expect(results.map(result => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(results.find(result => result.status === 'rejected')?.error).toContain('saved thread');
+    for (const [index, child] of children.entries()) if (results[index].status === 'fulfilled') child.send('close');
+    await Promise.all(
+      children.map(
+        child =>
+          new Promise<void>(done => {
+            if (child.exitCode !== null || child.signalCode !== null) done();
+            else child.once('exit', () => done());
+          })
+      )
+    );
   });
 });

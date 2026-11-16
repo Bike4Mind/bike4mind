@@ -41,13 +41,11 @@ export const peerCommand: CommandHandler = {
           break;
         case 'send':
           if (!target || !rest.length) throw new Error(usage);
-          service.resetSendBudget();
-          output = await service.send(target, rest.join(' '));
+          output = await service.send(target, rest.join(' '), undefined, undefined, { origin: 'human' });
           break;
         case 'reply':
           if (!target || !rest.length) throw new Error(usage);
-          service.resetSendBudget();
-          output = await service.reply(target, rest.join(' '));
+          output = await service.reply(target, rest.join(' '), undefined, { origin: 'human' });
           break;
         case 'status':
         case 'cancel':
@@ -68,7 +66,10 @@ export const peerCommand: CommandHandler = {
         case 'delete':
           if (!target || rest.length) throw new Error(usage);
           if (action === 'release') await service.release(target);
-          else await service.remove(target);
+          else {
+            await service.remove(target);
+            console.log('Removed local message content. This does not cancel remote work.');
+          }
           output = { messageId: target, action: action === 'release' ? 'approved' : 'deleted' };
           break;
         default:

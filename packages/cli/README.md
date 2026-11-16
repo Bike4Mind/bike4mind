@@ -1012,14 +1012,22 @@ and future incoming messages to start idle model turns and incur usage.
 `/peers cancel <session-id> <message-id>` withdraws an undelivered message, and
 `/peers delete <message-id>` removes stored message content when safe.
 `/peers off` unregisters the session and closes its local endpoint.
+If a receiver has gone away, deleting an unresolved outgoing receipt archives it
+locally and retains a bounded tombstone. It does not cancel or retry remote work.
+Already running work may still finish after `/peers off`; its correlated outcome
+is saved for this conversation's history without starting more work.
 
-The agent has `peer_list`, `peer_send`, and `peer_status` tools, but cannot enable
+While enabled, the agent has `peer_list`, `peer_send`, and `peer_status` tools, but cannot enable
 messaging or change inbound policy. Every agent send requires a separate human
 review, including in auto-accept mode. Peer-origin turns can only send back to
 their sender and preserve the reply hop limit. A message is peer input, never
 human permission, and cannot answer approval prompts or bypass denied actions.
 Approval identifies the recipient process and conversation before sending. If
 that recipient restarts while approval is pending, request a new approval.
+Normal tool-permission rules still apply, so an untrusted send can first show
+the standard permission prompt, then the recipient-specific review. Trusting a
+tool never removes that recipient review. Human `/peers send` and `/peers reply`
+commands are independent of the agent's reply chain and send allowance.
 
 Discovery is limited to the same local user, account/API environment, canonical
 repository, and additional granted directories. Local-only profiles use the
@@ -1032,9 +1040,19 @@ while drafting input, while another turn holds the session, and during dialogs.
 Only explicit text crosses the connection. Messages do not expand `@file` or
 image references, execute slash commands, or attach full conversation histories.
 Receiving agents can use their own tools subject to their existing permissions.
+Human input entered during peer work waits for a separate human turn. Its text
+and expanded file references are not steered into the peer's turn or its result.
+Custom commands, generated handoffs, compaction, and rewind are unavailable until
+peer work finishes. Replacing the conversation retires peer enrollment and prevents late
+peer output from entering the replacement conversation.
 Transport credentials stay outside model context in owner-only registry files
 under `~/.bike4mind/peers`. These controls do not isolate malicious programs
 already running as the same OS user.
+The CLI secures its own config and peer directories to 0700 when enabling peers;
+it does not change arbitrary parent-directory permissions. Unsafe ancestors or
+uncertain stale enrollment claims produce an actionable error instead of being
+silently trusted. A terminal transport failure disables peer tools and prints a
+notice; re-enroll only after resolving the reported problem.
 
 Messages are limited to 8 KiB UTF-8, with 20 pending messages per recipient,
 two agent sends per turn, a five-hop reply-chain limit, and per-sender rate
@@ -1048,15 +1066,17 @@ claims were independently verified. An ambiguous disconnect is unknown; do not
 blindly resend it.
 Sender-side deadlines cannot prove remote work expired. Unconfirmed outgoing
 work remains unknown and visible until its remote status is reconciled, including
-when the recipient started running before the deadline.
+when the recipient started running before the deadline. If that receiver is no
+longer discoverable, the user can archive the local receipt without claiming the
+execution stopped.
 If a model turn finishes but its conversation history cannot be saved, the receipt
 reports a storage failure with the completed result. This does not mean the work
 never ran; do not automatically retry it.
 
 Each launch has a new process identity, separate from its saved conversation.
-Use distinct saved conversations for concurrent processes. Enrollment rejects an
-already-discovered copy of the same conversation, but is not a general atomic
-lock on shared history files.
+Use distinct saved conversations for concurrent processes. Peer enrollment is
+serialized per account, project, and saved conversation. This is not a general
+lock on history files used by sessions that have not enabled peer messaging.
 Old process addresses are not redirected to resumed histories. Restarted work
 does not replay pending peer messages automatically. `/peers inbox` can show
 retired receipts for the same saved conversation; unfinished historical work is

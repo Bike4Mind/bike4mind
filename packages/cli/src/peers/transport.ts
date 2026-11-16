@@ -1,8 +1,9 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, open, opendir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { createConnection, createServer, type Socket } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -34,6 +35,16 @@ function missing(error: unknown): boolean {
 }
 
 export async function ensurePeerRoot(root: string): Promise<string> {
+  return validateRoot(root);
+}
+
+export async function preparePeerRoot(root: string): Promise<string> {
+  const config = join(homedir(), '.bike4mind');
+  const expected = join(config, 'peers');
+  return validateRoot(root, resolve(root) === expected ? new Set([config, expected]) : new Set());
+}
+
+async function validateRoot(root: string, repair = new Set<string>()): Promise<string> {
   supported();
   if (!isAbsolute(root) || root.includes('\0')) throw new Error('The peer registry must have an absolute path.');
   const target = resolve(root);
@@ -55,13 +66,37 @@ export async function ensurePeerRoot(root: string): Promise<string> {
       entry = await lstat(current);
     }
     if (entry.isSymbolicLink() || !entry.isDirectory())
-      throw new Error('Peer registry paths cannot contain symbolic links.');
+      throw new Error(`Peer registry path ${JSON.stringify(current)} must be a directory without symbolic links.`);
     const own = entry.uid === process.getuid!();
+    if (own && repair.has(current) && (entry.mode & 0o077) !== 0) {
+      const directory = await open(current, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try {
+        const opened = await directory.stat();
+        if (opened.ino !== entry.ino || opened.dev !== entry.dev || opened.uid !== process.getuid!())
+          throw new Error(`Peer directory ${JSON.stringify(current)} changed while securing it. Try again.`);
+        await directory.chmod(0o700);
+      } finally {
+        await directory.close();
+      }
+      const secured = await lstat(current);
+      if (
+        secured.ino !== entry.ino ||
+        secured.dev !== entry.dev ||
+        secured.isSymbolicLink() ||
+        secured.uid !== process.getuid!()
+      )
+        throw new Error(`Peer directory ${JSON.stringify(current)} changed while securing it. Try again.`);
+      entry = secured;
+    }
     const trustedStickyTemporary = trustedTemporary.has(current) && entry.uid === 0 && (entry.mode & 0o1000) !== 0;
     if ((!own && entry.uid !== 0) || ((entry.mode & 0o022) !== 0 && !trustedStickyTemporary))
-      throw new Error('The peer registry has an unsafe parent directory.');
+      throw new Error(
+        `Peer registry parent ${JSON.stringify(current)} is unsafe. Verify its owner and remove group/other write permission before retrying.`
+      );
     if (current === target && (!own || (entry.mode & 0o077) !== 0))
-      throw new Error('The peer registry must be owned by this user and private (0700).');
+      throw new Error(
+        `Peer registry ${JSON.stringify(current)} must be owned by this user and private (0700). Verify ownership and set directory permissions to 0700 before retrying.`
+      );
   }
   return target;
 }
@@ -93,6 +128,77 @@ function equalSecret(a: unknown, b: string): boolean {
   return (
     typeof a === 'string' && secretPattern.test(a) && timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'))
   );
+}
+
+function sameThread(a: PeerIdentity, b: PeerIdentity): boolean {
+  return a.threadId === b.threadId && sameScope(a, b);
+}
+
+async function acquireEnrollment(root: string, identity: PeerIdentity): Promise<() => Promise<void>> {
+  const directory = await ensurePeerRoot(join(root, 'enrollments'));
+  const key = createHash('sha256')
+    .update(JSON.stringify([identity.accountId, identity.projectId, identity.threadId]))
+    .digest('hex');
+  const file = join(directory, `${key}.lock`);
+  const started = performance.now();
+  let handle;
+  while (!handle) {
+    try {
+      handle = await open(file, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const current = await lstat(file).catch(error => {
+        if (missing(error)) return null;
+        throw error;
+      });
+      if (!current) continue;
+      if (
+        !current.isFile() ||
+        current.isSymbolicLink() ||
+        current.uid !== process.getuid!() ||
+        (current.mode & 0o077) !== 0
+      )
+        throw new Error(
+          `Unsafe peer enrollment lock ${JSON.stringify(file)}. Verify its owner and permissions before retrying.`
+        );
+      if (performance.now() - started >= DEADLINE_MS)
+        throw new Error(
+          `Peer enrollment lock ${JSON.stringify(file)} did not release. After verifying no peer enrollment is running, remove only this lock file and retry.`
+        );
+      await delay(10);
+    }
+  }
+  const original = await handle.stat();
+  const owner = JSON.stringify({ id: identity.id, generation: identity.generation, processId: process.pid });
+  try {
+    await handle.writeFile(owner);
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    try {
+      const current = await lstat(file).catch(error => {
+        if (missing(error)) return null;
+        throw error;
+      });
+      if (!current || current.ino !== original.ino || current.dev !== original.dev) return;
+      const read = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const checked = await read.stat();
+        if (checked.ino !== original.ino || checked.dev !== original.dev || (await read.readFile('utf8')) !== owner)
+          return;
+      } finally {
+        await read.close();
+      }
+      await rm(file);
+    } finally {
+      await handle.close();
+    }
+  };
 }
 
 async function readManifest(root: string, id: string, requireFresh = true): Promise<PeerManifest | null> {
@@ -132,8 +238,8 @@ async function readManifest(root: string, id: string, requireFresh = true): Prom
       typeof candidate.updatedAt !== 'number' ||
       !Number.isFinite(candidate.updatedAt) ||
       (candidate.processId !== undefined && (!Number.isSafeInteger(candidate.processId) || candidate.processId <= 0)) ||
-      candidate.updatedAt > Date.now() + 5_000 ||
-      (requireFresh && Date.now() - candidate.updatedAt > PEER_LEASE_MS)
+      candidate.updatedAt < 0 ||
+      (requireFresh && (candidate.updatedAt > Date.now() + 5_000 || Date.now() - candidate.updatedAt > PEER_LEASE_MS))
     )
       return null;
     return {
@@ -152,39 +258,44 @@ async function readManifest(root: string, id: string, requireFresh = true): Prom
 }
 
 async function writeManifest(root: string, manifest: PeerManifest, initial = false): Promise<void> {
-  const destination = join(root, `${manifest.id}.json`);
-  if (initial) {
-    try {
-      await lstat(`${destination}.prune`);
-      throw new Error('The peer registration is being cleaned up.');
-    } catch (error) {
-      if (!missing(error)) throw error;
-    }
-  }
-  const temporary = initial ? destination : join(root, `${manifest.id}.${randomUUID()}.tmp`);
-  const handle = await open(
-    temporary,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600
-  );
+  const release = initial ? undefined : await acquireEnrollment(root, manifest);
   try {
-    await handle.writeFile(JSON.stringify(manifest));
-  } finally {
-    await handle.close();
-  }
-  if (!initial) {
-    try {
-      const original = await lstat(destination);
-      const previous = await readManifest(root, manifest.id, false);
-      if (!previous || previous.generation !== manifest.generation || previous.token !== manifest.token)
-        throw new Error('The peer registration changed.');
-      const current = await lstat(destination);
-      if (current.ino !== original.ino || current.dev !== original.dev)
-        throw new Error('The peer registration changed.');
-      await rename(temporary, destination);
-    } finally {
-      await rm(temporary, { force: true });
+    const destination = join(root, `${manifest.id}.json`);
+    if (initial) {
+      try {
+        await lstat(`${destination}.prune`);
+        throw new Error('The peer registration is being cleaned up.');
+      } catch (error) {
+        if (!missing(error)) throw error;
+      }
     }
+    const temporary = initial ? destination : join(root, `${manifest.id}.${randomUUID()}.tmp`);
+    const handle = await open(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600
+    );
+    try {
+      await handle.writeFile(JSON.stringify(manifest));
+    } finally {
+      await handle.close();
+    }
+    if (!initial) {
+      try {
+        const original = await lstat(destination);
+        const previous = await readManifest(root, manifest.id, false);
+        if (!previous || previous.generation !== manifest.generation || previous.token !== manifest.token)
+          throw new Error('The peer registration changed.');
+        const current = await lstat(destination);
+        if (current.ino !== original.ino || current.dev !== original.dev)
+          throw new Error('The peer registration changed.');
+        await rename(temporary, destination);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+  } finally {
+    await release?.();
   }
 }
 
@@ -199,13 +310,36 @@ async function registryFiles(root: string): Promise<string[]> {
   return files;
 }
 
-function processEnded(pid: number | undefined): boolean {
-  if (pid === undefined) return false;
+async function ownerResponds(manifest: PeerManifest): Promise<boolean | undefined> {
+  let socket: Socket | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    process.kill(pid, 0);
-    return false;
+    await validateEndpoint(manifest.endpoint);
+    socket = createConnection({ path: manifest.endpoint });
+    const connection = socket;
+    connection.on('error', () => undefined);
+    timeout = setTimeout(() => connection.destroy(new Error('Peer ownership probe timed out.')), 1000);
+    timeout.unref();
+    await new Promise<void>((done, reject) => {
+      connection.once('connect', done);
+      connection.once('error', reject);
+    });
+    const challenge = object(await readFrame(connection));
+    return challenge.version === 1 &&
+      typeof challenge.nonce === 'string' &&
+      secretPattern.test(challenge.nonce) &&
+      challenge.generation === manifest.generation &&
+      equalSecret(
+        challenge.proof,
+        sign(manifest.token, ['challenge', challenge.nonce, manifest.id, manifest.generation])
+      )
+      ? true
+      : undefined;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+    return ['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code ?? '') ? false : undefined;
+  } finally {
+    clearTimeout(timeout);
+    socket?.destroy();
   }
 }
 
@@ -253,59 +387,69 @@ async function removeOrphanEndpoint(root: string, manifest: PeerManifest): Promi
   }
 }
 
-async function pruneManifest(root: string, manifest: PeerManifest): Promise<void> {
-  if (Date.now() - manifest.updatedAt <= PEER_LEASE_MS || !processEnded(manifest.processId)) return;
-  const file = join(root, `${manifest.id}.json`);
-  const claim = `${file}.prune`;
-  let marker;
+async function pruneManifest(root: string, manifest: PeerManifest, held?: PeerIdentity): Promise<void> {
+  if (Date.now() - manifest.updatedAt <= PEER_LEASE_MS || (held && !sameThread(held, manifest))) return;
+  const release = held ? undefined : await acquireEnrollment(root, manifest);
   try {
-    marker = await open(claim, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
-    throw error;
-  }
-  try {
-    const original = await lstat(file);
-    const current = await readManifest(root, manifest.id, false);
-    if (
-      !current ||
-      current.generation !== manifest.generation ||
-      current.token !== manifest.token ||
-      current.updatedAt !== manifest.updatedAt ||
-      !processEnded(current.processId)
-    )
-      return;
-    const checked = await lstat(file);
-    if (checked.ino !== original.ino || checked.dev !== original.dev) return;
-    await removeOrphanEndpoint(root, current);
-    const final = await readManifest(root, manifest.id, false);
-    if (
-      !final ||
-      final.generation !== manifest.generation ||
-      final.token !== manifest.token ||
-      final.updatedAt !== manifest.updatedAt
-    )
-      return;
-    await rm(file);
-  } catch (error) {
-    if (!missing(error)) throw error;
+    const file = join(root, `${manifest.id}.json`);
+    const claim = `${file}.prune`;
+    let marker;
+    try {
+      marker = await open(
+        claim,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+      throw error;
+    }
+    try {
+      const original = await lstat(file);
+      const current = await readManifest(root, manifest.id, false);
+      if (
+        !current ||
+        current.generation !== manifest.generation ||
+        current.token !== manifest.token ||
+        current.updatedAt !== manifest.updatedAt
+      )
+        return;
+      if ((await ownerResponds(current)) !== false) return;
+      const checked = await lstat(file);
+      if (checked.ino !== original.ino || checked.dev !== original.dev) return;
+      await removeOrphanEndpoint(root, current);
+      const final = await readManifest(root, manifest.id, false);
+      if (
+        !final ||
+        final.generation !== manifest.generation ||
+        final.token !== manifest.token ||
+        final.updatedAt !== manifest.updatedAt
+      )
+        return;
+      await rm(file);
+    } catch (error) {
+      if (!missing(error)) throw error;
+    } finally {
+      const owned = await marker.stat();
+      await marker.close();
+      const current = await lstat(claim).catch(() => null);
+      if (current?.ino === owned.ino && current.dev === owned.dev) await rm(claim);
+    }
   } finally {
-    const owned = await marker.stat();
-    await marker.close();
-    const current = await lstat(claim).catch(() => null);
-    if (current?.ino === owned.ino && current.dev === owned.dev) await rm(claim);
+    await release?.();
   }
 }
 
-async function registeredPeers(root: string, includeStaleOwners = false): Promise<PeerManifest[]> {
+async function registeredPeers(root: string, includeStaleOwners = false, held?: PeerIdentity): Promise<PeerManifest[]> {
   const peers: PeerManifest[] = [];
   for (const file of await registryFiles(root)) {
     const manifest = await readManifest(root, file.slice(0, -5), false);
     if (!manifest) continue;
     if (Date.now() - manifest.updatedAt > PEER_LEASE_MS) {
-      await pruneManifest(root, manifest);
-      if (includeStaleOwners && !processEnded(manifest.processId)) peers.push(manifest);
-    } else peers.push(manifest);
+      await pruneManifest(root, manifest, held);
+      const remaining = includeStaleOwners ? await readManifest(root, manifest.id, false) : null;
+      if (remaining) peers.push(remaining);
+    } else if (includeStaleOwners || manifest.updatedAt <= Date.now() + 5_000) peers.push(manifest);
   }
   if (peers.length > MAX_REGISTERED_PEERS) throw new Error('The peer registry has reached its session limit.');
   return peers;
@@ -366,26 +510,51 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function onlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every(key => allowed.includes(key));
+}
+
+function boundedText(value: unknown, limit: number): boolean {
+  return typeof value === 'string' && Buffer.byteLength(value) <= limit;
+}
+
 function validResponse(value: unknown): value is PeerResponse {
   if (!value || typeof value !== 'object') return false;
   const response = value as Record<string, unknown>;
   if (response.ok === false)
     return (
-      typeof response.error === 'string' &&
-      response.error.length <= 4096 &&
+      onlyKeys(response, ['ok', 'error', 'unknown']) &&
+      boundedText(response.error, 4096) &&
       (response.unknown === undefined || typeof response.unknown === 'boolean')
     );
-  if (response.ok !== true) return false;
+  if (response.ok !== true || !onlyKeys(response, ['ok', 'receipt', 'presence'])) return false;
   if (response.presence !== undefined) {
     if (!response.presence || typeof response.presence !== 'object') return false;
     const presence = response.presence as Record<string, unknown>;
-    if (!['hold', 'accept', 'refuse'].includes(String(presence.policy)) || typeof presence.ready !== 'boolean')
+    if (
+      !onlyKeys(presence, ['policy', 'ready']) ||
+      !['hold', 'accept', 'refuse'].includes(String(presence.policy)) ||
+      typeof presence.ready !== 'boolean'
+    )
       return false;
   }
   if (response.receipt === undefined) return true;
   if (!response.receipt || typeof response.receipt !== 'object') return false;
   const receipt = response.receipt as Record<string, unknown>;
   return (
+    onlyKeys(receipt, [
+      'id',
+      'senderId',
+      'recipientId',
+      'status',
+      'createdAt',
+      'expiresAt',
+      'text',
+      'replyTo',
+      'hops',
+      'result',
+      'error',
+    ]) &&
     ['id', 'senderId', 'recipientId'].every(
       key => typeof receipt[key] === 'string' && idPattern.test(receipt[key] as string)
     ) &&
@@ -403,13 +572,18 @@ function validResponse(value: unknown): value is PeerResponse {
     ].includes(String(receipt.status)) &&
     typeof receipt.createdAt === 'number' &&
     Number.isFinite(receipt.createdAt) &&
+    receipt.createdAt >= 0 &&
     typeof receipt.expiresAt === 'number' &&
     Number.isFinite(receipt.expiresAt) &&
+    receipt.expiresAt > receipt.createdAt &&
     typeof receipt.hops === 'number' &&
     Number.isInteger(receipt.hops) &&
     receipt.hops >= 0 &&
     receipt.hops <= 5 &&
-    ['text', 'result', 'error', 'replyTo'].every(key => receipt[key] === undefined || typeof receipt[key] === 'string')
+    (receipt.text === undefined || boundedText(receipt.text, 8192)) &&
+    (receipt.result === undefined || boundedText(receipt.result, 12288)) &&
+    (receipt.error === undefined || boundedText(receipt.error, 1024)) &&
+    (receipt.replyTo === undefined || (typeof receipt.replyTo === 'string' && idPattern.test(receipt.replyTo)))
   );
 }
 
@@ -420,18 +594,40 @@ async function validateEndpoint(endpoint: string): Promise<void> {
     throw new Error('The peer endpoint is not a private socket.');
 }
 
-export async function startPeerTransport(options: {
+interface PeerTransportOptions {
   root: string;
   identity: PeerIdentity;
   handle: (sender: PeerIdentity, request: PeerRequest) => Promise<PeerResponse>;
-}): Promise<{ close(): Promise<void>; manifest: PeerManifest }> {
+  onClosed?: (reason: string) => void;
+}
+
+export async function startPeerTransport(
+  options: PeerTransportOptions
+): Promise<{ close(): Promise<void>; manifest: PeerManifest }> {
   supported();
   if (!isPeerIdentity(options.identity)) throw new Error('Invalid peer identity.');
   const root = await ensurePeerRoot(options.root);
-  const registered = await registeredPeers(root, true);
+  await registeredPeers(root);
+  const release = await acquireEnrollment(root, options.identity);
+  try {
+    return await startEnrolledTransport(options, root, release);
+  } finally {
+    await release();
+  }
+}
+
+async function startEnrolledTransport(
+  options: PeerTransportOptions,
+  root: string,
+  releaseEnrollment: () => Promise<void>
+): Promise<{ close(): Promise<void>; manifest: PeerManifest }> {
+  const registered = await registeredPeers(root, true, options.identity);
   if (registered.length >= MAX_REGISTERED_PEERS) throw new Error('The peer registry has reached its session limit.');
-  if (registered.some(peer => peer.threadId === options.identity.threadId && sameScope(peer, options.identity)))
-    throw new Error('This saved thread already has a registered peer process.');
+  const duplicate = registered.find(peer => sameThread(peer, options.identity));
+  if (duplicate)
+    throw new Error(
+      `This saved thread already has a registered peer process. Stop that process first. If ownership cannot be verified, inspect ${JSON.stringify(join(root, `${duplicate.id}.json`))}; remove only that manifest after confirming the old peer is stopped, then retry.`
+    );
   const identity = { ...options.identity };
   let temporaryDirectory: string | undefined;
   let endpoint = join(root, `${identity.id}.sock`);
@@ -478,6 +674,7 @@ export async function startPeerTransport(options: {
       });
       const envelope = object(await readFrame(socket));
       if (
+        !onlyKeys(envelope, ['version', 'senderId', 'generation', 'request', 'proof']) ||
         envelope.version !== 1 ||
         typeof envelope.senderId !== 'string' ||
         typeof envelope.generation !== 'string' ||
@@ -518,9 +715,14 @@ export async function startPeerTransport(options: {
     for (const socket of sockets) socket.destroy();
     if (server.listening) await new Promise<void>(done => server.close(() => done()));
     if (published) {
-      const current = await readManifest(root, identity.id, false);
-      if (current?.generation === identity.generation && current.token === manifest.token)
-        await rm(join(root, `${identity.id}.json`), { force: true });
+      const release = await acquireEnrollment(root, identity);
+      try {
+        const current = await readManifest(root, identity.id, false);
+        if (current?.generation === identity.generation && current.token === manifest.token)
+          await rm(join(root, `${identity.id}.json`), { force: true });
+      } finally {
+        await release();
+      }
     }
     if (temporaryDirectory)
       await rmdir(temporaryDirectory).catch(error => {
@@ -539,6 +741,7 @@ export async function startPeerTransport(options: {
     await chmod(endpoint, 0o600);
     await writeManifest(root, manifest, true);
     published = true;
+    await releaseEnrollment();
     heartbeat = setInterval(() => {
       heartbeatWrite = heartbeatWrite
         .then(async () => {
@@ -547,13 +750,20 @@ export async function startPeerTransport(options: {
           await ensurePeerRoot(root);
           await writeManifest(root, manifest);
         })
-        .catch(() => {
+        .catch(error => {
+          if (closed) return;
           void close().catch(() => undefined);
+          try {
+            options.onClosed?.(error instanceof Error ? error.message : 'The peer transport closed unexpectedly.');
+          } catch {
+            /* The transport must close even if its lifecycle observer fails. */
+          }
         });
     }, 15_000);
     heartbeat.unref();
     return { close, manifest };
   } catch (error) {
+    await releaseEnrollment();
     await close();
     throw error;
   }
@@ -591,6 +801,7 @@ export async function callPeer(
     });
     const challenge = object(await readFrame(connection));
     if (
+      !onlyKeys(challenge, ['version', 'nonce', 'generation', 'proof']) ||
       challenge.version !== 1 ||
       typeof challenge.nonce !== 'string' ||
       !secretPattern.test(challenge.nonce) ||
@@ -608,6 +819,7 @@ export async function callPeer(
     dispatched = true;
     const result = object(await readFrame(connection));
     if (
+      !onlyKeys(result, ['version', 'response', 'proof']) ||
       result.version !== 1 ||
       !validResponse(result.response) ||
       !equalSecret(result.proof, sign(target.token, ['response', challenge.nonce, result.response]))

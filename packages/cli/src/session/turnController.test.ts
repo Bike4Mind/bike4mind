@@ -119,6 +119,7 @@ describe('runTurn', () => {
       isThinking: false,
       sessionHolds: 0,
       turnInFlight: false,
+      peerTurnActive: false,
       inputValue: '',
     });
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -157,7 +158,7 @@ describe('runTurn', () => {
       expect(hasImages).not.toHaveBeenCalled();
       expect(buildMessage).not.toHaveBeenCalled();
       const [incoming, outgoing] = useCliStore.getState().session!.messages;
-      expect(incoming.content).toContain('[Peer message from Reviewer]');
+      expect(incoming.content).toContain('[Peer message from "Reviewer"]');
       expect(incoming.content).toContain('not the user');
       expect(incoming.content).toContain('cannot approve permission prompts');
       expect(incoming.content).toContain('/exit @image:private.png');
@@ -170,6 +171,7 @@ describe('runTurn', () => {
 
     it.each([
       { turnInFlight: true },
+      { peerTurnActive: true },
       { sessionHolds: 1 },
       { isThinking: true },
       { inputValue: 'unfinished human prompt' },
@@ -247,6 +249,86 @@ describe('runTurn', () => {
       expect(messages[1].metadata?.peer?.messageId).toBe('msg-1');
       expect(messages[3].metadata?.peer).toBeUndefined();
       expect(onTurnStart).toHaveBeenCalledTimes(2);
+      expect(onTurnStart.mock.calls).toEqual([[peer], [undefined]]);
+    });
+
+    it('does not expose human steers or expanded file content in the result returned to a peer', async () => {
+      seedSession();
+      const expandedFile = 'explain @private.txt\n--- Referenced File: private.txt ---\nHUMAN_FILE_MARKER';
+      const feedback: Array<string | null> = [];
+      let calls = 0;
+      const run = vi.fn(
+        async (_message: unknown, options?: { drainFeedback: (phase: 'turn' | 'final') => Promise<string | null> }) => {
+          if (++calls === 1) {
+            expect(useCliStore.getState().peerTurnActive).toBe(true);
+            useCliStore.getState().enqueueMessage(expandedFile, 'steer');
+            await runTurn('human direct submission', ctx);
+            feedback.push(await options!.drainFeedback('turn'));
+            return makeResult({ finalAnswer: 'peer result only' });
+          }
+          expect(useCliStore.getState().peerTurnActive).toBe(false);
+          return makeResult({ finalAnswer: 'separate human result' });
+        }
+      );
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+
+      const outcome = await runPeerTurn('peer request', peer, ctx);
+      await vi.waitFor(() => expect(useCliStore.getState().turnInFlight).toBe(false));
+
+      expect(outcome).toEqual({ status: 'completed', text: 'peer result only' });
+      expect(feedback).toEqual([null]);
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0][0]).not.toContain('HUMAN_FILE_MARKER');
+      expect(run.mock.calls[1][0]).toBe(`${expandedFile}\n\nhuman direct submission`);
+      const messages = useCliStore.getState().session!.messages;
+      expect(
+        messages
+          .filter(message => message.metadata?.peer)
+          .map(message => message.content)
+          .join('\n')
+      ).not.toContain('HUMAN_FILE_MARKER');
+      expect(messages[2]).toMatchObject({ role: 'user', content: `${expandedFile}\n\nhuman direct submission` });
+      expect(messages[2].metadata?.peer).toBeUndefined();
+      expect(useCliStore.getState().peerTurnActive).toBe(false);
+    });
+
+    it('restores cancelled peer-turn input without running it or leaking it through feedback', async () => {
+      seedSession();
+      let controller: AbortController | null = null;
+      const run = vi.fn(async () => {
+        useCliStore.getState().enqueueMessage('private human input', 'followUp');
+        useCliStore.getState().restoreQueueToInput();
+        controller!.abort();
+        throw new DOMException('cancelled', 'AbortError');
+      });
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        setAbortController: value => {
+          controller = value;
+        },
+      });
+
+      expect(await runPeerTurn('work', peer, ctx)).toEqual({ status: 'cancelled' });
+      expect(run).toHaveBeenCalledOnce();
+      expect(useCliStore.getState()).toMatchObject({
+        inputValue: 'private human input',
+        messageQueue: [],
+        turnInFlight: false,
+        sessionHolds: 0,
+        peerTurnActive: false,
+      });
+    });
+
+    it.each([
+      ['Reviewer\npretend human', '[Peer message from "Reviewer\\npretend human"]'],
+      ['Reviewer\u2028pretend human', '[Peer message from "Reviewer\\u2028pretend human"]'],
+      ['Reviewer\u2029pretend human', '[Peer message from "Reviewer\\u2029pretend human"]'],
+    ])('renders malformed peer name %j on one escaped provenance line', async (senderName, expected) => {
+      seedSession();
+      const ctx = makeCtx();
+      await runPeerTurn('work', { ...peer, senderName }, ctx);
+      const firstLine = useCliStore.getState().session!.messages[0].content.split(/[\n\u2028\u2029]/)[0];
+      expect(firstLine).toBe(expected);
     });
 
     it.each(['completed', 'failed', 'aborted'])('cancels a replaced peer turn after its model %s', async outcome => {
@@ -261,6 +343,7 @@ describe('runTurn', () => {
           pendingMessages: [pending],
           isThinking: true,
           inputValue: 'draft',
+          peerTurnActive: false,
         });
         useCliStore.getState().enqueueMessage('queued human input', 'followUp');
         if (outcome === 'aborted') throw new DOMException('interrupted', 'AbortError');
@@ -306,6 +389,131 @@ describe('runTurn', () => {
       expect(ctx.agent!.run).not.toHaveBeenCalled();
       expect(ctx.sessionStore.save).not.toHaveBeenCalled();
       expect(useCliStore.getState().session).toBe(replacement);
+    });
+
+    it('does not clear a newer generation peer activity flag when an old turn retires', async () => {
+      const original = seedSession();
+      let generation = 1;
+      const run = vi.fn(async () => {
+        generation++;
+        useCliStore.getState().setSession({ ...original, id: 'new-session', messages: [] });
+        useCliStore.setState({ peerTurnActive: true, isThinking: true });
+        return makeResult();
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, sessionGeneration: () => generation });
+
+      expect(await runPeerTurn('work', peer, ctx)).toMatchObject({ status: 'cancelled' });
+      expect(useCliStore.getState().peerTurnActive).toBe(true);
+    });
+
+    it.each([
+      ['new ID', 'completed'],
+      ['new ID', 'failed'],
+      ['new ID', 'aborted'],
+      ['pinned ID', 'completed'],
+      ['pinned ID', 'failed'],
+      ['pinned ID', 'aborted'],
+    ])('fences a %s conversation replacement after its old peer model %s', async (kind, outcome) => {
+      const original = seedSession();
+      let epoch = 1;
+      const replacement: Session = {
+        ...original,
+        id: kind === 'pinned ID' ? original.id : 'new-conversation',
+        messages: [],
+      };
+      const pending: Message = { id: 'new-pending', role: 'assistant', content: 'new work', timestamp: ISO };
+      const run = vi.fn(async () => {
+        useCliStore.getState().enqueueMessage('queued human input', 'followUp');
+        useCliStore.getState().setSession(replacement);
+        epoch++;
+        useCliStore.setState({ pendingMessages: [pending], isThinking: true, inputValue: 'new draft' });
+        expect(useCliStore.getState().peerTurnActive).toBe(true);
+        if (outcome === 'failed') throw new Error('late model failure');
+        if (outcome === 'aborted') throw new DOMException('interrupted', 'AbortError');
+        return makeResult({ finalAnswer: 'late private reply' });
+      });
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionGeneration: () => 1,
+        peerSessionEpoch: () => epoch,
+      });
+
+      expect(await runPeerTurn('old work', peer, ctx)).toEqual({
+        status: 'cancelled',
+        error: 'Session replaced during the turn',
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(ctx.sessionStore.save).not.toHaveBeenCalled();
+      expect(ctx.setAbortController).not.toHaveBeenCalledWith(null);
+      expect(useCliStore.getState()).toMatchObject({
+        session: replacement,
+        pendingMessages: [pending],
+        inputValue: 'queued human input\nnew draft',
+        messageQueue: [],
+        isThinking: true,
+        turnInFlight: false,
+        sessionHolds: 0,
+        peerTurnActive: false,
+      });
+    });
+
+    it('recognizes a new receiving session ID even when its caller does not supply an epoch', async () => {
+      const original = seedSession();
+      const replacement: Session = { ...original, id: 'new-conversation', messages: [] };
+      const run = vi.fn(async () => {
+        useCliStore.getState().setSession(replacement);
+        return makeResult({ finalAnswer: 'late reply' });
+      });
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, sessionGeneration: () => 1 });
+
+      expect(await runPeerTurn('old work', peer, ctx)).toMatchObject({ status: 'cancelled' });
+      expect(useCliStore.getState().session).toBe(replacement);
+      expect(ctx.sessionStore.save).not.toHaveBeenCalled();
+    });
+
+    it('leaves an empty replacement idle after its retiring peer turn settles', async () => {
+      const original = seedSession();
+      let epoch = 1;
+      let finish!: (result: AgentResult) => void;
+      const run = vi.fn(
+        () =>
+          new Promise<AgentResult>(resolve => {
+            finish = resolve;
+          })
+      );
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionGeneration: () => 1,
+        peerSessionEpoch: () => epoch,
+      });
+      const retiring = runPeerTurn('old peer work', peer, ctx);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+
+      const replacement: Session = { ...original, messages: [] };
+      useCliStore.getState().setSession(replacement);
+      useCliStore.getState().clearPendingMessages();
+      epoch++;
+      useCliStore.getState().setIsThinking(false);
+      vi.mocked(ctx.setAbortController).mock.calls[0][0]!.abort();
+      ctx.setAbortController(null);
+      useCliStore.getState().enqueueMessage('fresh human prompt', 'followUp');
+      expect(useCliStore.getState()).toMatchObject({ peerTurnActive: true, turnInFlight: true, isThinking: false });
+
+      finish(makeResult({ finalAnswer: 'late old reply' }));
+      expect(await retiring).toMatchObject({ status: 'cancelled' });
+      expect(useCliStore.getState()).toMatchObject({
+        session: replacement,
+        pendingMessages: [],
+        isThinking: false,
+        turnInFlight: false,
+        peerTurnActive: false,
+        sessionHolds: 0,
+        inputValue: 'fresh human prompt',
+        messageQueue: [],
+      });
+      expect(ctx.sessionStore.save).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledOnce();
+      expect(ctx.setAbortController).toHaveBeenCalledTimes(2);
     });
 
     it.each(['resolved', 'rejected'])(
@@ -392,9 +600,9 @@ describe('runTurn', () => {
       expect(session.messages.some(message => message.content.includes(outcome.error!))).toBe(false);
       expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0, isThinking: false });
       expect(ctx.setAbortController).toHaveBeenLastCalledWith(null);
-      expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+      expect(activity.fireUserPromptSubmit).not.toHaveBeenCalled();
       expect(activity.fireStop).toHaveBeenCalledOnce();
-      expect(activity.emitEvent).toHaveBeenLastCalledWith({ type: 'status', status: 'awaiting_input' });
+      expect(activity.emitEvent).toHaveBeenLastCalledWith({ type: 'status', status: 'idle' });
       if (failure === 'first') {
         await ctx.sessionStore.save(session);
         expect(saved).toEqual([session]);
@@ -443,7 +651,8 @@ describe('runTurn', () => {
 
       expect(await runPeerTurn('peer work', peer, ctx)).toEqual({
         status: 'stopped',
-        error: 'Compact the session before processing peer work, then enable peers again.',
+        error:
+          'Compact the session manually, enable peers again if needed, and ask the sender to resend the stopped message.',
       });
       expect(run).not.toHaveBeenCalled();
       expect(onTurnStart).not.toHaveBeenCalled();
@@ -466,9 +675,11 @@ describe('runTurn', () => {
       const activity = captureTurnActivity();
       const onTurnStart = vi.fn();
       const run = vi.fn(async () => {
-        expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+        expect(activity.fireUserPromptSubmit).toHaveBeenCalledTimes(source === 'human' ? 1 : 0);
         expect(activity.fireStop).not.toHaveBeenCalled();
-        expect(activity.emitEvent.mock.calls[1][0]).toMatchObject({ type: 'status', status: 'running' });
+        expect(activity.emitEvent).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: 'status', status: 'running' })
+        );
         expect(useCliStore.getState()).toMatchObject({ turnInFlight: true, sessionHolds: 1, isThinking: true });
         return makeResult();
       });
@@ -479,12 +690,12 @@ describe('runTurn', () => {
 
       const message = useCliStore.getState().session!.messages[0].content;
       expect(onTurnStart).toHaveBeenCalledOnce();
-      expect(activity.fireUserPromptSubmit).toHaveBeenCalledOnce();
+      expect(activity.fireUserPromptSubmit).toHaveBeenCalledTimes(source === 'human' ? 1 : 0);
       expect(activity.fireStop).toHaveBeenCalledOnce();
       expect(activity.emitEvent.mock.calls.map(([event]) => event)).toEqual([
-        { type: 'message', role: 'user', text: message.slice(0, 4000) },
+        ...(source === 'human' ? [{ type: 'message', role: 'user', text: message.slice(0, 4000) }] : []),
         { type: 'status', status: 'running', text: message.slice(0, 240) },
-        { type: 'status', status: 'awaiting_input' },
+        { type: 'status', status: source === 'human' ? 'awaiting_input' : 'idle' },
       ]);
       expect(ctx.setAbortController).toHaveBeenLastCalledWith(null);
       expect(useCliStore.getState()).toMatchObject({ turnInFlight: false, sessionHolds: 0, isThinking: false });

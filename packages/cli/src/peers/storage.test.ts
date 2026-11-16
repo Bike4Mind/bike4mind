@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { PeerStorage } from './storage.js';
 
@@ -41,7 +42,7 @@ it('refuses symlink inbox files and path traversal identities', async () => {
 it('sweeps expired historical snapshots without following unrelated symlinks', async () => {
   const original = new PeerStorage(root, 'original');
   await original.init();
-  await original.save({ text: 'old history' });
+  await original.save(snapshot());
   const expired = path.join(root, 'inboxes', 'original.json');
   const now = Date.now();
   await fs.utimes(expired, new Date(now - 8 * 24 * 60 * 60 * 1000), new Date(now - 8 * 24 * 60 * 60 * 1000));
@@ -53,4 +54,60 @@ it('sweeps expired historical snapshots without following unrelated symlinks', a
   expect(await current.history(now)).toEqual([]);
   await expect(fs.stat(expired)).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await fs.readFile(victim, 'utf8')).toBe('preserved');
+});
+
+function snapshot() {
+  return {
+    version: 1,
+    identity: {
+      id: 'old',
+      generation: 'old',
+      threadId: 'old',
+      name: 'history',
+      accountId: 'account',
+      projectId: 'project',
+    },
+    incoming: [],
+    outgoing: [],
+  };
+}
+
+it('sweeps more than 4096 expired managed histories without blocking enrollment', async () => {
+  const current = new PeerStorage(root, 'current');
+  await current.init();
+  const now = Date.now();
+  const old = new Date(now - 8 * 24 * 60 * 60 * 1000);
+  await Promise.all(
+    Array.from({ length: 4097 }, async (_, index) => {
+      const file = path.join(root, 'inboxes', `old-${index}.json`);
+      await fs.writeFile(file, JSON.stringify(snapshot()), { mode: 0o600 });
+      await fs.utimes(file, old, old);
+    })
+  );
+  const orphan = path.join(root, 'inboxes', `orphan.json.${randomUUID()}.tmp`);
+  await fs.writeFile(orphan, 'unfinished private snapshot', { mode: 0o600 });
+  await fs.utimes(orphan, old, old);
+  const unrelated = path.join(root, 'inboxes', 'unrelated.txt');
+  await fs.writeFile(unrelated, 'preserved');
+  expect(await current.history(now)).toEqual([]);
+  expect(await fs.readdir(path.join(root, 'inboxes'))).toEqual(['unrelated.txt']);
+  await current.save(snapshot());
+  expect(await current.load()).toEqual(snapshot());
+}, 15_000);
+
+it('preserves expired snapshots owned by an active original execution', async () => {
+  const original = new PeerStorage(root, 'original');
+  await original.init();
+  await original.save({
+    ...snapshot(),
+    writer: { token: randomUUID(), processId: process.pid, activeMessageId: 'in-flight' },
+  });
+  const file = path.join(root, 'inboxes', 'original.json');
+  const now = Date.now();
+  const old = new Date(now - 8 * 24 * 60 * 60 * 1000);
+  await fs.utimes(file, old, old);
+  const current = new PeerStorage(root, 'current');
+  await current.init();
+  expect(await current.history(now)).toHaveLength(1);
+  expect(await fs.readFile(file, 'utf8')).toContain('in-flight');
 });

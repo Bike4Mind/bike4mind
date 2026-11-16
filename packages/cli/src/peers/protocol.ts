@@ -64,6 +64,20 @@ export const PEER_PROTOCOL_VERSION = 1;
 export const PEER_FRAME_LIMIT = 128 * 1024;
 export const PEER_LEASE_MS = 45_000;
 
+export function isPeerName(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 100 &&
+    value === value.trim() &&
+    !/[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(value)
+  );
+}
+
+function knownKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every(key => allowed.includes(key));
+}
+
 export function isPeerIdentity(value: unknown): value is PeerIdentity {
   if (!value || typeof value !== 'object') return false;
   const identity = value as Record<string, unknown>;
@@ -71,8 +85,7 @@ export function isPeerIdentity(value: unknown): value is PeerIdentity {
     ['id', 'generation', 'threadId'].every(
       key => typeof identity[key] === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(identity[key] as string)
     ) &&
-    typeof identity.name === 'string' &&
-    identity.name.length <= 200 &&
+    isPeerName(identity.name) &&
     ['projectId', 'accountId'].every(
       key =>
         typeof identity[key] === 'string' &&
@@ -85,12 +98,23 @@ export function isPeerIdentity(value: unknown): value is PeerIdentity {
 export function isPeerRequest(value: unknown): value is PeerRequest {
   if (!value || typeof value !== 'object') return false;
   const request = value as Record<string, unknown>;
-  if (request.type === 'presence') return true;
+  if (request.type === 'presence') return knownKeys(request, ['type']);
   if (request.type === 'status' || request.type === 'cancel')
-    return typeof request.messageId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(request.messageId);
-  if (request.type !== 'send' || !request.message || typeof request.message !== 'object') return false;
+    return (
+      knownKeys(request, ['type', 'messageId']) &&
+      typeof request.messageId === 'string' &&
+      /^[a-zA-Z0-9_-]{1,128}$/.test(request.messageId)
+    );
+  if (
+    request.type !== 'send' ||
+    !knownKeys(request, ['type', 'message']) ||
+    !request.message ||
+    typeof request.message !== 'object'
+  )
+    return false;
   const message = request.message as Record<string, unknown>;
   return (
+    knownKeys(message, ['id', 'text', 'replyTo', 'hops', 'createdAt', 'expiresAt']) &&
     typeof message.id === 'string' &&
     /^[a-zA-Z0-9_-]{1,128}$/.test(message.id) &&
     typeof message.text === 'string' &&
