@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has three members. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has three members. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -206,7 +206,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -2444,7 +2444,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'model_requires_subscription'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -2591,7 +2596,8 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch';
+      errorCode?:
+        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -3174,7 +3180,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'spend_frozen';
+      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -3637,7 +3643,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -3902,7 +3913,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -4417,7 +4433,7 @@ export interface components {
             /** @enum {boolean} */
             locked: true;
             /** @enum {string} */
-            reason: 'requires_paid_plan';
+            reason: 'requires_paid_plan' | 'org_policy';
           };
         }[];
         locked_models: {
@@ -4577,7 +4593,7 @@ export interface components {
             /** @enum {boolean} */
             locked: true;
             /** @enum {string} */
-            reason: 'requires_paid_plan';
+            reason: 'requires_paid_plan' | 'org_policy';
           };
         }[];
         superseded_models: {
@@ -4973,7 +4989,8 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch';
+      errorCode?:
+        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -5167,7 +5184,8 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch';
+      errorCode?:
+        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -7384,7 +7402,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -7873,7 +7896,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'billing_organization_mismatch' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'org_model_not_allowed'
+        | 'org_tool_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -10885,7 +10913,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `ai:chat` nor `ai:generate`, or the account is suspended (`errorCode: account_suspended`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), organization-policy preflight refuses the model (`errorCode: "org_model_not_allowed"`), or an API-key caller named a built-in tool the organization does not allow (`errorCode: "org_tool_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11131,7 +11159,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`. */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -12942,7 +12970,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither `ai:chat` nor `ai:generate` (`required_scopes` names them), the account is suspended (`errorCode: "account_suspended"`), or a free-tier account called a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), or the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
