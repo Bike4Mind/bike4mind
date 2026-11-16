@@ -11,6 +11,8 @@ export const USER_AI_VERDICT_FILTERS = ['abuse'] as const;
 export const aiAbuseAdvisorySchema = z.object({
   userId: z.string(),
   detectionId: z.string(),
+  /** The AbuseAssessment behind the verdict; an admin action taken from it names this id. */
+  assessmentId: z.string().optional(),
   detector: z.enum(SHADOW_DETECTORS),
   /** The model's probability for `abuse`; null when the assessment carried no probabilities. */
   abuseProbability: z.number().min(0).max(1).nullable(),
