@@ -236,8 +236,12 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatGetModelLoadOffer, modelId, draftTokens),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
-    setSessionOrchestrate: (sessionId: string, orchestrate: boolean) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate),
+    setSessionOrchestrate: (sessionId: string, orchestrate: boolean, budgetCredits?: number) =>
+      budgetCredits === undefined
+        ? ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate)
+        : ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate, budgetCredits),
+    raiseRunBudget: (sessionId: string, budgetCredits: number) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRaiseRunBudget, sessionId, budgetCredits),
     getRolePolicy: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetRolePolicy),
     setRolePolicy: (policy: RolePolicy) => ipcRenderer.invoke(IPC_CHANNELS.chatSetRolePolicy, policy),
     taskAction: (sessionId: string, action: TaskAction) =>

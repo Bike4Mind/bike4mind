@@ -597,6 +597,32 @@ export class SessionStore implements SessionWritesStore {
     );
   }
 
+  /**
+   * Update a run's budget fields on a session's orchestration policy. `undefined` in `patch` clears
+   * that field. A no-op unless the policy still belongs to `rootRunId`, as for setServerRunId.
+   */
+  setRunBudget(
+    id: string,
+    rootRunId: string,
+    patch: Partial<Pick<RootPolicy, 'budgetCredits' | 'budgetPaused' | 'budgetWarnedAt'>>,
+    expectedScope?: string | null
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId) return null;
+        const next: Record<string, unknown> = { ...policy, ...patch };
+        for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+          if (patch[key] === undefined) delete next[key];
+        }
+        session.orchestrationPolicy = rootPolicySchema.parse(next);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
   setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,

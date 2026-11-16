@@ -5,6 +5,7 @@ import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import {
   isToolChangeMessage,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   type CompletionRunAttribution,
   type PromptCacheTtl,
   type ReasoningEffort,
@@ -284,6 +285,7 @@ async function streamOnce(
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
     const body = await readErrorBody(err);
     if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
+    if (isRunBudgetExhausted(err, body)) throw new RunBudgetExhaustedError(body?.message);
     throw toRequestError(err, body?.message);
   }
 
@@ -467,20 +469,41 @@ function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
 }
 
 /**
+ * The request's `run` has no budget left (422 run_budget_exhausted). Refused before the provider
+ * was called, so nothing was charged; the run resumes once its budget is raised.
+ */
+export class RunBudgetExhaustedError extends Error {
+  readonly errorCode = RUN_BUDGET_EXHAUSTED_ERROR_CODE;
+  constructor(message?: string) {
+    super(message || 'This orchestration run has used its credit budget.');
+    this.name = 'RunBudgetExhaustedError';
+  }
+}
+
+function isRunBudgetExhausted(error: unknown, body: ErrorBody | undefined): boolean {
+  return isAxiosError(error) && error.response?.status === 422 && body?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE;
+}
+
+/**
  * Send `request` with `run`, and once more without it if the server refuses the run, so a stale
  * or foreign run id costs the turn nothing. `onRejected` runs before the resend, to forget the id.
  * Safe to resend: a refused run fails before the provider is called, so nothing was billed.
+ *
+ * A `budgeted` run is never resent without `run`: that would spend outside the cap the user set.
+ * Its refusal still runs `onRejected` and then rethrows.
  */
 export async function withRunFallback<T>(
   run: CompletionRunAttribution | undefined,
   send: (run: CompletionRunAttribution | undefined) => Promise<T>,
-  onRejected: (error: RunNotFoundError) => void | Promise<void>
+  onRejected: (error: RunNotFoundError) => void | Promise<void>,
+  options: { budgeted?: boolean } = {}
 ): Promise<T> {
   try {
     return await send(run);
   } catch (err) {
     if (!run || !(err instanceof RunNotFoundError)) throw err;
     await onRejected(err);
+    if (options.budgeted) throw err;
     return send(undefined);
   }
 }
