@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AdminPermissionSchema, sortAdminPermissions, type AdminPermissionId } from './adminPermissions';
+import { AdminActionReasonSchema } from './types/entities/adminActionReason';
 
 /**
  * Admin roles: named, admin-defined sets of the code-defined ADMIN_PERMISSIONS. Roles are database
@@ -34,9 +35,14 @@ export const AdminRoleUpdateSchema = z
     name: AdminRoleNameSchema.optional(),
     description: AdminRoleDescriptionSchema.optional(),
     permissions: AdminRolePermissionsSchema.optional(),
+    /** Why the role changes; recorded on the audit entry, never stored on the role. Required when `permissions` change (enforced by updateAdminRole). */
+    reason: AdminActionReasonSchema.optional(),
   })
   .strict()
-  .refine(patch => Object.values(patch).some(value => value !== undefined), 'Nothing to change');
+  .refine(
+    ({ reason: _reason, ...fields }) => Object.values(fields).some(value => value !== undefined),
+    'Nothing to change'
+  );
 export type AdminRoleUpdate = z.infer<typeof AdminRoleUpdateSchema>;
 
 export type AdminRole = {
