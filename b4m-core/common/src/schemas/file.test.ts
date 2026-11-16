@@ -54,7 +54,8 @@ describe('FileGeneratePresignedUrlRequestInput', () => {
     expect(failedOn(parse({ fileSize }), 'fileSize')).toBe(true);
   });
 
-  it.each(['', 'a'.repeat(256)])('rejects fileName of length %#', fileName => {
+  it.each([0, 256])('rejects fileName of length %s', length => {
+    const fileName = 'a'.repeat(length);
     expect(failedOn(parse({ fileName }), 'fileName')).toBe(true);
   });
 });
