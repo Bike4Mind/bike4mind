@@ -604,6 +604,9 @@ export async function shellApproval(
       : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ...(scan.commands.some(entry => entry.deletes)
+      ? ['Deletes files recursively or forcefully, which cannot be undone.']
+      : []),
     ...(script && script.names.length > 0
       ? [
           `Runs code from ${script.names.join(', ')}, which ${script.untracked ? 'may have been' : 'was'} written in this session.`,

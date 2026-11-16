@@ -150,3 +150,51 @@ describe('git rule and launcher review regressions', () => {
     expect(runsCheckedInAuto(await promptFor(command))).toBe(false);
   });
 });
+
+const DELETE_REASON = 'Deletes files recursively or forcefully, which cannot be undone.';
+
+describe('recursive or forced deletes', () => {
+  it.each([
+    'rm -rf src',
+    'rm -r src',
+    'rm -R src',
+    'rm -fr src',
+    'rm -f src/a.txt',
+    'rm --recursive src',
+    'rm --force src/a.txt',
+    'sudo rm -rf src',
+    'find . -name x -delete',
+    'find . -delete',
+    'find . -exec rm {} \\;',
+    'find . -exec rm -rf {} +',
+    'ls | xargs rm -rf',
+    '/bin/rm -rf src',
+    'env X=1 rm -rf src',
+    'command rm -rf src',
+    'rm --rec src',
+    'rm src -rf',
+    'ls && rm -rf src',
+    'echo $(rm -rf src)',
+    'find . -execdir rm {} \\;',
+    'find . -ok rm {} \\;',
+  ])('gives %s a reason on the card', async command => {
+    const prompt = await promptFor(command);
+    expect(prompt.reasons).toContain(DELETE_REASON);
+    expect(prompt.detail).toContain(DELETE_REASON);
+  });
+
+  it.each([
+    'rm src/a.txt',
+    'rm -i src/a.txt',
+    'rm -v src/a.txt',
+    'rm -d src',
+    'rm --dir src',
+    'ls',
+    'find . -name x',
+    'find . -fprint out',
+    'pnpm test',
+    'echo rm -rf src',
+  ])('gives %s no delete reason', async command => {
+    expect((await promptFor(command)).reasons ?? []).not.toContain(DELETE_REASON);
+  });
+});
