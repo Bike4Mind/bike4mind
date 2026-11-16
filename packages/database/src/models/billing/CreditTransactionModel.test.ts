@@ -743,3 +743,118 @@ describe('purchase reversal', () => {
     expect(found?.stripePaymentIntentId).toBe('pi_nostatus');
   });
 });
+
+describe('CreditTransactionRepository.completionRunSpend', () => {
+  const RUN = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+  const OWNER = { ownerId: ORG, ownerType: CreditHolderType.Organization };
+
+  /** A settled completion row as cliCompletions writes it: negative credits, lineage under metadata.run. */
+  const completionRow = (
+    credits: number,
+    run: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ): Record<string, unknown> => ({
+    type: 'completion_api_usage',
+    credits: -credits,
+    model: 'claude-sonnet-5-5',
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 1000,
+    cacheWriteTokens: 50,
+    metadata: { requestId: `req-${credits}`, usdCost: credits / 1000, run: { runId: RUN, ...run } },
+    ...extra,
+  });
+
+  it('sums each settled row once, with breakdowns by role, purpose, model and attempt', async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      completionRow(30, { role: 'worker', purpose: 'turn', taskId: 'task-a', attemptId: 'a1' }),
+      // A retry of the same task is its own attempt.
+      completionRow(20, { role: 'worker', taskId: 'task-a', attemptId: 'a2' }, { model: 'claude-haiku-5-5' }),
+      completionRow(10, { role: 'worker', purpose: 'explore', taskId: 'task-a', attemptId: 'a2' }),
+      // A settled request the ledger charged nothing for still counts as a request.
+      completionRow(0, { role: 'worker', taskId: 'task-b', attemptId: 'b1' }),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled).toEqual({
+      creditsCharged: 100,
+      usdCost: expect.closeTo(0.1, 10),
+      requests: 5,
+      inputTokens: 500,
+      outputTokens: 50,
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 250,
+    });
+    expect(spend.byRole.map(r => [r.role, r.creditsCharged, r.requests])).toEqual([
+      ['worker', 60, 4],
+      ['root', 40, 1],
+    ]);
+    // A request sent without a purpose was a turn.
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['turn', 90],
+      ['explore', 10],
+    ]);
+    expect(spend.byModel.map(r => [r.model, r.creditsCharged])).toEqual([
+      ['claude-sonnet-5-5', 80],
+      ['claude-haiku-5-5', 20],
+    ]);
+    expect(spend.byAttempt.map(r => [r.role, r.taskId, r.attemptId, r.creditsCharged, r.requests])).toEqual([
+      ['root', undefined, undefined, 40, 1],
+      ['worker', 'task-a', 'a1', 30, 1],
+      ['worker', 'task-a', 'a2', 30, 2],
+      ['worker', 'task-b', 'b1', 0, 1],
+    ]);
+    expect(spend.byAttempt[0]).not.toHaveProperty('taskId');
+  });
+
+  it("counts only this owner's completion rows for this run", async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      // Same run id on another holder's row: never read through this owner's run.
+      completionRow(500, { role: 'root' }, { ownerId: 'org-2' }),
+      completionRow(500, { role: 'root' }, { ownerType: CreditHolderType.User }),
+      // Another run of the same owner.
+      completionRow(500, { role: 'root', runId: '11111111-2222-4333-8444-555555555555' }),
+      // A non-completion row carrying the same metadata shape.
+      completionRow(500, { role: 'root' }, { type: 'tool_usage' }),
+      // An unattributed completion.
+      { type: 'completion_api_usage', credits: -500, model: 'claude-sonnet-5-5' },
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(40);
+    expect(spend.settled.requests).toBe(1);
+  });
+
+  it('reports zero spend and empty breakdowns for a run with nothing settled', async () => {
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend).toEqual({
+      settled: {
+        creditsCharged: 0,
+        usdCost: 0,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      byRole: [],
+      byPurpose: [],
+      byModel: [],
+      byAttempt: [],
+    });
+  });
+
+  it('is served by the partial run index', async () => {
+    const indexes = await CreditTransaction.collection.indexes();
+
+    expect(indexes.find(index => index.name === 'credit_tx_completion_run')).toMatchObject({
+      key: { 'metadata.run.runId': 1 },
+      partialFilterExpression: { 'metadata.run.runId': { $exists: true } },
+    });
+  });
+});

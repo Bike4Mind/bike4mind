@@ -11,7 +11,7 @@ export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
-export { createCompletionRunContract } from './contracts/completionRuns.contract';
+export { createCompletionRunContract, getCompletionRunUsageContract } from './contracts/completionRuns.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';

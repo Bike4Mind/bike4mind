@@ -357,6 +357,51 @@ export const CompletionRunSchema = z.object({
 
 export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 
+export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
+
+const TokenCountSchema = z.number().int().nonnegative();
+
+/** Settled spend of a set of run-attributed requests, summed from their ledger rows. */
+export const CompletionRunSpendSchema = z.object({
+  creditsCharged: z
+    .number()
+    .nonnegative()
+    .describe('Credits the ledger recorded for these requests: the same amount each `settled` stream event reported.'),
+  usdCost: z.number().nonnegative().describe('The provider cost, in USD, those credits were priced from.'),
+  requests: z.number().int().nonnegative().describe('Settled requests counted.'),
+  inputTokens: TokenCountSchema,
+  outputTokens: TokenCountSchema,
+  cacheReadTokens: TokenCountSchema,
+  cacheWriteTokens: TokenCountSchema,
+});
+
+export type CompletionRunSpend = z.infer<typeof CompletionRunSpendSchema>;
+
+export const CompletionRunUsageSchema = z.object({
+  runId: CompletionRunIdSchema,
+  rootSessionId: z.string().optional(),
+  createdAt: z.iso.datetime(),
+  settled: CompletionRunSpendSchema.describe('Every settled request attributed to the run, each counted once.'),
+  byRole: z.array(CompletionRunSpendSchema.extend({ role: z.enum(COMPLETION_RUN_ROLES) })),
+  byPurpose: z.array(
+    CompletionRunSpendSchema.extend({
+      purpose: z.enum(COMPLETION_RUN_PURPOSES).describe('`turn` when sent without one.'),
+    })
+  ),
+  byModel: z.array(CompletionRunSpendSchema.extend({ model: z.string() })),
+  byAttempt: z
+    .array(
+      CompletionRunSpendSchema.extend({
+        role: z.enum(COMPLETION_RUN_ROLES),
+        taskId: z.string().optional(),
+        attemptId: z.string().optional(),
+      })
+    )
+    .describe('One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry.'),
+});
+
+export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
+
 /**
  * Schema for CLI LLM completion requests
  * Shared between Next.js API route (dev) and Lambda function (production)

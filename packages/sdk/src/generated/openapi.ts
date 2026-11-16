@@ -235,6 +235,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/completion-runs/{runId}/usage': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a completion run's spend
+     * @description Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` matches the `settled` stream events those requests sent, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     */
+    get: operations['getCompletionRunUsage'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/ai/tts': {
     parameters: {
       query?: never;
@@ -3381,6 +3401,165 @@ export interface components {
     createCompletionRunRequest: {
       /** @description Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id. */
       rootSessionId?: string;
+    };
+    /**
+     * @example {
+     *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+     *       "rootSessionId": "session-42",
+     *       "createdAt": "2026-11-10T12:00:00.000Z",
+     *       "settled": {
+     *         "creditsCharged": 412,
+     *         "usdCost": 0.0412,
+     *         "requests": 9,
+     *         "inputTokens": 18200,
+     *         "outputTokens": 4100,
+     *         "cacheReadTokens": 52000,
+     *         "cacheWriteTokens": 6400
+     *       },
+     *       "byRole": [
+     *         {
+     *           "role": "root",
+     *           "creditsCharged": 412,
+     *           "usdCost": 0.0412,
+     *           "requests": 9,
+     *           "inputTokens": 18200,
+     *           "outputTokens": 4100,
+     *           "cacheReadTokens": 52000,
+     *           "cacheWriteTokens": 6400
+     *         }
+     *       ],
+     *       "byPurpose": [
+     *         {
+     *           "purpose": "turn",
+     *           "creditsCharged": 412,
+     *           "usdCost": 0.0412,
+     *           "requests": 9,
+     *           "inputTokens": 18200,
+     *           "outputTokens": 4100,
+     *           "cacheReadTokens": 52000,
+     *           "cacheWriteTokens": 6400
+     *         }
+     *       ],
+     *       "byModel": [
+     *         {
+     *           "model": "claude-sonnet-5-5",
+     *           "creditsCharged": 412,
+     *           "usdCost": 0.0412,
+     *           "requests": 9,
+     *           "inputTokens": 18200,
+     *           "outputTokens": 4100,
+     *           "cacheReadTokens": 52000,
+     *           "cacheWriteTokens": 6400
+     *         }
+     *       ],
+     *       "byAttempt": [
+     *         {
+     *           "role": "root",
+     *           "creditsCharged": 412,
+     *           "usdCost": 0.0412,
+     *           "requests": 9,
+     *           "inputTokens": 18200,
+     *           "outputTokens": 4100,
+     *           "cacheReadTokens": 52000,
+     *           "cacheWriteTokens": 6400
+     *         }
+     *       ]
+     *     }
+     */
+    getCompletionRunUsageResponse200: {
+      /**
+       * Format: uuid
+       * @description A run id issued by `POST /api/v1/completion-runs`.
+       */
+      runId: string;
+      rootSessionId?: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** @description Every settled request attributed to the run, each counted once. */
+      settled: {
+        /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
+        creditsCharged: number;
+        /** @description The provider cost, in USD, those credits were priced from. */
+        usdCost: number;
+        /** @description Settled requests counted. */
+        requests: number;
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+      };
+      byRole: {
+        /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
+        creditsCharged: number;
+        /** @description The provider cost, in USD, those credits were priced from. */
+        usdCost: number;
+        /** @description Settled requests counted. */
+        requests: number;
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        /** @enum {string} */
+        role: 'root' | 'worker';
+      }[];
+      byPurpose: {
+        /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
+        creditsCharged: number;
+        /** @description The provider cost, in USD, those credits were priced from. */
+        usdCost: number;
+        /** @description Settled requests counted. */
+        requests: number;
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        /**
+         * @description `turn` when sent without one.
+         * @enum {string}
+         */
+        purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+      }[];
+      byModel: {
+        /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
+        creditsCharged: number;
+        /** @description The provider cost, in USD, those credits were priced from. */
+        usdCost: number;
+        /** @description Settled requests counted. */
+        requests: number;
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        model: string;
+      }[];
+      /** @description One entry per distinct role, `taskId` and `attemptId` sent; absent ids are their own entry. */
+      byAttempt: {
+        /** @description Credits the ledger recorded for these requests: the same amount each `settled` stream event reported. */
+        creditsCharged: number;
+        /** @description The provider cost, in USD, those credits were priced from. */
+        usdCost: number;
+        /** @description Settled requests counted. */
+        requests: number;
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        /** @enum {string} */
+        role: 'root' | 'worker';
+        taskId?: string;
+        attemptId?: string;
+      }[];
+    };
+    getCompletionRunUsageResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
     };
     /**
      * @example {
@@ -12297,6 +12476,170 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getCompletionRunUsage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A run id issued by `POST /api/v1/completion-runs`. */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The run and its settled spend. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunUsageResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunUsageResponse404'];
         };
       };
       /** @description The path does not serve this HTTP method. */
