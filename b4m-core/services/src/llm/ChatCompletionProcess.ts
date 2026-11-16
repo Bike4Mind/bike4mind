@@ -7076,7 +7076,7 @@ export class ChatCompletionProcess {
         // tool called more than once in a turn settles as the sum of every call, not
         // the count times the last call's cost (see settleToolCallCredits).
         quest.promptMeta!.functionCalls = settleToolCallCredits(
-          quest.promptMeta!.functionCalls || [],
+          this.withReservedToolCalls(quest.promptMeta!.functionCalls || []),
           this.toolCreditsMap
         );
 
@@ -7162,10 +7162,8 @@ export class ChatCompletionProcess {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
           }
-          const toolCreditsUsed = (quest.promptMeta!.functionCalls || []).reduce(
-            (sum, fc) => sum + (fc.creditsUsed || 0),
-            0
-          );
+          // Adapter telemetry can omit delivered calls or be replaced by a text-only callback.
+          const toolCreditsUsed = this.chargedToolCredits();
           const totalCreditsUsed = textCreditsUsed + toolCreditsUsed;
           quest.creditsUsed = totalCreditsUsed;
 
@@ -7312,9 +7310,9 @@ export class ChatCompletionProcess {
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
             if (toolCreditsUsed > 0) {
-              const toolNames = (quest.promptMeta!.functionCalls || [])
-                .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
-                .map(fc => fc.name)
+              const toolNames = Array.from(this.toolCreditsMap)
+                .filter(([, charges]) => charges.some(credits => credits > 0))
+                .map(([name]) => name)
                 .join(', ');
               // NOT currentModel.id: the charge belongs to whatever model the tools ran
               // on. One aggregate row can only name it when a single model charged (see
@@ -8248,6 +8246,20 @@ export class ChatCompletionProcess {
     }
   }
 
+  /** Adds a placeholder call per reserved charge beyond the recorded calls, so missing tool telemetry cannot drop charged credits from the per-call breakdown. */
+  private withReservedToolCalls<T extends { name?: string }>(
+    functionCalls: T[]
+  ): Array<T | { name: string; parameters: Record<string, never> }> {
+    const calls: Array<T | { name: string; parameters: Record<string, never> }> = [...functionCalls];
+    for (const [name, charges] of this.toolCreditsMap) {
+      const recordedCalls = functionCalls.filter(call => call.name === name).length;
+      for (let index = recordedCalls; index < charges.length; index++) {
+        calls.push({ name, parameters: {} });
+      }
+    }
+    return calls;
+  }
+
   /**
    * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
    * reservation on the answering model, at the larger of the provider-reported counts and the input
@@ -8298,15 +8310,10 @@ export class ChatCompletionProcess {
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
     if (quest.promptMeta) {
-      const calls = [...(quest.promptMeta.functionCalls ?? [])];
-      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
-      for (const [name, charges] of this.toolCreditsMap) {
-        const recordedCalls = calls.filter(call => call.name === name).length;
-        for (let index = recordedCalls; index < charges.length; index++) {
-          calls.push({ name, parameters: {} });
-        }
-      }
-      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+      quest.promptMeta.functionCalls = settleToolCallCredits(
+        this.withReservedToolCalls(quest.promptMeta.functionCalls ?? []),
+        this.toolCreditsMap
+      );
     }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
