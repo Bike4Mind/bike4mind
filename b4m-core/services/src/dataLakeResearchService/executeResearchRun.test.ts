@@ -580,12 +580,22 @@ describe('executeResearchRun', () => {
       expect(result.spentMicroUsd).toBe(1_500);
     });
 
-    it('does not block on an undetermined block rule', async () => {
+    it('sends an auto-admittable item to review on an undetermined block rule and never blocks', async () => {
       const { ports, calls, autoAdmit } = rulePorts(answered('undetermined'));
       const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
-      expect(result.totals.blockedByRule).toBe(0);
-      expect(calls.proposals).toHaveLength(1);
-      expect(autoAdmit).toHaveBeenCalledTimes(1);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 1, blockedByRule: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({
+        kind: 'rule_undetermined',
+        conditions: [block.condition],
+      });
+    });
+
+    it('proposes normally on an undetermined block rule when the item cannot auto-admit', async () => {
+      const { ports, calls } = rulePorts(answered('undetermined'), { candidates: [hit(1, 'other.org')] });
+      const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 0, blockedByRule: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toBeUndefined();
     });
 
     it('sends a review match on a trusted item to review and records the condition', async () => {
@@ -643,16 +653,19 @@ describe('executeResearchRun', () => {
       expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 0 });
     });
 
-    it('does not count reviewedByRule past maxAutoAdmits', async () => {
-      const { ports } = rulePorts(answered('match'), { candidates: [hit(1), hit(2)] });
-      const result = await executeResearchRun(ruleLevers([review], { maxAutoAdmits: 1 }), 'run-1', {
-        ...ports,
-        evaluateItemRules: vi
-          .fn<NonNullable<ResearchRunPorts['evaluateItemRules']>>()
-          .mockResolvedValueOnce(answered('no_match'))
-          .mockResolvedValueOnce(answered('match')),
-      });
+    it('skips the rule call for a review-rule-only config past maxAutoAdmits', async () => {
+      const { ports, evaluateItemRules, calls } = rulePorts(answered('no_match'), { candidates: [hit(1), hit(2)] });
+      const result = await executeResearchRun(ruleLevers([review], { maxAutoAdmits: 1 }), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledTimes(1);
       expect(result.totals).toMatchObject({ proposed: 2, autoAdmitted: 1, reviewedByRule: 0 });
+      expect(calls.proposals[1].provenance.reviewReason).toBeUndefined();
+    });
+
+    it('still evaluates a block rule past maxAutoAdmits', async () => {
+      const { ports, evaluateItemRules } = rulePorts(answered('no_match'), { candidates: [hit(1), hit(2)] });
+      const result = await executeResearchRun(ruleLevers([block], { maxAutoAdmits: 1 }), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledTimes(2);
+      expect(result.totals).toMatchObject({ proposed: 2, autoAdmitted: 1, blockedByRule: 0 });
     });
 
     it('proposes a failed check for review, counts its cost and leaves the judge breaker alone', async () => {
@@ -678,6 +691,7 @@ describe('executeResearchRun', () => {
       const result = await executeResearchRun(ruleLevers([block], { costCeilingMicroUsd: 1_500 }), 'run-1', ports);
       expect(result.stopReason).toBe('cost_ceiling');
       expect(result.totals.proposed).toBe(1);
+      expect(result.spentMicroUsd).toBe(1_500);
     });
 
     it('settles cost_ceiling before the rule call when the judge spent the ceiling', async () => {

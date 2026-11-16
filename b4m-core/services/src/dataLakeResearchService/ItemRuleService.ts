@@ -14,7 +14,7 @@ import { z } from 'zod';
 /**
  * Checks one fetched research item against a config's plain-language item rules in a single model
  * call. A rule can only block or send to review, so the caller reads `undetermined` toward review
- * and never toward admission. Never throws: an unusable call is a `failed` result.
+ * (for an item that would otherwise auto-admit) and never toward blocking or admission. Never throws: an unusable call is a `failed` result.
  */
 
 export const ITEM_RULE_ANSWERS = ['match', 'no_match', 'undetermined'] as const;

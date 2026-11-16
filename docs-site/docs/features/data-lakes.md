@@ -124,10 +124,10 @@ A model checks every rule against the item's feed fields and the text of its pag
 dropped and counted on the run card as blocked by an item rule. A review item waits in the review
 queue, and the proposal says which rule sent it there.
 
-A rule can never add anything. It also never removes content that is already in the lake. If a review
-rule cannot be checked, for example because the page has no text that answers it, the item goes to
-review even when its site is trusted. A failed check does the same. A failure never blocks an item and
-never adds one.
+A rule can never add anything. It also never removes content that is already in the lake. If a rule
+(block or review) cannot be checked against a trusted item that would otherwise be added
+automatically, for example because the page has no text that answers it, the item goes to review.
+A failed check does the same. A rule that cannot be checked never blocks an item and never adds one.
 
 Review rules are a convenience for ordinary content. They are not a control against an author who
 writes a page to fool the checker. If anyone can post on a site, turn off automatic adding for it.

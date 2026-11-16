@@ -209,6 +209,7 @@ export async function executeResearchRun(
   const canAutoAdmitBeforePropose = (verdict: string, url: string, finalUrl: string): boolean =>
     ports.autoAdmit !== undefined &&
     levers.autoAdmitTrusted &&
+    totals.autoAdmitted < levers.maxAutoAdmits &&
     verdict === 'trusted' &&
     trustedEntryForUrl(url, levers) !== null &&
     trustedEntryForUrl(finalUrl, levers) !== null;
@@ -381,8 +382,8 @@ export async function executeResearchRun(
       continue;
     }
 
-    // Block rules always apply. Review rules only matter when the item could auto-admit; a review-tier
-    // item goes to a human anyway.
+    // Block rules always apply. Review rules, and an undetermined block rule, only matter when the item
+    // could auto-admit; a review-tier item goes to a human anyway.
     const couldAutoAdmit = canAutoAdmitBeforePropose(verdict, candidate.url, fetched.finalUrl);
     const applicableRules = levers.itemRules.filter(rule => rule.action === 'block' || couldAutoAdmit);
     let ruleReview: DataLakeProposalReviewReason | undefined;
@@ -411,7 +412,7 @@ export async function executeResearchRun(
           continue;
         }
         const matched = reviewRules.filter(rule => answerOf(rule) === 'match');
-        const undetermined = reviewRules.filter(rule => answerOf(rule) === 'undetermined');
+        const undetermined = couldAutoAdmit ? applicableRules.filter(rule => answerOf(rule) === 'undetermined') : [];
         if (matched.length > 0) {
           ruleReview = { kind: 'rule_match', conditions: matched.map(rule => rule.condition) };
         } else if (undetermined.length > 0) {
