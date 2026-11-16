@@ -393,6 +393,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note, and listens so you can talk with it hands-free.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Bike4Mind saves the images and videos you create to your photo library when you ask it to.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -431,6 +433,8 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bike4Mind uses the camera to scan documents and capture photos you choose to save or ask about.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bike4Mind records your voice to turn it into text for a message or a note, and listens so you can talk with it hands-free.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bike4Mind recognizes your speech so you can have a spoken conversation. Recognition happens on your device when your language supports it.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Bike4Mind saves the images and videos you create to your photo library when you ask it to.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Bike4Mind reads photos you choose to save to a lake or send in a session.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

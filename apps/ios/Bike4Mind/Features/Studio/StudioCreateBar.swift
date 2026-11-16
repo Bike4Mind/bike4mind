@@ -4,6 +4,8 @@ import SwiftUI
 /// Studio's bottom bar: Image / Video / Music, a model menu, a prompt and Generate.
 struct StudioCreateBar: View {
   @Bindable var model: StudioCreateViewModel
+  /// Set by Studio; offers starting from a photo. Absent where the bar has no upload route.
+  var photoContext: StudioEditContext?
   @FocusState private var isFocused: Bool
   @State private var showsParams = false
   @ScaledMetric(relativeTo: .title) private var iconSize: CGFloat = 32
@@ -39,6 +41,7 @@ struct StudioCreateBar: View {
           .accessibilityIdentifier("studio-create-error")
       }
       HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
+        if let photoContext { StudioPhotoButton(context: photoContext) }
         promptField
         generateButton
       }
