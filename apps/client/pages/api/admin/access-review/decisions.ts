@@ -2,6 +2,7 @@ import {
   AccessReviewDecisionSchema,
   BadRequestError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   sortAdminPermissions,
   type AccessReviewDecision,
@@ -94,6 +95,8 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:
         message: 'Another admin must review your access.',
       });
     }
+    // The decision record names the reviewer, so it must be the real admin, not the impersonated one.
+    if (req.user.impersonatedBy) throw new ForbiddenError('Stop impersonating to record access review decisions.');
 
     const now = new Date();
     const quarter = reviewQuarter(now);

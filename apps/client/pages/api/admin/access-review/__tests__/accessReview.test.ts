@@ -268,6 +268,15 @@ describe('POST decisions', () => {
     expect(mocks.recordDecision).not.toHaveBeenCalled();
   });
 
+  it('refuses any decision while impersonating, even on a third admin', async () => {
+    const actor = { ...FULL_ADMIN, id: DELEGATE, impersonatedBy: REVIEWER };
+    await expect(
+      call(decisions, 'POST', { actor, body: { userId: OTHER, decision: 'confirmed' } })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.deny).not.toHaveBeenCalled();
+    expect(mocks.recordDecision).not.toHaveBeenCalled();
+  });
+
   it.each([{ userId: '' }, { userId: 'not-hex' }, { userId: 'ABCDEF000000000000000001' }, { decision: 'maybe' }])(
     'rejects a malformed body %j',
     async patch => {
