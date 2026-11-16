@@ -21,6 +21,7 @@ const {
   mockHandle,
   mockGetHandler,
   mockDispatchReviewToSreRevision,
+  mockFindMcpServerById,
   mockEmitWebhookDeliveryMetric,
 } = vi.hoisted(() => ({
   mockFindByOrgAndRepo: vi.fn(),
@@ -31,6 +32,7 @@ const {
   mockHandle: vi.fn(),
   mockGetHandler: vi.fn(),
   mockDispatchReviewToSreRevision: vi.fn(),
+  mockFindMcpServerById: vi.fn(),
   mockEmitWebhookDeliveryMetric: vi.fn(),
 }));
 
@@ -48,8 +50,8 @@ vi.mock('@bike4mind/database', () => ({
   webhookAuditLogRepository: {
     updateByDeliveryId: mockUpdateAuditLogByDeliveryId,
   },
-  mcpServerRepository: { findById: vi.fn() },
-  cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
+  mcpServerRepository: { findById: mockFindMcpServerById, updateGitHubWebhookLastDelivery: vi.fn() },
+  cacheRepository: { findByKey: vi.fn().mockResolvedValue(null), createOrUpdate: vi.fn() },
 }));
 
 vi.mock('@workers/integrations/github/handlers', () => ({
@@ -369,5 +371,45 @@ describe('processOrgWebhook — delivery-status priority chain', () => {
       expect(dimensionless).toBeDefined();
       expect(dimensionless![1]).toBe(2);
     });
+  });
+});
+
+describe('SRE revision dispatch is not reachable from tenant-authenticated paths', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindOrgById.mockResolvedValue(mockOrg);
+    mockFindByDeliveryAndSubscription.mockResolvedValue(null);
+    mockCreateIfNotExists.mockResolvedValue(undefined);
+    mockUpdateAuditLogByDeliveryId.mockResolvedValue(undefined);
+    mockDispatchReviewToSreRevision.mockResolvedValue(undefined);
+    mockGetHandler.mockReturnValue({ handle: mockHandle });
+    mockHandle.mockResolvedValue({ notifiedUserIds: [], failedNotifications: [] });
+    mockEmitWebhookDeliveryMetric.mockResolvedValue(undefined);
+    mockFindByOrgAndRepo.mockResolvedValue([makeSubscriber('user-a')]);
+    mockFindMcpServerById.mockResolvedValue({ id: 'mcp-1', userId: { toString: () => 'user-a' }, enabled: true });
+  });
+
+  it('org path: a pull_request_review never calls dispatchReviewToSreRevision', async () => {
+    await dispatch(makeSqsEvent(makeOrgMessage()), mockContext, mockLogger);
+
+    expect(mockDispatchReviewToSreRevision).not.toHaveBeenCalled();
+  });
+
+  it('MCP path: a pull_request_review never calls dispatchReviewToSreRevision', async () => {
+    const message = {
+      deliveryId: 'delivery-mcp-1',
+      eventType: 'pull_request_review',
+      payload: { repository: { full_name: 'owner/repo' } },
+      mcpServerId: 'mcp-1',
+      userId: 'user-a',
+      receivedAt: new Date().toISOString(),
+      correlationId: 'corr-mcp-1',
+    };
+
+    await dispatch(makeSqsEvent(message), mockContext, mockLogger);
+
+    expect(mockFindMcpServerById).toHaveBeenCalled();
+    expect(mockHandle).toHaveBeenCalled();
+    expect(mockDispatchReviewToSreRevision).not.toHaveBeenCalled();
   });
 });
