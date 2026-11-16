@@ -17,9 +17,14 @@ import type { ChatModelOption } from '@shared/chat';
 import type { LocalLoopDetail, LocalLoopSummary } from '@shared/localLoops';
 import { ArrowLeftIcon } from '../chat/icons';
 import { LoopRunnerSettings, useLoopRunnerState } from '../chat/LoopRunnerSettings';
+import { OrchestratorStage, type AgentActions } from '../chat/orchestrator/OrchestratorStage';
+import type { OrchestratorViewId } from '../chat/orchestrator/orchestratorPrefs';
+import { TableView } from '../chat/orchestrator/TableView';
+import { TavernView } from '../chat/orchestrator/tavern/TavernView';
 import { LoopBoardView, type TicketMove } from './LoopBoardView';
 import { LoopFormModal } from './LoopFormModal';
 import { NeedsYouInbox } from './NeedsYouInbox';
+import { buildLoopRoster, isLoopSessionId } from './roster';
 import { TicketDetail } from './TicketDetail';
 import { useLocalLoop, type useLocalLoopList } from './useLocalLoops';
 
@@ -176,10 +181,19 @@ function LoopPane({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [openTicket, setOpenTicket] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [view, setView] = useState<OrchestratorViewId>('board');
   const api = window.b4m.localLoops;
   if (!detail) return error ? <Alert color="danger">{error}</Alert> : null;
   const { loop } = detail;
   const ticket = openTicket ? detail.tickets.find(entry => entry.id === openTicket) : undefined;
+
+  // Lanes with no session yet (a free lane, a run still opening) have nothing to open or stop.
+  const laneActions: AgentActions = {
+    open: id => isLoopSessionId(id) && onOpenSession(id),
+    // The scheduler sees the stop and ends the run as blocked ("Stopped on the desktop").
+    stop: id => isLoopSessionId(id) && void window.b4m.chat.stopReply(id),
+    archive: () => undefined,
+  };
 
   const runNow = async () => {
     setNotice(null);
@@ -286,12 +300,25 @@ function LoopPane({
         </TabList>
       </Tabs>
       {tab === 'board' && (
-        <LoopBoardView
-          detail={detail}
-          onMove={(id, move) => void moveTicket(id, move)}
-          onCreate={async title => !!(await act(() => api.createTicket({ loopId: loop.id, title })))}
-          onDelete={id => void act(() => api.updateTicket({ id, delete: true }))}
-          onOpen={setOpenTicket}
+        <OrchestratorStage
+          agents={buildLoopRoster(detail)}
+          view={view}
+          onViewChange={setView}
+          introPlaying={false}
+          actions={laneActions}
+          renderView={(id, props) => {
+            if (id === 'tavern') return <TavernView {...props} />;
+            if (id === 'table') return <TableView {...props} />;
+            return (
+              <LoopBoardView
+                detail={detail}
+                onMove={(ticketId, move) => void moveTicket(ticketId, move)}
+                onCreate={async title => !!(await act(() => api.createTicket({ loopId: loop.id, title })))}
+                onDelete={ticketId => void act(() => api.updateTicket({ id: ticketId, delete: true }))}
+                onOpen={setOpenTicket}
+              />
+            );
+          }}
         />
       )}
       {tab === 'needs-you' && (
