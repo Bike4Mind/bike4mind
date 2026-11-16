@@ -26,6 +26,15 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
   prefix and must match `[A-Za-z0-9_-]{1,64}`; anything else returns 400.
 - Both tokens are declared in `infra/turborepoCache.ts` and linked into the cache
   handler only, never into the shared `infra/secrets.ts` map that every app Lambda links.
+- The bucket is not linked, because a bucket link grants `s3:*`. The handler gets
+  the bucket name in `TURBO_CACHE_BUCKET` and only `s3:GetObject`/`s3:PutObject`
+  on its objects plus `s3:ListBucket`, which keeps a miss a 404 rather than a 403.
+- An upload preflight for an artifact that already exists returns 409, so a stored
+  artifact is never replaced through the cache API. Upload URLs expire after 60
+  seconds; download URLs after 15 minutes.
+- Each refused credential (401, or 403 for a read-only upload) logs one JSON line
+  with `msg: "turbo cache request rejected"`, method, path and source IP, never the
+  token, so a CloudWatch metric filter can count them.
 
 ## Contract-gate exception
 
@@ -67,8 +76,10 @@ Secrets reach the handler at deploy time, so a new value takes effect only after
 `sst deploy --stage dev`; until then the old token keeps working.
 
 Anyone holding the CI token can publish artifacts that CI trusts. Rotate it if
-exposed: set the new value and redeploy in the same step. Presigned URLs remain usable until their 15-minute expiry, including
-URLs issued before token rotation. Artifact signatures are not enabled by this
+exposed: set the new value and redeploy in the same step. URLs issued before a
+rotation stay usable until they expire: 60 seconds for uploads, 15 minutes for
+downloads. Upload URLs carry no size limit (a single PUT can be up to 5 GB);
+the 30-day lifecycle bounds how long such an object costs storage. Artifact signatures are not enabled by this
 transport: direct S3 downloads do not supply Turbo's signature response header.
 
 ## Local development
@@ -110,7 +121,10 @@ artifacts that CI trusts, so treat it as a deployment credential:
 
 Artifact signatures are not enabled by this transport (direct S3 downloads do
 not carry Turbo's signature header), so these workflow rules are the entire
-write-trust boundary.
+write-trust boundary. `packages/scripts/src/checkTurboCacheWriteTokenScope.test.ts`
+enforces the first two: a workflow that references `secrets.TURBO_TOKEN` or
+`secrets.TURBO_CACHE_TOKEN` must be triggered by `push` alone and run its job in
+a GitHub Environment.
 
 ### Workflow setup
 
@@ -138,6 +152,8 @@ env:
 - **401**: neither configured token matches the bearer credential.
 - **403 on upload**: the token is read-only; CI needs the distinct write token.
 - **400 on upload**: enable `remoteCache.preflight` in the consuming workspace.
+- **409 on upload**: the artifact already exists (another job uploaded the same
+  hash first). A failed upload does not fail the Turbo task.
 - **Cache misses**: confirm the endpoint, team and task inputs match the writer.
 - **Artifact size**: bytes travel directly to S3; single PUT uploads support up to
   5 GB. Split larger task outputs.
