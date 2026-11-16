@@ -226,9 +226,10 @@ describe('TOTP seed backfill', () => {
       }
       return original(...args);
     }) as typeof original);
-    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     await protectStoredCredentials();
     expect(raced).toBe(true);
+    expect(info).toHaveBeenCalledWith('TOTP seeds encrypted: 0');
     expect((await mfaOf(row.insertedId))!.totpSecret).toBe('SEEDBBBB');
   });
 
