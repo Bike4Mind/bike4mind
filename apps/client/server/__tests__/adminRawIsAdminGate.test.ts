@@ -170,6 +170,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['publish/artifact/upload-url.ts', 'isAdmin only forwarded as actor flag to the publish access check'],
   ['publish/artifacts/[id].ts', 'owner or admin may manage a published artifact'],
   ['publish/artifacts/index.ts', 'admins see all artifacts in browse, users see own and live'],
+  ['publish/gate/owner.ts', 'artifact owner or admin skips the passphrase; mints a proof cookie for that artifact'],
   ['publish/fabfile.ts', 'file owner or admin may publish a file; isAdmin forwarded to access checks'],
   ['publish/reply.ts', 'session owner or admin may reply; isAdmin forwarded to access checks'],
   ['sessions/[id]/summary.ts', 'session owner summarizes; an admin may summarize any session'],
@@ -318,10 +319,8 @@ const codeOf = (source: string): string => {
 /** Strings and comments are blanked first, so a quoted mention or a zod `isAdmin:` field is not a gate. */
 export function usesRawIsAdminGate(source: string): boolean {
   const code = codeOf(source);
-  return (
-    (RAW_GATE.test(code) && !ADMIN_API_CALL.test(code)) ||
-    (RAW_GATE_HELPER.test(code) && !PERMISSION_GATE_CALL.test(code))
-  );
+  const rawGate = RAW_GATE.test(code) || callerAliases(code).some(alias => readsFlagThrough(code, alias));
+  return (rawGate && !ADMIN_API_CALL.test(code)) || (RAW_GATE_HELPER.test(code) && !PERMISSION_GATE_CALL.test(code));
 }
 
 /** True when an `adminApi()` route also reads the caller's raw `isAdmin`, overriding its declared permission. */
@@ -369,6 +368,7 @@ describe('usesRawIsAdminGate', () => {
     ['an optional currentUser receiver', 'if (!currentUser?.isAdmin) throw new Error();'],
     ['isAdmin destructured from a user binding', 'const { isAdmin } = currentUser; if (!isAdmin) throw new Error();'],
     ['a nested destructured isAdmin', 'const { user: { id, isAdmin } } = req; if (!isAdmin) throw new Error();'],
+    ['any alias of req.user', 'const principal = req.user; if (!principal.isAdmin) throw new Error();'],
   ])('flags %s', (_label, code) => {
     expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
   });
