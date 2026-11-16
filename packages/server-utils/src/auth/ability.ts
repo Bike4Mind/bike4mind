@@ -16,6 +16,7 @@ import {
   Memento,
   applySharedShareableRules,
   applyOrganizationRules,
+  organizationManagerCondition,
 } from '@bike4mind/database';
 import {
   InvitePermission,
@@ -93,9 +94,8 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     applyOrganizationRules(allow, user, Organization);
 
     // Org manager permissions: update the orgs they manage (but not billing-related fields); read
-    // comes from applyOrganizationRules. Needs a roster row too, like canAdministerOrganization: a
-    // bare `adminUserIds` entry is not a member.
-    const managerPermission: MongoQuery = { adminUserIds: user.id, users: { $elemMatch: { userId: user.id } } };
+    // comes from applyOrganizationRules.
+    const managerPermission = organizationManagerCondition(user.id);
     allow(Permission.update, Organization, managerPermission);
     allow('addUser', Organization, managerPermission);
     allow('removeUser', Organization, managerPermission);

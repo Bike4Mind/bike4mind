@@ -32,12 +32,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 // The share arm and the organization rules are the real implementations - they take the subject as
 // a parameter, so they register rules against the stub classes below and CASL still matches them.
 vi.mock('@bike4mind/database', async () => {
-  const { applySharedShareableRules, applyOrganizationRules } = await vi.importActual<
+  const { applySharedShareableRules, applyOrganizationRules, organizationManagerCondition } = await vi.importActual<
     typeof import('../../../../../../packages/database/src/utils/ability')
   >('../../../../../../packages/database/src/utils/ability');
   return {
     applySharedShareableRules,
     applyOrganizationRules,
+    organizationManagerCondition,
     AdminSettings: class AdminSettings {},
     adminSettingsRepository: {},
     CounterLog: class CounterLog {},

@@ -5,12 +5,13 @@ vi.mock('@bike4mind/database', async () => {
   // The shared share arm and the organization rules are the REAL implementations - they take the
   // subject as a parameter, so they register rules against the stub classes below and CASL still
   // matches them.
-  const { applySharedShareableRules, applyOrganizationRules } = await vi.importActual<
+  const { applySharedShareableRules, applyOrganizationRules, organizationManagerCondition } = await vi.importActual<
     typeof import('../../../../../packages/database/src/utils/ability')
   >('../../../../../packages/database/src/utils/ability');
   return {
     applySharedShareableRules,
     applyOrganizationRules,
+    organizationManagerCondition,
     AdminSettings: class AdminSettings {},
     CounterLog: class CounterLog {},
     Session: class Session {
@@ -303,7 +304,8 @@ describe('defineAbilitiesFor - org manager rule', () => {
 
   it('lets a manager with a roster row read and update the org', () => {
     const ability = defineAbilitiesFor(makeUser());
-    const doc = org({ adminUserIds: ['u1'], users: [{ userId: 'u1', permissions: ['read'] }] });
+    // No permissions on the row, so read comes from the manager rule rather than membership.
+    const doc = org({ adminUserIds: ['u1'], users: [{ userId: 'u1', permissions: [] }] });
     expect(ability.can('read', doc)).toBe(true);
     expect(ability.can('update', doc)).toBe(true);
     expect(ability.can('addUser', doc)).toBe(true);

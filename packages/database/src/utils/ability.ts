@@ -90,6 +90,12 @@ export function applySharedShareableRules(
  * current manager with a roster row (canAdministerOrganization). Global flags and group shares do
  * not grant anything on an organization.
  */
+/** A current manager: listed in `adminUserIds` AND holding a roster row, like canAdministerOrganization. */
+export const organizationManagerCondition = (userId: string): MongoQuery => ({
+  adminUserIds: userId,
+  users: { $elemMatch: { userId } },
+});
+
 export function applyOrganizationRules(
   allow: AllowFn,
   user: Pick<IUserDocument, 'id'>,
@@ -103,7 +109,7 @@ export function applyOrganizationRules(
   allow(Permission.read, organization, {
     users: { $elemMatch: { userId: user.id, permissions: { $in: [...ORG_MEMBERSHIP_ACL_PERMISSIONS] } } },
   });
-  allow(Permission.read, organization, { adminUserIds: user.id, users: { $elemMatch: { userId: user.id } } });
+  allow(Permission.read, organization, organizationManagerCondition(user.id));
 
   [Permission.update, Permission.delete, Permission.share].forEach(permission => {
     allow(permission, organization, ownOrganization);

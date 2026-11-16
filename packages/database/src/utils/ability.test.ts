@@ -331,12 +331,6 @@ describe('db-core defineAbilitiesFor - FabFile export scoping', () => {
   });
 });
 
-// The user/group share arm used to be hand-copied into packages/server-utils/src/auth/ability.ts, and the
-// copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
-// is now one exported function both builders call, so it cannot drift and the behavioural tests
-// above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
-// registers rules against the models it imported and CASL matches subjects by constructor - so the
-// list is the one thing left that can diverge, and it is what this compares.
 describe('db-core defineAbilitiesFor - organization read follows membership', () => {
   const org = (fields: Record<string, unknown> = {}) =>
     Object.assign(new Organization(), { userId: 'owner', users: [], groups: [], adminUserIds: [], ...fields });
@@ -371,6 +365,17 @@ describe('db-core defineAbilitiesFor - organization read follows membership', ()
     expect(ability.can('read', org({ users: [{ userId: 'u1', permissions: ['share'] }] }))).toBe(false);
   });
 
+  it('requires the caller and the membership permission on the same row', () => {
+    const ability = defineAbilitiesFor(makeUser({ id: 'u1' }));
+    const doc = org({
+      users: [
+        { userId: 'u1', permissions: ['share'] },
+        { userId: 'u2', permissions: ['read'] },
+      ],
+    });
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
   it('compiles no global or group arm into the organization read query', () => {
     const ability = defineAbilitiesFor(makeUser({ id: 'u1', groups: ['g1'] }));
     const query = JSON.stringify(accessibleBy(ability, 'read').ofType(Organization));
@@ -379,6 +384,12 @@ describe('db-core defineAbilitiesFor - organization read follows membership', ()
   });
 });
 
+// The user/group share arm used to be hand-copied into packages/server-utils/src/auth/ability.ts, and the
+// copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
+// is now one exported function both builders call, so it cannot drift and the behavioural tests
+// above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
+// registers rules against the models it imported and CASL matches subjects by constructor - so the
+// list is the one thing left that can diverge, and it is what this compares.
 describe('shared shareable arm', () => {
   const dbCoreSource = fs.readFileSync(path.resolve(__dirname, './ability.ts'), 'utf-8');
   const clientSource = fs.readFileSync(
