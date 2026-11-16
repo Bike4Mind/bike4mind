@@ -31,11 +31,12 @@ import {
  * REST chat routes withhold too. No SPA code reads any of them, so the owner-cache concern above does
  * not apply.
  *
- * organizations: the subscription streams raw org documents, so it has to reproduce what
- * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
- * transports cannot drift. A Mongo projection is per-query, not per-document: billingContact
- * is kept only for a platform admin; member credit details are also kept for owners/managers
- * when the query is pinned to their verified org. Broader subscriptions exclude both.
+ * organizations: the subscription streams raw org documents, so it reuses the field lists
+ * `toSafeOrganization` applies on the REST paths. A Mongo projection is per-query, not
+ * per-document, so it can only be stricter: billingContact is kept only for a platform admin; the
+ * administrator-only fields and member credit details are kept only for a platform admin, or an
+ * owner/manager whose query is pinned to their verified org. Every other subscriber, including a
+ * member who may edit the team profile, gets the member view.
  *
  * invites: the subscription matches both invites addressed to the caller and every invite on a
  * project the caller may share, so a raw document carries co-recipients' addresses and addresses

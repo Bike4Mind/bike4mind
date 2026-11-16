@@ -1,5 +1,6 @@
 import type { IOrganizationDocument } from '../types/entities/OrganizationTypes';
 import { canAdministerOrganization } from '../constants/organization';
+import { Permission } from '../types/entities/ShareableDocumentTypes';
 
 /**
  * Response-boundary serializer for organization documents.
@@ -13,11 +14,15 @@ import { canAdministerOrganization } from '../constants/organization';
  * - Everyone loses ORGANIZATION_SECRET_FIELDS.
  * - Owners, current managers (`canAdministerOrganization`) and site admins get every other field;
  *   `billingContact` stays with the owner and site admins.
- * - Any other viewer gets only ORGANIZATION_MEMBER_VISIBLE_FIELDS, and in `userDetails` only
- *   their own row keeps its credit fields.
+ * - A member whose `users[]` row holds `update` may edit the team profile (canEditOrgProfile in
+ *   the client's orgTabAccess.ts), so they also get the settings fields, but not `budgetAlerts` or
+ *   colleagues' credit fields.
+ * - Any other viewer gets only ORGANIZATION_MEMBER_VISIBLE_FIELDS.
+ * - Outside the full view, only the viewer's own `userDetails` row keeps its credit fields.
  *
  * The websocket data-subscribe projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts)
- * enforces the same split from these lists; keep the two in sync.
+ * excludes ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS for every subscriber who is not the owner, a
+ * manager or a site admin; keep the lists and that projection in sync.
  *
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
@@ -60,6 +65,7 @@ export const ORGANIZATION_MEMBER_VISIBLE_FIELDS = [
   'currentCredits',
   'maxCreditsPerMember',
   'mfaPolicy',
+  'retentionPolicy',
 ] as const satisfies readonly OrganizationField[];
 
 /** Withheld from plain members; the websocket projection excludes these by name. */
@@ -72,7 +78,6 @@ export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
   'redactPushContent',
   'sharingPolicy',
   'budgetAlerts',
-  'retentionPolicy',
   'retentionVersion',
   'lastCreditsPurchasedAt',
   'preferredModel',
@@ -119,14 +124,20 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
         { userId: plain.userId, adminUserIds: plain.adminUserIds, users: plain.users }
       ));
 
-  const o: Record<string, unknown> = administers
-    ? { ...plain }
-    : Object.fromEntries(Object.entries(plain).filter(([field]) => MEMBER_VISIBLE_FIELD_SET.has(field)));
+  const editsProfile =
+    viewer?.userId != null &&
+    (plain.users ?? []).some(row => row.userId === viewer.userId && row.permissions?.includes(Permission.update));
+
+  const o: Record<string, unknown> =
+    administers || editsProfile
+      ? { ...plain }
+      : Object.fromEntries(Object.entries(plain).filter(([field]) => MEMBER_VISIBLE_FIELD_SET.has(field)));
 
   for (const f of ORGANIZATION_SECRET_FIELDS) delete o[f];
   if (!isOwner && !isSiteAdmin) {
     for (const f of ORGANIZATION_OWNER_ONLY_FIELDS) delete o[f];
   }
+  if (!administers) delete o.budgetAlerts;
   if (!administers && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
       // A member keeps their own row: the budget warning reads it from this response.

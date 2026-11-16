@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { IOrganization } from '../types/entities/OrganizationTypes';
-import { ORGANIZATION_MEMBER_VISIBLE_FIELDS, toSafeOrganization, toSafeOrganizations } from './toSafeOrganization';
+import {
+  ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+  ORGANIZATION_MEMBER_VISIBLE_FIELDS,
+  ORGANIZATION_OWNER_ONLY_FIELDS,
+  ORGANIZATION_SECRET_FIELDS,
+  toSafeOrganization,
+  toSafeOrganizations,
+} from './toSafeOrganization';
 
 const creditPeriod = new Date('2026-01-01');
 const fullOrg = {
@@ -25,6 +32,7 @@ const fullOrg = {
   users: [
     { userId: 'manager1', permissions: ['read'] },
     { userId: 'member2', permissions: ['read'] },
+    { userId: 'editor3', permissions: ['read', 'update'] },
   ],
   userDetails: [
     {
@@ -133,6 +141,26 @@ describe('toSafeOrganization', () => {
 
   it('withholds billingContact from a current manager who is not the owner', () => {
     expect('billingContact' in toSafeOrganization(fullOrg, { userId: 'manager1', isAdmin: false })!).toBe(false);
+  });
+
+  it('gives a member who may edit the profile the settings, but not budgets or colleagues credits', () => {
+    const safe = toSafeOrganization(fullOrg, { userId: 'editor3', isAdmin: false })!;
+    expect(safe.systemPrompt).toBe('internal enterprise context');
+    expect(safe.sharingPolicy).toEqual({ allowPublicLinks: false });
+    expect('budgetAlerts' in safe).toBe(false);
+    expect('billingContact' in safe).toBe(false);
+    expect('stripeCustomerId' in safe).toBe(false);
+    expect(JSON.stringify(safe.userDetails)).not.toMatch(/usedCredits|maxCredits|lastCreditUsedAt|periodStart/);
+  });
+
+  it('assigns every field to exactly one visibility list', () => {
+    const all = [
+      ...ORGANIZATION_MEMBER_VISIBLE_FIELDS,
+      ...ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+      ...ORGANIZATION_OWNER_ONLY_FIELDS,
+      ...ORGANIZATION_SECRET_FIELDS,
+    ];
+    expect(new Set(all).size).toBe(all.length);
   });
 
   it('keeps _id for a plain member when the input is a plain object', () => {
