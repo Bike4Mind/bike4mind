@@ -7,6 +7,8 @@ vi.mock('aws-jwt-verify', () => ({
   JwtVerifier: { create: (...args: any[]) => mockCreate(...args) },
 }));
 
+import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
+import { SimpleFetcher } from 'aws-jwt-verify/https';
 import { verifyFederatedIdToken, FederatedIdTokenError, __clearVerifierCache } from './verifyFederatedIdToken';
 
 const IDP = {
@@ -31,7 +33,10 @@ describe('verifyFederatedIdToken', () => {
     const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
-    expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience });
+    expect(mockCreate).toHaveBeenCalledWith(
+      { issuer: IDP.issuer, audience: IDP.audience },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
   });
 
   it('parses a JSON-string identities claim', async () => {
@@ -49,7 +54,21 @@ describe('verifyFederatedIdToken', () => {
     const jwksUri = 'https://example.com/keys';
 
     await verifyFederatedIdToken('tok', { ...IDP, jwksUri });
-    expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience, jwksUri });
+    expect(mockCreate).toHaveBeenCalledWith(
+      { issuer: IDP.issuer, audience: IDP.audience, jwksUri },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
+  });
+
+  it('builds the verifier with a JWKS fetcher that sends a User-Agent', async () => {
+    mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
+    await verifyFederatedIdToken('tok', IDP);
+
+    const { jwksCache } = mockCreate.mock.calls[0][1] as { jwksCache: SimpleJwksCache };
+    expect(jwksCache).toBeInstanceOf(SimpleJwksCache);
+    const { fetcher } = jwksCache;
+    expect(fetcher).toBeInstanceOf(SimpleFetcher);
+    expect(fetcher.defaultRequestOptions.headers).toMatchObject({ 'User-Agent': 'Lumina5-JwksFetcher/1.0' });
   });
 
   it('throws when signature/claim verification fails', async () => {
@@ -116,11 +135,14 @@ describe('verifyFederatedIdToken - B4M-issued ID token (subjectSource: sub)', ()
     const result = await verifyFederatedIdToken('tok', B4M_IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-777');
-    expect(mockCreate).toHaveBeenCalledWith({
-      issuer: B4M_IDP.issuer,
-      audience: B4M_IDP.audience,
-      jwksUri: B4M_IDP.jwksUri,
-    });
+    expect(mockCreate).toHaveBeenCalledWith(
+      {
+        issuer: B4M_IDP.issuer,
+        audience: B4M_IDP.audience,
+        jwksUri: B4M_IDP.jwksUri,
+      },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
   });
 
   it('accepts a refreshed, scope-limited id_token with no nonce (OIDC Core 12.2)', async () => {

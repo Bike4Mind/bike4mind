@@ -1219,7 +1219,14 @@ const spendReconciliationCron = runsScheduledJobs
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
         },
-        permissions: [...providerAdminKeyAccess.permissions],
+        // PutMetricData publishes the drift and nothing-reconciled metrics alarmed in infra/providerSpend.ts.
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+          ...providerAdminKeyAccess.permissions,
+        ],
       },
     })
   : undefined;
