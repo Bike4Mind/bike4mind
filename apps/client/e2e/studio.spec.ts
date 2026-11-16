@@ -104,7 +104,7 @@ test.describe('Studio - video and music forms', () => {
     const estimate = page.getByTestId('video-form-estimate');
 
     await test.step('defaults: a model is picked, submit waits for a prompt', async () => {
-      await expect(page.getByTestId('video-form-model-select')).not.toHaveText('');
+      await expect(studioPage.modelName('video')).not.toHaveText('');
       await expect(page.getByTestId('video-form-payer-note')).toBeVisible();
       await expect(estimate).toHaveText(/Estimated cost: [\d,]+ credits/);
       await expect(submit).toBeDisabled();
@@ -157,7 +157,7 @@ test.describe('Studio - video and music forms', () => {
     await studioPage.goto('music');
     const submit = page.getByTestId('music-form-submit-btn');
 
-    await expect(page.getByTestId('music-form-model-select')).not.toHaveText('');
+    await expect(studioPage.modelName('music')).not.toHaveText('');
     await expect(page.getByTestId('music-form-estimate')).toHaveText(/Estimated cost: [\d,]+ credits/);
     await expect(page.getByTestId('music-form-payer-note')).toBeVisible();
     await expect(submit).toBeDisabled();

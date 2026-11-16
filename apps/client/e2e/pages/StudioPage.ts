@@ -82,6 +82,14 @@ export class StudioPage extends BasePage {
     await expect(this.form(modality)).toBeVisible({ timeout: TIMEOUTS.ACTION });
   }
 
+  /**
+   * The picked model's name for a capability form: the legacy Select (`<kind>-form-model-select`) or the Create v2
+   * model row (`<kind>-form-model-row-name`, StudioModelPicker).
+   */
+  modelName(kind: 'video' | 'music'): Locator {
+    return this.page.getByTestId(`${kind}-form-model-select`).or(this.page.getByTestId(`${kind}-form-model-row-name`));
+  }
+
   form(modality: StudioModality): Locator {
     if (modality === 'video' || modality === 'music') return this.page.getByTestId(`${modality}-form`);
     return this.page.getByTestId(`${modality}-studio-form`);
