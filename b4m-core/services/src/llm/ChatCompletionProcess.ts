@@ -7162,10 +7162,8 @@ export class ChatCompletionProcess {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
           }
-          const toolCreditsUsed = (quest.promptMeta!.functionCalls || []).reduce(
-            (sum, fc) => sum + (fc.creditsUsed || 0),
-            0
-          );
+          // Adapter telemetry can omit delivered calls or be replaced by a text-only callback.
+          const toolCreditsUsed = this.chargedToolCredits();
           const totalCreditsUsed = textCreditsUsed + toolCreditsUsed;
           quest.creditsUsed = totalCreditsUsed;
 
@@ -7312,9 +7310,9 @@ export class ChatCompletionProcess {
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
             if (toolCreditsUsed > 0) {
-              const toolNames = (quest.promptMeta!.functionCalls || [])
-                .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
-                .map(fc => fc.name)
+              const toolNames = Array.from(this.toolCreditsMap)
+                .filter(([, charges]) => charges.some(credits => credits > 0))
+                .map(([name]) => name)
                 .join(', ');
               // NOT currentModel.id: the charge belongs to whatever model the tools ran
               // on. One aggregate row can only name it when a single model charged (see
