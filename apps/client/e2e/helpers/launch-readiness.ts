@@ -1,4 +1,6 @@
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Browser, type Locator, type Page } from '@playwright/test';
+import { buildAuthSuccessUrl, type SpecAuth } from './auth-seed';
+import { installWafBypass } from './waf-bypass';
 
 /**
  * Launch-readiness gate A6.1: the money paths must work on a short phone screen over a slow link.
@@ -28,6 +30,27 @@ export async function throttleToSlowLink(page: Page): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
   await cdp.send('Network.emulateNetworkConditions', SLOW_LINK);
+}
+
+/**
+ * A throttled 375x667 page signed in as `auth`, in a context of its own. Unlike the fixture page
+ * it stubs no modal and seeds no cookie-consent decision, so a What's New dialog or a consent bar
+ * that lands over a pay button fails the reachability checks instead of being hidden from them.
+ * `goto` lands through /auth/success, like a returning user whose session is restored.
+ */
+export async function openShortScreenPageAs(
+  browser: Browser,
+  baseURL: string | undefined,
+  auth: SpecAuth
+): Promise<{ page: Page; goto: (path: string) => Promise<void>; close: () => Promise<void> }> {
+  const context = await browser.newContext({ ...SHORT_SCREEN_MOBILE, baseURL });
+  const page = await context.newPage();
+  await installWafBypass(page);
+  await throttleToSlowLink(page);
+  const goto = async (path: string) => {
+    await page.goto(buildAuthSuccessUrl(path, auth));
+  };
+  return { page, goto, close: () => context.close() };
 }
 
 /**

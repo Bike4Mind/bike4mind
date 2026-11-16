@@ -104,6 +104,35 @@ describe('CookieConsentBanner', () => {
     expect(document.body).toHaveFocus();
   });
 
+  // Modals end above the bar through this variable (themes/customizations/modal.ts).
+  it('publishes its height while asking and withdraws it once answered', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(260);
+    try {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('260px');
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+      expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('never publishes a height when no question is asked', () => {
+    localStorageMock.setItem('cookie_consent', 'granted');
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    expect(document.documentElement.style.getPropertyValue('--cookie-consent-banner-height')).toBe('');
+  });
+
   it('hides banner when consent was previously granted', () => {
     localStorageMock.setItem('cookie_consent', 'granted');
 
