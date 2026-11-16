@@ -7,7 +7,14 @@ vi.mock('aws-jwt-verify', () => ({
   JwtVerifier: { create: (...args: any[]) => mockCreate(...args) },
 }));
 
-import { verifyFederatedIdToken, FederatedIdTokenError, __clearVerifierCache } from './verifyFederatedIdToken';
+import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
+import { SimpleFetcher } from 'aws-jwt-verify/https';
+import {
+  verifyFederatedIdToken,
+  FederatedIdTokenError,
+  __clearVerifierCache,
+  JWKS_USER_AGENT,
+} from './verifyFederatedIdToken';
 
 const IDP = {
   issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
@@ -31,7 +38,10 @@ describe('verifyFederatedIdToken', () => {
     const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
-    expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience });
+    expect(mockCreate).toHaveBeenCalledWith(
+      { issuer: IDP.issuer, audience: IDP.audience },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
   });
 
   it('parses a JSON-string identities claim', async () => {
@@ -49,7 +59,22 @@ describe('verifyFederatedIdToken', () => {
     const jwksUri = 'https://example.com/keys';
 
     await verifyFederatedIdToken('tok', { ...IDP, jwksUri });
-    expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience, jwksUri });
+    expect(mockCreate).toHaveBeenCalledWith(
+      { issuer: IDP.issuer, audience: IDP.audience, jwksUri },
+      expect.objectContaining({ jwksCache: expect.anything() })
+    );
+  });
+
+  it('builds the verifier with a JWKS fetcher that sends a User-Agent', async () => {
+    mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
+    await verifyFederatedIdToken('tok', IDP);
+
+    const { jwksCache } = mockCreate.mock.calls[0][1] as { jwksCache: SimpleJwksCache };
+    expect(jwksCache).toBeInstanceOf(SimpleJwksCache);
+    const fetcher = (jwksCache as unknown as { fetcher: SimpleFetcher }).fetcher;
+    expect(fetcher).toBeInstanceOf(SimpleFetcher);
+    expect(fetcher.defaultRequestOptions.headers).toMatchObject({ 'User-Agent': JWKS_USER_AGENT });
+    expect(JWKS_USER_AGENT).not.toBe('');
   });
 
   it('throws when signature/claim verification fails', async () => {

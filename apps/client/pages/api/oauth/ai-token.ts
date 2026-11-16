@@ -163,7 +163,12 @@ const handler = baseApi({ auth: false })
       ({ b4mUserId } = await verifyFederatedIdToken(id_token, federatedIdp));
     } catch (err) {
       if (err instanceof FederatedIdTokenError) {
-        req.logger.warn(`[OAUTH_AI_TOKEN] ID token rejected for client ${client_id}: ${err.message}`);
+        const cause = err.cause instanceof Error ? err.cause.message : err.cause;
+        req.logger.warn(
+          `[OAUTH_AI_TOKEN] ID token rejected for client ${client_id}: ${err.message}${
+            cause !== undefined ? ` (cause: ${String(cause)})` : ''
+          }`
+        );
         logError('invalid_grant', 401);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }

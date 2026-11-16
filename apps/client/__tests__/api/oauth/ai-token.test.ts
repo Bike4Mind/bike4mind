@@ -95,8 +95,8 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   // Defined inside the factory (hoisted): a class declaration in the module body
   // would be in its TDZ when the hoisted mock runs.
   FederatedIdTokenError: class FederatedIdTokenError extends Error {
-    constructor(message: string) {
-      super(message);
+    constructor(message: string, options?: { cause?: unknown }) {
+      super(message, options);
       this.name = 'FederatedIdTokenError';
     }
   },
@@ -370,6 +370,21 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getStatusCode()).toBe(401);
     expect(res._getJSONData().error).toBe('invalid_grant');
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('logs the verification cause on rejection without leaking it in the response', async () => {
+    mockVerifyIdToken.mockRejectedValue(
+      new FederatedIdTokenError('ID token failed signature/claim verification', {
+        cause: new Error('Status code is 403, expected 200'),
+      })
+    );
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData().error).toBe('invalid_grant');
+    expect(JSON.stringify(res._getJSONData())).not.toContain('403');
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('Status code is 403'));
   });
 
   it('AC3: token subject resolves to no B4M user → 401 invalid_grant', async () => {
