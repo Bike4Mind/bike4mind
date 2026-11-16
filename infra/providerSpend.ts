@@ -161,64 +161,78 @@ if (isMonitoredStage) {
       policyDocument: accessLogGroup.arn.apply(arn => JSON.stringify(providerAdminKeyLogsPolicy(arn))),
     });
 
-    const accessRules = [
+    const readRuleName = `${prefix}-provider-admin-key-read`;
+    const changeRuleName = `${prefix}-provider-admin-key-change`;
+    const kmsChangeRuleName = `${prefix}-provider-admin-key-kms-change`;
+
+    const readRule = new aws.cloudwatch.EventRule('ProviderAdminKeyReadRule', {
+      name: readRuleName,
+      description: 'A principal other than the spend crons read a provider admin key secret',
+      // Read-only management events reach a rule only in this state.
+      state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(
+          providerAdminKeyReadEventPattern({ secrets: refs.secrets, allowedRoleArns: refs.readerRoleArns })
+        )
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyReadTarget', {
+      rule: readRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const changeRule = new aws.cloudwatch.EventRule('ProviderAdminKeyChangeRule', {
+      name: changeRuleName,
+      description: 'A provider admin key secret or its policy was changed',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(providerAdminKeyChangeEventPattern({ secrets: refs.secrets }))
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyChangeTarget', {
+      rule: changeRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const kmsChangeRule = new aws.cloudwatch.EventRule('ProviderAdminKeyKmsChangeRule', {
+      name: kmsChangeRuleName,
+      description: 'The provider admin key store KMS key policy, grants or lifecycle changed',
+      eventPattern: adminKeyStore.refs.apply(refs =>
+        JSON.stringify(providerAdminKeyKmsEventPattern({ keyId: refs.keyId, keyArn: refs.keyArn }))
+      ),
+    });
+    new aws.cloudwatch.EventTarget('ProviderAdminKeyKmsChangeTarget', {
+      rule: kmsChangeRule.name,
+      arn: accessLogGroup.arn,
+    });
+
+    const accessAlarms = [
       {
         id: 'Read',
-        name: `${prefix}-provider-admin-key-read`,
-        description: 'A principal other than the spend crons read a provider admin key secret',
+        ruleName: readRuleName,
         alarmDescription: 'A principal other than the spend crons read a provider admin key secret',
-        // Read-only management events reach a rule only in this state.
-        state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
-        pattern: adminKeyStore.refs.apply(refs =>
-          JSON.stringify(
-            providerAdminKeyReadEventPattern({ secrets: refs.secrets, allowedRoleArns: refs.readerRoleArns })
-          )
-        ),
       },
       {
         id: 'Change',
-        name: `${prefix}-provider-admin-key-change`,
-        description: 'A provider admin key secret or its policy was changed',
+        ruleName: changeRuleName,
         alarmDescription: 'A provider admin key secret or its resource policy was changed',
-        state: undefined,
-        pattern: adminKeyStore.refs.apply(refs =>
-          JSON.stringify(providerAdminKeyChangeEventPattern({ secrets: refs.secrets }))
-        ),
       },
       {
         id: 'KmsChange',
-        name: `${prefix}-provider-admin-key-kms-change`,
-        description: 'The provider admin key store KMS key policy, grants or lifecycle changed',
+        ruleName: kmsChangeRuleName,
         alarmDescription:
           'The KMS key that encrypts the provider admin key secrets had its policy, grants or lifecycle changed',
-        state: undefined,
-        pattern: adminKeyStore.refs.apply(refs =>
-          JSON.stringify(providerAdminKeyKmsEventPattern({ keyId: refs.keyId, keyArn: refs.keyArn }))
-        ),
       },
     ];
 
-    for (const { id, name, description, alarmDescription, state, pattern } of accessRules) {
-      const rule = new aws.cloudwatch.EventRule(`ProviderAdminKey${id}Rule`, {
-        name,
-        description,
-        eventPattern: pattern,
-        ...(state ? { state } : {}),
-      });
-
-      new aws.cloudwatch.EventTarget(`ProviderAdminKey${id}Target`, {
-        rule: rule.name,
-        arn: accessLogGroup.arn,
-      });
-
+    for (const { id, ruleName, alarmDescription } of accessAlarms) {
       new aws.cloudwatch.MetricAlarm(`ProviderAdminKey${id}Alarm`, {
-        name,
+        name: ruleName,
         alarmDescription,
         comparisonOperator: 'GreaterThanOrEqualToThreshold',
         evaluationPeriods: 1,
         metricName: 'MatchedEvents',
         namespace: 'AWS/Events',
-        dimensions: { RuleName: name },
+        dimensions: { RuleName: ruleName },
         period: 300,
         statistic: 'Sum',
         threshold: 1,
