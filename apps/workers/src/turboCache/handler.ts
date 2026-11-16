@@ -9,6 +9,9 @@ import { z } from 'zod';
 // The body is uploaded later by Turbo; createS3Client keeps an empty-body checksum out of the signature.
 const s3 = createS3Client();
 const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
+// Turbo sends the upload body straight after its preflight, so a short window is enough. Keeping it
+// short limits how long an issued upload URL can be replayed, including after a token rotation.
+const UPLOAD_URL_EXPIRY = 60;
 const TEAM_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 function bucketName(): string {
@@ -79,7 +82,22 @@ async function handleHead(hash: string, team?: string): Promise<APIGatewayProxyS
   }
 }
 
+async function artifactExists(key: string): Promise<boolean> {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucketName(), Key: key }));
+    return true;
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'NotFound') return false;
+    throw err;
+  }
+}
+
 async function createUploadPreflight(hash: string, team?: string): Promise<APIGatewayProxyStructuredResultV2> {
+  // Artifacts are content-addressed, so an existing key already holds this task's output. Refuse
+  // to issue an upload URL for it: a stored artifact is never replaced through the cache API.
+  if (await artifactExists(artifactKey(hash, team))) {
+    return { statusCode: 409, body: JSON.stringify({ error: 'Artifact already exists' }) };
+  }
   const url = await getSignedUrl(
     s3,
     new PutObjectCommand({
@@ -87,7 +105,7 @@ async function createUploadPreflight(hash: string, team?: string): Promise<APIGa
       Key: artifactKey(hash, team),
       ContentType: 'application/octet-stream',
     }),
-    { expiresIn: PRESIGNED_URL_EXPIRY }
+    { expiresIn: UPLOAD_URL_EXPIRY }
   );
   // Turbo sends the body directly to this URL after its authenticated OPTIONS request.
   // Deliberately omit Authorization from allowed headers: S3 uses the URL signature.

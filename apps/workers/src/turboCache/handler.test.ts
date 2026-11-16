@@ -76,6 +76,8 @@ describe('turboCache handler', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.stubEnv('TURBO_CACHE_BUCKET', 'test-turbo-cache-bucket');
+    // S3 reports a miss unless a test queues a hit, so upload preflights reach the signer.
+    mockSend.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
     (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value = 'test-token-abc123';
     (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_READ_TOKEN.value = 'read-token-abc123';
     handler = (await import('./handler')).handler;
@@ -165,6 +167,35 @@ describe('turboCache handler', () => {
     expect(result.headers?.['access-control-allow-headers']).not.toMatch(/authorization|\*/i);
     expect(result.headers?.location).toBe('https://s3.example.com/presigned');
     expect(mockGetSignedUrl).toHaveBeenCalledOnce();
+    expect(mockGetSignedUrl.mock.calls[0][2]).toEqual({ expiresIn: 60 });
+  });
+
+  it('refuses an upload URL for an artifact that already exists', async () => {
+    mockSend.mockResolvedValueOnce({ ContentLength: 1024 });
+    const result = await handler(
+      makeEvent({
+        method: 'OPTIONS',
+        headers: { authorization: 'Bearer test-token-abc123', 'access-control-request-method': 'PUT' },
+        path: '/v8/artifacts/abc123def456',
+        queryStringParameters: { slug: 'bike4mind' },
+      })
+    );
+
+    expect(result.statusCode).toBe(409);
+    expect(result.headers?.location).toBeUndefined();
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+    expect(mockSend.mock.calls[0][0].input).toEqual({ Bucket: 'test-turbo-cache-bucket', Key: 'bike4mind/abc123def456' });
+  });
+
+  it('rethrows unexpected S3 errors on the upload existence check', async () => {
+    mockSend.mockRejectedValueOnce(new Error('AccessDenied'));
+    const event = makeEvent({
+      method: 'OPTIONS',
+      headers: { authorization: 'Bearer test-token-abc123', 'access-control-request-method': 'PUT' },
+      path: '/v8/artifacts/abc123def456',
+    });
+    await expect(handler(event)).rejects.toThrow('AccessDenied');
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
   });
 
   it('returns 200 on HEAD hit', async () => {

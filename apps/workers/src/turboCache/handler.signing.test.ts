@@ -1,3 +1,4 @@
+import { S3Client } from '@aws-sdk/client-s3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
@@ -9,6 +10,7 @@ vi.mock('sst', () => ({
 }));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.resetModules();
 });
@@ -23,6 +25,9 @@ describe('cache upload URL signing', () => {
     vi.stubEnv('AWS_SESSION_TOKEN', undefined);
     vi.stubEnv('AWS_EC2_METADATA_DISABLED', 'true');
     vi.stubEnv('AWS_REQUEST_CHECKSUM_CALCULATION', 'WHEN_SUPPORTED');
+    // The preflight checks for an existing artifact first; report a miss without calling AWS.
+    const missing = Object.assign(new Error('not found'), { name: 'NotFound' });
+    vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(missing as never);
     const { handler } = await import('./handler');
 
     const result = await handler({
@@ -39,6 +44,7 @@ describe('cache upload URL signing', () => {
     if (typeof location !== 'string') throw new Error('Missing presigned upload URL');
     const query = new URL(location).searchParams;
     expect(query.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256');
+    expect(query.get('X-Amz-Expires')).toBe('60');
     expect([...query.keys()].filter(key => /checksum/i.test(key))).toEqual([]);
     expect(query.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('content-length');
   });
