@@ -4,7 +4,14 @@ import type { ModelInfo } from '@bike4mind/common';
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get } }));
 
-const { getModelCatalog } = await import('./llm');
+const { getModelCatalog, getModels } = await import('./llm');
+
+it('reads the narrow model list from client-config without requesting the internal catalog', async () => {
+  const models = [{ id: 'public-model', supports_tools: true }];
+  get.mockResolvedValueOnce({ data: { models: { available: models } } });
+  expect(await getModels()).toEqual(models);
+  expect(get).toHaveBeenCalledWith('/api/v1/client-config');
+});
 
 const model = (id: string, extra: Partial<ModelInfo> = {}) => ({ id, name: id, type: 'text', ...extra }) as ModelInfo;
 const lockedModel = (id: string) => model(id, { access: { locked: true, reason: 'requires_paid_plan' } });

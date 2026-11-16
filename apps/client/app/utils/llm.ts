@@ -1,8 +1,10 @@
 import type {
   GenerationJobRef,
+  ClientConfigResponse,
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelInfo,
+  PublicModel,
   SupersededModelInfo,
 } from '@bike4mind/common';
 import type { AxiosError } from 'axios';
@@ -423,6 +425,7 @@ export type ModelCatalog = {
 
 export const getModelCatalog = async (): Promise<ModelCatalog> => {
   try {
+    // The web picker needs internal pricing/rank and runtime fields absent from PublicModel.
     const response = await api.get('/api/models');
     const listed: ModelInfo[] = response.data.models;
     return {
@@ -440,7 +443,10 @@ export const getModelCatalog = async (): Promise<ModelCatalog> => {
   }
 };
 
-export const getModels = async (): Promise<ModelInfo[]> => (await getModelCatalog()).models;
+export const getModels = async (): Promise<PublicModel[]> => {
+  const { data } = await api.get<ClientConfigResponse>('/api/v1/client-config');
+  return data.models.available;
+};
 
 export type SendMessageOptions = {
   isRetry?: boolean;
