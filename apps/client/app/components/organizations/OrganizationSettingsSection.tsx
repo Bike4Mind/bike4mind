@@ -12,6 +12,7 @@ import DeleteOrganizationDialog from './DeleteOrganizationDialog';
 import OrganizationGeneralSection from './OrganizationGeneralSection';
 import { canEditOrgProfile, canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 import { OrganizationSharingSettings } from './OrganizationSharingSettings';
+import OwnerOnlyNote from './OwnerOnlyNote';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
 
@@ -191,6 +192,11 @@ const OrganizationSettingsSection: FC<{ organization: WithId<IOrganizationDocume
             </Box>
           </Stack>
         </Card>
+      )}
+      {!canDeleteOrg && (
+        <OwnerOnlyNote testId="organization-settings-owner-only">
+          Exporting team data, transferring ownership and deleting the team
+        </OwnerOnlyNote>
       )}
       <OrgFormSaveBar
         count={hasChanges ? 1 : 0}

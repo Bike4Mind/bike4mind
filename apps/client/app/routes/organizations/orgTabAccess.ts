@@ -185,7 +185,33 @@ export interface OrgTabAccess {
   canManageConnectors: boolean;
   canManageDomains: boolean;
   canViewAudit?: boolean;
+  /**
+   * Owner, current manager or platform admin. Such a caller gets an owner-only tab they cannot open
+   * as a locked rail entry instead of having it vanish; a plain member is not shown admin tabs at all.
+   */
+  seesLockedTabs?: boolean;
 }
+
+/**
+ * Who may open each gated tab, for the notice a caller sees when a deep link names one they cannot.
+ * Tabs open to every member are absent. Billing is owner-only (canViewOrgBilling); every other gated
+ * tab admits the owner and current managers.
+ */
+export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers'>>> = {
+  [OrganizationTabs.Groups]: 'managers',
+  [OrganizationTabs.Usage]: 'managers',
+  [OrganizationTabs.Analysis]: 'managers',
+  [OrganizationTabs.Integrations]: 'managers',
+  [OrganizationTabs.Billing]: 'owner',
+  [OrganizationTabs.Domains]: 'managers',
+  [OrganizationTabs.ApiKeys]: 'managers',
+  [OrganizationTabs.Audit]: 'managers',
+  [OrganizationTabs.Settings]: 'managers',
+};
+
+/** Owner-only tabs shown to a manager as a locked entry with a read-only summary. */
+export const isOrgTabLocked = (tab: OrganizationTabs, access: OrgTabAccess): boolean =>
+  tab === OrganizationTabs.Billing && !!access.seesLockedTabs && !access.canViewBilling;
 
 /** The Integrations sub-sections this caller may see, in display order. */
 export const visibleIntegrationSections = (
@@ -216,6 +242,25 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
   if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   return selected;
+};
+
+export interface OrgTabView {
+  /** The tab to select. */
+  tab: OrganizationTabs;
+  /** The tab is owner-only and shows its locked panel rather than its content. */
+  locked: boolean;
+  /** The requested tab, when the caller may not open it and was sent to Overview instead. */
+  denied?: OrganizationTabs;
+}
+
+/**
+ * resolveAccessibleTab, except that a locked tab stays selected (it renders its locked panel) and a
+ * refused one is reported, so the page can say why the link landed on Overview.
+ */
+export const resolveOrgTabView = (requested: OrganizationTabs, access: OrgTabAccess): OrgTabView => {
+  if (isOrgTabLocked(requested, access)) return { tab: requested, locked: true };
+  const tab = resolveAccessibleTab(requested, access);
+  return tab === requested ? { tab, locked: false } : { tab, locked: false, denied: requested };
 };
 
 /** The Integrations sub-section to show: the requested one when visible, else the first visible. */

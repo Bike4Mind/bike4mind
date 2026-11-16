@@ -10,6 +10,7 @@ import {
   ORG_INVITE_ROLES,
   OrgInviteRole,
 } from '@bike4mind/common';
+import { canViewOrgBilling } from '@client/app/routes/organizations/orgTabAccess';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -62,6 +63,11 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   const queryClient = useQueryClient();
 
   const hasAvailableSeats = maxSeats === 0 || availableSeats > 0;
+  // Only the owner can buy seats (canViewOrgBilling), so everyone else is pointed at them.
+  const canBuySeats = canViewOrgBilling(currentUser, organization);
+  const noSeatsMessage = canBuySeats
+    ? t('organizations.errors.no_seats', 'No seats available. Please upgrade your plan.')
+    : t('organizations.errors.no_seats_ask_owner', 'No seats available. Ask the team owner to add seats.');
   const seatUsagePercentage = maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 100;
 
   // For the add members modal
@@ -387,7 +393,9 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 level="body-sm"
                 color="danger"
               >
-                You&apos;ve reached your seat limit. Upgrade your plan to add more members.
+                {canBuySeats
+                  ? "You've reached your seat limit. Upgrade your plan to add more members."
+                  : "You've reached your seat limit. Ask the team owner to add seats."}
               </Typography>
             )}
           </Stack>
@@ -421,7 +429,11 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 onSelectIds={ids => {
                   // Only allow selecting up to available seats
                   if (maxSeats > 0 && ids.length > availableSeats) {
-                    toast.error(`You can only add up to ${availableSeats} more members with your current plan`);
+                    toast.error(
+                      canBuySeats
+                        ? `You can only add up to ${availableSeats} more members with your current plan`
+                        : `You can only add up to ${availableSeats} more members. Ask the team owner to add seats.`
+                    );
                     return;
                   }
                   setSelectedUserIds(ids);
@@ -454,9 +466,7 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
                 variant="outlined"
                 color="danger"
                 startDecorator={<AddIcon />}
-                onClick={() =>
-                  toast.error(t('organizations.errors.no_seats', 'No seats available. Please upgrade your plan.'))
-                }
+                onClick={() => toast.error(noSeatsMessage)}
                 sx={{ opacity: 0.75 }}
               >
                 {t('organizations.modals.members.button_label', 'Add Member')}

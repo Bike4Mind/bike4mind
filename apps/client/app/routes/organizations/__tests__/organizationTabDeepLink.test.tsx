@@ -267,6 +267,36 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
   });
 
+  it('says why a refused deep link landed on Overview', () => {
+    searchParams.current = { tab: 'usage' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Usage. Ask the owner if you need it.'
+    );
+  });
+
+  it('names the owner as the only one who can open Billing', () => {
+    searchParams.current = { tab: 'billing' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner can open Billing. Ask the owner if you need it.'
+    );
+  });
+
+  it('shows no notice when the requested tab opens', () => {
+    searchParams.current = { tab: 'usage' };
+
+    renderThroughLoad();
+
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
   it('falls back to Overview for a non-member', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'stranger9' };
@@ -281,6 +311,59 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Overview');
+  });
+});
+
+describe('organization detail page - what a manager cannot do', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'mgr1' };
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  it('lists Billing as a locked entry rather than hiding it', () => {
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+  });
+
+  it('opens the locked Billing tab on a read-only summary with no billing controls', () => {
+    searchParams.current = { tab: 'billing' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toContain('Billing');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+    expect(screen.getByTestId('organization-billing-owner-only')).toBeTruthy();
+    expect(screen.getByTestId('organization-billing-locked-credits').textContent).toBe('100');
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('1 of 5');
+  });
+
+  it('explains the owner-only Integrations sections', () => {
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-integrations-owner-only').textContent).toContain(
+      'Setting up Slack, GitHub and webhooks'
+    );
+  });
+
+  it('does not show the owner a locked Billing entry or the Integrations note', () => {
+    user.current = { id: 'owner1' };
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
+    expect(screen.queryByTestId('organization-integrations-owner-only')).toBeNull();
   });
 });
 

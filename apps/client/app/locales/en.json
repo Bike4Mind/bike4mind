@@ -208,6 +208,17 @@
     },
     "api_keys": {
       "member_keys": "Member API keys"
+    },
+    "access_notice": {
+      "owner_only": "Owner only",
+      "denied_owner": "Only the team owner can open {{tab}}. Ask the owner if you need it.",
+      "denied_managers": "Only the team owner and managers can open {{tab}}. Ask the owner if you need it.",
+      "billing_locked": "Changing the plan, seats and payment details",
+      "billing_summary": "What you can see from here",
+      "credits_remaining": "Credits remaining",
+      "seats_used": "Seats used",
+      "seats_value": "{{current}} of {{max}}",
+      "integrations_locked": "Setting up Slack, GitHub and webhooks"
     }
   },
   "session": {

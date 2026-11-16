@@ -109,6 +109,20 @@ describe('OrganizationSettingsSection - Danger Zone visibility', () => {
     expect(screen.getByText('Team System Prompt')).toBeTruthy();
   });
 
+  it('explains the missing Danger Zone to a non-owner instead of rendering nothing', () => {
+    renderAs({ id: 'member1', isAdmin: false });
+
+    expect(screen.getByTestId('organization-settings-owner-only').textContent).toContain(
+      'Owner only: Exporting team data, transferring ownership and deleting the team. Ask the team owner'
+    );
+  });
+
+  it('shows no owner-only note to the owner', () => {
+    renderAs({ id: OWNER_ID, isAdmin: false });
+
+    expect(screen.queryByTestId('organization-settings-owner-only')).toBeNull();
+  });
+
   it('hides Delete Team when there is no resolved user', () => {
     renderAs(null);
 

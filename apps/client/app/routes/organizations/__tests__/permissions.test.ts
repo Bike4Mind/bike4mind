@@ -15,6 +15,7 @@ import {
   canViewOrgUsage,
   OrganizationTabs,
   resolveAccessibleTab,
+  resolveOrgTabView,
 } from '../orgTabAccess';
 
 /**
@@ -501,5 +502,60 @@ describe('canManageOrgDomains', () => {
     expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(
       OrganizationTabs.Domains
     );
+  });
+});
+
+describe('resolveOrgTabView', () => {
+  const manager = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: false,
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: true,
+  };
+  const member = {
+    ...manager,
+    canViewUsage: false,
+    canViewAnalysis: false,
+    canManageGroups: false,
+    canManageConnectors: false,
+    canManageDomains: false,
+    canViewAudit: false,
+    seesLockedTabs: false,
+  };
+
+  it('keeps Billing selected but locked for a manager', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, manager)).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: true,
+    });
+  });
+
+  it('opens Billing unlocked for the owner', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, { ...manager, canViewBilling: true })).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: false,
+    });
+  });
+
+  it('reports the refused tab for a plain member, who gets no locked entries', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, member)).toEqual({
+      tab: OrganizationTabs.Overview,
+      locked: false,
+      denied: OrganizationTabs.Billing,
+    });
+    expect(resolveOrgTabView(OrganizationTabs.Usage, member).denied).toBe(OrganizationTabs.Usage);
+  });
+
+  it('reports nothing for a tab the caller may open', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Members, member)).toEqual({
+      tab: OrganizationTabs.Members,
+      locked: false,
+    });
   });
 });

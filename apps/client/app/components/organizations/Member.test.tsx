@@ -666,6 +666,22 @@ describe('OrganizationMembers invite plumbing', () => {
     expect(mocks.toast.error).toHaveBeenCalledWith('organizations.errors.no_seats');
   });
 
+  it('points a manager at the owner rather than an upgrade they cannot make', () => {
+    mocks.viewer = { id: 'mgr1', isAdmin: false };
+    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['mgr1'],
+        users: [{ userId: 'mgr1', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
+      "You've reached your seat limit. Ask the team owner to add seats."
+    );
+    fireEvent.click(screen.getByTestId('organization-members-add-no-seats-btn'));
+    expect(mocks.toast.error).toHaveBeenCalledWith('organizations.errors.no_seats_ask_owner');
+  });
+
   it('says when pending invitations fail to load', () => {
     mocks.invitesError = true;
     renderMembers(buildOrg({}));

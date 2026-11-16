@@ -19,6 +19,7 @@ import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSe
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
+import OwnerOnlyNote from '@client/app/components/organizations/OwnerOnlyNote';
 import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
 import { isAxiosError } from 'axios';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
@@ -61,6 +62,7 @@ import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgDomains,
@@ -71,10 +73,12 @@ import {
   canViewOrgAudit,
   canViewOrgUsage,
   IntegrationSections,
+  isOrgTabLocked,
   LEGACY_INTEGRATION_TABS,
+  ORG_TAB_AUDIENCE,
   OrganizationTabs,
-  resolveAccessibleTab,
   resolveIntegrationSection,
+  resolveOrgTabView,
   visibleIntegrationSections,
   type OrgTabAccess,
 } from '@client/app/routes/organizations/orgTabAccess';
@@ -131,6 +135,7 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
         visible: a => a.canManageDomains,
         testId: 'org-tab-domains',
       },
+      // A manager gets it as a locked entry: plan, credits and seats read-only, changes owner-only.
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
       // Same gate as Connectors: owner, current manager or platform admin.
       { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
@@ -212,6 +217,7 @@ const OrganizationPage: FC = () => {
       canManageConnectors: canManageOrgConnectors(currentUser, organization),
       canManageDomains: canManageOrgDomains(currentUser, organization),
       canViewAudit: canViewOrgAudit(currentUser, organization),
+      seesLockedTabs: !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization),
     }),
     [currentUser, organization]
   );
@@ -226,7 +232,10 @@ const OrganizationPage: FC = () => {
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, access);
+  // A refused tab is named in a notice on Overview, so the link does not silently land elsewhere.
+  const tabView = resolveOrgTabView(requestedTab, access);
+  const selectedTab = tabView.tab;
+  const deniedAudience = tabView.denied && currentUser ? ORG_TAB_AUDIENCE[tabView.denied] : undefined;
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
 
@@ -373,7 +382,7 @@ const OrganizationPage: FC = () => {
             }}
           >
             {RAIL_GROUPS.map(group => {
-              const tabs = group.tabs.filter(entry => entry.visible(access));
+              const tabs = group.tabs.filter(entry => entry.visible(access) || isOrgTabLocked(entry.tab, access));
               if (tabs.length === 0) return null;
               return (
                 <Fragment key={group.key}>
@@ -385,12 +394,25 @@ const OrganizationPage: FC = () => {
                   >
                     {t(`organization.tab_groups.${group.key}`)}
                   </Typography>
-                  {tabs.map(entry => (
-                    <Tab key={entry.tab} value={entry.tab} data-testid={entry.testId}>
-                      {entry.icon}
-                      {t(`organization.tabs.${entry.tab}`)}
-                    </Tab>
-                  ))}
+                  {tabs.map(entry => {
+                    const locked = isOrgTabLocked(entry.tab, access);
+                    return (
+                      <Tab
+                        key={entry.tab}
+                        value={entry.tab}
+                        data-testid={locked ? `organization-tab-locked-${entry.tab}` : entry.testId}
+                      >
+                        {entry.icon}
+                        {t(`organization.tabs.${entry.tab}`)}
+                        {locked && (
+                          <LockOutlinedIcon
+                            titleAccess={t('organization.access_notice.owner_only')}
+                            sx={{ ml: 'auto', color: 'text.tertiary' }}
+                          />
+                        )}
+                      </Tab>
+                    );
+                  })}
                 </Fragment>
               );
             })}
@@ -398,6 +420,19 @@ const OrganizationPage: FC = () => {
 
           <Box sx={{ p: 3, flex: 1, overflow: 'auto' }}>
             <TabPanel value={OrganizationTabs.Overview}>
+              {tabView.denied && deniedAudience && (
+                <Alert
+                  color="warning"
+                  variant="soft"
+                  startDecorator={<LockOutlinedIcon />}
+                  sx={{ mb: 3 }}
+                  data-testid="organization-tab-denied-notice"
+                >
+                  {t(`organization.access_notice.denied_${deniedAudience}`, {
+                    tab: t(`organization.tabs.${tabView.denied}`),
+                  })}
+                </Alert>
+              )}
               {header(OrganizationTabs.Overview)}
               {currentUser?.id === organization.userId && !organization.personal && (
                 <TeamOnboardingChecklist
@@ -448,6 +483,13 @@ const OrganizationPage: FC = () => {
             {selectedSection && (
               <TabPanel value={OrganizationTabs.Integrations}>
                 {header(OrganizationTabs.Integrations)}
+                {!access.canManageIntegrations && (
+                  <Box sx={{ mb: 3 }}>
+                    <OwnerOnlyNote testId="organization-integrations-owner-only">
+                      {t('organization.access_notice.integrations_locked')}
+                    </OwnerOnlyNote>
+                  </Box>
+                )}
                 {integrationSections.length > 1 && (
                   <Box sx={{ mb: 3 }}>
                     <SegmentedControl
@@ -469,6 +511,12 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Billing}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
+            {tabView.locked && selectedTab === OrganizationTabs.Billing && (
+              <TabPanel value={OrganizationTabs.Billing}>
+                {header(OrganizationTabs.Billing)}
+                <LockedBillingSummary organization={organization} />
               </TabPanel>
             )}
             {access.canManageDomains && (
@@ -529,6 +577,43 @@ const IntegrationSection: FC<{ section: IntegrationSections; organization: WithI
       {section === IntegrationSections.Connectors && (
         <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
       )}
+    </Stack>
+  );
+};
+
+/**
+ * The Billing tab for a manager: credits and seats read-only, with every change left to the owner.
+ * Until granular roles land, the owner is the only one the Billing routes accept.
+ */
+const LockedBillingSummary: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
+  const { t } = useTranslation();
+  const { currentSeats, maxSeats } = useOrganizationSeats(organization.id);
+  return (
+    <Stack spacing={2} data-testid="organization-billing-locked">
+      <OwnerOnlyNote testId="organization-billing-owner-only">
+        {t('organization.access_notice.billing_locked')}
+      </OwnerOnlyNote>
+      <Card variant="outlined" sx={{ p: 3 }}>
+        <Typography level="title-sm">{t('organization.access_notice.billing_summary')}</Typography>
+        <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.credits_remaining')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-credits">
+              {formatCreditAmount(organization.currentCredits)}
+            </Typography>
+          </Stack>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.seats_used')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-seats">
+              {t('organization.access_notice.seats_value', { current: currentSeats, max: maxSeats })}
+            </Typography>
+          </Stack>
+        </Stack>
+      </Card>
     </Stack>
   );
 };
