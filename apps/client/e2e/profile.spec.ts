@@ -459,7 +459,6 @@ test.describe('Profile - API key gates', () => {
 
     await loginAsUser(owner);
     await profilePage.gotoApiKeyScopesDocs();
-    await expect(page.getByTestId('api-keys-scopes-open-endpoints')).toContainText('GET /api/sessions');
 
     const expandRoutes = async (value: string) => {
       const toggle = page.getByTestId(`api-keys-scope-endpoints-${value}-toggle-btn`);
@@ -473,6 +472,7 @@ test.describe('Profile - API key gates', () => {
     expect(total, 'toggle reads "Show all <n>"').toBeGreaterThan(1);
     const routes = await expandRoutes(scope);
     expect(routes).toHaveLength(total);
+    expect(routes).toContain('GET /api/sessions');
     for (const route of routes) expect(route).toMatch(/^[A-Z|]+ \/api\/\S+$/);
     await expect(toggle).toHaveText('Hide routes');
 
@@ -487,7 +487,7 @@ test.describe('Profile - API key gates', () => {
     const call = (path: string) => request.get(path, { headers: { Authorization: `Bearer ${key}` } });
     const callable = routes.filter(route => route.startsWith('GET ') && !route.includes(':')).map(r => r.slice(4));
     expect(callable).toContain('/api/v1/sessions');
-    for (const path of [...callable, '/api/sessions']) {
+    for (const path of callable) {
       const response = await call(path);
       expect(response.status(), `${path}: ${await response.text()}`).not.toBe(403);
       expect(response.status(), path).toBeLessThan(500);

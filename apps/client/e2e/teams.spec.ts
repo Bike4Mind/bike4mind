@@ -358,11 +358,14 @@ test.describe('Teams', () => {
 
   // --- Roles ------------------------------------------------------------------------
 
-  test('a plain member sees only Overview and Members, with no roster controls', async ({ browser, baseURL }) => {
+  test('a plain member sees only Overview, Members and Library, with no roster controls', async ({
+    browser,
+    baseURL,
+  }) => {
     const { page, teamsPage, close } = await openTeamsPageAs(browser, baseURL, member);
     try {
       await teamsPage.gotoTeam(mainTeamId);
-      expect(await teamsPage.visibleTabs()).toEqual(['Overview', 'Members']);
+      expect(await teamsPage.visibleTabs()).toEqual(['Overview', 'Members', 'Library']);
 
       await teamsPage.openTab('Members');
       await expect(teamsPage.memberRow(manager.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });

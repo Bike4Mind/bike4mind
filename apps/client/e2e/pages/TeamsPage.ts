@@ -6,6 +6,7 @@ import { BasePage } from './BasePage';
 export type TeamTab =
   | 'Overview'
   | 'Members'
+  | 'Library'
   | 'Groups'
   | 'Usage'
   | 'Analysis'
@@ -15,12 +16,14 @@ export type TeamTab =
   | 'Webhooks'
   | 'Connectors'
   | 'API Keys'
+  | 'Domains'
   | 'Settings'
   | 'Audit';
 
 export const ALL_TEAM_TABS: TeamTab[] = [
   'Overview',
   'Members',
+  'Library',
   'Groups',
   'Usage',
   'Analysis',
@@ -30,6 +33,7 @@ export const ALL_TEAM_TABS: TeamTab[] = [
   'Webhooks',
   'Connectors',
   'API Keys',
+  'Domains',
   'Settings',
   'Audit',
 ];
