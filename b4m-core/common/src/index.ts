@@ -48,6 +48,7 @@ export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
 export * from './studioFeatureFlags';
+export * from './studioComposition';
 export * from './schemas';
 export * from './modelHub';
 export { personalEmailProviders } from './organizationUtils';

@@ -1,0 +1,189 @@
+import { z } from 'zod';
+import {
+  STUDIO_OUTPUT_DEFAULT_SIZES,
+  STUDIO_TIMELINE_VERSION,
+  StudioFileIdSchema,
+  StudioTimelineSchema,
+  studioTimelineFileIds,
+  type StudioOutputAspectRatio,
+  type StudioTimeline,
+} from './timeline';
+
+/**
+ * A Studio Production: a brief, a small brand kit, a shot list and a timeline that arrange many generated assets
+ * into one output. The UI calls it a Production; code always says StudioComposition / compositionId so it never
+ * reads as the prod environment. Assets are referenced by FabFile id only, never copied.
+ *
+ * The Mongoose model (packages/database models/content/StudioCompositionModel.ts) must declare exactly the
+ * fields of StudioCompositionSchema; its parity test fails when they drift.
+ */
+
+export const STUDIO_COMPOSITION_TEMPLATES = [
+  'ad_campaign',
+  'social_pack',
+  'product_video',
+  'explainer',
+  'short_film',
+  'blank',
+] as const;
+export type StudioCompositionTemplate = (typeof STUDIO_COMPOSITION_TEMPLATES)[number];
+
+export const STUDIO_COMPOSITION_LIMITS = {
+  titleMaxLength: 200,
+  briefSummaryMaxLength: 4000,
+  briefFieldMaxLength: 500,
+  brandColorsMax: 8,
+  brandProductFilesMax: 20,
+  shotsMax: 100,
+  shotTitleMaxLength: 200,
+  shotDescriptionMaxLength: 4000,
+  shotFilesMax: 20,
+  listLimitMax: 100,
+} as const;
+
+export const StudioCompositionIdSchema = z.string().regex(/^[a-f0-9]{24}$/, 'Not a valid composition id');
+
+const limits = STUDIO_COMPOSITION_LIMITS;
+
+export const StudioCompositionBriefSchema = z.object({
+  summary: z.string().trim().max(limits.briefSummaryMaxLength).optional(),
+  audience: z.string().trim().max(limits.briefFieldMaxLength).optional(),
+  callToAction: z.string().trim().max(limits.briefFieldMaxLength).optional(),
+});
+export type StudioCompositionBrief = z.infer<typeof StudioCompositionBriefSchema>;
+
+/** A deliberately small first cut of a brand kit; it grows as templates need more. */
+export const StudioBrandKitSchema = z.object({
+  logoFileId: StudioFileIdSchema.optional(),
+  colors: z
+    .array(z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colors are #RRGGBB'))
+    .max(limits.brandColorsMax)
+    .default([]),
+  fontFamily: z.string().trim().min(1).max(100).optional(),
+  productFileIds: z.array(StudioFileIdSchema).max(limits.brandProductFilesMax).default([]),
+});
+export type StudioBrandKit = z.infer<typeof StudioBrandKitSchema>;
+
+/** One planned shot: what it should show and the candidate assets generated for it. */
+export const StudioShotSchema = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_-]+$/, 'Ids may contain only letters, digits, "_" and "-"'),
+  title: z.string().trim().min(1).max(limits.shotTitleMaxLength),
+  description: z.string().trim().max(limits.shotDescriptionMaxLength).optional(),
+  durationMs: z.number().int().positive().optional(),
+  fileIds: z.array(StudioFileIdSchema).max(limits.shotFilesMax).default([]),
+});
+export type StudioShot = z.infer<typeof StudioShotSchema>;
+
+const StudioShotListSchema = z.array(StudioShotSchema).max(limits.shotsMax);
+
+/** The client-writable content of a composition. Ownership fields are server-set and live on the entity below. */
+export const StudioCompositionContentSchema = z.object({
+  title: z.string().trim().min(1).max(limits.titleMaxLength),
+  template: z.enum(STUDIO_COMPOSITION_TEMPLATES).default('ad_campaign'),
+  brief: StudioCompositionBriefSchema.prefault({}),
+  brandKit: StudioBrandKitSchema.prefault({}),
+  shots: StudioShotListSchema.default([]),
+  timeline: StudioTimelineSchema,
+  projectId: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/, 'Not a valid project id')
+    .optional(),
+});
+export type StudioCompositionContent = z.infer<typeof StudioCompositionContentSchema>;
+
+/**
+ * The stored entity. Owner-only for now: `userId` is the only access key. `organizationId` is reserved for
+ * organization ownership, which waits on a separate decision; nothing writes or reads access through it yet.
+ */
+export const StudioCompositionSchema = StudioCompositionContentSchema.extend({
+  userId: z.string().min(1),
+  organizationId: z.string().optional(),
+});
+export type IStudioComposition = z.infer<typeof StudioCompositionSchema>;
+
+/**
+ * What the Studio routes send: the content plus identity and timestamps, never the ownership fields. Dates are
+ * coerced so the client can parse the JSON (ISO strings) with the same schema the server responds through.
+ */
+export const StudioCompositionResponseSchema = StudioCompositionContentSchema.extend({
+  id: z.string(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+});
+export type StudioCompositionResponse = z.infer<typeof StudioCompositionResponseSchema>;
+
+/** A list row: the response without the shot list and timeline. */
+export const StudioCompositionSummaryResponseSchema = StudioCompositionResponseSchema.omit({
+  shots: true,
+  timeline: true,
+});
+export type StudioCompositionSummaryResponse = z.infer<typeof StudioCompositionSummaryResponseSchema>;
+
+/** POST body. A timeline left out starts from the template's default. */
+export const StudioCompositionCreateInputSchema = z.strictObject({
+  ...StudioCompositionContentSchema.shape,
+  timeline: StudioTimelineSchema.optional(),
+});
+export type StudioCompositionCreateBody = z.input<typeof StudioCompositionCreateInputSchema>;
+export type StudioCompositionCreateInput = z.output<typeof StudioCompositionCreateInputSchema>;
+
+/** PATCH body: any content field replaces the stored one whole; `projectId: null` unlinks the project. */
+export const StudioCompositionUpdateInputSchema = z
+  .strictObject({
+    title: StudioCompositionContentSchema.shape.title.optional(),
+    template: z.enum(STUDIO_COMPOSITION_TEMPLATES).optional(),
+    brief: StudioCompositionBriefSchema.optional(),
+    brandKit: StudioBrandKitSchema.optional(),
+    shots: StudioShotListSchema.optional(),
+    timeline: StudioTimelineSchema.optional(),
+    projectId: StudioCompositionContentSchema.shape.projectId.unwrap().nullable().optional(),
+  })
+  .refine(update => Object.values(update).some(value => value !== undefined), 'Nothing to update');
+export type StudioCompositionUpdateBody = z.input<typeof StudioCompositionUpdateInputSchema>;
+export type StudioCompositionUpdateInput = z.output<typeof StudioCompositionUpdateInputSchema>;
+
+const DEFAULT_TIMELINE_FPS = 30;
+
+/** Ads ship in every placement shape at once; the other templates start landscape and add sizes as needed. */
+const TEMPLATE_DEFAULTS: Record<StudioCompositionTemplate, { durationMs: number; aspects: StudioOutputAspectRatio[] }> =
+  {
+    ad_campaign: { durationMs: 15_000, aspects: ['16:9', '9:16', '1:1'] },
+    social_pack: { durationMs: 15_000, aspects: ['9:16', '1:1', '4:5'] },
+    product_video: { durationMs: 30_000, aspects: ['16:9'] },
+    explainer: { durationMs: 60_000, aspects: ['16:9'] },
+    short_film: { durationMs: 120_000, aspects: ['16:9'] },
+    blank: { durationMs: 15_000, aspects: ['16:9'] },
+  };
+
+/** An empty timeline sized for the template: its default length and output shapes, no tracks yet. */
+export const defaultStudioTimeline = (template: StudioCompositionTemplate): StudioTimeline => {
+  const { durationMs, aspects } = TEMPLATE_DEFAULTS[template];
+  return {
+    version: STUDIO_TIMELINE_VERSION,
+    durationMs,
+    fps: DEFAULT_TIMELINE_FPS,
+    outputs: aspects.map(aspectRatio => ({
+      id: `out-${aspectRatio.replace(':', 'x')}`,
+      aspectRatio,
+      ...STUDIO_OUTPUT_DEFAULT_SIZES[aspectRatio],
+    })),
+    tracks: [],
+  };
+};
+
+/** Every FabFile id the composition references (brand kit, shots, timeline), deduplicated. */
+export const studioCompositionFileIds = (
+  content: Pick<StudioCompositionContent, 'brandKit' | 'shots' | 'timeline'>
+): string[] => {
+  const ids = [
+    ...(content.brandKit.logoFileId ? [content.brandKit.logoFileId] : []),
+    ...content.brandKit.productFileIds,
+    ...content.shots.flatMap(shot => shot.fileIds),
+    ...studioTimelineFileIds(content.timeline),
+  ];
+  return [...new Set(ids)];
+};
