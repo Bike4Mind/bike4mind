@@ -252,19 +252,22 @@ async function verifyClaimForOwner(
 
   // An org outranks a Space: its verify releases the Space claims on the domain in the same
   // transaction, so the one-verified-holder index never sees both.
+  // The throws abort the transaction so the release rolls back with it. A caught duplicate-key error
+  // must not resolve the callback: the server has already aborted, and the commit would be retried.
   const { result, released } = await withTransaction(async () => {
     const released =
       owner.organizationId !== undefined ? await orgDomainClaimRepository.deleteSpaceClaimsByDomain(claim.domain) : [];
-    return { result: await orgDomainClaimRepository.markVerified(claimId, owner), released };
+    const result = await orgDomainClaimRepository.markVerified(claimId, owner);
+    if (result === 'conflict') {
+      throw new ConflictError(
+        owner.organizationId !== undefined
+          ? 'Domain already claimed by another organization'
+          : 'Domain already claimed by another owner'
+      );
+    }
+    if (!result) throw new NotFoundError('Domain claim not found');
+    return { result, released };
   });
-  if (result === 'conflict') {
-    throw new ConflictError(
-      owner.organizationId !== undefined
-        ? 'Domain already claimed by another organization'
-        : 'Domain already claimed by another owner'
-    );
-  }
-  if (!result) throw new NotFoundError('Domain claim not found');
   await notifyReleasedSpaceOwners(released);
   return { verified: true, claim: result };
 }

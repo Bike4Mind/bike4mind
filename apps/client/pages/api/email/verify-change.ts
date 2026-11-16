@@ -75,10 +75,14 @@ const handler = baseApi({ auth: false })
             );
             // Runs whatever EnableSpaces says: domain membership must stay correct while the flag is off.
             if (changeOutcome === 'changed' && newEmail) {
-              await spaceService.recheckDomainMembers(user.id, newEmail, {
-                db: { spaces: spaceRepository },
-                isDomainJoinable,
-              });
+              await spaceService.recheckDomainMembers(
+                user.id,
+                { oldEmail, newEmail },
+                {
+                  db: { spaces: spaceRepository },
+                  isDomainJoinable,
+                }
+              );
             }
             return changeOutcome;
           },

@@ -118,10 +118,14 @@ describe('POST /api/email/verify-change', () => {
     const { req, res } = fire();
     await handler(req, res);
 
-    expect(mockRecheckDomainMembers).toHaveBeenCalledWith('user-1', 'new@example.com', {
-      db: { spaces: { name: 'spaceRepository' } },
-      isDomainJoinable: expect.any(Function),
-    });
+    expect(mockRecheckDomainMembers).toHaveBeenCalledWith(
+      'user-1',
+      { oldEmail: 'old@example.com', newEmail: 'new@example.com' },
+      {
+        db: { spaces: { name: 'spaceRepository' } },
+        isDomainJoinable: expect.any(Function),
+      }
+    );
     expect(order).toEqual(['verify', 'recheck', 'session-end']);
   });
 

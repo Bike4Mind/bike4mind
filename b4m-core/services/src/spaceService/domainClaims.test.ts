@@ -143,15 +143,40 @@ describe('recheckDomainMembers', () => {
 
   it('pulls only the Spaces the new address no longer qualifies for, without blocking', async () => {
     isDomainJoinable.mockImplementation(async (s: ISpaceDocument) => s.id === 'a');
-    await recheckDomainMembers('u1', 'a@other.com', { db, isDomainJoinable } as never);
+    await recheckDomainMembers('u1', { oldEmail: 'a@acme.com', newEmail: 'a@other.com' }, {
+      db,
+      isDomainJoinable,
+    } as never);
     expect(db.spaces.removeMember).toHaveBeenCalledTimes(1);
     expect(db.spaces.removeMember).toHaveBeenCalledWith('b', 'u1', { block: false });
   });
 
   it('keeps every membership when the new address is still joinable', async () => {
     isDomainJoinable.mockResolvedValue(true);
-    await recheckDomainMembers('u1', 'a@acme.org', { db, isDomainJoinable } as never);
+    await recheckDomainMembers('u1', { oldEmail: 'a@acme.com', newEmail: 'a@acme.org' }, {
+      db,
+      isDomainJoinable,
+    } as never);
     expect(db.spaces.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('keeps every membership on a same-domain move even when nothing is joinable', async () => {
+    isDomainJoinable.mockResolvedValue(false);
+    await recheckDomainMembers('u1', { oldEmail: 'A@Acme.com', newEmail: 'b@acme.COM' }, {
+      db,
+      isDomainJoinable,
+    } as never);
+    expect(db.spaces.removeMember).not.toHaveBeenCalled();
+    expect(isDomainJoinable).not.toHaveBeenCalled();
+  });
+
+  it('removes on a move to a different non-joinable domain', async () => {
+    isDomainJoinable.mockResolvedValue(false);
+    await recheckDomainMembers('u1', { oldEmail: 'a@acme.com', newEmail: 'a@mail.acme.com' }, {
+      db,
+      isDomainJoinable,
+    } as never);
+    expect(db.spaces.removeMember).toHaveBeenCalledTimes(2);
   });
 });
 

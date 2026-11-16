@@ -217,22 +217,30 @@ describe('verifyDomainClaim', () => {
     });
   });
 
-  it('maps a lost verify race to a 409', async () => {
+  it('maps a lost verify race to a 409 and aborts the transaction without notifying', async () => {
+    claims.deleteSpaceClaimsByDomain.mockResolvedValue([{ id: 'sc', spaceId: SPACE, domain: 'acme.com' }]);
     claims.markVerified.mockResolvedValue('conflict');
     await expect(
       verifyDomainClaim(ORG, 'cccccccccccccccccccccccc', resolverReturning([[recordValueFor(TOKEN)]]))
     ).rejects.toMatchObject({
       statusCode: 409,
     });
+    expect(txOrder.events).not.toContain('commit');
+    expect(inbox.createInboxMessage).not.toHaveBeenCalled();
+    expect(notifyEmail).not.toHaveBeenCalled();
   });
 
-  it('404s a claim deleted between load and mark', async () => {
+  it('404s a claim deleted between load and mark, aborting the transaction without notifying', async () => {
+    claims.deleteSpaceClaimsByDomain.mockResolvedValue([{ id: 'sc', spaceId: SPACE, domain: 'acme.com' }]);
     claims.markVerified.mockResolvedValue(null);
     await expect(
       verifyDomainClaim(ORG, 'cccccccccccccccccccccccc', resolverReturning([[recordValueFor(TOKEN)]]))
     ).rejects.toMatchObject({
       statusCode: 404,
     });
+    expect(txOrder.events).not.toContain('commit');
+    expect(inbox.createInboxMessage).not.toHaveBeenCalled();
+    expect(notifyEmail).not.toHaveBeenCalled();
   });
 });
 

@@ -151,6 +151,56 @@ describe('org verify releases Space claims (real transaction)', () => {
   });
 });
 
+describe('failed verify rolls back the release (real transaction)', () => {
+  const orgPending = async () => {
+    const spaceOwner = await makeUser('so@other.org');
+    const space = await makeSpace(spaceOwner.id);
+    await verifiedSpaceClaim(space.id);
+    const org = await makeOrg((await makeUser('oo@other.org')).id);
+    const claim = await addDomainClaim(org.id, 'owner', DOMAIN);
+    return { spaceOwner, space, org, claim };
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('409s fast on a duplicate-key conflict and keeps the Space claim', async () => {
+    const { space, org, claim } = await orgPending();
+    const original = orgDomainClaimRepository.deleteSpaceClaimsByDomain.bind(orgDomainClaimRepository);
+    // Inside the transaction, after the release, a rival verified claim appears so markVerified hits E11000.
+    vi.spyOn(orgDomainClaimRepository, 'deleteSpaceClaimsByDomain').mockImplementation(async domain => {
+      const released = await original(domain);
+      await OrgDomainClaim.create({
+        organizationId: new mongoose.Types.ObjectId().toString(),
+        domain,
+        status: 'verified',
+        verifiedAt: new Date(),
+        verificationToken: 'r'.repeat(32),
+      });
+      return released;
+    });
+
+    await expect(verifyDomainClaim(org.id, claim.id, resolverFor(claim.verificationToken))).rejects.toMatchObject({
+      statusCode: 409,
+    });
+
+    expect(await OrgDomainClaim.countDocuments({ spaceId: space.id, status: 'verified' })).toBe(1);
+    expect(await OrgDomainClaim.countDocuments({ domain: DOMAIN, status: 'verified' })).toBe(1);
+  }, 15_000);
+
+  it('404s a claim deleted during the lookup and keeps the Space claim without notifying', async () => {
+    const { spaceOwner, space, org, claim } = await orgPending();
+    const deletingResolver = async () => {
+      await OrgDomainClaim.deleteOne({ _id: claim.id });
+      return [[recordValueFor(claim.verificationToken)]];
+    };
+
+    await expect(verifyDomainClaim(org.id, claim.id, deletingResolver)).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(await OrgDomainClaim.countDocuments({ spaceId: space.id, status: 'verified' })).toBe(1);
+    expect(await Inbox.countDocuments({ receiverId: spaceOwner.id })).toBe(0);
+  }, 15_000);
+});
+
 describe('org flows ignore Space claims', () => {
   it('does not auto-join or suggest an org for an address a Space claims', async () => {
     const space = await makeSpace((await makeUser('so@other.org')).id);
@@ -264,8 +314,8 @@ describe('domain join rules', () => {
 });
 
 describe('email change recheck', () => {
-  const recheck = (userId: string, email: string) =>
-    recheckDomainMembers(userId, email, { db: { spaces: spaceRepository }, isDomainJoinable });
+  const recheck = (userId: string, newEmail: string, oldEmail = `dee@${DOMAIN}`) =>
+    recheckDomainMembers(userId, { oldEmail, newEmail }, { db: { spaces: spaceRepository }, isDomainJoinable });
 
   it('removes a domain member whose new address is not joinable, without blocking a rejoin', async () => {
     const space = await makeSpace((await makeUser('so@other.org')).id);
@@ -278,6 +328,18 @@ describe('email change recheck', () => {
     const after = (await Space.findById(space.id).lean())!;
     expect(after.members).toHaveLength(0);
     expect(after.removedUserIds).not.toContain(dee.id);
+  });
+
+  it('keeps a same-domain member after an org takes the domain', async () => {
+    const owner = await makeUser('so@other.org');
+    const space = await makeSpace(owner.id);
+    await verifiedSpaceClaim(space.id);
+    const dee = await makeUser(`dee@${DOMAIN}`);
+    await join(dee.id, space.id);
+    await verifiedOrgClaim((await makeOrg((await makeUser('oo@other.org')).id)).id);
+
+    await recheck(dee.id, `dee2@${DOMAIN}`);
+    expect(await membersOf(space.id)).toEqual([dee.id]);
   });
 
   it('keeps the member on a move between joinable domains', async () => {
